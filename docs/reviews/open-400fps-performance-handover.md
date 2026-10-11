@@ -1,5 +1,35 @@
 # High-quality realtime performance handover
 
+## Exact-epoch ephemeris cache admission — 2026-10-11
+
+The analytic provider's existing single-epoch cache admits 47 of 143 requests
+in a settled eight-second High-quality sandbox interval. Its 96 misses are
+first requests for their exact `(body_id, epoch_jd.to_bits())` samples: no
+previously evaluated sample is requested again after eviction. The interval
+covers 32 distinct epochs and Earth, EMB and Moon. A larger retained epoch set
+would not eliminate any of these observed misses.
+
+The preceding native baseline ranks `link_snapshot_occlusion_inputs` at
+1.054 ms mean across 163 recomputes in the full capture. The pinned celestial
+library's `Vsop2013Earth::heliocentric_position` privately evaluates EMB and
+Moon operands; the application's exact-epoch cache cannot access those
+intermediate samples through that call. Retain the maintained formula owner
+and native f64 operation order rather than adding a second Earth calculation.
+Continue with measured application-owned work, including the entity-tree gate.
+
+The `ephemeris-epoch-admission-` receipts under `target/entity-tree-perf/`
+retain the 294,027,263-byte capture, successful native CPU/message exports,
+exact source/artifact fingerprints and request classification. Its compressed
+payload matches the collector's reported 280.36 MiB after excluding container
+headers. Owned app/collector PIDs 3909611/3909610 exit zero and release API
+4202/Tracy 8087. The workload snapshots contain sibling builds, so elapsed
+timings are diagnostic only. Instrumentation is removed byte for byte and the
+validated normal artifact
+`195d19025df902d0c19442d61c0f6bce70eb0a19bd554f814bdb03c30b927a88`
+is restored. No simulation, scene, quality or external-library changes remain;
+its existing 360-check replay and 18-check history/restart evidence remains
+valid. This diagnostic establishes no product speedup or loading acceptance.
+
 ## Avoid repeated Modelica wire-owner lookups — 2026-10-11
 
 `lunco-modelica-telemetry` caches each channel's owner publication under a

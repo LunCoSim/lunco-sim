@@ -175,6 +175,10 @@ shares native EMB/Earth VSOP operands across dependent bodies. Preserve native
 f64 values and formula order; a new epoch bit pattern invalidates final and
 intermediate samples together. Compare public `BodyPosition` results against the
 prior exact artifact at adjacent and revisited epochs before claiming a gain.
+Before increasing epoch retention, record exact body/epoch keys and cache hits.
+Distinguish first evaluations from repeated misses after eviction; extra slots
+cannot save unique sample work. Do not quantize epochs or duplicate a maintained
+analytical formula to create apparent reuse.
 For an exclusive system, check repeated `World::query` construction separately
 from iteration. Retain Bevy's native `QueryState` in the owning system when
 the query shape is stable; read current membership each pass and collect
