@@ -131,7 +131,12 @@ despawn and active-frame switch/removal detection without waking on ordinary
 pose values. Validate a disconnected body through the public owner diagnostic
 and stopped solver ticks, then verify a replacement scene resumes physics.
 For link-sweep costs, attribute `celestial_ephemeris_position` separately from
-pair geometry and verdict hooks. The analytic provider's exact-epoch cache also
+pair geometry and verdict hooks. Use `link_collect_endpoints`,
+`link_snapshot_occlusion_inputs`, `link_evaluate_pair`,
+`link_terrain_line_of_sight` and `link_verdict_policy` to distinguish snapshot
+preparation, terrain marching and typed-policy marshalling/execution. Pair
+spans contain terrain and policy spans; do not add inclusive durations.
+The analytic provider's exact-epoch cache also
 shares native EMB/Earth VSOP operands across dependent bodies. Preserve native
 f64 values and formula order; a new epoch bit pattern invalidates final and
 intermediate samples together. Compare public `BodyPosition` results against the
@@ -220,6 +225,12 @@ Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable
 slot borrow; measure that copy separately from solver response admission.
+`modelica_outputs_copy_variables` isolates the variable-map traversal and port
+update; `modelica_outputs_seed_inputs` isolates omitted-input seeding. Both are
+children of fixed-step output publication, so compare their total time with
+that owner over the same settled window. Their call counts are per participant,
+not per simulation tick. Preserve the reflected map's reader contract before
+choosing a change-detection or ownership refactor.
 Preserve reordering, same-size source replacement, target
 edits, clone/clear/compaction retirement and native-bit no-op detection when
 changing that mechanism. Do not infer unchanged source topology from map length

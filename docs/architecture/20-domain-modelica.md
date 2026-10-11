@@ -731,6 +731,11 @@ The remaining cross-domain admission and replay requirements are recorded in
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
+Fixed-step publication exposes `modelica_outputs_copy_variables` and
+`modelica_outputs_seed_inputs` trace spans for each participant. These separate
+port-snapshot copying from omitted-input seeding inside `sync_modelica_outputs`;
+they do not change the publication order or Modelica's reflected state contract.
+
 Standalone Modelica port topology publication excludes entities with
 `SimComponent`, matching its port backend. The co-simulation port owner
 publishes those entities' topology instead. Live input values do not invalidate

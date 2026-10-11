@@ -1,5 +1,81 @@
 # High-quality realtime performance handover
 
+## Attribute fixed output publication and link preparation — 2026-10-11
+
+The fixed exchange and connectivity owners expose phase-level trace spans.
+`modelica_outputs_copy_variables` and `modelica_outputs_seed_inputs` separate
+variable-map projection from omitted-input seeding. Link spans distinguish
+endpoint collection, occlusion-input snapshots, pair evaluation, nonempty-DEM
+marching and typed-hook construction/execution. Their existing loops, f64
+values, cadence, serial publication and reflected state remain unchanged.
+These are diagnostics, not a claimed performance improvement. Canonical
+Modelica/connectivity documentation and the profiling skill name the spans
+and their nesting.
+
+Production Tracy artifact
+`a630f31b87cf113ccd3f9b0ea179f1a3f6273b9cf5bc0d96cc47dd1252100f73`
+was captured in owned PID 808204/API 4202, collector 808203/profiler 8086.
+It passes readiness, diagnostics, advancing physics, three invalid-assembly
+pause guards and scene replacement. High quality, no vsync/throttle,
+50 bodies/33 colliders/20 joints and the within-run camera pose are retained.
+The inspected post-dismissal View screenshot shows shadows. A visual-resource
+prompt remains visible during the measurement windows. Main PID 84260 overlaps
+this run and remains untouched. Warm readiness is 4.525 s; this is not controlled
+loading acceptance. The app and collector exit zero and release their ports.
+The 318,677,618-byte capture matches the reported compressed size and passes
+native message and CPU exports.
+
+Each settled window spans +1.5 to +7.5 seconds after View/Build/View activation.
+There are 360/361/360 output-publication calls and nine participant copies per
+call. Total variable-copy time is 75.789/86.731/74.702 ms, or
+71.12/72.18/70.66 percent of the respective output-system totals
+106.559/120.155/105.720 ms. Input seeding totals 17.336/18.904/17.923 ms.
+These nested phase totals establish attribution within this instrumented
+artifact; they must not be added to their enclosing system time or interpreted
+as an unprofiled throughput gain.
+
+Each window has 22 link sweeps. Snapshot preparation totals
+31.140/33.673/31.521 ms, or 65.12/68.04/67.87 percent of link-system totals
+47.821/49.492/46.441 ms. Policy construction/execution totals
+9.436/8.912/8.454 ms across 330 direct-pair calls per window. Native ephemeris
+zones fully contained in the same-thread snapshot span account for Earth
+25.684/28.116/26.002 ms and Moon 4.739/4.724/4.792 ms. Counts are 22/22/21
+per body; cache hits do not emit evaluation spans. These are inclusive native
+provider costs, not evidence of duplicate evaluations. The provider already
+reuses final positions and EMB/Earth operands at one exact epoch. The windows
+contain no nonempty-DEM march spans; terrain LOS cost remains unmeasured.
+
+The same Tracy artifact passes serial PID 808902 and default-Compute PID
+809458 exact four-rover replay: 24 authored checks each, 780 ticks/13 simulated
+seconds, with the deliberate-mismatch negative control. Serial uses the
+unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Default uses those same state rows with profile metadata adapted for default
+admission, SHA
+`98a768728903e6d2285e8237a3e932d43370f551162f5eb82822d646dab8a922`;
+it is not a separately captured default-width baseline. Both exit zero and
+close API 4202. The full ten-profile matrix remains open.
+
+Normal artifact
+`202c637ecd9d5225fd4c363c68c455701a6f2031442ac99e0d647a7ab269d138`
+passes the 15-check authored `rocket_engine_observables` public-reader gate
+in PID 815910, completing 180 ticks/3 simulated seconds with exit zero and
+API 4202 closed. Both production builds pass with only the existing unused
+`PreparedSolveCache::clear` warning. Skill validation passes all 43 entries.
+The current normal executable, its hash-verified gzip archive, the validated
+Tracy capture, phase exports, receipts, replay references and verdict logs are
+retained. The normal build replaces the Tracy executable; its exact hash and
+capture provenance remain recorded above.
+
+A separate settled windowed BindingStatus inspection of the prior normal
+artifact finds 104 bound wires and 102 distinct source entity/port/direction
+tuples. Only two repeated reads exist, so that workload provides little
+support for a new fanout cache. Its owned PID 774588 exits zero and closes
+API 4202. Earlier unsettled inspections are excluded from this conclusion.
+Evidence lives under `target/entity-tree-perf/`, prefixes `exchange-owner-`
+and `source-fanout-windowed-baseline-`. Loading, visual FPS and physics
+throughput acceptance remain open; official Trello tools are unavailable.
+
 ## Share admitted Modelica output snapshots — 2026-10-11
 
 `lunco-modelica-runtime` owns immutable output slices shared by the accepted

@@ -410,6 +410,7 @@ pub(crate) fn update_links(
     // "not yet", and the node joins the graph within a frame or two. Inventing a
     // name/index key instead would MIS-BIND — it diverges across peers and across a
     // reload, which is precisely the class of bug GIDs exist to prevent.
+    let endpoint_span = bevy::log::info_span!("link_collect_endpoints").entered();
     let mut endpoints = Vec::new();
     let mut direct_entities = HashSet::new();
     for (entity, node, pose, name, gid) in q_nodes.iter() {
@@ -453,8 +454,10 @@ pub(crate) fn update_links(
         return;
     }
     state.last_jd = Some(jd);
+    drop(endpoint_span);
 
     // Body centers for analytic occlusion.
+    let snapshot_span = bevy::log::info_span!("link_snapshot_occlusion_inputs").entered();
     let bodies: Vec<(String, DVec3, f64)> = match (ephemeris.as_deref(), registry.as_deref()) {
         (Some(eph), Some(reg)) => reg
             .bodies
@@ -493,6 +496,7 @@ pub(crate) fn update_links(
             (pose.pos + pose.rotation * center_local, pose.rotation, half)
         })
         .collect();
+    drop(snapshot_span);
 
     // Pairwise verdicts.
     let mut per_node: HashMap<Entity, Vec<LinkPeer>> = HashMap::new();
@@ -500,6 +504,7 @@ pub(crate) fn update_links(
     let mut up_now: HashSet<(u64, u64)> = HashSet::new();
     for i in 0..endpoints.len() {
         for j in (i + 1)..endpoints.len() {
+            let _pair_span = bevy::log::info_span!("link_evaluate_pair").entered();
             let (a, b) = (&endpoints[i], &endpoints[j]);
             // A nested endpoint is a duplicate declaration inside one physical
             // assembly (for example an antenna root plus its feed aperture),
@@ -584,6 +589,7 @@ pub(crate) fn update_links(
                 continue;
             };
 
+            let policy_span = bevy::log::info_span!("link_verdict_policy").entered();
             let ctx = HookValue::map([
                 // Identity first (the ids `find()` speaks), labels alongside for a
                 // policy that wants to read as prose.
@@ -644,6 +650,7 @@ pub(crate) fn update_links(
                     false
                 }
             };
+            drop(policy_span);
 
             // Asymmetric drop debounce (see `LinkConfig::drop_debounce`). Acquire the
             // instant geometry closes; drop only after N consecutive severed reads, so a
@@ -850,6 +857,7 @@ fn terrain_blocks(a: DVec3, b: DVec3, terrains: &[(DVec3, DQuat, Arc<SurfaceOrac
     if terrains.is_empty() {
         return false;
     }
+    let _terrain_span = bevy::log::info_span!("link_terrain_line_of_sight").entered();
     let d = b - a;
     let seg = d.length();
     if seg < 1e-3 {

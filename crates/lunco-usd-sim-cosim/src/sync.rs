@@ -85,18 +85,22 @@ pub fn sync_modelica_outputs(
     for (model, mut comp) in &mut q {
         let changed = {
             let comp = comp.bypass_change_detection();
+            let output_span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
             let mut changed = comp.outputs.upsert_samples(
                 model
                     .variables
                     .iter()
                     .map(|(name, value)| (name.as_str(), value)),
             );
+            drop(output_span);
+            let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
                 if !comp.inputs.contains_key(k) {
                     comp.inputs.insert(k.clone(), *v);
                     changed = true;
                 }
             }
+            drop(input_span);
             let status = modelica_status(model);
             if comp.status != status {
                 comp.status = status;
