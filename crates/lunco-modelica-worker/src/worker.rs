@@ -251,10 +251,7 @@ fn build_stepper(
         #[cfg(target_arch = "wasm32")]
         {
             let lower_started = web_time::Instant::now();
-            let model = lunco_modelica_solver::simulation_session::lower_for_live(
-                &_comp_res.compiled.dae,
-                &plan.options,
-            )?;
+            let model = rumoca_sim::prepare_fmi_component(&_comp_res.compiled.dae, &plan.options)?;
             bevy::log::info!(
                 "[modelica-runtime] prepared solver IR for `{}`: lower={:?} cache=miss",
                 plan.spec.id,
@@ -516,9 +513,9 @@ impl SolvePreparationPool {
                 let lower_started = web_time::Instant::now();
                 let result = {
                     let _lower_span =
-                        bevy::log::info_span!("modelica_solve_preparation_lower_for_live").entered();
+                        bevy::log::info_span!("modelica_solve_preparation_fmi").entered();
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        lunco_modelica_solver::simulation_session::lower_for_live(&dae, &options)
+                        rumoca_sim::prepare_fmi_component(&dae, &options)
                     }))
                     .unwrap_or_else(|payload| {
                         let message = payload
@@ -1429,7 +1426,7 @@ struct CachedModel {
     /// on a cache-invalidating recompile so Reset and Step auto-init resolve
     /// the same source closure as Compile.
     extra_sources: Vec<(String, String)>,
-    /// Instance parameter values applied to the cached DAE. Reapplied if a
+    /// Instance parameter values passed to checked FMI preparation. Reapplied if a
     /// library invalidates the artifact and it must be compiled again.
     parameter_overrides: Vec<(String, f64)>,
     initial_inputs: Vec<(String, f64)>,
@@ -4900,11 +4897,7 @@ mod artifact_cache_tests {
                 Some(revision),
             )
             .unwrap();
-            let model = lunco_modelica_solver::simulation_session::lower_for_live(
-                &compiled.dae,
-                &plan.options,
-            )
-            .unwrap();
+            let model = rumoca_sim::prepare_fmi_component(&compiled.dae, &plan.options).unwrap();
             compiler.clear_user_documents();
             (plan.key, revision, model)
         };

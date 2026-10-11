@@ -942,10 +942,9 @@ pub fn import_model_to_diagram_from_ast(
                 // instead of the class default `J=1`).
                 if let Some(comp) = comp_by_short.get(short_name) {
                     for (k, v) in &comp.modifications {
-                        diagram_node.parameter_values.insert(
-                            k.clone(),
-                            lunco_modelica_ast::ast_extract::format_expression_for_display(v),
-                        );
+                        diagram_node
+                            .parameter_values
+                            .insert(k.clone(), v.to_string());
                     }
                     // `Component X if <cond>` — only dim when the
                     // condition evaluates FALSE against the parent's

@@ -115,13 +115,9 @@ pub(super) fn emit_diagram_decorations(
     let mut text_idx: usize = 0;
     for item in graphics.iter() {
         if let GraphicItem::Text(t) = item {
-            // Editable label. Strip surrounding quotes the parser
-            // left on `textString` so the visual sees the raw
-            // string. Skip `%name` / `%class` substitutions and
-            // empty strings — those are source library conventions for
-            // icon-internal Text and aren't meaningful as Diagram
-            // callouts.
-            let raw = t.text_string.trim_matches('"');
+            // Rumoca has decoded the label. Skip source-library substitutions
+            // and empty strings when exposing editable diagram callouts.
+            let raw = t.text_string.as_str();
             if raw.is_empty() || raw.starts_with('%') {
                 text_idx += 1;
                 continue;
@@ -227,20 +223,8 @@ pub(super) fn diagram_annotation_for_target(
     Vec<lunco_modelica_ast::annotations::GraphicItem>,
     Vec<lunco_modelica_ast::annotations::LunCoPlotNode>,
 )> {
-    // Route through the canonical AST class lookup
-    // `lunco_modelica_index::class_lookup::find_class_by_qualified_name`. It already
-    // handles within-clause stripping correctly — at segment
-    // boundaries, not raw string boundaries. The earlier local
-    // `walk_qualified` here used `.unwrap_or(rest)` after stripping
-    // a non-dot suffix, which corrupted targets when the within
-    // prefix happened to be a *string* prefix of the next segment
-    // (the bug that hid the diagram for `Duplicate to edit` of any
-    // class whose copy name was `<OriginalCopy>` — the within clause
-    // `AnnotatedRocketStage` is a string prefix of
-    // `AnnotatedRocketStageCopy`, so the strip mangled the target
-    // to `Copy.RocketStage` and the walk found nothing).
-    // For `None` targets fall back to the first non-package class,
-    // matching the workbench's default active-class picker.
+    // The canonical class lookup respects qualified segment boundaries.
+    // With no selected target, preview the first non-package declaration.
     let class = if let Some(qualified) = target {
         lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
     } else {

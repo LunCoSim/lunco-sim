@@ -4038,7 +4038,7 @@ captured exactly. Readiness remained clear at 02:45:47.715. This misses the
 acceptance were not measured.
 
 The 90.4-second trace contains 4,848 frames and 20,779,197 zones. Five
-`modelica_solve_preparation_lower_for_live` worker spans took 7.90–13.50 seconds
+FMI preparation worker spans took 7.90–13.50 seconds
 (the other measured spans were 0.84 seconds and 0.036 seconds). These ran on
 the dedicated Modelica solve-preparation pool, which logged four workers.
 Physics admission completed around 1.5 seconds; slow solve lowering remained
@@ -4116,7 +4116,7 @@ readiness evidence for that Twin; the exact full-readiness transition was not
 timestamped in this run.
 
 The Tracy capture recorded six prepared solver lookups: five persistent-cache
-hits and one worker-side `lower_for_live` miss lasting 422.064 ms, followed by
+hits and one worker-side FMI preparation miss lasting 422.064 ms, followed by
 a 4.373 ms cache save. Solver lookup work totaled 58.09 ms with a 37.60 ms
 maximum. The miss remained on the worker path. Two other simulator sessions
 were active on ports 4113 and 49376, so the capture is diagnostic under
@@ -4513,7 +4513,7 @@ five-second stable interval were not sampled; this does not establish the 5 s
 target. The scene-mount time is under 2 s in this diagnostic, but is not a clean
 acceptance result.
 
-New worker zones isolate `lower_for_live` as the long Modelica preparation
+New worker zones isolate FMI preparation as the long Modelica preparation
 stage. Rumoca compile calls took 0.05–0.15 s; solver lowering took 4.370 s for
 Ackermann, 0.481 s for Rover, 8.159 s and 8.446 s for the two rocker-bogie
 systems, 9.446 s for Electrical, and 0.056 s for CommsLink. Repeated
@@ -4533,7 +4533,7 @@ separate admitted-library content revision and hashes primary and sorted
 sibling source text without runtime document IDs. A corrected-key run
 generated new entries and therefore still paid cold lowering. The following
 warm Tracy run confirmed persistent reuse: there were no
-`modelica_solve_preparation_lower_for_live` zones, and eight disk lookups
+FMI preparation zones, and eight disk lookups
 averaged 2.30 ms (6.96 ms max). This removes repeated warm-lowering cost; cold
 lowering remains part of first-open startup. The Tracy zones bracket job queue
 wait, cache lookup, lowering, result delivery, and the live-stepper commit.
@@ -4569,10 +4569,10 @@ health sample at the startup boundary, so app readiness remains unverified.
 
 The corrected cache keys were exercised in two Tracy runs of the same authored
 Apollo scene. The first run generated entries for the new identity and recorded
-seven `lower_for_live` jobs totaling about 30.7 s; it is a cold-cache run for
+seven FMI preparation jobs totaling about 30.7 s; it is a cold-cache run for
 those corrected keys. The warm follow-up,
 `scripts/perf/captures/sss-modelica-cache-key-fix-warm-20260927.tracy` (40.3 s,
-2,410 frames), recorded no `modelica_solve_preparation_lower_for_live` zones
+2,410 frames), recorded no FMI preparation zones
 and eight persistent disk lookups (2.30 ms mean, 6.96 ms max). Scene
 participants became lifecycle-ready 6.08 s after Twin-open. The first sampled
 clear full-readiness state was at 11.35 s after Twin-open and stayed clear for
@@ -4728,7 +4728,7 @@ ms over its 240-sample window, with 56 service-budget exceedances. That is
 another contended diagnostic and is not the Avian solver measurement.
 
 The same trace's five persistent Modelica solve-cache lookups totaled 7.02 ms.
-Two missed and ran lower_for_live: preparation 3 for Traverse_Rover_System
+Two missed and ran FMI preparation: preparation 3 for Traverse_Rover_System
 took 0.370 s, and preparation 4 for Traverse_Rover_Electrical_System took
 9.144 s. Preparation 4 waited only 26 microseconds in the worker queue; the
 slow time was solver lowering, not queue admission. Its persistent cache entry
@@ -5822,7 +5822,7 @@ composed-reader selection and physics extraction. Rebuild the Tracy production
 binary before the next capture; this span is not in the saved trace.
 
 The same capture links the late participant-ready event to cold Modelica
-solver preparation. `lower_for_live` took 9.037/9.168 s for the two rocker
+solver preparation. FMI preparation took 9.037/9.168 s for the two rocker
 bogie systems, 5.658 s for Ackermann, 0.529 s for Rover, and 8.209 s for the
 Electrical system. Their worker queue waits were 26–94 µs, while the associated
 Modelica compiler calls logged 0.04–0.14 s. Electrical lowering ended at about
@@ -5831,7 +5831,7 @@ worker path, these spans point to lowering time rather than queue admission as
 the dominant cold-start cost. Persistent-cache hits remain a separate warm
 path; the cold full-readiness target is still open.
 
-The capture identifies the total `lower_for_live` wall time but does not show
+The capture identifies the total FMI preparation wall time but does not show
 which Rumoca phase dominates. Rumoca emits per-phase `elapsed_seconds` debug
 events on the `rumoca_sim::solve_lowering` target; the default app filter hid
 them in this run. For the next CPU diagnostic, launch with
@@ -6190,7 +6190,7 @@ spawned 1.76 s after Twin-open. The first `/api/health` response was about
 3.05 s after process launch. Readiness first appeared clear at that early
 sample, later regressed, and remained pending around 20 s; the later clear
 sample was near capture end, so the exact stable transition was not captured.
-Four `modelica_solve_preparation_lower_for_live` worker jobs took 14.3–16.3 s
+Four FMI preparation worker jobs took 14.3–16.3 s
 each, with only 39–157 microseconds of queue wait. This is a startup-readiness
 lead to investigate separately from the steady render cost.
 
@@ -6853,7 +6853,7 @@ not establish the 5 s app or Twin readiness targets; the observed full-Twin
 readiness was later than 5 s. Sandbox was not measured.
 
 The warm run confirmed persistent Modelica solve-cache reuse: eight disk
-lookups averaged 2.81 ms (5.29 ms max), with no `lower_for_live` spans. Cold
+lookups averaged 2.81 ms (5.29 ms max), with no FMI preparation spans. Cold
 lowering remains part of first-open work. `sync_twin_overlays` did not reproduce
 the earlier long calls in this sample (nine calls, 29 microseconds maximum).
 The first run's Tracy-only physics diagnostics were 2.47 ms p50, 3.24 ms p95,
@@ -7422,7 +7422,7 @@ warning handler. No identity allocation or lifecycle ordering changed.
 `cargo +nightly-2026-02-27 check --locked --tests -j 4 -p lunco-core-session`
 passed as a compile-only check; no tests were executed. This path has not yet
 been reprofiled, so no timing gain is claimed. The same capture's remaining
-startup lead is worker-side `modelica_solve_preparation_lower_for_live` (six
+startup lead is worker-side FMI preparation (six
 calls, 5.09 s mean, 6.82 s maximum).
 
 ### 2026-09-28 — batch procedural terrain-rock components
@@ -7449,7 +7449,7 @@ and <5 s full readiness targets remain open.
 
 ### 2026-09-28 — coalesce identical Modelica solve preparation
 
-The existing Sandbox capture shows separate `lower_for_live` jobs for
+The existing Sandbox capture shows separate FMI preparation jobs for
 `Skid_Raycast_1_System` (6.225 s) and `Skid_Raycast_2_System` (6.301 s). Both
 reference the same skid-rover asset, and the existing structural solve key
 normalizes generated instance names; the Sandbox scene authors no per-instance
@@ -8612,11 +8612,11 @@ sample and is contention-affected.
 The 35.38 s capture
 `scripts/perf/captures/sss-lookahead-open-20260930.tracy` shows the six compile
 jobs entering the pipeline by 6.47 s from capture start while one cold
-`lower_for_live` occupied a solve worker for 7.65 s. The other five jobs were
+FMI preparation occupied a solve worker for 7.65 s. The other five jobs were
 prepared-solve cache hits (about 1–6 ms); this profile therefore does not
 isolate the performance effect of the new lookahead limit. The warm Twin-open
 capture `scripts/perf/captures/sss-lookahead-warm-20260930.tracy` instead
-recorded one cache miss taking 9.16 s in `lower_for_live`, with cache lookups
+recorded one cache miss taking 9.16 s in FMI preparation, with cache lookups
 of at most 6 ms. These are worker-side readiness costs, not measured UI or
 physics-thread stalls. Tracy and the concurrent simulator workloads make all
 timings diagnostic only; clean FPS, physics, and readiness acceptance remain

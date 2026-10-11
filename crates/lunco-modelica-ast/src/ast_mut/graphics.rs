@@ -449,10 +449,7 @@ where
 
 /// Index of the `LunCoAnnotations.PlotNode(signal="…")` arg matching `signal`.
 fn plot_node_arg(source: &str, args: &[Range<usize>], signal: &str) -> Option<usize> {
-    let needle = format!(
-        "signal=\"{}\"",
-        signal.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    let needle = format!("signal=\"{}\"", rumoca_core::escape_modelica_string(signal));
     let squished = |s: &str| s.split_whitespace().collect::<String>();
     args.iter()
         .position(|r| squished(&source[r.clone()]).contains(&squished(&needle)))

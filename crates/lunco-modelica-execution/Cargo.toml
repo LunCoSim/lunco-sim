@@ -49,6 +49,7 @@ bincode.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow.workspace = true
+rumoca-sim.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 lunco-worker-transport = { path = "../lunco-worker-transport" }

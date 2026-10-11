@@ -177,7 +177,7 @@ pub(super) fn read_text_spec(expr: &Expression) -> TextSpec {
 
 /// Render a [`TextSpec`] as a Modelica `Text(...)` graphic.
 pub(super) fn render_text_spec(spec: &TextSpec) -> String {
-    let escaped = spec.text.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = rumoca_core::escape_modelica_string(&spec.text);
     format!(
         "Text(extent={{{{{},{}}},{{{},{}}}}}, textString=\"{}\")",
         spec.x1, spec.y1, spec.x2, spec.y2, escaped

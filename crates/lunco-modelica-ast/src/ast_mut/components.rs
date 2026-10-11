@@ -2,7 +2,7 @@
 //!
 //! Each helper splices the bytes it means to change and mutates the AST clone to
 //! match. It must never re-emit a declaration that already exists in the source
-//! — see [`super::edit`] for what that used to cost.
+//! so comments and formatting outside the claimed spans remain unchanged.
 
 use rumoca_ir_ast::ClassDef;
 

@@ -39,6 +39,12 @@ instance modifiers. Follow the
 [declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
 and validate the composed participant through its production scene gate.
 
+Automatic target selection requires a runnable model, block, or class. A file
+containing only packages, records, connectors, types, or functions has no
+simulation target. Component metadata uses Rumoca's complete expression
+rendering and already-decoded string values; preserve literal quotes,
+backslashes, and description concatenation when inspecting authored facts.
+
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
 the physical vehicle identity after compile and reload.
@@ -490,14 +496,10 @@ post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id"
 just unpauses (no recompile). `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only.
 
-If a live compile fails on an unbalanced DAE, its ordinary Modelica Error event
-in Recent status events explains why simulation did not start and lists the
-unknowns Rumoca's structural matcher could not pair with equations, plus their
-categories and referencing equation rows. Selecting the row expands the full
-message. `GetDiagnostics` also returns the explanation with the structured
-compiler findings. Those names identify values the current equations cannot
-determine; add or correct independent equations or constraints. The diagnostic
-DAE is never simulated.
+A strict compile failure is terminal and appears as a Modelica Error in Recent
+status events. Selecting the row expands Rumoca's checked phase diagnostic;
+`GetDiagnostics` exposes the structured compiler findings. Correct the authored
+equations or constraints before requesting another solve.
 
 ## 4. Recipe B — build an experiment (batch + parameter sweep)
 

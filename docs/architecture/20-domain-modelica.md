@@ -846,14 +846,10 @@ Verb semantics:
 | `RestartActiveModel` | Composition of `ResetActiveModel` + `RunActiveModel`. |
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
 
-When strict DAE compilation rejects an unbalanced model, the compiler runs
-Rumoca's diagnostic-only unbalanced DAE path and shared structural matcher.
-It appends the unmatched unknown names, categories, and referencing equation
-rows to the compile error when available. This diagnostic DAE never reaches a
-stepper. The complete explanation is part of the ordinary Modelica Error
-status event, which opens in the existing history popup for a terminal fault.
-The same explanation is included in the document's structured diagnostics.
-The author can then add or correct enough independent equations or constraints.
+Strict DAE compilation failures remain terminal. Rumoca's checked phase
+report supplies the balance and source diagnostics, which reach the Modelica
+Error status, history popup, and document diagnostics. The author must correct
+the independent equations or constraints before a solver can be prepared.
 
 The toolbar (`ui/panels/model_view/render.rs`) maps these to one
 Compile button (🚀 → `CompileModel`, compile only), a Run/Pause

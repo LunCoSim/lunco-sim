@@ -257,11 +257,10 @@ mod native {
             .collect();
         stepper_opts.initial_inputs.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut stepper =
-            match lunco_modelica_solver::simulation_session::cli(&comp_res.dae, stepper_opts) {
-                Ok(s) => s,
-                Err(e) => die(&format!("stepper init failed: {e:?}")),
-            };
+        let mut stepper = match rumoca_sim::SimulationSession::new(&comp_res.dae, stepper_opts) {
+            Ok(s) => s,
+            Err(e) => die(&format!("stepper init failed: {e:?}")),
+        };
 
         // Capture the initialized observable surface once for a stable CSV schema.
         let initial_state: Vec<(String, f64)> = stepper

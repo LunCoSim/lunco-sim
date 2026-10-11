@@ -120,6 +120,8 @@ pub struct ComponentEntry {
     /// Description string from the declaration (e.g. `"Resistance"` in
     /// `Real R "Resistance";`). Empty when none was provided.
     pub description: String,
+    /// Unit string value decoded by Rumoca from the declaration.
+    pub unit: Option<String>,
     /// Modifications attached to the declaration
     /// (e.g. `{"min": "0", "max": "100"}` for `Real x(min=0, max=100)`).
     pub modifications: HashMap<String, String>,
@@ -452,6 +454,7 @@ impl ModelicaIndex {
             name: name.to_string(),
             type_name: type_name.to_string(),
             description: String::new(),
+            unit: None,
             modifications: HashMap::new(),
             source_range: None,
             placement: None,
@@ -596,6 +599,10 @@ impl ModelicaIndex {
             return;
         };
         if let Some(entry) = self.components.iter_mut().find(|c| c.key == key) {
+            if param == "unit" {
+                // The decoded value arrives at the next successful AST reconcile.
+                entry.unit = None;
+            }
             entry
                 .modifications
                 .insert(param.to_string(), value.to_string());
@@ -845,11 +852,9 @@ fn insert_class_recursive(
     source: &str,
 ) {
     // Description from the class header (`model X "desc"`).
-    let description = class_def
-        .description
-        .first()
-        .map(|t| t.text.as_ref().trim_matches('"').to_string())
-        .unwrap_or_default();
+    let description =
+        lunco_modelica_ast::ast_extract::description_from_tokens(&class_def.description)
+            .unwrap_or_default();
 
     // Direct child class qualified names — rebuild's recursion fills
     // them in below.
@@ -919,9 +924,7 @@ fn insert_class_recursive(
     // preserves declaration order via `components_by_class`.
     //
     // Description + modifications come from `lunco_modelica_ast::ast_extract::extract_components_for_class`
-    // which runs the description + modification-expression flattening
-    // logic. Calling that public helper keeps Index in lockstep with
-    // the inspector's previous direct-AST path.
+    // so the index and inspector share Rumoca expression rendering and decoded descriptions.
     let infos = lunco_modelica_ast::ast_extract::extract_components_for_class(class_def);
     let info_by_name: HashMap<String, lunco_modelica_ast::ast_extract::ComponentInfo> =
         infos.into_iter().map(|i| (i.name.clone(), i)).collect();
@@ -945,6 +948,10 @@ fn insert_class_recursive(
             name: name.to_string(),
             type_name: format!("{}", comp.type_name),
             description,
+            unit: comp
+                .modifications
+                .get("unit")
+                .and_then(lunco_modelica_ast::ast_extract::string_literal_value),
             modifications,
             source_range: Some(TextRange::new(
                 comp.name_token.location.start as usize,
@@ -1087,6 +1094,29 @@ fn map_variability(v: &AstVariability) -> Variability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_metadata_preserves_rumoca_decoded_units_and_descriptions() {
+        let source = r#"model Labels "\"Model\" " + "description"
+  Real value(unit="\"K\"", min=sin(2)) "\"Value\" " + "description";
+end Labels;"#;
+        let ast = lunco_modelica_ast::parse_to_ast(source, "labels.mo").unwrap();
+        let mut index = ModelicaIndex::default();
+        index.rebuild_from_ast(&ast, source);
+        assert_eq!(index.classes["Labels"].description, "\"Model\" description");
+        let entry = index.find_component("Labels", "value").unwrap();
+        assert_eq!(entry.unit.as_deref(), Some("\"K\""));
+        assert_eq!(entry.description, "\"Value\" description");
+        assert_eq!(entry.modifications["min"], "sin(2)");
+        index.patch_parameter_changed("Labels", "value", "unit", "\"m\"");
+        assert!(
+            index
+                .find_component("Labels", "value")
+                .unwrap()
+                .unit
+                .is_none()
+        );
+    }
 
     const SRC: &str = "within Demo;\n\nmodel RC\n  parameter Real R = 100;\n  Real x;\n  Modelica.Electrical.Analog.Basic.Resistor resistor;\nend RC;\n";
 

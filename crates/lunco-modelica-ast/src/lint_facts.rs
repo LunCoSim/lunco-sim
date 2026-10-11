@@ -526,7 +526,7 @@ mod tests {
             key(&facts, "inputs"),
             &H::Array(vec![H::map([
                 ("name", H::Str("throttle".to_string())),
-                ("default", H::Float(0.0)),
+                ("default", H::Unit),
             ])])
         );
     }

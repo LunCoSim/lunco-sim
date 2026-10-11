@@ -311,8 +311,7 @@ fn model_signal_meta(
         .and_then(|entry| entry.unit.clone())
         .or_else(|| {
             entry
-                .and_then(|entry| entry.modifications.get("unit"))
-                .map(|unit| unit.trim_matches('"').to_string())
+                .and_then(|entry| entry.unit.clone())
                 .filter(|unit| !unit.is_empty())
         })
         .or_else(|| connector_metadata.map(|(unit, _)| unit.to_string()));

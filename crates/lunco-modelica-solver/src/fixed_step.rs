@@ -13,21 +13,18 @@
 
 use indexmap::IndexMap;
 use rumoca_compile::compile::Dae;
+use rumoca_eval_solve::projection_policy::{
+    ALGEBRAIC_REFRESH_MAX_ITERS, ALGEBRAIC_REFRESH_TOLERANCE,
+};
 use rumoca_ir_solve::SolveModel;
 use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
 use rumoca_solver::SolveRuntime;
-
-const ALGEBRAIC_TOL: f64 = 1.0e-10;
-const ALGEBRAIC_MAX_ITERS: usize = 256;
 
 /// A fixed-step RK4 session over a continuous, event-free Rumoca solve model.
 pub struct FixedStepSession {
     runtime: SolveRuntime,
     state: Vec<f64>,
-    initial_state: Vec<f64>,
     params: Vec<f64>,
-    initial_params: Vec<f64>,
-    input_values: IndexMap<String, f64>,
     time_origin: f64,
     step_index: u64,
     fixed_dt: f64,
@@ -97,11 +94,8 @@ impl FixedStepSession {
 
         Ok(Self {
             runtime,
-            state: initial_state.clone(),
-            initial_state,
+            state: initial_state,
             params: model.parameters.clone(),
-            initial_params: model.parameters.clone(),
-            input_values: IndexMap::new(),
             time_origin: options.t_start,
             step_index: 0,
             fixed_dt,
@@ -111,6 +105,11 @@ impl FixedStepSession {
     /// Set one runtime input. Input values are part of the solve parameter tail,
     /// exactly as in Rumoca's adaptive session.
     pub fn set_input(&mut self, name: &str, value: f64) -> Result<(), SimulationDiagnosticError> {
+        if !value.is_finite() {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "input '{name}' must be finite, got {value}"
+            )));
+        }
         let Some(index) = self
             .runtime
             .model
@@ -129,14 +128,6 @@ impl FixedStepSession {
             )));
         };
         *slot = value;
-        self.input_values.insert(name.to_string(), value);
-        Ok(())
-    }
-
-    pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
-        for (name, value) in inputs {
-            self.set_input(name, *value)?;
-        }
         Ok(())
     }
 
@@ -144,9 +135,6 @@ impl FixedStepSession {
     /// rejected rather than rounded or subdivided, preserving the prediction
     /// contract at the call boundary.
     pub fn step(&mut self, dt: f64) -> Result<(), SimulationDiagnosticError> {
-        if dt <= 0.0 {
-            return Ok(());
-        }
         if dt.to_bits() != self.fixed_dt.to_bits() {
             return Err(SimulationDiagnosticError::Solver(format!(
                 "fixed-rk4 received dt={dt:?}, but its configured step is {:?}",
@@ -156,49 +144,11 @@ impl FixedStepSession {
         self.rk4_step()
     }
 
-    pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
-        if target_time <= self.time() {
-            return Ok(());
-        }
-        let steps = ((target_time - self.time()) / self.fixed_dt).round();
-        let represented = steps * self.fixed_dt;
-        let tolerance = self.fixed_dt * 1.0e-12;
-        if !steps.is_finite() || (represented - (target_time - self.time())).abs() > tolerance {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "fixed-rk4 cannot advance from {} to {}: target is not on the configured step lattice ({:?})",
-                self.time(),
-                target_time,
-                self.fixed_dt,
-            )));
-        }
-        for _ in 0..steps as usize {
-            self.step(self.fixed_dt)?;
-        }
-        Ok(())
-    }
-
-    pub fn reset(&mut self, t_start: f64) -> Result<(), SimulationDiagnosticError> {
-        if !t_start.is_finite() {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "fixed-rk4 reset time {t_start} must be finite"
-            )));
-        }
-        self.state.clone_from(&self.initial_state);
-        self.params.clone_from(&self.initial_params);
-        self.input_values.clear();
-        self.time_origin = t_start;
-        self.step_index = 0;
-        Ok(())
-    }
-
     pub fn time(&self) -> f64 {
         self.time_origin + self.step_index as f64 * self.fixed_dt
     }
 
     pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
-        if let Some(value) = self.input_values.get(name).copied() {
-            return Ok(Some(value));
-        }
         let values = self.visible_values()?;
         Ok(values.get(name).copied())
     }
@@ -210,26 +160,8 @@ impl FixedStepSession {
         })
     }
 
-    pub fn values_for(
-        &self,
-        names: &[String],
-    ) -> Result<IndexMap<String, f64>, SimulationDiagnosticError> {
-        let values = self.visible_values()?;
-        let mut selected = IndexMap::with_capacity(names.len());
-        for name in names {
-            if let Some(value) = values.get(name).copied() {
-                selected.insert(name.clone(), value);
-            }
-        }
-        Ok(selected)
-    }
-
     pub fn input_names(&self) -> &[String] {
         self.runtime.model.problem.solve_layout.input_scalar_names()
-    }
-
-    pub fn variable_names(&self) -> &[String] {
-        &self.runtime.model.visible_names
     }
 
     fn rk4_step(&mut self) -> Result<(), SimulationDiagnosticError> {
@@ -267,8 +199,8 @@ impl FixedStepSession {
                 time,
                 state,
                 &self.params,
-                ALGEBRAIC_TOL,
-                ALGEBRAIC_MAX_ITERS,
+                ALGEBRAIC_REFRESH_TOLERANCE,
+                ALGEBRAIC_REFRESH_MAX_ITERS,
             )
             .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))
     }
@@ -280,24 +212,18 @@ impl FixedStepSession {
                 self.time(),
                 &self.state,
                 &self.params,
-                ALGEBRAIC_TOL,
-                ALGEBRAIC_MAX_ITERS,
+                ALGEBRAIC_REFRESH_TOLERANCE,
+                ALGEBRAIC_REFRESH_MAX_ITERS,
             )
             .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))?;
-        let values = self
-            .runtime
-            .visible_values(&solver_y, &self.params, self.time())
-            .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))?;
-        let mut result = IndexMap::with_capacity(self.runtime.model.visible_names.len());
-        for (name, value) in self.runtime.model.visible_names.iter().zip(values) {
-            result.insert(name.clone(), value);
-        }
-        result.extend(
-            self.input_values
-                .iter()
-                .map(|(name, value)| (name.clone(), *value)),
-        );
-        Ok(result)
+        self.runtime
+            .visible_values_for_names(
+                &solver_y,
+                &self.params,
+                self.time(),
+                &self.runtime.model.visible_names,
+            )
+            .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))
     }
 }
 

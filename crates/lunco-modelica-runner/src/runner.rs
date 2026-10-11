@@ -900,17 +900,16 @@ pub fn drive_run(
             run_batch_sim(dae, &batch_opts, output_budget, started, sink);
         }
         lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper =
-                match lunco_modelica_solver::simulation_session::interactive(dae, stepper_opts) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sink.emit(RunUpdate::Failed {
-                            error: format!("stepper init failed: {e:?}"),
-                            partial: None,
-                        });
-                        return;
-                    }
-                };
+            let mut stepper = match rumoca_sim::SimulationSession::new(dae, stepper_opts) {
+                Ok(s) => s,
+                Err(e) => {
+                    sink.emit(RunUpdate::Failed {
+                        error: format!("stepper init failed: {e:?}"),
+                        partial: None,
+                    });
+                    return;
+                }
+            };
             bevy::log::info!(
                 "[runner] simulate begin (interactive): t={}..{} dt={:?}",
                 bounds.t_start,

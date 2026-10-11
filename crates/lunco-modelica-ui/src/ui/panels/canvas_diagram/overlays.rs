@@ -294,7 +294,7 @@ pub(super) fn empty_overlay_class_info(
     };
 
     // Locate the class. Prefer an exact name match; fall back to the
-    // first non-package class (matches `extract_model_name`).
+    // first non-package class for an authoring preview.
     let class_def = locate_class(&ast_arc, class_name);
     let Some(class) = class_def else {
         return (None, None, None, vec![], vec![], vec![]);
@@ -338,11 +338,7 @@ pub(super) fn empty_overlay_class_info(
         ClassType::Function => Some("function"),
         ClassType::Operator => Some("operator"),
     };
-    let description: Option<String> = class
-        .description
-        .first()
-        .map(|t| t.text.as_ref().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty());
+    let description = lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
 
     let mut params = Vec::new();
     let mut inputs = Vec::new();
@@ -367,13 +363,7 @@ pub(super) fn empty_overlay_class_info(
 ///
 /// Lookup is delegated to `lunco_modelica_index::class_lookup::find_class_by_qualified_name`,
 /// which handles both short names (`"PID"`) and qualified names with
-/// within-clause tolerance (`"Modelica.Blocks.PID"`). The previous
-/// hand-rolled walk only matched literal IndexMap keys, so qualified
-/// input always fell through to the picker silently — the lookup
-/// half of the function was effectively dead. The fallback (first
-/// non-package class) is kept explicit because callers do pass it
-/// `extract_model_name_from_ast`'s output and rely on the picker
-/// when that name isn't structurally findable.
+/// within-clause tolerance (`"Modelica.Blocks.PID"`).
 pub(super) fn locate_class<'a>(
     ast: &'a rumoca_compile::parsing::ast::StoredDefinition,
     name: &str,

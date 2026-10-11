@@ -130,6 +130,13 @@ the first entity, a fabricated value, or an older behavior.
 
 ## Existing seams to reuse
 
+- Rumoca owns Modelica expression rendering, decoded parser string tokens,
+  string escaping, checked initialization, and visible solver values. Reuse
+  those APIs directly; keep source-splice authoring and co-simulation admission
+  at their LunCoSim owners. See the
+  [Rumoca ownership review](../../docs/architecture/29-rumoca-runtime-contracts.md#ownership-review)
+  for the retained upstream extension boundaries.
+
 - `lunco-hooks` is the backend-neutral typed hook registry; `lunco-hooks-rhai`
   is the one Rhai adapter.
 - `lunco-scripting-rhai-world` already registers authored policy files from

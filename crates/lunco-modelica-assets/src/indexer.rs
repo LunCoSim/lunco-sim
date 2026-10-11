@@ -588,23 +588,9 @@ impl SourceLibraryIndexer {
                     // the explicit binding (`= expr`); fall back
                     // to `start=` modification (`parameter Real
                     // R(start=1)`) when no binding is present.
-                    // Numeric and string literals show as-written;
-                    // enum refs collapse to the leaf name (matches
-                    // OMEdit); arithmetic and array literals use the shared
-                    // AST display projection.
-                    let default = comp
-                        .binding
-                        .as_ref()
-                        .map(lunco_modelica_ast::ast_extract::format_expression_for_display)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| {
-                            // `comp.start: Expression` — Empty when no
-                            // explicit start was given. The shared display
-                            // projection returns "" for `Empty` so this is safe.
-                            lunco_modelica_ast::ast_extract::format_expression_for_display(
-                                &comp.start,
-                            )
-                        });
+                    // Rumoca renders every parsed expression. An omitted binding
+                    // uses the declaration's start expression; Empty renders empty.
+                    let default = comp.binding.as_ref().unwrap_or(&comp.start).to_string();
                     // TODO: resolve `unit` from the type definition.
                     // For `parameter SI.Torque tau_constant` the
                     // authoritative unit lives on `Modelica.Units.SI.Torque`
@@ -1540,7 +1526,7 @@ mod parsed_bundle_tests {
 
     #[test]
     fn parsed_bundle_roundtrips_in_memory() {
-        let source = "model M Real x; equation der(x) = -x; end M;";
+        let source = "function External input Real x; output Real y; external \"C\" y = external_call(x); end External; model M Real x; equation der(x) = -x; end M;";
         let docs = vec![
             rumoca_compile::compile::ParsedSourceDocument::parse("M.mo", source)
                 .expect("parse sample model"),

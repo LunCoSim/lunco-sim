@@ -87,15 +87,12 @@ fn extract_lunco_plot_node_record(expr: &Expression) -> Option<LunCoPlotNode> {
     }
     let args = call_args(expr)?;
     let extent = named_arg(args, "extent").and_then(extract_extent)?;
-    let signal = named_arg(args, "signal")
-        .and_then(extract_string)
-        .map(|s| s.trim_matches('"').to_string())?;
+    let signal = named_arg(args, "signal").and_then(crate::ast_extract::string_literal_value)?;
     if signal.is_empty() {
         return None;
     }
     let title = named_arg(args, "title")
-        .and_then(extract_string)
-        .map(|s| s.trim_matches('"').to_string())
+        .and_then(crate::ast_extract::string_literal_value)
         .unwrap_or_default();
     Some(LunCoPlotNode {
         extent,
@@ -614,15 +611,21 @@ fn extract_text(args: &[Expression]) -> Option<Text> {
     let (text_string, text_string_dynamic) = if call_name(text_string_arg) == Some("DynamicSelect")
     {
         let cargs = call_args(text_string_arg).unwrap_or(&[]);
-        let s = cargs.first().and_then(extract_string).unwrap_or_default();
+        let s = cargs
+            .first()
+            .and_then(crate::ast_extract::string_literal_value)
+            .unwrap_or_default();
         let d = cargs.get(1).and_then(expr_to_dyn);
         (s, d)
     } else {
-        (extract_string(text_string_arg).unwrap_or_default(), None)
+        (
+            crate::ast_extract::string_literal_value(text_string_arg).unwrap_or_default(),
+            None,
+        )
     };
     Some(Text {
         extent,
-        text_string: text_string.trim_matches('"').to_string(),
+        text_string,
         text_string_dynamic,
         font_size: named_arg(args, "fontSize")
             .and_then(extract_number)
@@ -665,8 +668,9 @@ fn extract_bitmap(args: &[Expression]) -> Option<Bitmap> {
     let extent = named_arg(args, "extent").and_then(extract_extent)?;
     Some(Bitmap {
         extent,
-        filename: named_arg(args, "fileName").and_then(extract_string),
-        image_source: named_arg(args, "imageSource").and_then(extract_string),
+        filename: named_arg(args, "fileName").and_then(crate::ast_extract::string_literal_value),
+        image_source: named_arg(args, "imageSource")
+            .and_then(crate::ast_extract::string_literal_value),
         origin: named_arg(args, "origin")
             .and_then(extract_point)
             .unwrap_or(Point { x: 0.0, y: 0.0 }),
@@ -778,17 +782,6 @@ fn extract_number(expr: &Expression) -> Option<f64> {
     crate::ast_extract::numeric_of(expr)
 }
 
-fn extract_string(expr: &Expression) -> Option<String> {
-    match expr {
-        Expression::Terminal {
-            terminal_type: TerminalType::String,
-            token,
-            ..
-        } => Some(token.text.to_string()),
-        _ => None,
-    }
-}
-
 fn extract_enum_ident(expr: &Expression) -> Option<String> {
     match expr {
         Expression::ComponentReference(cref) => {
@@ -821,9 +814,7 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
                 token.text.parse().ok().map(DynExpr::Const)
             }
-            TerminalType::String => {
-                Some(DynExpr::StringLit(token.text.trim_matches('"').to_string()))
-            }
+            TerminalType::String => Some(DynExpr::StringLit(token.text.to_string())),
             _ => None,
         },
         Expression::ComponentReference(cref) => {

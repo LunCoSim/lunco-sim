@@ -1,8 +1,8 @@
-//! One construction boundary for rumoca simulation sessions.
+//! Live solver selection over checked Rumoca FMI components.
 
 use rumoca_compile::compile::Dae;
 use rumoca_ir_solve::fmi::FmiComponent;
-use rumoca_sim::{SimOptions, SimulationDiagnosticError, SimulationSession};
+use rumoca_sim::{SimOptions, SimulationDiagnosticError};
 
 use crate::fixed_step::FixedStepSession;
 use lunco_experiments::solver::SolverSpec;
@@ -22,13 +22,6 @@ impl LiveStepper {
         match self {
             Self::Adaptive(session) => session.set_input(name, value).map_err(adaptive_error),
             Self::Fixed(session) => session.set_input(name, value),
-        }
-    }
-
-    pub fn reset(&mut self, t_start: f64) -> Result<(), SimulationDiagnosticError> {
-        match self {
-            Self::Adaptive(session) => session.reset(t_start).map_err(adaptive_error),
-            Self::Fixed(session) => session.reset(t_start),
         }
     }
 
@@ -76,25 +69,15 @@ impl LiveStepper {
 
 /// Build the real-time co-simulation session.
 ///
-/// The worker owns the fixed-step live solver policy; this boundary owns the
-/// rumoca construction so the live path cannot grow a second constructor.
+/// This boundary selects the registered live backend. Rumoca owns checked
+/// preparation and adaptive session construction.
 pub fn live(
     dae: &Dae,
     spec: &SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
-    let component = lower_for_live(dae, &options)?;
+    let component = rumoca_sim::prepare_fmi_component(dae, &options)?;
     live_from_fmi_component(&component, spec, options)
-}
-
-/// Lower a compiled DAE once at the live-session boundary. Callers that own a
-/// worker-local prepared-model cache use this function directly and then pass
-/// the cached result to [`live_from_fmi_component`].
-pub fn lower_for_live(
-    dae: &Dae,
-    options: &SimOptions,
-) -> Result<FmiComponent, SimulationDiagnosticError> {
-    rumoca_sim::prepare_fmi_component(dae, options)
 }
 
 /// Build a live session from a checked FMI component. This keeps solver construction
@@ -116,25 +99,4 @@ pub fn live_from_fmi_component(
             spec.id.as_str()
         ))),
     }
-}
-
-/// Build an interactive workbench/experiment session.
-pub fn interactive(
-    dae: &Dae,
-    options: SimOptions,
-) -> Result<SimulationSession, SimulationDiagnosticError> {
-    construct(dae, options)
-}
-
-/// Build an explicit command-line or diagnostic-probe session.
-pub fn cli(dae: &Dae, options: SimOptions) -> Result<SimulationSession, SimulationDiagnosticError> {
-    construct(dae, options)
-}
-
-/// The sole production construction of a rumoca simulation session.
-fn construct(
-    dae: &Dae,
-    options: SimOptions,
-) -> Result<SimulationSession, SimulationDiagnosticError> {
-    SimulationSession::new(dae, options)
 }
