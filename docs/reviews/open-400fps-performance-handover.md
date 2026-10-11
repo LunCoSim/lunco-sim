@@ -1,5 +1,48 @@
 # High-quality realtime performance handover
 
+## Native preprocessing binding lifetime — 2026-10-11
+
+The native `prepare_preprocess_bind_groups` cost of 0.50–0.61 ms per settled
+frame includes binding allocation, but allocation capacity is not a reuse key.
+Bevy 0.19.1's `collect_buffers_for_phase` exchanges the per-phase resources
+with the frame-level buffer tables, clearing and retaining the old allocations
+for the next preparation. This alternates the actual indirect and phase-buffer
+cohorts even when their sizes and scene counts stay constant. Native view groups
+must also be available on each current extracted view before a preparation can
+be skipped.
+
+Two owned High-quality sandbox captures observe zero consecutive-frame
+admissions: 2,969 and 2,874 misses. The complete binding-fact collection alone
+costs 78.5 and 87.0 microseconds mean across these captures, so retaining that
+gate would add work without removing native preparation. A sampled lifetime
+capture verifies a same-size indirect CPU-metadata buffer changing from
+`BufferId(2246)` to `BufferId(2256)` at 2,808 bytes, and missing native view groups
+before preparation. RenderDevice changes once at startup and remains unchanged
+on the following 3,006 checks. Pipeline-cache change ticks cannot establish
+binding invalidation: its native queue-processing system mutably accesses it
+on every render frame; use actual layout and resource facts.
+
+The `preprocess-bindings-` receipts under `target/entity-tree-perf/` retain the
+three native captures (392,838,102; 393,727,331; 400,289,810 bytes), successful
+native exports, exact artifact/source hashes and owned-process checks. The
+lifetime summary separates the two admission captures from the sampled
+invalidation diagnostic. Each owned app/collector exits zero and releases API
+4202 and Tracy 8087. Instrumentation and the ineffective gate are removed;
+production Rust sources match their admitted revision byte for byte. Package
+cleanup removes only this checkout's root-package outputs, and the verified
+normal artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+is restored. Its unchanged 360-check replay and 18-check history/restart evidence
+remains valid. No product speedup, loading improvement or new determinism
+acceptance is claimed by these diagnostic captures.
+
+The current binding-construction owner remains native. Any future reuse must
+cover the actual buffer cohort, binding offsets/ranges, layout descriptors,
+occlusion textures, work modes/counts and bin-job parameters, and publish
+complete groups to current views at the native deferred boundary. A one-frame
+latch or a capacity-only key does not meet that contract. Continue with measured
+application-owned costs rather than adding that extra per-frame work.
+
 ## Measure local-shadow reuse candidacy — 2026-10-11
 
 Native exports show twelve nonempty 4096-by-4096 local maps, with three to six

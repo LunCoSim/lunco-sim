@@ -89,6 +89,18 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Architecture checks
 
+When attributing native GPU preprocessing, trace allocation identity rather
+than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges
+per-phase and frame-level buffer cohorts each frame; equal sizes do not mean
+consecutive bindings agree. Native view groups must be present on current
+extracted views. Compare actual buffer identities, binding offsets/ranges,
+layout descriptors, occlusion textures, work modes/counts and bin-job
+parameters, and measure admission overhead and native rebuild frequency.
+Pipeline-cache change ticks alone are unsuitable: native queue processing
+mutably accesses that resource every frame. Preserve native deferred publication
+and every GPU preprocessing/draw pass. See the current handover for the owned
+binding-lifetime captures; they establish no product speedup.
+
 For authored image preparation, trace `lunco-materials` typed
 `PreparedShaderImage` loading: native decoding and owned RGBA8 filtering precede
 source/child publication. CPU filtering awaits the async compute pool with an
