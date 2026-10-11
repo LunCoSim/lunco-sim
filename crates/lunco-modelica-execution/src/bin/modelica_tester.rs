@@ -50,20 +50,18 @@ mod native {
         println!("DAE IR Size: {} bytes", json_ir.len());
 
         // 3. Dump DAE state list + equations before stepper init.
-        println!("\n--- DAE states ---");
-        for (name, v) in result.dae.variables.states.iter() {
-            println!("  {} (size={})", name, v.size());
-        }
-        println!(
-            "--- DAE equations ({}) ---",
-            result.dae.continuous.equations.len()
-        );
-        for (i, eq) in result.dae.continuous.equations.iter().enumerate() {
+        result.dae.inspect(|view| {
+            println!("\n--- DAE states ---");
+            for (_, variable) in view.variables().filter(|(_, variable)| {
+                variable.role() == rumoca_compile::compile::VariableRole::State
+            }) {
+                println!("  {} (size={})", variable.name(), variable.scalar_count());
+            }
             println!(
-                "  [{i}] origin={} scalar_count={}",
-                eq.origin, eq.scalar_count
+                "--- DAE equations ({}) ---",
+                view.continuous_equation_count()
             );
-        }
+        });
 
         // 4. Build a stepper and actually step it. Tolerances + dt +
         //    step count overridable via env vars so we can sweep them
@@ -82,7 +80,7 @@ mod native {
         );
         // Base options come from the same library helper the app and `modelica_run`
         // use — in particular it carries the probe horizon into `SimOptions::t_end`,
-        // which the session clamps every advance at. `ATOL`/`RTOL` are then set
+        // which defines the experiment span. `ATOL`/`RTOL` are then set
         // independently: sweeping them apart is exactly what this probe is for, and
         // `RunBounds::tolerance` is a single scalar applied to both.
         let bounds = lunco_experiments::RunBounds {

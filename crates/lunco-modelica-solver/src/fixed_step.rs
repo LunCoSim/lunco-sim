@@ -13,9 +13,9 @@
 
 use indexmap::IndexMap;
 use rumoca_compile::compile::Dae;
-use rumoca_eval_solve::SolveRuntime;
 use rumoca_ir_solve::SolveModel;
 use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
+use rumoca_solver::SolveRuntime;
 
 const ALGEBRAIC_TOL: f64 = 1.0e-10;
 const ALGEBRAIC_MAX_ITERS: usize = 256;
@@ -30,7 +30,6 @@ pub struct FixedStepSession {
     input_values: IndexMap<String, f64>,
     time_origin: f64,
     step_index: u64,
-    t_end: f64,
     fixed_dt: f64,
 }
 
@@ -38,19 +37,20 @@ impl FixedStepSession {
     /// Lower and prepare a DAE for the fixed-step backend.
     pub fn new(dae: &Dae, options: SimOptions) -> Result<Self, SimulationDiagnosticError> {
         let lower_started = web_time::Instant::now();
-        let model = rumoca_sim::lower_for_simulation_with_overrides(dae, &options)?;
+        let component = rumoca_sim::prepare_fmi_component(dae, &options)?;
         let lower_elapsed = lower_started.elapsed();
-        Self::from_solve_model(&model, options, Some(lower_elapsed))
+        Self::from_continuous_model(
+            component.runtime_view().model(),
+            options,
+            Some(lower_elapsed),
+        )
     }
 
-    /// Prepare a fixed-step session from an already-lowered solve model.
-    ///
-    /// DAE lowering is immutable with respect to a compiled artifact and its
-    /// parameter overrides. The worker owns a cache of these solve models, so
-    /// Reset and a second USD instance do not repeat the expensive structural
-    /// lowering pass. The model is borrowed only while `SolveRuntime` copies
-    /// the executable solve representation into the session.
-    pub fn from_solve_model(
+    /// Prepare a qualified fixed-step session from a checked FMI runtime view.
+    /// The worker retains the checked component across resets and equivalent
+    /// instances. `SolveRuntime` copies its executable representation into this
+    /// session; the owner then validates the continuous fixed-step subset.
+    pub(crate) fn from_continuous_model(
         model: &SolveModel,
         options: SimOptions,
         lower_elapsed: Option<web_time::Duration>,
@@ -65,14 +65,9 @@ impl FixedStepSession {
                 "fixed-rk4 requires a finite positive SimOptions::dt".into(),
             ));
         }
-        if !options.t_start.is_finite() || !options.t_end.is_finite() {
+        if !options.t_start.is_finite() {
             return Err(SimulationDiagnosticError::Solver(
-                "fixed-rk4 requires finite simulation bounds".into(),
-            ));
-        }
-        if options.t_end < options.t_start {
-            return Err(SimulationDiagnosticError::Solver(
-                "fixed-rk4 requires t_end >= t_start".into(),
+                "fixed-rk4 requires a finite start time".into(),
             ));
         }
 
@@ -109,7 +104,6 @@ impl FixedStepSession {
             input_values: IndexMap::new(),
             time_origin: options.t_start,
             step_index: 0,
-            t_end: options.t_end,
             fixed_dt,
         })
     }
@@ -159,19 +153,10 @@ impl FixedStepSession {
                 self.fixed_dt,
             )));
         }
-        let next_time = self.time_origin + (self.step_index as f64 + 1.0) * self.fixed_dt;
-        if next_time > self.t_end && next_time - self.t_end > self.fixed_dt * 1.0e-12 {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "fixed-rk4 step at t={} would cross t_end={}",
-                self.time(),
-                self.t_end,
-            )));
-        }
         self.rk4_step()
     }
 
     pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
-        let target_time = target_time.min(self.t_end);
         if target_time <= self.time() {
             return Ok(());
         }
@@ -193,9 +178,9 @@ impl FixedStepSession {
     }
 
     pub fn reset(&mut self, t_start: f64) -> Result<(), SimulationDiagnosticError> {
-        if !t_start.is_finite() || t_start > self.t_end {
+        if !t_start.is_finite() {
             return Err(SimulationDiagnosticError::Solver(format!(
-                "fixed-rk4 reset time {t_start} is outside its finite simulation bounds"
+                "fixed-rk4 reset time {t_start} must be finite"
             )));
         }
         self.state.clone_from(&self.initial_state);
@@ -207,12 +192,7 @@ impl FixedStepSession {
     }
 
     pub fn time(&self) -> f64 {
-        let time = self.time_origin + self.step_index as f64 * self.fixed_dt;
-        if (time - self.t_end).abs() <= self.fixed_dt * 1.0e-12 {
-            self.t_end
-        } else {
-            time
-        }
+        self.time_origin + self.step_index as f64 * self.fixed_dt
     }
 
     pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {

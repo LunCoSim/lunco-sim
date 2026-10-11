@@ -61,6 +61,14 @@ assigned to the analyzed face and use its sourced engineering optical/thermal
 properties. `UsdShade` shader presets are presentation mappings only and must
 not be used as Modelica property sources.
 
+For solar-driven electrical or thermal models, use the probe’s required physical
+`sun_irradiance_w_m2`, sampled `sun_visibility`, and framed direction. Keep
+incidence and conversion in Modelica; connect incident radiant power to thermal
+equations with authored absorption properties. Missing demanded samples fault
+the exchange rather than becoming zero. See the
+[physical illumination contract](../../docs/architecture/terrain-layered-rendering.md)
+for area sampling, explicit optical proxies and production scene gates.
+
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `"$LUNICA_BIN" --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
@@ -175,7 +183,7 @@ content in the source key captured from the successful strict compiler's
 participating-source closure before clearing user overlays. Generated class/network-title identity is
 normalized; equations, parameters, initial values, participating siblings, and
 contributing library bytes remain structural. Unrelated sibling edits and runtime
-document IDs do not invalidate prepared solve IR. The captured key remains with
+document IDs do not invalidate prepared FMI components. The captured key remains with
 the immutable DAE through shared reuse and resets; the precompile DAE cache uses
 the full submitted input set until the strict closure is known. It does not scan
 the complete Modelica tree during the first live stepper build.
@@ -259,7 +267,7 @@ bounded preparation pool because the DAE input and solve options are immutable.
 The worker alone commits the resulting solve model and constructs the live
 stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
 ordered behind that commit. Persistent solve-IR entries are keyed by structural
-participating-source closure identity, solver, and exact parameter-override bits.
+participating-source closure identity, solver, and exact parameter-override and initial-input bits.
 Source-root changes invalidate compilation; bounded prepared models remain
 reusable when fresh strict resolution yields the same participating closure.
 A contributing-library edit changes that closure key. Native disk records use
@@ -564,8 +572,8 @@ runtime input variables.
 - `n_intervals` — output **NumberOfIntervals**: emits `n+1` evenly-spaced
   samples. Takes precedence over `dt` when set.
 - `tolerance` — solver tolerance.
-- `solver` — family: `"bdf"|"dassl"|"ida"` → BDF; `"esdirk34"|"rk"|"dopri"|"trbdf2"`
-  → ESDIRK34; `"auto"`/omit → backend default (BDF).
+- `solver` — registered ID: `"bdf"`, `"rk45"`, or `"fixed-rk4"`. Omission selects
+  the highest-ranked capable backend. Unknown IDs are rejected.
 - `h0` — initial step size (seconds).
 - Omit any field to fall back to the model's `experiment(...)` annotation, then
   the backend default.
@@ -868,3 +876,16 @@ URLs use their path component when selecting the executor.
 Twin Modelica directories may use `.` to designate the admitted Twin root;
 the directory resolver preserves this manifest semantic without permitting
 parent traversal or using it as a concrete file address.
+
+For causal USD models, initialization waits for all wired producers to publish
+finite current samples. Explicit unconnected USD inputs and connected samples
+enter `Compile.initial_inputs`; no interface placeholder is an initialization
+value. An unbound input without a declaration default or admitted runtime value
+fails visibly. Reset and reinitialization admit current input values before
+solving initialization equations.
+
+`modelica_controller_inputs.rhai` accepts the exact authored DescentGuidance
+source snapshot in `RunScenarioAsset.params` (`source` and
+`source_uri: "lunco://models/DescentGuidance.mo"`). It checks sensor feedback,
+current gain initialization, paused input changes, and the authority gate.
+Reset admits current values even when the worker has not stepped after a write.

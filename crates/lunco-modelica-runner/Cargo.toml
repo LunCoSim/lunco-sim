@@ -22,6 +22,7 @@ lunco-workspace = { path = "../lunco-workspace" }
 rumoca-compile.workspace = true
 rumoca-sim.workspace = true
 rumoca-solver.workspace = true
+rumoca-eval-solve.workspace = true
 web-time.workspace = true
 
 [lints]

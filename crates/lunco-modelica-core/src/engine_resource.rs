@@ -183,8 +183,11 @@ impl ModelicaEngineHandle {
                             let mut parsed = Vec::with_capacity(files.len());
                             let mut diagnostics = Vec::new();
                             for (uri, source) in files {
-                                match lunco_modelica_ast::parse_to_ast(&source, &uri) {
-                                    Ok(ast) => parsed.push((uri, ast)),
+                                match rumoca_compile::compile::ParsedSourceDocument::parse(
+                                    uri.clone(),
+                                    source,
+                                ) {
+                                    Ok(document) => parsed.push(document),
                                     Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
                                 }
                             }
@@ -768,8 +771,8 @@ pub fn drive_engine_sync(
                             .and_then(|bundle| {
                                 bundle
                                     .iter()
-                                    .find(|(k, _)| k == &key)
-                                    .map(|(_, ast)| ast.clone())
+                                    .find(|document| document.uri() == key)
+                                    .map(|document| document.definition().clone())
                             })
                     })
                 };
@@ -1173,7 +1176,7 @@ pub enum SourceBundleBootstrapState {
 
 /// Background source-index install for a resident source library bundle.
 ///
-/// `Session::replace_parsed_source_set` builds the cross-file scope index and
+/// `Session::replace_in_memory_source_set` builds the cross-file scope index and
 /// can take hundreds of milliseconds even when parsing has already happened.
 /// Keep that work off the Bevy update thread; the shared engine mutex is the
 /// only rendezvous and UI readers use `try_lock`/cache-only APIs while it is
@@ -1209,7 +1212,7 @@ pub struct SourceRootBecameReady {
 ///
 /// **The parsed source slot is the readiness predicate.** Install fires iff
 /// `source_library::global_parsed_source_bundle()` is populated (the in-process slot holds the
-/// parsed `Vec<(uri, StoredDefinition)>`); install is a clone plus the engine's
+/// source-bearing `Vec<ParsedSourceDocument>`); install is a clone plus the engine's
 /// source-set boundary, with no re-parsing. `LibraryLoadState::Ready` only means
 /// that the source tree/index is available; native fills the parsed slot lazily
 /// after a class is first opened, so using that UI state as the bootstrap gate
@@ -1283,13 +1286,10 @@ fn drive_source_bundle_bootstrap(
     };
     let handle = handle.clone();
     task.0 = Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> = docs
-            .iter()
-            .map(|(uri, definition)| (uri.clone(), definition.clone()))
-            .collect();
+        let defs = (*docs).clone();
         let count = defs.len();
         let mut engine = handle.lock();
-        engine.replace_parsed_source_set(
+        engine.replace_in_memory_source_set(
             "source-bundle",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,

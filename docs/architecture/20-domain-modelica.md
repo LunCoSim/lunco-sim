@@ -34,7 +34,7 @@ model name when first admitted.
 - [3. Runtime architecture — background worker](#3-runtime-architecture--background-worker)
 - [4. Execution pipeline](#4-execution-pipeline)
 - [5. Document System integration](#5-document-system-integration)
-- [6. The `output` convention (rumoca workaround)](#6-the-output-convention-rumoca-workaround)
+- [6. Modelica public ports](#6-modelica-public-ports)
 - [7. Type vs. instance distinction](#7-type-vs-instance-distinction)
 - [7a. Document identity — three tiers, one truth](#7a-document-identity--three-tiers-one-truth)
 - [8. New-model workflow (target)](#8-new-model-workflow-target)
@@ -222,11 +222,11 @@ seated. The source key includes only that closure, with generated wrapper
 class and network-title identity normalized; authored parameters, initial
 values, equations, participating siblings, and admitted contributing library
 bytes remain structural. Unrelated open sibling documents do not invalidate
-prepared solve IR. The captured key travels with the immutable DAE through
+prepared FMI components. The captured key travels with the immutable DAE through
 shared-artifact reuse and participant resets. Precompile DAE admission retains
 the conservative full submitted input-set hash until strict resolution supplies
 the actual participating closure.
-Prepared-solve identity adds the resolved solver and exact parameter-override
+Prepared-solve identity adds the resolved solver and exact parameter-override and initial-input
 bits to that closure key. Admitted-root changes still advance the compiler's
 generation and invalidate compiled artifacts; bounded prepared graphs remain
 available for a fresh compilation that produces the same participating closure.
@@ -236,7 +236,7 @@ Native INFO preparation logs distinguish `cache=memory-hit`, `cache=disk-hit`,
 and `cache=miss` at their actual lookup owners. Disk preparation reports lookup,
 lowering, and total preparation duration plus source key and success.
 The native `modelica_solve_preparation_job` span records the admitted source key,
-solver ID, exact parameter-override bit patterns, cache version and disk
+solver ID, exact parameter-override and initial-input bit patterns, cache version and disk
 eligibility. `admitted_library_revision` records compiler admission context
 separately from the solve key.
 Compare these fields before attributing a miss to retention or repeated work.
@@ -404,8 +404,9 @@ CIDv1 raw/SHA-256 identity and a URI made relative to its source root before
 the compiler session commit; `PreparedSourceRoot::content_closure()` exposes
 that captured result.
 `ModelicaCompiler::source_root_content_closure(id)` exposes the current root
-content state; a failed latest admission and parsed-only source bundles return
-explicit errors instead of stale or unavailable source text. The existing
+content state; a failed latest admission returns an explicit error. Bundles
+retain exact expanded source text beside the parser-produced syntax, so their
+provenance spans and content identities use the same admitted bytes. The existing
 64-bit library revision remains a cache invalidation fact. These per-root
 closures do not yet join a live participant's document, all admitted
 dependencies, solver state, and initial values into a replay baseline.
@@ -547,7 +548,7 @@ successful resolution state.
 
 ## 3. Runtime architecture — background worker
 
-`SimulationSession` (rumoca's solver; it replaced `SimStepper` in rumoca 0.9.20)
+`SimulationSession` (Rumoca's interactive solver)
 is `!Send` — it can't cross threads. So we own it on a dedicated background
 worker thread; the main Bevy thread communicates via `crossbeam` channels:
 
@@ -588,7 +589,7 @@ solver instances, live state, and telemetry remain per entity.
 
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
 capacities, captured before worker admission. Both capacities must be positive;
-defaults retain at most 64 compiled artifacts and 64 prepared solve models per
+defaults retain at most 64 compiled artifacts and 64 prepared FMI components per
 worker. Insert the resource before `ModelicaExecutionPlugin` to change its
 immutable snapshot. `worker/cache.rs` owns one bounded FIFO mechanism for both
 caches: distinct insertions evict the oldest admitted key, while hits and
@@ -648,7 +649,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v8`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v10`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through
@@ -675,23 +676,10 @@ documents retain sibling-document compilation for cross-document definitions.
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
 
-**`SimOptions::t_end` is a hard ceiling on the model clock.** Since rumoca
-0.9.20, `SimulationSession` clamps every `step`/`advance_to` at `t_end` — and
-does it *silently*: the call still returns `Ok`, the clock simply stops
-advancing. The default is `1.0`, so any caller that builds options from
-`SimOptions::default()` parks at t=1s and then reports a frozen model rather
-than an error. Two consequences, both deliberate:
-
-- The batch/offline path builds options **only** through
-  `lunco_modelica_runner::stepper_options_from_bounds`, which carries the run's
-  real horizon through. Nothing else may hand-roll `SimOptions`.
-- The live path is driven by `step(dt)` forever and has no horizon, so
-  `lunco_modelica_worker::worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
-  "no ceiling" sentinel.
-
-`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
-this behaviour with an inline mechanism fixture, so a future rumoca bump that
-drops the clamp fails loudly without coupling the Rust target to shipped assets.
+Live FMI sessions are open-ended. The worker options span sets the root-scan
+scale, and every requested step must reach its public target. Batch experiments
+carry their explicit stop time through `stepper_options_from_bounds`; the
+runner owns bounded output sampling. Fixed RK4 uses the same open live clock.
 
 Panics in the worker are caught (`catch_unwind`) and reported as solver
 errors rather than crashing the app. This tolerance is essential for
@@ -1139,34 +1127,13 @@ See
 [`../../crates/lunco-modelica-document/src/document/core.rs`](../../crates/lunco-modelica-document/src/document/core.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
 
-## 6. The `output` convention (rumoca workaround)
+## 6. Modelica public ports
 
-**Critical.** Every variable in a Modelica model that needs to be
-observable by co-simulation must have explicit `input` or `output`
-causality. Bare `Real` declarations are eliminated by rumoca's DAE
-preparation and disappear from the solver.
-
-```modelica
-model Balloon
-  parameter Real mass = 4.5;
-
-  input Real height = 0;            // wired in from Avian
-  input Real velocity = 0;
-
-  Real volume(start = 4.0);         // state — always kept
-
-  output Real temperature;          // MUST be output or it vanishes
-  output Real airDensity;
-  output Real buoyancy;
-  output Real drag;
-  output Real netForce;
-equation
-  // ...
-end Balloon;
-```
-
-Full rationale, including planned upstream fixes to the rumoca fork, in
-[`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crates/lunco-cosim/README.md).
+Modelica `input` and `output` declarations define the external port surface.
+USD wires consume that declared interface; internal variables retain their
+Modelica equation and state ownership. See the
+[co-simulation public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
+for initialization, runtime writes, and missing-sample admission.
 
 ## 7. Type vs. instance distinction
 

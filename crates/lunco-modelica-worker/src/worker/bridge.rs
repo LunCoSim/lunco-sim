@@ -469,6 +469,14 @@ pub fn spawn_modelica_requests(
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
+    // A fault raised earlier in this fixed transaction must prevent the
+    // solver from advancing with withdrawn or stale physical inputs.
+    if faults
+        .as_deref()
+        .is_some_and(lunco_core::RuntimeFaults::active)
+    {
+        return;
+    }
     // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
     // show up as MORE fixed ticks, never as a longer one, so accumulating it
     // per tick is exactly "one tick of world time".
@@ -1632,9 +1640,10 @@ mod compile_fault_tests {
                 rtol: 1.0e-8,
                 h0: Some(1.0 / 60.0),
                 t_start: 0.0,
-                t_end: f64::from(u32::MAX),
+                t_end: super::LIVE_MICRO_DT,
             },
             parameter_overrides: vec![("mass".to_owned(), 2.0)],
+            initial_inputs: Vec::new(),
         }
     }
 

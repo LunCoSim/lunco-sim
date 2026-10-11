@@ -32,6 +32,73 @@ pub struct MeshData {
 }
 
 impl HeightGrid {
+    /// Conservative height enclosure inside one raster cell. Interval
+    /// evaluation uses the same Catmull-Rom polynomial as `height_at`, including
+    /// extrapolated boundary posts; sub-cell features cannot fall between rays.
+    pub fn cell_height_bounds(&self, cell: [usize; 2], rect: [f64; 4]) -> [f64; 2] {
+        fn add(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+            [a[0] + b[0], a[1] + b[1]]
+        }
+        fn scale(a: [f64; 2], k: f64) -> [f64; 2] {
+            if k >= 0.0 {
+                [a[0] * k, a[1] * k]
+            } else {
+                [a[1] * k, a[0] * k]
+            }
+        }
+        fn mul(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+            let v = [a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1]];
+            [
+                v.into_iter().fold(f64::INFINITY, f64::min),
+                v.into_iter().fold(f64::NEG_INFINITY, f64::max),
+            ]
+        }
+        fn cubic(p: [[f64; 2]; 4], t: [f64; 2]) -> [f64; 2] {
+            let a = scale(
+                add(
+                    add(scale(p[0], -1.0), scale(p[1], 3.0)),
+                    add(scale(p[2], -3.0), p[3]),
+                ),
+                0.5,
+            );
+            let b = scale(
+                add(
+                    add(scale(p[0], 2.0), scale(p[1], -5.0)),
+                    add(scale(p[2], 4.0), scale(p[3], -1.0)),
+                ),
+                0.5,
+            );
+            let c = scale(add(scale(p[0], -1.0), p[2]), 0.5);
+            add(mul(add(mul(add(mul(a, t), b), t), c), t), p[1])
+        }
+        let s = self.spacing() as f64;
+        let half = self.half_extent as f64;
+        let t = |lo: f64, hi: f64, i: usize| {
+            [
+                ((lo + half) / s - i as f64).clamp(0.0, 1.0),
+                ((hi + half) / s - i as f64).clamp(0.0, 1.0),
+            ]
+        };
+        let tx = t(rect[0], rect[2], cell[0]);
+        let tz = t(rect[1], rect[3], cell[1]);
+        let anchor = self.sample_extrapolated(cell[0] as isize, cell[1] as isize);
+        let mut rows = [[0.0; 2]; 4];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let p = std::array::from_fn(|c| {
+                let v = self.sample_extrapolated(
+                    cell[0] as isize + c as isize - 1,
+                    cell[1] as isize + r as isize - 1,
+                ) - anchor;
+                [v, v]
+            });
+            *row = cubic(p, tx);
+        }
+        let mut b = cubic(rows, tz);
+        b[0] += anchor;
+        b[1] += anchor;
+        let pad = 64.0 * f64::EPSILON * b[0].abs().max(b[1].abs()).max(1.0);
+        [b[0] - pad, b[1] + pad]
+    }
     pub fn new_flat(res: usize, half_extent: f32) -> Self {
         let res = res.max(2);
         Self {
@@ -531,5 +598,40 @@ mod tests {
         assert_eq!(m.normals.len(), m.positions.len());
         assert_eq!(m.indices.len(), 16 * 16 * 6);
         assert!(m.indices.iter().all(|&i| (i as usize) < m.positions.len()));
+    }
+}
+
+#[cfg(test)]
+mod enclosure_tests {
+    use super::*;
+    #[test]
+    fn bicubic_enclosures_cover_interior_and_extrapolated_edges() {
+        let mut grid = HeightGrid::new_flat(7, 3.0);
+        for (i, h) in grid.heights.iter_mut().enumerate() {
+            *h = -2000.0 + ((i * 17 % 23) as f64 - 11.0) * 0.03;
+        }
+        let spacing = grid.spacing() as f64;
+        for z in 0..6 {
+            for x in 0..6 {
+                let left = -3.0 + x as f64 * spacing;
+                let top = -3.0 + z as f64 * spacing;
+                let rect = [
+                    left + 0.17 * spacing,
+                    top + 0.23 * spacing,
+                    left + 0.73 * spacing,
+                    top + 0.81 * spacing,
+                ];
+                let bounds = grid.cell_height_bounds([x, z], rect);
+                for iz in 0..=20 {
+                    for ix in 0..=20 {
+                        let h = grid.height_at(
+                            rect[0] + (rect[2] - rect[0]) * ix as f64 / 20.0,
+                            rect[1] + (rect[3] - rect[1]) * iz as f64 / 20.0,
+                        );
+                        assert!(bounds[0] <= h && h <= bounds[1], "{bounds:?} misses {h}");
+                    }
+                }
+            }
+        }
     }
 }

@@ -98,8 +98,7 @@ impl RenderProfile {
 /// It also hosts the render-only code that has **no intent form** and therefore had
 /// to move here bodily rather than be expressed as a component:
 /// - `horizon_shade` — the per-frame heightfield/sun *uniform feed* into the terrain
-///   `ShaderMaterial` and the `StandardMaterial` darkening of shadowed props (from
-///   `lunco-environment`);
+///   `ShaderMaterial`;
 /// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
 ///   Terrain-derived map selection remains render-free on the terrain's
 ///   `ShaderLook`; this crate only binds that intent to the generic GPU material.

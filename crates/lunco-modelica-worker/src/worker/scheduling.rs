@@ -204,6 +204,7 @@ mod tests {
             doc_uri: "doc.mo".into(),
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
+            initial_inputs: Vec::new(),
             stream: None,
         }
     }
@@ -356,6 +357,7 @@ mod tests {
         let mut compile_lane = VecDeque::from([ModelicaCommand::Reset {
             entity: ent(2),
             session_id: 4,
+            initial_inputs: Vec::new(),
         }]);
 
         assert!(
@@ -364,7 +366,7 @@ mod tests {
         assert_eq!(compile_lane.len(), 1);
         assert!(matches!(
             take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
-            Some(ModelicaCommand::Reset { entity, session_id: 4 }) if entity == ent(2)
+            Some(ModelicaCommand::Reset { entity, session_id: 4, .. }) if entity == ent(2)
         ));
     }
 

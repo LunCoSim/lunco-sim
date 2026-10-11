@@ -185,6 +185,12 @@ pub fn update_sun_light_system(
         let r2 = (p_sun - p_observer).length_squared();
         (r2 > 1.0e-4).then_some((cal.illuminance_lux as f64 / r2) as f32)
     });
+    if let Err(error) = sun_state.publish_physical(sun_cal.as_deref().and_then(|cal| {
+        let r2 = (p_sun - p_observer).length_squared();
+        (r2 > 1.0e-4).then_some(cal.irradiance_w_m2 / r2)
+    })) {
+        warn!("[solar] {error}");
+    }
     sun_state.publish(irradiance);
 }
 

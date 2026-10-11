@@ -884,7 +884,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .filter(|(_, component)| {
                 matches!(
                     component.variability,
-                    rumoca_compile::parsing::Variability::Parameter(_)
+                    lunco_modelica_ast::Variability::Parameter(_)
                 )
             })
             .map(|(name, component)| {

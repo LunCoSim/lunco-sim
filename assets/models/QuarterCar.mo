@@ -33,11 +33,8 @@ equation
   // guard. What IS needed is the one-sided contact condition — the strut pushes only
   // while compressed and cannot pull the chassis down through the wheel.
   //
-  // rumoca is branch-free (`if` in an equation section reconstructs as literal 0, which
-  // would zero f_susp and with it the whole trajectory), so the contact condition is a
-  // continuous gate: exactly 0 for chi <= 0, exactly 1 for chi >= chi_band. chi_band is
-  // sub-micron, far below the 0.2..0.41 m range this experiment actually visits, so the
-  // reference trajectory is bit-for-bit the ideal linear spring-damper it was before.
+  // The one-sided contact gate ramps from zero at chi <= 0 to one at
+  // chi >= chi_band. The transition width is an authored physical parameter.
   contact = min(max(chi / chi_band, 0.0), 1.0);
   f_susp = (k * chi + c * v) * contact;
   v = der(chi);

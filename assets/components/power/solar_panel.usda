@@ -15,17 +15,6 @@ def Xform "SolarPanel" (
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
-    float parameters:area = 18.0
-    float parameters:efficiency = 0.30000001192092896
-    float inputs:irradiance = 1361.0
-    float inputs:panel_normal_x = 0.0
-    float inputs:panel_normal_y = 1.0
-    float inputs:panel_normal_z = 0.0
-    float outputs:available_power_w
-    float outputs:power_out
-    float outputs:cos_incidence
-    float outputs:terminal_voltage_v
-    float outputs:generated_current_a
     custom token connectors:p
     bool lunco:telemetry = true
     string ui:displayName = "Solar power"
@@ -40,6 +29,29 @@ def Xform "SolarPanel" (
     double inputs:target_mount_y.connect = </SolarPanel/Environment.outputs:sun_mount_y>
     custom double inputs:target_mount_z
     double inputs:target_mount_z.connect = </SolarPanel/Environment.outputs:sun_mount_z>
+    custom double inputs:irradiance
+    double inputs:irradiance.connect = </SolarPanel/Environment.outputs:sun_irradiance_w_m2>
+    custom double inputs:sun_visibility
+    double inputs:sun_visibility.connect = </SolarPanel/Environment.outputs:sun_visibility>
+    custom double outputs:incident_irradiance_w_m2
+    double outputs:incident_irradiance_w_m2.connect = []
+    custom double outputs:incident_power_w
+    double outputs:incident_power_w.connect = []
+    double parameters:area = 18.0
+    double parameters:efficiency = 0.3
+    double inputs:panel_normal_x = 0.0
+    double inputs:panel_normal_y = 1.0
+    double inputs:panel_normal_z = 0.0
+    custom double outputs:available_power_w
+    double outputs:available_power_w.connect = []
+    custom double outputs:power_out
+    double outputs:power_out.connect = []
+    custom double outputs:cos_incidence
+    double outputs:cos_incidence.connect = []
+    custom double outputs:terminal_voltage_v
+    double outputs:terminal_voltage_v.connect = []
+    custom double outputs:generated_current_a
+    double outputs:generated_current_a.connect = []
     def Scope "Looks"
     {
         def Material "SolarPanel"
@@ -85,16 +97,18 @@ def Xform "SolarPanel" (
         bool physics:collisionEnabled = true
         rel material:binding = </SolarPanel/Looks/SolarPanel>
     }
-    def Xform "Environment" (
+    def Points "Environment" (
         prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
     )
     {
         custom double outputs:sun_mount_x
         custom double outputs:sun_mount_y
         custom double outputs:sun_mount_z
+        point3f[] points = [(-2.0, 0.014499999582767487, -1.0), (0.0, 0.014499999582767487, -1.0), (2.0, 0.014499999582767487, -1.0), (-2.0, 0.014499999582767487, 0.0), (0.0, 0.014499999582767487, 0.0), (2.0, 0.014499999582767487, 0.0), (-2.0, 0.014499999582767487, 1.0), (0.0, 0.014499999582767487, 1.0), (2.0, 0.014499999582767487, 1.0)]
+        token visibility = "invisible"
     }
     def Scope "VoltageTelemetry" (
-        prepend apiSchemas = ["LunCoTelemetryAPI"]
+        prepend apiSchemas = "LunCoTelemetryAPI"
     )
     {
         bool lunco:telemetry = true
@@ -106,7 +120,7 @@ def Xform "SolarPanel" (
         rel lunco:telemetry:target = </SolarPanel>
     }
     def Scope "CurrentTelemetry" (
-        prepend apiSchemas = ["LunCoTelemetryAPI"]
+        prepend apiSchemas = "LunCoTelemetryAPI"
     )
     {
         bool lunco:telemetry = true
@@ -118,7 +132,7 @@ def Xform "SolarPanel" (
         rel lunco:telemetry:target = </SolarPanel>
     }
     def Scope "AvailablePowerTelemetry" (
-        prepend apiSchemas = ["LunCoTelemetryAPI"]
+        prepend apiSchemas = "LunCoTelemetryAPI"
     )
     {
         bool lunco:telemetry = true

@@ -29,7 +29,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 8;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 10;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,7 +42,7 @@ pub use bridge::{
     request_modelica_compiles, retire_closed_twin_models, retire_replication_models,
     spawn_modelica_requests, validate_modelica_variable_ownership,
 };
-pub use compile::dispatch_modelica_compile_requests;
+pub use compile::{PendingCompileAdmissions, dispatch_modelica_compile_requests};
 #[cfg(not(target_arch = "wasm32"))]
 mod compiler_actor;
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,11 +118,10 @@ fn live_stepper_options(
         // `h0` is the initial/maximum internal step: pinned to the micro-step
         // so the integrator's first internal step matches what it is asked for.
         h0: Some(LIVE_MICRO_DT),
-        // The live stepper is driven by `step(dt)` calls, never by `t_end`;
-        // the window only feeds defaults, so it is wide enough that no
-        // realistic session reaches it.
+        // Live sessions are open. This span sets the initial root-scan scale;
+        // it is not a stop time.
         t_start: 0.0,
-        t_end: f64::from(u32::MAX),
+        t_end: LIVE_MICRO_DT,
     };
     let options = lunco_modelica_solver::solver_backends::rumoca_options(&spec, &parameters)?;
     Ok((spec, parameters, options))
@@ -130,9 +129,8 @@ fn live_stepper_options(
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
 ///
-/// **Single source of truth** for live stepper construction across the worker —
-/// every site routes through here instead of copy-pasting the `SimOptions` setup
-/// + `SimulationSession::new` call (there were ~9 such copies).
+/// Every worker live construction uses this boundary to resolve solver options
+/// and borrow the checked prepared FMI component.
 ///
 /// Stepping POLICY (fixed micro-step ladder, fixed tolerance) is live-specific;
 /// the SOLVER is resolved from the model's own requirements — see
@@ -181,6 +179,7 @@ struct LiveBuildPlan {
 fn live_build_plan(
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
+    initial_inputs: &[(String, f64)],
     source_key: u64,
     _admitted_library_revision: Option<u64>,
 ) -> Result<LiveBuildPlan, rumoca_sim::SimulationDiagnosticError> {
@@ -192,6 +191,8 @@ fn live_build_plan(
     // parameter dependents and initial-equation states are recomputed. Mutating
     // the DAE after compilation leaves the initialization vector stale.
     options.param_overrides = parameter_overrides.clone();
+    let initial_inputs = canonical_parameter_overrides(initial_inputs);
+    options.initial_inputs = initial_inputs.clone();
     let snapshot = ModelicaLiveSolverSnapshot {
         solver_id: spec.id.to_string(),
         capabilities: ModelicaSolverCapabilities {
@@ -211,8 +212,9 @@ fn live_build_plan(
             t_end: parameters.t_end,
         },
         parameter_overrides: parameter_overrides.clone(),
+        initial_inputs: initial_inputs.clone(),
     };
-    let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides);
+    let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides, &initial_inputs);
     Ok(LiveBuildPlan {
         spec,
         snapshot,
@@ -227,11 +229,18 @@ fn build_stepper(
     _comp_res: &CompiledModelArtifact,
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
+    initial_inputs: &[(String, f64)],
     source_key: u64,
     library_revision: Option<u64>,
     prepared: &mut PreparedSolveCache,
 ) -> Result<(LiveStepper, ModelicaLiveSolverSnapshot), rumoca_sim::SimulationDiagnosticError> {
-    let plan = live_build_plan(profile, parameter_overrides, source_key, library_revision)?;
+    let plan = live_build_plan(
+        profile,
+        parameter_overrides,
+        initial_inputs,
+        source_key,
+        library_revision,
+    )?;
     if !prepared.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(
@@ -263,7 +272,7 @@ fn build_stepper(
     let model = prepared
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
-    let stepper = lunco_modelica_solver::simulation_session::live_from_solve_model(
+    let stepper = lunco_modelica_solver::simulation_session::live_from_fmi_component(
         model,
         &plan.spec,
         plan.options,
@@ -305,7 +314,7 @@ impl SolvePreparationLimits {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Owns bounded off-thread preparation for immutable solve models and source roots.
+/// Owns bounded off-thread preparation for checked FMI components and source roots.
 /// Disk-cache access and DAE lowering stay here; the Modelica command owner only
 /// commits a completed model and creates the thread-affine live stepper.
 struct SolvePreparationPool {
@@ -427,7 +436,7 @@ impl SolvePreparationPool {
     }
 
     /// Bound the full compile-to-solve pipeline while leaving two entries of
-    /// lookahead beyond the workers currently lowering solve models. This lets
+    /// lookahead beyond the workers currently preparing FMI components. This lets
     /// the serialized Rumoca owner prepare later independent programs while
     /// the solve pool is busy, without allowing an unbounded DAE backlog.
     fn can_admit(&self, pending_operations: usize) -> bool {
@@ -639,6 +648,7 @@ struct PendingCompile {
     doc_uri: String,
     raw_extras: Vec<(String, String)>,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     library_gen: u64,
     intent: CompileIntent,
 }
@@ -686,7 +696,10 @@ struct SolvePreparationResult {
     id: u64,
     key: PreparedSolveKey,
     result: std::sync::Arc<
-        Result<std::sync::Arc<rumoca_ir_solve::SolveModel>, rumoca_sim::SimulationDiagnosticError>,
+        Result<
+            std::sync::Arc<rumoca_ir_solve::fmi::FmiComponent>,
+            rumoca_sim::SimulationDiagnosticError,
+        >,
     >,
 }
 
@@ -712,6 +725,7 @@ struct CompileWork {
     doc_uri: String,
     raw_extras: Vec<(String, String)>,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     unit: CompileUnit,
     comp_res: CompiledModelArtifact,
     unit_key: u64,
@@ -823,6 +837,7 @@ fn finish_compile_work(
         &work.comp_res,
         profile_for(work.entity, realtime_models),
         &work.parameter_overrides,
+        &work.initial_inputs,
         work.unit_key,
         Some(work.library_revision),
         prepared_solve_cache,
@@ -838,6 +853,7 @@ fn finish_compile_work(
                 doc_uri,
                 raw_extras,
                 parameter_overrides,
+                initial_inputs,
                 unit,
                 comp_res,
                 unit_key: _,
@@ -856,6 +872,7 @@ fn finish_compile_work(
                     source: Arc::from(source),
                     extra_sources: raw_extras,
                     parameter_overrides,
+                    initial_inputs,
                     doc_uri,
                     compiled: comp_res.clone(),
                     unit_hash,
@@ -1322,6 +1339,7 @@ fn commit_ready_compiler_completions(
                 let plan = match live_build_plan(
                     profile_for(pending.entity, realtime_models),
                     &pending.parameter_overrides,
+                    &pending.initial_inputs,
                     unit_key,
                     Some(artifact.library_revision),
                 ) {
@@ -1347,6 +1365,7 @@ fn commit_ready_compiler_completions(
                     doc_uri: pending.doc_uri,
                     raw_extras: pending.raw_extras,
                     parameter_overrides: pending.parameter_overrides,
+                    initial_inputs: pending.initial_inputs,
                     unit: artifact.unit,
                     comp_res,
                     unit_key,
@@ -1407,13 +1426,13 @@ struct CachedModel {
     model_name: String,
     source: Arc<str>,
     /// Sibling docs the model was compiled with, raw like `source`. Replayed
-    /// on a cache-invalidating recompile so Reset / Step auto-init resolve the
-    /// same cross-doc references the original Compile did (the source-only
-    /// cache silently dropped these and recompiled the primary alone).
+    /// on a cache-invalidating recompile so Reset and Step auto-init resolve
+    /// the same source closure as Compile.
     extra_sources: Vec<(String, String)>,
     /// Instance parameter values applied to the cached DAE. Reapplied if a
     /// library invalidates the artifact and it must be compiled again.
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     /// The document's stable session URI (see `ModelicaCommand::Compile`'s
     /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
     /// UpdateParameters — re-seats under this SAME key so the reused rumoca
@@ -1704,6 +1723,7 @@ struct CacheRebuild {
     /// The instance values that must be supplied to Rumoca when the cached DAE
     /// is lowered into a fresh live stepper.
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     /// `Ok` = artifact to build the stepper from; `Err` = rumoca's formatted
     /// compile summary.
     outcome: Result<CompiledModelArtifact, String>,
@@ -1722,7 +1742,16 @@ fn rebuild_from_cache(
     entity: Entity,
     library_gen: u64,
 ) -> Option<CacheRebuild> {
-    let (model_name, doc_uri, source, extras, parameter_overrides, cached_hash, cached_gen) = {
+    let (
+        model_name,
+        doc_uri,
+        source,
+        extras,
+        parameter_overrides,
+        initial_inputs,
+        cached_hash,
+        cached_gen,
+    ) = {
         let c = cached_models.get(&entity)?;
         (
             c.model_name.clone(),
@@ -1730,6 +1759,7 @@ fn rebuild_from_cache(
             Arc::clone(&c.source),
             c.extra_sources.clone(),
             c.parameter_overrides.clone(),
+            c.initial_inputs.clone(),
             c.unit_hash,
             c.library_gen,
         )
@@ -1747,6 +1777,7 @@ fn rebuild_from_cache(
             model_name,
             library_revision,
             parameter_overrides,
+            initial_inputs,
             outcome: Ok(compiled),
             compile_diagnostics: Vec::new(),
         });
@@ -1763,6 +1794,7 @@ fn rebuild_from_cache(
         model_name,
         library_revision: Some(result.library_revision),
         parameter_overrides,
+        initial_inputs,
         outcome: result.outcome,
         compile_diagnostics: result.diagnostics,
     })
@@ -1775,6 +1807,7 @@ struct NativeCachedRebuild {
     raw_extras: Vec<(String, String)>,
     doc_uri: String,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     compiled: CompiledModelArtifact,
     unit_hash: u64,
     cached_library_gen: u64,
@@ -1811,6 +1844,7 @@ impl NativeCachedRebuild {
                 doc_uri: self.doc_uri,
                 raw_extras: self.raw_extras,
                 parameter_overrides: self.parameter_overrides,
+                initial_inputs: self.initial_inputs,
                 library_gen,
                 intent,
             },
@@ -1829,6 +1863,7 @@ impl NativeCachedRebuild {
         let plan = live_build_plan(
             profile,
             &self.parameter_overrides,
+            &self.initial_inputs,
             self.unit_key,
             Some(self.library_revision),
         )?;
@@ -1841,6 +1876,7 @@ impl NativeCachedRebuild {
             doc_uri: self.doc_uri,
             raw_extras: self.raw_extras,
             parameter_overrides: self.parameter_overrides,
+            initial_inputs: self.initial_inputs,
             unit: self.unit,
             comp_res: self.compiled,
             unit_key: self.unit_key,
@@ -1867,6 +1903,7 @@ fn native_cached_rebuild(
         raw_extras: cached.extra_sources.clone(),
         doc_uri: cached.doc_uri.clone(),
         parameter_overrides: cached.parameter_overrides.clone(),
+        initial_inputs: cached.initial_inputs.clone(),
         compiled: cached.compiled.clone(),
         unit_hash: cached.unit_hash,
         cached_library_gen: cached.library_gen,
@@ -1894,6 +1931,7 @@ fn cached_solve_is_prepared(
     live_build_plan(
         profile,
         &cached.parameter_overrides,
+        &cached.initial_inputs,
         cached.unit_key,
         Some(cached.library_revision),
     )
@@ -1991,9 +2029,8 @@ fn submit_cached_solve_preparation(
     }
 }
 
-/// Collect every readable variable from the stepper — states, inputs, and
-/// (on rumoca `main`) algebraic / output reconstructions via
-/// `EliminationResult`. Non-finite values are dropped so the UI never
+/// Collect states, inputs and reconstructed algebraic/output observations from
+/// the checked runtime projection. Non-finite values are dropped so the UI never
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; the admitted variable map and presentation
 /// stream consume this complete observation through their own typed readers.
@@ -2028,6 +2065,35 @@ pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> 
         .into_iter()
         .filter(|(name, val)| val.is_finite() && name != "time")
         .collect()
+}
+
+fn capture_initial_inputs(
+    stepper: &LiveStepper,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    let state = stepper.state()?;
+    stepper
+        .input_names()
+        .iter()
+        .map(|name| {
+            let value = state.values.get(name).copied().ok_or_else(|| {
+                rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "admitted input '{name}' has no runtime observation"
+                ))
+            })?;
+            if !value.is_finite() {
+                return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "admitted input '{name}' is not finite"
+                )));
+            }
+            Ok((name.clone(), value))
+        })
+        .collect()
+}
+
+fn merge_initial_inputs(initial: &mut Vec<(String, f64)>, values: &[(String, f64)]) {
+    let mut merged: std::collections::BTreeMap<_, _> = initial.drain(..).collect();
+    merged.extend(values.iter().cloned());
+    initial.extend(merged);
 }
 
 /// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
@@ -2397,11 +2463,7 @@ pub fn modelica_worker(
     // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
-    // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
-    // be `let _ =` on this per-tick path, which made the single most damaging
-    // failure mode in the whole co-sim silent: rumoca demotes a bound `input` to
-    // an algebraic, so an input that never became a runtime slot fails here on
-    // EVERY tick while the model quietly keeps its declared default forever.
+    // Solver input rejections are reported once per entity and qualified name.
     let mut rejected_inputs: std::collections::HashSet<(Entity, String)> = Default::default();
     // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
     // rebuild steppers from `CachedModel::compiled` without recompiling.
@@ -2803,8 +2865,38 @@ pub fn modelica_worker(
             log::debug!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
-                    ModelicaCommand::Reset { entity, session_id } => {
+                    ModelicaCommand::Reset {
+                        entity,
+                        session_id,
+                        initial_inputs,
+                    } => {
                         current_sessions.insert(entity, session_id);
+
+                        if let Some((_, _, stepper)) = steppers.get(&entity) {
+                            match capture_initial_inputs(stepper) {
+                                Ok(inputs) => {
+                                    if let Some(cached) = cached_models.get_mut(&entity) {
+                                        cached.initial_inputs = inputs;
+                                    }
+                                }
+                                Err(error) => {
+                                    let mut result = reset_ok(
+                                        entity,
+                                        session_id,
+                                        Vec::new(),
+                                        Vec::new(),
+                                        "Reset rejected.",
+                                    );
+                                    result.error = Some(error.to_string());
+                                    let _ = tx_inner.send(result);
+                                    return;
+                                }
+                            }
+                        }
+
+                        if let Some(cached) = cached_models.get_mut(&entity) {
+                            merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
+                        }
 
                         // Rebuild from the cached DAE. A changed library set
                         // recompiles through the Rumoca actor; a missing solve
@@ -2869,6 +2961,23 @@ pub fn modelica_worker(
                         }
                         current_sessions.insert(entity, session_id);
 
+                        if let Some((_, _, stepper)) = steppers.get(&entity) {
+                            match capture_initial_inputs(stepper) {
+                                Ok(inputs) => {
+                                    if let Some(cached) = cached_models.get_mut(&entity) {
+                                        cached.initial_inputs = inputs;
+                                    }
+                                }
+                                Err(error) => {
+                                    let mut result = result_ok(entity, session_id);
+                                    result.is_parameter_update = true;
+                                    result.error = Some(error.to_string());
+                                    let _ = tx_inner.send(result);
+                                    return;
+                                }
+                            }
+                        }
+
                         // Re-seat under the SAME session URI the model was first
                         // compiled with. The actor owns the mutable Rumoca session;
                         // the command owner records this continuation and remains
@@ -2886,6 +2995,10 @@ pub fn modelica_worker(
                             doc_uri,
                             raw_extras: Vec::new(),
                             parameter_overrides: Vec::new(),
+                            initial_inputs: cached_models
+                                .get(&entity)
+                                .map(|c| c.initial_inputs.clone())
+                                .unwrap_or_default(),
                             library_gen,
                             intent: CompileIntent::UpdateParameters,
                         };
@@ -2907,6 +3020,7 @@ pub fn modelica_worker(
                         doc_uri,
                         extra_sources,
                         parameter_overrides,
+                        initial_inputs,
                         stream,
                         realtime_safe,
                     } => {
@@ -2943,6 +3057,7 @@ pub fn modelica_worker(
                             doc_uri: doc_uri.clone(),
                             raw_extras,
                             parameter_overrides,
+                            initial_inputs,
                             library_gen,
                             intent: CompileIntent::Compile,
                         };
@@ -2995,9 +3110,10 @@ pub fn modelica_worker(
                                 .get(&entity)
                                 .is_some_and(|c| c.model_name == model_name);
                             if cached_name_matches {
-                                if let Some(cached) =
+                                if let Some(mut cached) =
                                     native_cached_rebuild(&cached_models, entity, library_revision)
                                 {
+                                    merge_initial_inputs(&mut cached.initial_inputs, &inputs);
                                     if !cached.artifact_is_valid(library_gen) {
                                         let pipeline_load = compiler_order.len()
                                             + pending_compile_works.len()
@@ -3125,10 +3241,8 @@ pub fn modelica_worker(
                                     let _ = tx_inner.send(r);
                                     steppers.remove(&entity);
                                 } else {
-                                    // `state()` reconstructs algebraics / outputs via
-                                    // `EliminationResult` and also includes inputs, so
-                                    // this single call supersedes the old two-loop
-                                    // variable_names + input_names collection.
+                                    // The checked session observation includes
+                                    // reconstructed algebraics, outputs, and inputs.
                                     let outputs = collect_stepper_observables(stepper);
                                     let new_time = stepper.time();
                                     // Publish the immutable stream projection
@@ -3463,12 +3577,14 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             w.library_gen,
                         )
                     };
-                    if let Some(rb) = rebuild {
+                    if let Some(mut rb) = rebuild {
+                        merge_initial_inputs(&mut rb.initial_inputs, &inputs);
                         if let Ok(comp_res) = rb.outcome {
                             if let Ok((mut s, live_solver_snapshot)) = build_stepper(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
+                                &rb.initial_inputs,
                                 comp_res.prepared_source_key,
                                 rb.library_revision,
                                 &mut w.prepared_solve_cache,
@@ -3599,6 +3715,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             doc_uri,
             extra_sources,
             parameter_overrides,
+            initial_inputs,
             stream,
             realtime_safe,
         } => {
@@ -3632,6 +3749,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &parameter_overrides,
+                        &initial_inputs,
                         comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
@@ -3648,6 +3766,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     source: Arc::from(source.clone()),
                                     extra_sources: raw_extras,
                                     parameter_overrides,
+                                    initial_inputs,
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
@@ -3720,11 +3839,40 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 }
             }
         }
-        ModelicaCommand::Reset { entity, session_id } => {
+        ModelicaCommand::Reset {
+            entity,
+            session_id,
+            initial_inputs,
+        } => {
             w.current_sessions.insert(entity, session_id);
 
-            // M3: rebuild from the cached compiled artifact — instant unless a
-            // LoadSourceRoot / compiler reset invalidated it.
+            if let Some((_, _, stepper)) = w.steppers.get(&entity) {
+                match capture_initial_inputs(stepper) {
+                    Ok(inputs) => {
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.initial_inputs = inputs;
+                        }
+                    }
+                    Err(error) => {
+                        let mut result = reset_ok(
+                            entity,
+                            session_id,
+                            Vec::new(),
+                            Vec::new(),
+                            "Reset rejected.",
+                        );
+                        result.error = Some(error.to_string());
+                        send(result);
+                        return;
+                    }
+                }
+            }
+
+            if let Some(cached) = w.cached_models.get_mut(&entity) {
+                merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
+            }
+
+            // Rebuild from the compiled artifact while its source admission is current.
             let rebuild = {
                 let mut backend = InlineCompileBackend {
                     compiler: &mut w.compiler,
@@ -3739,6 +3887,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
                             &rb.parameter_overrides,
+                            &rb.initial_inputs,
                             comp_res.prepared_source_key,
                             rb.library_revision,
                             &mut w.prepared_solve_cache,
@@ -3829,6 +3978,24 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 .map(|c| c.doc_uri.clone())
                 .unwrap_or_else(|| model_name.clone());
 
+            let initial_inputs = match w.steppers.get(&entity) {
+                Some((_, _, stepper)) => match capture_initial_inputs(stepper) {
+                    Ok(inputs) => inputs,
+                    Err(error) => {
+                        let mut result = result_ok(entity, session_id);
+                        result.is_parameter_update = true;
+                        result.error = Some(error.to_string());
+                        send(result);
+                        return;
+                    }
+                },
+                None => w
+                    .cached_models
+                    .get(&entity)
+                    .map(|cached| cached.initial_inputs.clone())
+                    .unwrap_or_default(),
+            };
+
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
 
             match compile_shared(
@@ -3844,6 +4011,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &[],
+                        &initial_inputs,
                         comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
@@ -3861,6 +4029,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     // compiled without extras, matching above.
                                     extra_sources: Vec::new(),
                                     parameter_overrides: Vec::new(),
+                                    initial_inputs,
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
@@ -4336,6 +4505,7 @@ mod macro_step_tests {
                 doc_uri: "balloon.mo".into(),
                 extra_sources: Vec::new(),
                 parameter_overrides: Vec::new(),
+                initial_inputs: Vec::new(),
                 stream: None,
             },
             "panic",
@@ -4725,6 +4895,7 @@ mod artifact_cache_tests {
                     predicted: false,
                 },
                 &[],
+                &[],
                 source_key,
                 Some(revision),
             )
@@ -4755,8 +4926,14 @@ mod artifact_cache_tests {
         let (unrelated_key, unrelated_revision, unrelated_model) = prepare(&mut compiler);
         assert_ne!(first_revision, unrelated_revision);
         assert_eq!(first_key.source_key, unrelated_key.source_key);
-        assert_eq!(first_model.initial_y, unrelated_model.initial_y);
-        assert_eq!(first_model.parameters, unrelated_model.parameters);
+        assert_eq!(
+            first_model.runtime_view().model().initial_y,
+            unrelated_model.runtime_view().model().initial_y
+        );
+        assert_eq!(
+            first_model.runtime_view().model().parameters,
+            unrelated_model.runtime_view().model().parameters
+        );
         assert_eq!(
             first_key, unrelated_key,
             "unrelated admitted roots do not change a prepared solve's participating input closure"
@@ -4774,7 +4951,10 @@ mod artifact_cache_tests {
         let (changed_key, _, changed_model) = prepare(&mut compiler);
         assert_ne!(first_key.source_key, changed_key.source_key);
         assert_ne!(first_key, changed_key);
-        assert_ne!(first_model.parameters, changed_model.parameters);
+        assert_ne!(
+            first_model.runtime_view().model().parameters,
+            changed_model.runtime_view().model().parameters
+        );
     }
 
     #[test]
@@ -4800,6 +4980,7 @@ mod live_solver_snapshot_tests {
         let plan = live_build_plan(
             profile,
             &[("zeta".to_owned(), 2.0), ("alpha".to_owned(), 1.0)],
+            &[],
             17,
             Some(9),
         )
@@ -4823,7 +5004,7 @@ mod live_solver_snapshot_tests {
         assert_eq!(plan.snapshot.parameters.rtol, LIVE_TOL);
         assert_eq!(plan.snapshot.parameters.h0, Some(LIVE_MICRO_DT));
         assert_eq!(plan.snapshot.parameters.t_start, 0.0);
-        assert_eq!(plan.snapshot.parameters.t_end, f64::from(u32::MAX));
+        assert_eq!(plan.snapshot.parameters.t_end, LIVE_MICRO_DT);
         assert_eq!(
             plan.snapshot.parameter_overrides,
             vec![("alpha".to_owned(), 1.0), ("zeta".to_owned(), 2.0)]

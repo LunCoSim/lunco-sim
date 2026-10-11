@@ -295,7 +295,6 @@ mod wasm {
         bounds: &lunco_experiments::RunBounds,
         result_limits: lunco_experiments::RunResultLimits,
     ) {
-        use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -372,34 +371,9 @@ mod wasm {
             return;
         }
 
-        // Inject run values (experiment inputs + parameter overrides) at the DAE
-        // level — the SINGLE injection path, identical to native. No source
-        // rewriting, so the run's DAE derives from exactly the compiled source.
-        // `dae.dae` is an `Arc<Dae>` (shared compile cache); clone the inner DAE
-        // before mutating, exactly as native `run_inner` does.
-        let mut bindings = inputs.clone();
-        bindings.extend(overrides.clone());
-        let run_dae = if bindings.is_empty() {
-            dae.dae.clone()
-        } else {
-            let mut d = (*dae.dae).clone();
-            if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
-                post_run_update(
-                    scope,
-                    run_id,
-                    lunco_experiments::RunUpdate::Failed {
-                        error: format!("parameter/input binding failed: {reason}"),
-                        partial: None,
-                    },
-                );
-                return;
-            }
-            std::sync::Arc::new(d)
-        };
-
         // Drive the run through the SHARED `drive_run` — the EXACT same entry
         // point native (`lunco_modelica_runner`) uses. It honours
-        // `bounds.runtime`: Batch → the budget-admitted dense-output `simulate_solve_model`
+        // `bounds.runtime`: Batch → the budget-admitted dense-output `simulate_fmi_component`
         // solve (robust on stiff models), Interactive → the streamable
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
         // (postMessage + the cancel registry). The admitted limits and output
@@ -409,7 +383,15 @@ mod wasm {
             run_id,
             source_content,
         };
-        lunco_modelica_runner::drive_run(&run_dae, bounds, result_limits, started, &mut sink);
+        lunco_modelica_runner::drive_run(
+            &dae.dae,
+            bounds,
+            inputs,
+            overrides,
+            result_limits,
+            started,
+            &mut sink,
+        );
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),

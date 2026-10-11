@@ -181,29 +181,33 @@ impl Overzoom {
     /// hashed per `cell = r_hi · REACH` lattice cell; a 3×3 neighbourhood bounds
     /// every craterlet that can reach `(x, z)`.
     fn band_delta(&self, x: f64, z: f64, band: u64, r_lo: f64, r_hi: f64) -> f64 {
-        // Skip the whole band when even its biggest feature is (near-)unresolvable
-        // at the consumer's sampling — this is what makes coarse consumers cheap.
-        // The 5% floor matters: a band contributing centimetres would otherwise
-        // still cost full hashing/profile evaluation per sample (the multi-second
-        // full-DEM materialize regression that delayed the static collider).
+        let mut sum = 0.0;
+        self.visit_band_craters([x, z, x, z], band, r_lo, r_hi, |crater| {
+            sum += crater.delta_at(x, z);
+        });
+        sum
+    }
+
+    /// Enumerate the same hashed population for point samples and regional
+    /// enclosures. The expanded cell range covers every reaching crater.
+    fn visit_band_craters(
+        &self,
+        rect: [f64; 4],
+        band: u64,
+        r_lo: f64,
+        r_hi: f64,
+        mut visit: impl FnMut(SyntheticCrater),
+    ) {
         if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
-            return 0.0;
+            return;
         }
         let cell = r_hi * CRATER_REACH;
-        let cx0 = (x / cell).floor() as i64;
-        let cz0 = (z / cell).floor() as i64;
         let band_seed = self.seed ^ band.wrapping_mul(0xA076_1D64_78BD_642F);
-        let mut sum = 0.0;
-        // Density varies at super-cell (4×4 cell) scale — mean-preserving factor
-        // in [0.2, 1.8] — so the population clumps and thins at a scale bigger
-        // than a single cell (the large-scale texture real crater fields have).
         let dens_seed = band_seed ^ 0xD1CE_D1CE_D1CE_D1CE;
-        for dz in -1..=1i64 {
-            for dx in -1..=1i64 {
-                let (cx, cz) = (cx0 + dx, cz0 + dz);
+        for cz in (rect[1] / cell).floor() as i64 - 1..=(rect[3] / cell).floor() as i64 + 1 {
+            for cx in (rect[0] / cell).floor() as i64 - 1..=(rect[2] / cell).floor() as i64 + 1 {
                 let u_dens = hash01(cx.div_euclid(4), cz.div_euclid(4), dens_seed);
                 let lambda = self.crater_mean * (0.2 + 1.6 * u_dens);
-                // Deterministic Poisson count: clusters + voids, not 0-or-1.
                 let count = poisson_count(hash01(cx, cz, band_seed), lambda);
                 for k in 0..count {
                     let ks = band_seed ^ ((k as u64 + 1).wrapping_mul(0xE703_7ED1_A0B4_28DB));
@@ -212,53 +216,159 @@ impl Overzoom {
                     let ur = hash01(cx, cz, ks ^ 0x33);
                     let ud = hash01(cx, cz, ks ^ 0x44);
                     let ue = hash01(cx, cz, ks ^ 0x55);
-                    let ctr_x = (cx as f64 + ux) * cell;
-                    let ctr_z = (cz as f64 + uz) * cell;
-                    // Inverse-CDF of N(>r) ∝ r⁻² on [r_lo, r_hi]: mass near r_lo.
+                    let center = [(cx as f64 + ux) * cell, (cz as f64 + uz) * cell];
                     let inv2 = (1.0 - ur) / (r_lo * r_lo) + ur / (r_hi * r_hi);
-                    let r = 1.0 / inv2.sqrt();
-                    let fade = nyquist_fade(r, self.min_wavelength);
+                    let radius = 1.0 / inv2.sqrt();
+                    let fade = nyquist_fade(radius, self.min_wavelength);
                     if fade <= 0.0 {
                         continue;
                     }
-                    let ddx = x - ctr_x;
-                    let ddz = z - ctr_z;
-                    let dist = (ddx * ddx + ddz * ddz).sqrt() / r;
-                    if dist >= CRATER_REACH {
+                    if (center[0] - center[0].clamp(rect[0], rect[2]))
+                        .hypot(center[1] - center[1].clamp(rect[1], rect[3]))
+                        >= radius * CRATER_REACH
+                    {
                         continue;
                     }
-                    let depth =
-                        r * (self.depth_ratio.0 + (self.depth_ratio.1 - self.depth_ratio.0) * ud);
-                    // Rim prominence varies per craterlet — degraded soft-rimmed
-                    // bowls next to fresh sharp-lipped ones, instead of one
-                    // identical profile everywhere.
+                    let depth = radius
+                        * (self.depth_ratio.0 + (self.depth_ratio.1 - self.depth_ratio.0) * ud);
                     let rim = depth * (0.15 + 0.5 * ue);
-                    // Deep (fresh) craterlets are paraboloid, shallow (degraded)
-                    // ones flat dishes — same morphology tie as the crater layer.
-                    let bowl_power = 6.0 - 4.0 * ud;
-                    // The fade above guarantees the BOWL is resolvable; the thin
-                    // lip is not — widen it to the sampling step at full height
-                    // so it stays representable. The profile's residual at the
-                    // reach is subtracted so the field cuts off continuously.
-                    let rim_sigma_n = 0.5 * self.min_wavelength / r;
-                    let prof =
-                        crater_profile_rim_limited(dist, depth, rim, bowl_power, rim_sigma_n);
-                    let tail = crater_profile_rim_limited(
-                        CRATER_REACH,
+                    let power = 6.0 - 4.0 * ud;
+                    let sigma = (0.5 * self.min_wavelength / radius).clamp(0.14, 0.35);
+                    let tail = crater_profile_rim_limited(CRATER_REACH, depth, rim, power, sigma);
+                    visit(SyntheticCrater {
+                        center,
+                        radius,
                         depth,
                         rim,
-                        bowl_power,
-                        rim_sigma_n,
-                    );
-                    sum += (prof - tail) * fade;
+                        power,
+                        sigma,
+                        tail,
+                        fade,
+                    });
                 }
             }
         }
-        sum
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SyntheticCrater {
+    center: [f64; 2],
+    radius: f64,
+    depth: f64,
+    rim: f64,
+    power: f64,
+    sigma: f64,
+    tail: f64,
+    fade: f64,
+}
+impl SyntheticCrater {
+    fn delta_at(self, x: f64, z: f64) -> f64 {
+        let dx = x - self.center[0];
+        let dz = z - self.center[1];
+        let d = (dx * dx + dz * dz).sqrt() / self.radius;
+        if d >= CRATER_REACH {
+            return 0.0;
+        }
+        (crater_profile_rim_limited(d, self.depth, self.rim, self.power, self.sigma) - self.tail)
+            * self.fade
+    }
+    fn bounds(self, rect: [f64; 4]) -> [f64; 2] {
+        let d = crate::crater::radial_bounds(rect, self.center, self.radius);
+        if d[0] >= CRATER_REACH {
+            return [0.0; 2];
+        }
+        let b = crate::crater::rim_limited_profile_bounds(
+            [d[0], d[1].min(CRATER_REACH)],
+            self.depth,
+            self.rim,
+            self.power,
+            self.sigma,
+        );
+        let mut result = [
+            (b[0] - self.tail) * self.fade,
+            (b[1] - self.tail) * self.fade,
+        ];
+        if d[1] >= CRATER_REACH {
+            result[0] = result[0].min(0.0);
+            result[1] = result[1].max(0.0);
+        }
+        result
     }
 }
 
 impl HeightModifier for Overzoom {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        if rect
+            .iter()
+            .chain(input.iter())
+            .copied()
+            .chain([
+                self.max_radius,
+                self.min_radius,
+                self.crater_mean,
+                self.depth_ratio.0,
+                self.depth_ratio.1,
+                self.relief_amp,
+                self.relief_scale,
+                self.min_wavelength,
+            ])
+            .any(|v| !v.is_finite())
+            || rect[0] > rect[2]
+            || rect[1] > rect[3]
+        {
+            return None;
+        }
+        let x = (rect[0] + rect[2]) * 0.5;
+        let z = (rect[1] + rect[3]) * 0.5;
+        let radius = (rect[2] - rect[0]).hypot(rect[3] - rect[1]) * 0.5;
+        let noise_slope =
+            5.0 * 3.0 * 2.0_f64.sqrt() * self.relief_amp.abs() / self.relief_scale.max(0.5);
+        let mid = self.relief_delta(x, z);
+        let span = noise_slope * radius;
+        let relief_bound = 1.9375 * self.relief_amp.max(0.0);
+        let mut result = [
+            input[0] + (mid - span).max(-relief_bound),
+            input[1] + (mid + span).min(relief_bound),
+        ];
+        if self.crater_mean > 0.0 && self.max_radius > self.min_radius.max(0.05) {
+            // The warp Jacobian has operator norm below two: each noise
+            // derivative is at most three, with amplitude/wavelength = 0.12.
+            let (wx, wz) = self.warped(x, z);
+            let reach = 2.0 * radius;
+            let region = [wx - reach, wz - reach, wx + reach, wz + reach];
+            let mut r_hi = self.max_radius;
+            let mut band = 0;
+            while r_hi > self.min_radius.max(0.05) && band < 8 {
+                let r_lo = (r_hi * 0.5).max(self.min_radius);
+                // Each point sees at most nine lattice cells with eight
+                // craters each. This amplitude certificate bounds broad
+                // enclosures without enumerating an arbitrarily large region.
+                let amplitude = if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
+                    0.0
+                } else {
+                    72.0 * 2.625 * r_hi * self.depth_ratio.0.abs().max(self.depth_ratio.1.abs())
+                };
+                let mut delta = [-amplitude, amplitude];
+                let cell = r_hi * CRATER_REACH;
+                if region[2] - region[0] <= 4.0 * cell && region[3] - region[1] <= 4.0 * cell {
+                    let mut regional = [0.0, 0.0];
+                    self.visit_band_craters(region, band, r_lo, r_hi, |crater| {
+                        let bounds = crater.bounds(region);
+                        regional[0] += bounds[0];
+                        regional[1] += bounds[1];
+                    });
+                    delta = [delta[0].max(regional[0]), delta[1].min(regional[1])];
+                }
+                result[0] += delta[0];
+                result[1] += delta[1];
+                r_hi = r_lo;
+                band += 1;
+            }
+        }
+        let pad = 128.0 * f64::EPSILON * result[0].abs().max(result[1].abs()).max(1.0);
+        Some([result[0] - pad, result[1] + pad])
+    }
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         h_in + self.delta_at(x, z)
     }
@@ -444,5 +554,41 @@ mod tests {
             differs,
             "5 m gate should attenuate sub-5 m detail somewhere"
         );
+    }
+}
+
+#[cfg(test)]
+mod enclosure_tests {
+    use super::*;
+    #[test]
+    fn regional_overzoom_enclosures_cover_warped_population_and_noise() {
+        let invalid = Overzoom {
+            depth_ratio: (f64::NAN, 0.22),
+            ..Default::default()
+        };
+        assert!(
+            invalid
+                .height_bounds([0.0, 0.0, 1.0, 1.0], [0.0; 2])
+                .is_none()
+        );
+        for gate in [0.0, 0.2, 1.0] {
+            let surface = Overzoom {
+                min_wavelength: gate,
+                ..Default::default()
+            };
+            for i in 0..60 {
+                let x = (i as f64 * 1.37) - 40.0;
+                let z = (i as f64 * 0.71) - 20.0;
+                let rect = [x, z, x + 0.31, z + 0.27];
+                let bounds = surface.height_bounds(rect, [0.0; 2]).unwrap();
+                for iz in 0..=12 {
+                    for ix in 0..=12 {
+                        let h = surface
+                            .delta_at(x + ix as f64 * 0.31 / 12.0, z + iz as f64 * 0.27 / 12.0);
+                        assert!(bounds[0] <= h && h <= bounds[1], "{bounds:?} misses {h}");
+                    }
+                }
+            }
+        }
     }
 }

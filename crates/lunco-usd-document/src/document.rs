@@ -910,7 +910,7 @@ pub enum UsdOp {
     SetAttribute {
         /// Layer to write to.
         edit_target: LayerId,
-        /// Absolute USD path of the prim whose attribute to set.
+        /// Absolute USD prim or variant-qualified owner path whose attribute to set.
         path: String,
         /// The name of the attribute (e.g. `primvars:displayColor` or `inputs:roughness`).
         name: String,
@@ -1082,7 +1082,7 @@ pub enum UsdOp {
     SetConnection {
         /// Layer to write to.
         edit_target: LayerId,
-        /// Absolute USD path of the prim that owns the attribute.
+        /// Absolute USD prim or variant-qualified owner path that owns the attribute.
         path: String,
         /// The attribute name (e.g. `inputs:voltage`).
         name: String,
@@ -2328,7 +2328,7 @@ impl UsdDocument {
     /// Validate an attribute owner, including an authored variant root.
     ///
     /// A variant root is an Sdf `Variant` spec rather than a `Prim` spec, but
-    /// it can own properties such as `inputs:*`. Attribute removal addresses
+    /// it can own properties such as `inputs:*`. Attribute operations address
     /// that spec directly and does not need to create an over prim first.
     fn require_attribute_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
@@ -3404,16 +3404,17 @@ impl Document for UsdDocument {
                 value,
                 ..
             } => {
-                let (prim_sdf, define_local_over) = match self.require_prim_anywhere(&path) {
-                    Ok(prim) => (prim, false),
-                    Err(error) => {
-                        let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim) {
-                            return Err(error);
+                let (prim_sdf, define_local_over) =
+                    match self.require_attribute_owner_anywhere(&path) {
+                        Ok(prim) => (prim, false),
+                        Err(error) => {
+                            let prim = parse_prim_path(&path)?;
+                            if !self.path_is_under_composed_arc_path(&prim) {
+                                return Err(error);
+                            }
+                            (prim, true)
                         }
-                        (prim, true)
-                    }
-                };
+                    };
                 self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
 
                 // The single place attribute values are turned into USD values, so
@@ -3878,15 +3879,19 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = parse_prim_path(&path)?;
-                let composed = self.open_composed_stage()?;
-                if !composed
-                    .prim(prim_sdf.clone())
-                    .is_valid()
-                    .map_err(author_err)?
-                {
-                    return Err(DocumentError::ValidationFailed(format!(
-                        "composed connection target `{path}` not found in the loaded stage"
-                    )));
+                if prim_sdf.contains_prim_variant_selection() {
+                    self.require_attribute_owner_anywhere(&path)?;
+                } else {
+                    let composed = self.open_composed_stage()?;
+                    if !composed
+                        .prim(prim_sdf.clone())
+                        .is_valid()
+                        .map_err(author_err)?
+                    {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "composed connection target `{path}` not found in the loaded stage"
+                        )));
+                    }
                 }
                 self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
                 let source_paths = sources
@@ -3916,7 +3921,6 @@ impl Document for UsdDocument {
                     _ => self.coarse_inverse(target, &id),
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // Create-if-absent (like SetAttribute) so a connection can be
                 // authored on a not-yet-materialised port, then author the
                 // `connectionPaths` list op (explicit; empty clears).

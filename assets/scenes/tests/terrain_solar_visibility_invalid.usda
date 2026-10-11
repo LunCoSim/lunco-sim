@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "TerrainSolarVisibility"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "TerrainSolarVisibility" (
+    prepend references = @lunco://scenes/tests/terrain_solar_visibility.usda@</TerrainSolarVisibility>
+)
+{
+    over "Scenario"
+    {
+        def "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_solar_visibility_invalid.rhai@
+        }
+    }
+    over "Power"
+    {
+        over "Panel"
+        {
+            def "Environment"
+            {
+                point3f[] points = []
+            }
+        }
+    }
+}

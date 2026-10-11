@@ -276,10 +276,9 @@ returns sorted CIDv1 raw/SHA-256 identities for exact project source bytes and
 all embedded standard-library files, failing on diagnostics or ambiguous names.
 `PreparedSourceRoot::content_closure()` returns portable per-file CID identities
 for an exact Modelica source root, and `ModelicaCompiler` exposes current source
-content state by source-set identity. Failed latest admissions and parsed-only
-source bundles explicitly report unavailable content; these root closures do
-not yet join the live model document or every source dependency into one compile
-snapshot.
+content state by source-set identity. Failed latest admissions report explicit
+errors. Source-bearing parsed bundles preserve their exact source text, and the
+successful strict compile captures the participating document and library files.
 `RhaiScenarioRuntime::active_content_closure(entity)` returns the exact root,
 source-backed literal imports reachable from the root and authored prelude,
 and authored prelude files captured with that entity's last committed compiled

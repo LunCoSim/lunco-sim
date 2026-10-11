@@ -1,0 +1,87 @@
+#usda 1.0
+(
+    defaultPrim = "TerrainSolarVisibility"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "TerrainSolarVisibility" (
+    prepend references = @lunco://scenes/tests/terrain_shader_appearance.usda@</TerrainShaderAppearance>
+)
+{
+    def Xform "Power" (
+        prepend apiSchemas = "CollectionAPI:components"
+    )
+    {
+        custom rel collection:components:includes = [</TerrainSolarVisibility/Power/Panel>, </TerrainSolarVisibility/Power/Battery>]
+        token collection:components:expansionRule = "explicitOnly"
+        double3 xformOp:translate = (0.0, -1800.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom double inputs:irradiance
+        double inputs:irradiance.connect = </TerrainSolarVisibility/Power/Panel/Environment.outputs:sun_irradiance_w_m2>
+        custom double inputs:sun_visibility
+        double inputs:sun_visibility.connect = </TerrainSolarVisibility/Power/Panel/Environment.outputs:sun_visibility>
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </TerrainSolarVisibility/Power/Panel/Environment.outputs:sun_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </TerrainSolarVisibility/Power/Panel/Environment.outputs:sun_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </TerrainSolarVisibility/Power/Panel/Environment.outputs:sun_mount_z>
+        custom double outputs:available_power
+        double outputs:available_power.connect = </TerrainSolarVisibility/Power/Panel.outputs:available_power_w>
+        custom double outputs:incidence
+        double outputs:incidence.connect = </TerrainSolarVisibility/Power/Panel.outputs:cos_incidence>
+        custom double outputs:incident_irradiance
+        double outputs:incident_irradiance.connect = </TerrainSolarVisibility/Power/Panel.outputs:incident_irradiance_w_m2>
+        def Xform "Panel" (
+            prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+        )
+        {
+            custom token connectors:p
+            token connectors:p.connect = </TerrainSolarVisibility/Power/Battery.connectors:p>
+            custom double inputs:irradiance
+            double inputs:irradiance.connect = </TerrainSolarVisibility/Power.inputs:irradiance>
+            custom double inputs:sun_visibility
+            double inputs:sun_visibility.connect = </TerrainSolarVisibility/Power.inputs:sun_visibility>
+            custom double inputs:target_mount_x
+            double inputs:target_mount_x.connect = </TerrainSolarVisibility/Power.inputs:target_mount_x>
+            custom double inputs:target_mount_y
+            double inputs:target_mount_y.connect = </TerrainSolarVisibility/Power.inputs:target_mount_y>
+            custom double inputs:target_mount_z
+            double inputs:target_mount_z.connect = </TerrainSolarVisibility/Power.inputs:target_mount_z>
+            def Points "Environment" (
+                prepend apiSchemas = "CollectionAPI:occluders"
+            )
+            {
+                custom rel collection:occluders:includes = </TerrainSolarVisibility/Blocker>
+                token collection:occluders:expansionRule = "explicitOnly"
+            }
+        }
+        def Xform "Battery" (
+            prepend references = @lunco://components/power/battery.usda@</Battery>
+        )
+        {
+        }
+    }
+    def "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-5.0, 0.0, 0.0)
+    }
+    over "Scenario"
+    {
+        def "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_solar_visibility.rhai@
+        }
+    }
+    def Cube "Blocker" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-20.0, -1799.7, 2.0)
+        double3 xformOp:scale = (1.0, 1.0, 0.1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+}

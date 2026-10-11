@@ -24,30 +24,23 @@ use lunco_modelica_index::index::ModelicaIndex;
 /// every parse path (file-open, native async, wasm worker) funnels through it.
 pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -> Diagnostic {
     use rumoca_phase_parse::ParseError;
-    match e {
-        ParseError::SyntaxError { message, span, .. } => {
-            // A syntax error carries a span only when the parser could pin one
-            // (`Option<Span>` since rumoca 0.9.20) — an unlocated error stays
-            // unlocated rather than being pinned to a fabricated line 1.
-            let (line, column) = match span {
-                Some(span) => {
-                    let (line, column) = byte_offset_to_line_col(source, span.start.0);
-                    (Some(line), Some(column))
-                }
-                None => (None, None),
-            };
-            Diagnostic::error(message.clone(), line, column)
+    let span = e.span();
+    let (line, column) = if span.is_dummy() {
+        (None, None)
+    } else {
+        let (line, column) = byte_offset_to_line_col(source, span.start.0);
+        (Some(line), Some(column))
+    };
+    let message = match e {
+        ParseError::SyntaxError { message, .. } => message.clone(),
+        ParseError::NoAstProduced { .. } => {
+            "parser produced no AST (empty or unrecoverable source)".into()
         }
-        // No-span variants — render a human description instead of the
-        // raw `{:?}` debug dump (part of the rumoca-diagnostics
-        // migration: "better description of errors").
-        ParseError::NoAstProduced => {
-            Diagnostic::message_only("parser produced no AST (empty or unrecoverable source)")
+        ParseError::IoError { path, message, .. } => {
+            format!("I/O error reading `{path}`: {message}")
         }
-        ParseError::IoError { path, message } => {
-            Diagnostic::message_only(format!("I/O error reading `{path}`: {message}"))
-        }
-    }
+    };
+    Diagnostic::error(message, line, column)
 }
 
 /// Convert a 0-based byte offset into a 1-based (line, column) of

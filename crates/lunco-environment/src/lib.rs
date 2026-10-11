@@ -87,6 +87,16 @@ pub use directions::{
 #[reflect(Component)]
 pub struct EnvironmentProbe;
 
+/// Explicit, equally weighted radiation sample locations in the probe frame.
+/// USD PointBased.points owns these positions; an Xform probe is a point sample.
+#[derive(Component, Debug, Clone)]
+pub struct ProbeSampling(pub Vec<bevy::math::DVec3>);
+
+/// Explicit optical proxy geometry selected by standard CollectionAPI:occluders.
+/// Membership is composed USD prim identity; collision shapes supply the f64 proxy.
+#[derive(Component, Clone, Debug, Default)]
+pub struct ProbeOccluderPaths(pub Vec<String>);
+
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). **Render-free**: the heightfield bakes and the
 /// sun-visibility cache run headless; the material wiring they feed lives in
@@ -884,6 +894,21 @@ impl Plugin for EnvironmentPlugin {
             ),
         );
 
+        app.init_schedule(lunco_cosim_core::schedule::InitializationSampling);
+        app.configure_sets(
+            lunco_cosim_core::schedule::InitializationSampling,
+            (EnvironmentSet::Compute, EnvironmentSet::Apply).chain(),
+        );
+        app.add_systems(
+            lunco_cosim_core::schedule::InitializationSampling,
+            (
+                compute_local_gravity.in_set(EnvironmentSet::Compute),
+                inject_local_gravity_into_cosim.in_set(EnvironmentSet::Apply),
+                solar::publish_fixed_solar_irradiance.in_set(EnvironmentSet::Compute),
+                publish_direction_sources_to_cosim.in_set(EnvironmentSet::Apply),
+            ),
+        );
+
         // Lighting half — RENDER-FREE. `DirectionalLight` is `bevy_light` and
         // `RenderLayers` is `bevy_camera`; neither depends on `bevy_render`, so
         // the earthshine fill and generic target-direction publication run headless too
@@ -925,9 +950,12 @@ impl Plugin for EnvironmentPlugin {
         // mount frame and publish it directly to cosim outputs before propagation.
         app.add_systems(
             FixedUpdate,
-            (publish_direction_sources_to_cosim
-                .in_set(EnvironmentSet::Apply)
-                .before(lunco_cosim_core::schedule::CosimSet::Propagate),),
+            (
+                solar::publish_fixed_solar_irradiance.in_set(EnvironmentSet::Compute),
+                publish_direction_sources_to_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
+            ),
         );
 
         // Horizon-map terrain self-shadowing — the BAKE half (heightfield +

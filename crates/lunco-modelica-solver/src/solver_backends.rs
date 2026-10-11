@@ -1,7 +1,6 @@
 //! The rumoca backends, registered into [`lunco_experiments::solver`].
 //!
-//! This crate owns rumoca, so this is where rumoca's two-axis selection
-//! (`SimSolverMode` family × `DiffsolMethod` tableau) is expressed — ONCE, in
+//! This crate translates registered capabilities into Rumoca's solver mode in
 //! [`rumoca_options`]. Above this line nobody knows those types exist: callers
 //! state where the model runs and take back a [`SolverSpec`].
 //!
@@ -19,7 +18,7 @@ pub fn ensure_builtin_solvers() {
     use std::sync::OnceLock;
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        // The three implicit tableaus. All are adaptive: they own their internal
+        // The implicit BDF backend is adaptive: it owns its internal
         // step sequence, which is exactly right for a replicated model (the
         // server computes, clients receive) and exactly wrong inside a
         // client-prediction loop.
@@ -33,33 +32,9 @@ pub fn ensure_builtin_solvers() {
                 deterministic: false,
             },
             // Highest-ranked implicit backend: rumoca's own default, and the
-            // most robust general-purpose stiff solver of the three.
+            // default general-purpose stiff solver.
             rank: 30,
             label: "BDF (stiff, variable order)".into(),
-        });
-        solver::register(SolverSpec {
-            id: SolverId::from("esdirk34"),
-            caps: SolverCaps {
-                // Adaptive: owns its own step sequence and its per-step cost is
-                // unbounded, so it must not be driven by the frame loop.
-                usable_live: false,
-                fixed_step: false,
-                deterministic: false,
-            },
-            rank: 20,
-            label: "ESDIRK34 (stiff, sharp transitions)".into(),
-        });
-        solver::register(SolverSpec {
-            id: SolverId::from("trbdf2"),
-            caps: SolverCaps {
-                // Adaptive: owns its own step sequence and its per-step cost is
-                // unbounded, so it must not be driven by the frame loop.
-                usable_live: false,
-                fixed_step: false,
-                deterministic: false,
-            },
-            rank: 25,
-            label: "TR-BDF2 (stiff + events)".into(),
         });
 
         // The explicit family is frame-loop usable for authoritative live
@@ -79,7 +54,7 @@ pub fn ensure_builtin_solvers() {
         });
 
         // This is not Rumoca's adaptive RkLike session. The live construction
-        // boundary dispatches this capability to lunco-modelica-core's explicit RK4
+        // boundary dispatches this capability to lunco-modelica-solver's explicit RK4
         // loop over Rumoca's lowered derivative runtime. Its qualified model
         // contract is continuous, event-free, and external-table-free.
         solver::register(SolverSpec {
@@ -107,17 +82,15 @@ pub fn rumoca_options(
     spec: &SolverSpec,
     params: &SolverParams,
 ) -> Result<rumoca_sim::SimOptions, SolverError> {
-    use rumoca_sim::{DiffsolMethod as D, SimSolverMode as M};
+    use rumoca_sim::SimSolverMode as M;
 
-    let (mode, method) = match spec.id.as_str() {
-        "bdf" => (M::Bdf, D::Bdf),
-        "esdirk34" => (M::Bdf, D::Esdirk34),
-        "trbdf2" => (M::Bdf, D::TrBdf2),
-        "rk45" => (M::RkLike, D::Bdf),
+    let mode = match spec.id.as_str() {
+        "bdf" => M::Bdf,
+        "rk45" => M::RkLike,
         // The fixed-rk4 session owns the integration loop. These options only
         // carry the solver-neutral Rumoca lowering mode and tolerances into the
-        // common DAE-to-SolveModel path.
-        "fixedrk4" => (M::RkLike, D::Bdf),
+        // checked FMI preparation boundary.
+        "fixedrk4" => M::RkLike,
         _ => {
             return Err(SolverError::Incapable {
                 asked: spec.id.clone(),
@@ -132,7 +105,6 @@ pub fn rumoca_options(
         solver_mode: mode,
         ..Default::default()
     };
-    opts.diffsol_method = method;
     opts.atol = params.atol;
     opts.rtol = params.rtol;
     opts.dt = params.h0;

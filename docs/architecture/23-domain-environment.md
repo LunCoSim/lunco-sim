@@ -258,3 +258,16 @@ per-body projection cache.
 - [`22-domain-cosim.md`](22-domain-cosim.md) — where the injection happens
 - [`../../crates/lunco-celestial/`](../../crates/lunco-celestial/) — celestial bodies and their providers
 - `specs/018-astronomical-environment` — detailed environment spec
+
+Physical solar probes, sampling geometry, optical proxy selection, required
+co-simulation samples and Modelica consumers are defined in
+[the terrain illumination contract](terrain-layered-rendering.md). `SunState`
+keeps physical W/m2 separate from render lux. Fixed lighting uses the authored
+Sun direction and the one-AU physical calibration; celestial lighting applies
+the provider's inverse-square distance at its admitted celestial epoch.
+
+Before co-simulation initialization, `InitializationSampling` reuses the physical
+gravity, direction and solar sample producers without advancing the fixed clock.
+This lets required Modelica inputs be admitted while scene readiness holds that
+clock. Terrain and collider preparation must be admitted before a solar visibility
+sample is published; malformed authored sampling still produces a runtime fault.

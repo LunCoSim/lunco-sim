@@ -50,7 +50,7 @@ equation
   charge_current_a = max(0.0, p.i);
   discharge_current_a = max(0.0, -p.i);
   // Event bindings consume a normalized empty-boundary signal, not a depletion
-  // fraction. Saturation keeps it branch-free for the solver while retaining
+  // fraction. Saturation bounds the continuous charge fraction while retaining
   // the exact boundary value: 1 at soc=0 and 0 at or above the authored 0.1%
   // empty reserve interval. The finite interval is intentional: it represents
   // a usable-storage reserve and keeps the event signal well-conditioned at

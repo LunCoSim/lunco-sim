@@ -87,7 +87,7 @@ fn on_tick(me, params) {
             && ack.error.contains("NumberOfIntervals"), "authored count cannot fall back during admission"));
         let good_runs = query("ListRuns", #{doc_id: this.good});
         let bad_runs = query("ListRuns", #{doc_id: this.bad});
-        this.failures.push(t_true(good_runs != () && good_runs.count == 0 && bad_runs != () && bad_runs.count == 0,
+        this.failures.push(t_true(good_runs != () && good_runs.count.to_int() == 0 && bad_runs != () && bad_runs.count.to_int() == 0,
             "rejected bounds do not register experiments"));
         this.ack = cmd("RunExperiment", #{doc_id: this.good, class: "BoundsProbe", t_end: 0.1, n_intervals: 10});
         this.phase = "valid";

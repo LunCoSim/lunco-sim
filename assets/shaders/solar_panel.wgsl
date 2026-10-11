@@ -94,8 +94,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     }
 
     // Full scene lighting (real sun direction, shadow maps, ambient) over
-    // the procedural cell grid — panels go dark on the night side and when
-    // the horizon system pulls the entity out of the sun's render layer.
+    // the procedural cell grid, including the terrain's native shadow maps.
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[input.instance_index].flags; // keep SHADOW_RECEIVER
     pbr_input.frag_coord = input.position;

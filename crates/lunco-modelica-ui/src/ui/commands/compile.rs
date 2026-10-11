@@ -146,8 +146,8 @@ pub struct FastRunSetupEntry {
 pub struct FastRunInput {
     pub name: String,
     pub type_name: String,
-    /// User input as text. Parsed on Run; empty = leave as Modelica
-    /// `input` (default 0) without substitution.
+    /// User input as text, parsed on Run. An empty field retains a checked
+    /// declaration default; an unbound input requires an explicit value.
     pub value_text: String,
 }
 
@@ -357,11 +357,11 @@ pub(crate) fn render_fast_run_setup(
 
                     // Solver picker — mirrors the Experiments-tab Setup so
                     // both surfaces expose the same control. `None` = use
-                    // the annotation / backend default (TR-BDF2).
+                    // the annotation / backend default (BDF).
                     ui.label("Solver")
                         .on_hover_text(
                             "Integration method. Auto picks the backend default \
-                             (TR-BDF2 — event-robust, recommended for stiff \
+                             (BDF — recommended for stiff \
                              multi-day horizons).",
                         );
                     crate::ui::solver_picker::solver_picker(
@@ -1829,6 +1829,11 @@ fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(
         .session_id
         .checked_add(1)
         .ok_or("Modelica session identity exhausted")?;
+    let initial_inputs = model
+        .inputs
+        .iter()
+        .map(|(name, value)| (name.to_owned(), *value))
+        .collect();
     let channels = world
         .get_resource::<lunco_modelica_runtime::ModelicaChannels>()
         .ok_or("Modelica worker transport is unavailable")?
@@ -1862,7 +1867,11 @@ fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(
     model.last_step_time = 0.0;
     drop(model);
     channels
-        .send(lunco_modelica_runtime::ModelicaCommand::Reset { entity, session_id })
+        .send(lunco_modelica_runtime::ModelicaCommand::Reset {
+            entity,
+            session_id,
+            initial_inputs,
+        })
         .map_err(|error| format!("Modelica reset dispatch failed: {error}"))
 }
 

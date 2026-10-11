@@ -1,10 +1,6 @@
-// Bulk indexing goes through `rumoca_compile::parsing::parse_files_parallel`,
-// which routes every parse through rumoca's content-hash keyed artifact cache
-// (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
-// the workbench's runtime drill-ins share the same cache entries, so
-// a file parsed here is instant at runtime and vice versa.
+// Indexing admits paired source text and syntax through Rumoca's checked parser.
+use lunco_modelica_ast::{Causality, ClassType, Variability};
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
-use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -114,7 +110,7 @@ const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 /// producer.
 fn write_parsed_bundle(
     path: &std::path::Path,
-    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+    docs: &[rumoca_compile::compile::ParsedSourceDocument],
 ) -> std::io::Result<()> {
     let file = std::fs::File::create(path)?;
     encode_parsed_bundle(std::io::BufWriter::new(file), docs)
@@ -122,7 +118,7 @@ fn write_parsed_bundle(
 
 fn encode_parsed_bundle<W: std::io::Write>(
     writer: W,
-    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+    docs: &[rumoca_compile::compile::ParsedSourceDocument],
 ) -> std::io::Result<()> {
     let mut encoder = zstd::stream::write::Encoder::new(writer, PARSED_BUNDLE_ZSTD_LEVEL)?;
     bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
@@ -214,7 +210,7 @@ struct SourceLibraryIndexer {
     /// scope-walks, no indexer-side resolver heuristic.
     ///
     /// Populated bulk after `scan_dir` finishes via
-    /// `engine.session_mut().replace_parsed_source_set("source-bundle", …)`
+    /// `engine.session_mut().replace_in_memory_source_set("source-bundle", …)`
     /// — same code path the web bootstrap uses to install the
     /// prebuilt source library bundle. Indexer and runtime then have the
     /// SAME session shape; any `extends` chain that resolves at
@@ -243,16 +239,11 @@ struct SourceLibraryIndexer {
     last_progress_print: Option<Instant>,
     /// Bundle of every parsed `.mo` collected during the scan. Written
     /// at the end of `main()` to `.cache/library/parsed-library.bin` so the
-    /// workbench can install pre-parsed `StoredDefinition`s in ~1s
-    /// via `Session::replace_parsed_source_set` — mirrors the wasm
+    /// workbench can install paired source text and syntax
+    /// via `Session::replace_in_memory_source_set` — mirrors the wasm
     /// runtime's `parsed-*.bin.zst` strategy on native.
-    parsed_bundle: Vec<(String, StoredDefinition)>,
-    /// `(path, source)` pairs captured during scan. Used by
-    /// `install_into_engine` to feed the session via the full
-    /// `add_document` pipeline so rumoca's `within`-aware lookup
-    /// indexes are populated correctly. `replace_parsed_source_set`
-    /// alone leaves scope-aware lookup blind to within-prefixed nested classes.
-    sources: Vec<(std::path::PathBuf, String)>,
+    parsed_bundle: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    source_errors: Vec<String>,
 }
 
 /// Scan a Modelica source buffer and map each class's simple name to
@@ -260,7 +251,7 @@ struct SourceLibraryIndexer {
 /// `annotation(Documentation(info="…"))`, if any.
 ///
 /// Walks the rumoca AST: parses the source, recursively visits every
-/// nested class (`iter_classes`), and pulls the class-level
+/// nested class (`classes`), and pulls the class-level
 /// Documentation via the same `extract_documentation` helper that
 /// the workbench's model_view panel uses. Consistent path for
 /// boundary detection + doc extraction; no regex.
@@ -297,7 +288,7 @@ fn collect_documentation(
     if let Some(info) = info {
         out.insert(short_name.to_string(), clean_info_text(&info));
     }
-    for (nested_name, nested_def) in class_def.iter_classes() {
+    for (nested_name, nested_def) in class_def.classes.iter() {
         collect_documentation(nested_name, nested_def, out);
     }
 }
@@ -370,31 +361,17 @@ impl SourceLibraryIndexer {
             scan_started: None,
             last_progress_print: None,
             parsed_bundle: Vec::with_capacity(2700),
-            sources: Vec::with_capacity(2700),
+            source_errors: Vec::new(),
         }
     }
 
-    /// Install each file into the engine's session via the full
-    /// `add_document` pipeline. `replace_parsed_source_set` looked
-    /// like the right call (it's what web bootstrap uses) but
-    /// the old annotation walker called
-    /// `find_class_def_in_file` which expects `qualified_name` to
-    /// walk through `parsed.classes` directly — and source library's flat
-    /// per-file `within X; model Y end Y;` shape doesn't have
-    /// that structure (the file's `parsed.classes` is just `{Y}`,
-    /// not nested under X). `add_document` goes through rumoca's
-    /// full pipeline which handles `within` correctly when
-    /// indexing scope. rumoca's content-hash artifact cache makes
-    /// the parse near-free on the second pass since the indexer
-    /// already populated it via `parse_files_parallel`.
+    /// Install the admitted source text in the engine's within-aware lookup index.
     fn install_into_engine(&mut self) {
-        let count = self.sources.len();
+        let count = self.parsed_bundle.len();
         let started = Instant::now();
-        let sources = std::mem::take(&mut self.sources);
         let session = self.engine.session_mut();
-        for (path, source) in &sources {
-            let uri = path.to_string_lossy().to_string();
-            let _ = session.add_document(&uri, source);
+        for document in &self.parsed_bundle {
+            let _ = session.add_document(document.uri(), document.source());
         }
         println!(
             "[indexer] installed {count} docs into engine session in {:.1}s",
@@ -408,7 +385,15 @@ impl SourceLibraryIndexer {
             self.last_progress_print = Some(Instant::now());
         }
         if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        self.source_errors
+                            .push(format!("{}: {error}", dir.display()));
+                        continue;
+                    }
+                };
                 let path = entry.path();
                 if path.is_dir() {
                     let folder_name = path.file_name().unwrap().to_str().unwrap();
@@ -451,9 +436,15 @@ impl SourceLibraryIndexer {
                         }
                         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
                         self.ingest_file(&path, &source, &file_name, package_prefix);
+                    } else {
+                        self.source_errors
+                            .push(format!("cannot read {}", path.display()));
                     }
                 }
             }
+        } else {
+            self.source_errors
+                .push(format!("cannot list {}", dir.display()));
         }
     }
 
@@ -468,27 +459,23 @@ impl SourceLibraryIndexer {
         // both the placement mapping below and `add_stored_definition`
         // treat the class name correctly.
         let is_package_file = file_name == "package.mo";
-        // Parse through rumoca-compile's cache. A content-hash-matching
-        // entry at `.cache/rumoca/parsed-files/` deserialises from
-        // bincode in ~ms; a miss pays the full rumoca parse once and
-        // writes the bincode so the NEXT indexer run and the workbench's
-        // first drill-in are both instant. `parse_files_parallel` with
-        // one path is the public entry point that exercises the cache;
-        // rayon overhead is negligible for length-1.
-        let ast_opt = rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
-            .ok()
-            .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
-        if let Some(ast) = ast_opt {
+        let parsed = match rumoca_compile::compile::ParsedSourceDocument::parse(
+            path.to_string_lossy().to_string(),
+            source.to_owned(),
+        ) {
+            Ok(document) => document,
+            Err(error) => {
+                self.source_errors
+                    .push(format!("{}: {error}", path.display()));
+                return;
+            }
+        };
+        let ast = parsed.definition().clone();
+        {
             for (k, v) in extract_documentation_infos(source) {
                 self.doc_infos.entry(k).or_insert(v);
             }
-            self.parsed_bundle
-                .push((path.to_string_lossy().to_string(), ast.clone()));
-            // Capture source for engine population. add_document
-            // needs raw text so rumoca's full pipeline runs (which
-            // populates the within-aware lookup tables that
-            // scope-aware lookup tables read).
-            self.sources.push((path.to_path_buf(), source.to_string()));
+            self.parsed_bundle.push(parsed);
             self.add_stored_definition(ast, package_prefix, is_package_file);
         }
     }
@@ -875,7 +862,7 @@ impl SourceLibraryIndexer {
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
                 let class_kind = match (&class.class_type, class.expandable) {
-                    (rumoca_compile::parsing::ClassType::Connector, true) => {
+                    (lunco_modelica_ast::ClassType::Connector, true) => {
                         lunco_modelica_index::index::ClassKind::ExpandableConnector
                     }
                     (t, _) => lunco_modelica_index::index::map_class_type(t),
@@ -1061,8 +1048,8 @@ fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
     }
 }
 
-pub fn run(opts: Options) {
-    run_with_cancel(opts, None);
+pub fn run(opts: Options) -> Result<(), String> {
+    run_with_cancel(opts, None)
 }
 
 /// Like [`run`] but checks `cancel` at phase boundaries and returns
@@ -1075,7 +1062,7 @@ pub fn run(opts: Options) {
 pub fn run_with_cancel(
     opts: Options,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) {
+) -> Result<(), String> {
     let cancelled = || {
         cancel
             .as_ref()
@@ -1084,8 +1071,7 @@ pub fn run_with_cancel(
     macro_rules! bail_if_cancelled {
         () => {
             if cancelled() {
-                println!("[indexer] cancelled");
-                return;
+                return Err("source library indexing cancelled".into());
             }
         };
     }
@@ -1095,8 +1081,10 @@ pub fn run_with_cancel(
         .clone()
         .unwrap_or_else(lunco_modelica_library::source_library::source_library_cache_dir);
     if !library_root.is_dir() {
-        println!("[indexer] source root not found at {:?}", library_root);
-        return;
+        return Err(format!(
+            "source root not found at {}",
+            library_root.display()
+        ));
     }
 
     let t_total = Instant::now();
@@ -1128,7 +1116,18 @@ pub fn run_with_cancel(
             indexer.files_scanned += 1;
             indexer.bytes_scanned += source.len();
             indexer.ingest_root_file(file, &source);
+        } else {
+            indexer
+                .source_errors
+                .push(format!("cannot read {}", file.display()));
         }
+    }
+
+    if !indexer.source_errors.is_empty() {
+        return Err(format!(
+            "source admission failed; no artifacts published: {}",
+            indexer.source_errors.join("; ")
+        ));
     }
 
     let scan_secs = indexer
@@ -1193,8 +1192,8 @@ pub fn run_with_cancel(
 
     // Pre-parsed bundle for the workbench's fast path. Native mirror
     // of the wasm `parsed-*.bin.zst` artifact: bincode-serialised
-    // `Vec<(uri, StoredDefinition)>` that the workbench installs
-    // directly via `Session::replace_parsed_source_set`, bypassing
+    // `Vec<ParsedSourceDocument>` that the workbench installs
+    // directly via `Session::replace_in_memory_source_set`, bypassing
     // every per-file cache key concern.
     bail_if_cancelled!();
     // The package is native-only for this module, while the surrounding asset
@@ -1217,10 +1216,12 @@ pub fn run_with_cancel(
                     bundle_path.display()
                 );
             }
-            Err(e) => eprintln!(
-                "[indexer] WARN: failed to write parsed bundle to {}: {e}",
-                bundle_path.display()
-            ),
+            Err(e) => {
+                return Err(format!(
+                    "cannot publish parsed bundle {}: {e}",
+                    bundle_path.display()
+                ));
+            }
         }
     }
 
@@ -1234,6 +1235,7 @@ pub fn run_with_cancel(
         "[indexer] all done in {:.1}s",
         t_total.elapsed().as_secs_f64()
     );
+    Ok(())
 }
 
 /// Parse every bundled `.mo` (compiled into `lunco_modelica` via
@@ -1517,18 +1519,32 @@ enum WarmKind {
 
 #[cfg(test)]
 mod parsed_bundle_tests {
-    use super::encode_parsed_bundle;
+    use super::{SourceLibraryIndexer, encode_parsed_bundle};
     use std::io::Read;
 
     /// The generated parsed-source artifact is a zstd-compressed bincode
     /// stream. Keep this codec contract next to its sole producer without
     /// pulling the asset writer into the compiler-host test target.
     #[test]
+    fn parsed_bundle_rejects_invalid_source() {
+        let mut indexer = SourceLibraryIndexer::new();
+        indexer.ingest_file(
+            std::path::Path::new("Bad.mo"),
+            "model Bad Real x = ; end Bad;",
+            "Bad.mo",
+            "",
+        );
+        assert!(!indexer.source_errors.is_empty());
+        assert!(indexer.parsed_bundle.is_empty());
+    }
+
+    #[test]
     fn parsed_bundle_roundtrips_in_memory() {
         let source = "model M Real x; equation der(x) = -x; end M;";
-        let definition =
-            lunco_modelica_ast::parse_to_ast(source, "M.mo").expect("parse sample model");
-        let docs = vec![("M.mo".to_string(), definition)];
+        let docs = vec![
+            rumoca_compile::compile::ParsedSourceDocument::parse("M.mo", source)
+                .expect("parse sample model"),
+        ];
 
         let mut encoded = Vec::new();
         {
@@ -1542,12 +1558,14 @@ mod parsed_bundle_tests {
         decoder
             .read_to_end(&mut decoded)
             .expect("decode zstd stream");
-        let back: Vec<(String, rumoca_compile::parsing::StoredDefinition)> =
+        let (back, consumed): (Vec<rumoca_compile::compile::ParsedSourceDocument>, usize) =
             bincode::serde::decode_from_slice(&decoded, bincode::config::standard())
-                .expect("decode parsed bundle")
-                .0;
+                .expect("decode parsed bundle");
 
         assert_eq!(back.len(), docs.len());
-        assert_eq!(back[0].0, docs[0].0);
+        assert_eq!(consumed, decoded.len());
+        assert_eq!(back[0].uri(), docs[0].uri());
+        assert_eq!(back[0].source(), source);
+        assert!(back[0].definition().classes.contains_key("M"));
     }
 }

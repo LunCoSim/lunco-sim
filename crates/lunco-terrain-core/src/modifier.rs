@@ -31,6 +31,12 @@ use crate::source::HeightSource;
 pub trait HeightModifier: Send + Sync {
     /// Modified height (metres) at world `(x, z)` given the accumulated `h_in`.
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64;
+    /// Conservative composed-height enclosure over `[min_x,min_z,max_x,max_z]`.
+    /// `None` means this modifier cannot certify an occlusion query; consumers
+    /// must expose unavailable data rather than assuming clear terrain.
+    fn height_bounds(&self, _rect: [f64; 4], _input: [f64; 2]) -> Option<[f64; 2]> {
+        None
+    }
 
     /// For **detail-synthesising** modifiers (procedural over-zoom): a variant of
     /// this modifier Nyquist-gated for a consumer sampling at `min_wavelength`
@@ -165,6 +171,27 @@ impl BrushModifier {
 }
 
 impl HeightModifier for BrushModifier {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        let near = [
+            self.center[0].clamp(rect[0], rect[2]),
+            self.center[1].clamp(rect[1], rect[3]),
+        ];
+        let far = [
+            if (rect[0] - self.center[0]).abs() > (rect[2] - self.center[0]).abs() {
+                rect[0]
+            } else {
+                rect[2]
+            },
+            if (rect[1] - self.center[1]).abs() > (rect[3] - self.center[1]).abs() {
+                rect[1]
+            } else {
+                rect[3]
+            },
+        ];
+        let a = self.delta_at(near[0], near[1]);
+        let b = self.delta_at(far[0], far[1]);
+        Some([input[0] + a.min(b), input[1] + a.max(b)])
+    }
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         h_in + self.delta_at(x, z)
@@ -209,6 +236,37 @@ impl FlattenModifier {
 }
 
 impl HeightModifier for FlattenModifier {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        let near = [
+            self.center[0].clamp(rect[0], rect[2]),
+            self.center[1].clamp(rect[1], rect[3]),
+        ];
+        let far = [
+            if (rect[0] - self.center[0]).abs() > (rect[2] - self.center[0]).abs() {
+                rect[0]
+            } else {
+                rect[2]
+            },
+            if (rect[1] - self.center[1]).abs() > (rect[3] - self.center[1]).abs() {
+                rect[1]
+            } else {
+                rect[3]
+            },
+        ];
+        let weights = [
+            self.weight_at(near[0], near[1]),
+            self.weight_at(far[0], far[1]),
+        ];
+        let v = weights
+            .into_iter()
+            .flat_map(|w| input.map(|h| h + (self.target_y - h) * w));
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for h in v {
+            lo = lo.min(h);
+            hi = hi.max(h);
+        }
+        Some([lo, hi])
+    }
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         let w = self.weight_at(x, z);
@@ -253,6 +311,20 @@ impl BodyCurvature {
 }
 
 impl HeightModifier for BodyCurvature {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        let near = [
+            0.0_f64.clamp(rect[0], rect[2]),
+            0.0_f64.clamp(rect[1], rect[3]),
+        ];
+        let far = [
+            rect[0].abs().max(rect[2].abs()),
+            rect[1].abs().max(rect[3].abs()),
+        ];
+        Some([
+            self.apply(far[0], far[1], input[0]),
+            self.apply(near[0], near[1], input[1]),
+        ])
+    }
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         // The ground rides the sphere at the SITE's radius, not the mean one —

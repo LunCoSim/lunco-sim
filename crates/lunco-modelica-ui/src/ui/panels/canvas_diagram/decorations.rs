@@ -244,7 +244,7 @@ pub(super) fn diagram_annotation_for_target(
     let class = if let Some(qualified) = target {
         lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
     } else {
-        use rumoca_compile::parsing::ClassType;
+        use lunco_modelica_ast::ClassType;
         ast.classes
             .iter()
             .find(|(_, c)| !matches!(c.class_type, ClassType::Package))

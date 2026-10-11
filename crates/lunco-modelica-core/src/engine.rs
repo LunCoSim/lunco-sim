@@ -65,8 +65,8 @@ pub enum InheritedCausality {
     Internal,
 }
 
-fn map_variability_inherited(v: &rumoca_compile::parsing::Variability) -> InheritedVariability {
-    use rumoca_compile::parsing::Variability as V;
+fn map_variability_inherited(v: &lunco_modelica_ast::Variability) -> InheritedVariability {
+    use lunco_modelica_ast::Variability as V;
     match v {
         V::Empty | V::Continuous(_) => InheritedVariability::Continuous,
         V::Constant(_) => InheritedVariability::Constant,
@@ -75,8 +75,8 @@ fn map_variability_inherited(v: &rumoca_compile::parsing::Variability) -> Inheri
     }
 }
 
-fn map_causality_inherited(c: &rumoca_compile::parsing::Causality) -> InheritedCausality {
-    use rumoca_compile::parsing::Causality as C;
+fn map_causality_inherited(c: &lunco_modelica_ast::Causality) -> InheritedCausality {
+    use lunco_modelica_ast::Causality as C;
     match c {
         C::Empty => InheritedCausality::Internal,
         C::Input(_) => InheritedCausality::Input,
@@ -486,8 +486,8 @@ impl ModelicaEngine {
         let mut parsed = Vec::with_capacity(files.len());
         let mut diagnostics = Vec::new();
         for (uri, text) in files {
-            match lunco_modelica_ast::parse_to_ast(&text, &uri) {
-                Ok(ast) => parsed.push((uri, ast)),
+            match rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), text) {
+                Ok(document) => parsed.push(document),
                 Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
             }
         }
@@ -519,15 +519,15 @@ impl ModelicaEngine {
     /// This is the canonical boundary for immutable library batches such as
     /// source library. Keeping the invalidation rules here makes the background bootstrap
     /// and a first class lookup observe the same engine state.
-    pub fn replace_parsed_source_set(
+    pub fn replace_in_memory_source_set(
         &mut self,
         set_id: &str,
         kind: rumoca_compile::compile::SourceRootKind,
-        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     ) -> usize {
         let count = self
             .session
-            .replace_parsed_source_set(set_id, kind, files, None);
+            .replace_in_memory_source_set(set_id, kind, files, None);
         if count > 0 {
             self.installed_source_sets.insert(set_id.to_string());
             self.class_uri_misses.clear();
@@ -594,7 +594,7 @@ impl ModelicaEngine {
     pub fn finish_source_root_load(
         &mut self,
         root: &str,
-        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
         diagnostics: Vec<String>,
     ) -> usize {
         self.pending_source_roots.remove(root);
@@ -629,13 +629,13 @@ impl ModelicaEngine {
 
     fn load_parsed_library_files(
         &mut self,
-        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     ) -> usize {
         let count = files.len();
-        for (uri, ast) in &files {
-            self.index_ast_classes(uri, ast);
+        for document in &files {
+            self.index_ast_classes(document.uri(), document.definition());
         }
-        self.session.add_parsed_batch(files);
+        self.session.add_in_memory_parsed_batch(files);
         self.class_uri_misses.clear();
         lunco_modelica_ast::source_memo::invalidate_source_memos();
         count
@@ -772,7 +772,7 @@ impl ModelicaEngine {
     /// URI (e.g. `/…/FixedTemperature.mo`). We bridge these via the
     /// `class_to_uris` map that is populated whenever an AST is
     /// installed, and fall back to a linear search over the source library bundle
-    /// for classes that arrived via `replace_parsed_source_set` (which
+    /// for classes that arrived via `replace_in_memory_source_set` (which
     /// bypasses `add_document` and therefore skips `index_ast_classes`).
     pub fn class_def(&mut self, qualified: &str) -> Option<rumoca_compile::parsing::ast::ClassDef> {
         // Negative cache: skip the whole resolution (incl. the O(bundle)
@@ -861,7 +861,7 @@ impl ModelicaEngine {
             );
         }
 
-        // Slow fallback: the class arrived via replace_parsed_source_set
+        // Slow fallback: the class arrived via replace_in_memory_source_set
         // (e.g. the bulk source library install), which bypasses add_document and
         // therefore doesn't call index_ast_classes. Search the source library bundle
         // directly and remember the result for next time.
@@ -890,7 +890,9 @@ impl ModelicaEngine {
                 // every nested class → `None` → callers (drill-in projection,
                 // icon resolution) retried every frame and rendered nothing.
                 let mut best: Option<(usize, String)> = None;
-                for (uri, ast) in bundle.iter() {
+                for document in bundle.iter() {
+                    let uri = document.uri();
+                    let ast = document.definition();
                     let prefix = ast
                         .within
                         .as_ref()
@@ -905,7 +907,7 @@ impl ModelicaEngine {
                         let is_container =
                             qualified == q || qualified.starts_with(&format!("{}.", q));
                         if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
-                            best = Some((q.len(), uri.clone()));
+                            best = Some((q.len(), uri.to_owned()));
                         }
                     }
                 }

@@ -103,18 +103,13 @@ end MyController;
 
 **Gotchas that will waste hours if you don't know them:**
 
-- **rumoca folds unwired, algebraic-only inputs to their default.** An `input Real x`
-  used only in algebraic equations, never wired and never written, is constant-folded
-  → runtime writes to it never reach the solver. To keep an input LIVE, either **wire
-  it** (see §3/§4) or **route it through a `der`** (`der(x_live)=(x-x_live)/0.02; use x_live`).
-  Symptom: `set()` returns true but has no effect.
-- **Inputs that feed a `der` are always live** (a state depends on them) — that's why
-  `external_throttle`/`pitch` are spool-filtered (`der(filter)=(cmd-filter)/tau`): it
-  both gives pilot feel AND keeps them live.
+- External inputs retain qualified runtime slots and declaration defaults. Wire
+  physical producers explicitly; use `SetModelInput` for an authored override.
+  A filter belongs in Modelica only when its dynamics are part of the controller.
 - **Keep the control (GNC) path DIRECT — no spool.** A lag on the autonomous path makes
   it sluggish and can tumble the vehicle. Spool only the pilot's stick.
-- **rumoca mis-lowers `if` on algebraic vars.** Use `min`/`max` for clamps and a
-  branch-free arithmetic blend (`a*x+(1-a)*y`) for selection, never a nested `if`.
+- Conditional expressions are checked compiler capabilities. Choose clamps and
+  selection expressions from the controller's physical contract.
 
 For a rover route, the drivetrain and any continuous control law remain the
 actuator-side Modelica/USD contract. Both skid `RoverDrivetrain` and wheel-steered
@@ -369,8 +364,7 @@ trace is not a session replay log.
 - ❌ Control math in rhai — belongs in Modelica.
 - ❌ Per-tick rhai routing / an unconditional self-wire — clobbers the pilot; use the
   `piloted` gate instead.
-- ❌ An in-model `manual` flag toggled at runtime — folds unless der-fed; and it's
-  per-model. `piloted` is the general, wired, first-class signal.
+- ❌ A separate per-model authority flag — `piloted` is the shared, wired signal.
 - ❌ Reading the god-view body pose — read sensors (altimeter, IMU) so it's a real GNC.
 - ❌ Magic constants (torque, mass) — wire them from the body's ports (inertia, mass).
 - ❌ Starting a new controller from a mission report or tutorial snippet without

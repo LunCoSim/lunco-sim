@@ -1,21 +1,7 @@
-//! The splice accumulator — how a structural edit becomes a text patch.
-//!
-//! # Why this exists
-//!
-//! A structural op used to be turned into text by re-emitting the whole class
-//! through rumoca's `to_modelica()`. That is a *lossy* round-trip: it drops
-//! comments, and its component emitter mis-renders any declaration carrying
-//! both a `start` modifier and a binding. So dragging one icon on the canvas
-//! silently rewrote every sibling declaration in the class — a
-//! `parameter Real k = 2.0` came back as `k = 0.0`. Wrong numbers, no error.
-//!
-//! The rule now: **an edit may only touch the bytes it means to change.**
-//! Mutations record [`Splice`]s against the original source; everything else is
-//! copied through verbatim. Comments, formatting and untouched declarations
-//! survive because they are never re-emitted — not because the emitter is
-//! careful. New nodes are rendered by [`crate::pretty`], which is ours.
-//!
-//! See `docs/architecture/29-rumoca-workarounds.md` §5.
+//! Source-preserving structural edits record byte-range splices. Only claimed
+//! ranges change; untouched comments, declarations, and formatting are copied
+//! verbatim. New nodes are rendered through `crate::pretty`.
+//! See `docs/architecture/29-rumoca-runtime-contracts.md`.
 
 use std::ops::Range;
 

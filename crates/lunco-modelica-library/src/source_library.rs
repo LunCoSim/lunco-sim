@@ -74,12 +74,12 @@ pub fn source_library_asset_path(file_name: &str) -> Result<String, String> {
 
 /// Process-wide pre-parsed source library documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into
-/// `StoredDefinition`s. `ModelicaCompiler::new` reads it (via
+/// source-bearing `ParsedSourceDocument`s. `ModelicaCompiler::new` reads it (via
 /// [`global_parsed_source_bundle`]) and installs into rumoca via
-/// `Session::replace_parsed_source_set` — the entire parse cost is
+/// `Session::replace_in_memory_source_set` — the entire parse cost is
 /// already paid by then, so compile init is fast.
 static GLOBAL_PARSED_SOURCE_BUNDLE: OnceLock<
-    Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
+    Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>,
 > = OnceLock::new();
 static GLOBAL_PARSED_SOURCE_BUNDLE_REVISION: OnceLock<Option<u64>> = OnceLock::new();
 
@@ -96,14 +96,12 @@ impl std::io::Write for HashWriter<'_> {
     }
 }
 
-fn parsed_bundle_revision(
-    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
-) -> Option<u64> {
+fn parsed_bundle_revision(docs: &[rumoca_compile::compile::ParsedSourceDocument]) -> Option<u64> {
     use std::hash::{Hash, Hasher};
 
     let mut entries = docs
         .iter()
-        .map(|(uri, definition)| (uri.as_str(), definition))
+        .map(|document| (document.uri(), document))
         .collect::<Vec<_>>();
     entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
@@ -134,7 +132,7 @@ static SOURCE_BUNDLE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Read the pre-parsed source library bundle if any has been installed.
 pub fn global_parsed_source_bundle()
--> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+-> Option<&'static Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>> {
     GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
 
@@ -152,9 +150,7 @@ pub fn parsed_source_bundle_revision() -> Option<u64> {
 /// the first install wins; subsequent calls are silently ignored
 /// (the `OnceLock` guarantees a stable handle for the lifetime of
 /// the page session).
-fn install_global_parsed_source_bundle(
-    parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
-) {
+fn install_global_parsed_source_bundle(parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>) {
     let _ = GLOBAL_PARSED_SOURCE_BUNDLE.set(Arc::new(parsed));
 }
 
@@ -167,13 +163,11 @@ fn install_global_parsed_source_bundle(
 /// - On **native**, lazily deserialize `parsed-library.bin` (the bundle the
 ///   `modelica_library_indexer` writes) into the process-wide slot on first call —
 ///   one ~1–3 s bincode decode, then every subsequent lookup is an
-///   in-memory hit. This replaces the old per-file `parse_files_parallel`
-///   path that paid a full rumoca parse (tens of seconds for big
-///   `package.mo` wrappers) on every drill-in.
+///   in-memory hit. Drill-in reads the retained source-bearing definitions.
 /// - On **wasm** there is no synchronous disk path, so a miss just
 ///   returns `None` (the worker transfer fills the slot asynchronously).
 pub fn parsed_source_bundle()
--> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+-> Option<&'static Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>> {
     if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
         return Some(bundle);
     }
@@ -228,7 +222,7 @@ pub fn parsed_source_bundle()
 /// bundle) so the caller cold-parses the source root and rewrites it.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file()
--> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
+-> Result<Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>, String> {
     let Some((_, file)) = lunco_assets_runtime::library::library_open(std::path::Path::new(
         PARSED_LIBRARY_BUNDLE_FILE_NAME,
     )) else {
@@ -239,13 +233,20 @@ fn read_parsed_bundle_file()
     }
     let mut decoder = ruzstd::StreamingDecoder::new(std::io::BufReader::new(file))
         .map_err(|e| format!("zstd decoder: {e}"))?;
-    bincode::serde::decode_from_std_read::<
-        Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+    let documents = bincode::serde::decode_from_std_read::<
+        Vec<rumoca_compile::compile::ParsedSourceDocument>,
         _,
         _,
     >(&mut decoder, bincode::config::standard())
-    .map(Some)
-    .map_err(|e| format!("bincode: {e}"))
+    .map_err(|e| format!("bincode: {e}"))?;
+    let mut trailing = [0u8; 1];
+    if std::io::Read::read(&mut decoder, &mut trailing)
+        .map_err(|e| format!("parsed bundle completion: {e}"))?
+        != 0
+    {
+        return Err("trailing parsed-bundle bytes".to_string());
+    }
+    Ok(Some(documents))
 }
 
 /// Inflate a `parsed-*.bin.zst` blob to the raw bincode bytes, *without*
@@ -267,16 +268,23 @@ pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// bincode-deserialize the *decompressed* bundle bytes (output of
-/// [`decompress_parsed_bundle`]) into the `Vec<(uri, StoredDefinition)>`.
-#[cfg(target_arch = "wasm32")]
+/// [`decompress_parsed_bundle`]) into the `Vec<ParsedSourceDocument>`.
 pub fn deserialize_parsed_bundle(
     decoded: &[u8],
-) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
-    bincode::serde::decode_from_slice::<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, _>(
+) -> Result<Vec<rumoca_compile::compile::ParsedSourceDocument>, String> {
+    bincode::serde::decode_from_slice::<Vec<rumoca_compile::compile::ParsedSourceDocument>, _>(
         decoded,
         bincode::config::standard(),
     )
-    .map(|(v, _)| v)
+    .and_then(|(documents, consumed)| {
+        if consumed == decoded.len() {
+            Ok(documents)
+        } else {
+            Err(bincode::error::DecodeError::Other(
+                "trailing parsed-bundle bytes",
+            ))
+        }
+    })
     .map_err(|e| format!("bincode deserialize: {e}"))
 }
 
@@ -326,7 +334,7 @@ struct MainDecodeState {
     /// Total element count (read from the bincode seq header).
     total: u64,
     header_read: bool,
-    acc: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+    acc: Vec<rumoca_compile::compile::ParsedSourceDocument>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -391,7 +399,7 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
         };
 
         // Bincode-deserialize, bounded docs per frame. The blob is a
-        // bincode `standard()` encoding of `Vec<(uri, StoredDefinition)>`: a
+        // bincode `standard()` encoding of `Vec<ParsedSourceDocument>`: a
         // variable-int element count followed by the elements back-to-back.
         // Decode the count once, then walk elements one at a time, advancing
         // `pos` by the bytes each consumes so the work splits across frames.
@@ -403,10 +411,20 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
                     d.remaining = count;
                     d.pos += n as u64;
                     d.header_read = true;
-                    d.acc.reserve(count as usize);
+                    let capacity = usize::try_from(count).ok()
+                        .filter(|count| *count <= d.out.len());
+                    if capacity.is_none() || d.acc.try_reserve(capacity.unwrap()).is_err() {
+                        let error = "parsed source bundle document count exceeds available storage".to_string();
+                        warn!("[source library] {error}");
+                        *state = LibraryLoadState::Failed(error);
+                        *guard = None;
+                        return;
+                    }
                 }
                 Err(e) => {
-                    warn!("[source library] main decode: bad bundle header: {e}");
+                    let error = format!("parsed source bundle has a bad header: {e}");
+                    warn!("[source library] {error}");
+                    *state = LibraryLoadState::Failed(error);
                     *guard = None;
                     return;
                 }
@@ -418,7 +436,7 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
                 break;
             }
             match bincode::serde::decode_from_slice::<
-                (String, rumoca_compile::parsing::StoredDefinition),
+                rumoca_compile::compile::ParsedSourceDocument,
                 _,
             >(&d.out[d.pos as usize..], cfg)
             {
@@ -428,14 +446,23 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
                     d.remaining -= 1;
                 }
                 Err(e) => {
-                    warn!("[source library] main decode deserialize error: {e}");
-                    d.remaining = 0;
-                    break;
+                    let error = format!("parsed source bundle document decode failed: {e}");
+                    warn!("[source library] {error}");
+                    *state = LibraryLoadState::Failed(error);
+                    *guard = None;
+                    return;
                 }
             }
         }
 
         if d.remaining == 0 {
+            if d.pos != d.out.len() as u64 {
+                let error = "parsed source bundle has trailing bytes".to_string();
+                warn!("[source library] {error}");
+                *state = LibraryLoadState::Failed(error);
+                *guard = None;
+                return;
+            }
             let docs = std::mem::take(&mut d.acc);
             let count = docs.len();
             let uncompressed = d.out.len() as u64;
@@ -509,7 +536,7 @@ pub fn ensure_library_source_unpacked() {
 /// receives over postMessage.
 #[cfg(target_arch = "wasm32")]
 pub fn install_global_parsed_source_bundle_pub(
-    parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+    parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>,
 ) {
     install_global_parsed_source_bundle(parsed);
 }
@@ -1043,6 +1070,34 @@ mod web {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parsed_bundle_preserves_source_and_syntax_provenance() {
+        let source = "model Probe input Real u=7.0; output Real y; equation y=u; end Probe;";
+        let document = rumoca_compile::compile::ParsedSourceDocument::parse("Probe.mo", source)
+            .expect("source parses");
+        let bytes = bincode::serde::encode_to_vec(vec![document], bincode::config::standard())
+            .expect("source document encodes");
+        let documents = deserialize_parsed_bundle(&bytes).expect("source document decodes");
+        assert!(deserialize_parsed_bundle(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(deserialize_parsed_bundle(&trailing).is_err());
+        assert_eq!(documents[0].source(), source);
+        let mut session = rumoca_compile::Session::default();
+        assert_eq!(
+            session.replace_in_memory_source_set(
+                "library",
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                documents,
+                None
+            ),
+            1
+        );
+        session
+            .compile_model_dae_strict_reachable_uncached_with_recovery("Probe")
+            .expect("decoded source spans construct a checked DAE");
+    }
 
     #[test]
     fn source_library_artifact_paths_are_single_filenames() {

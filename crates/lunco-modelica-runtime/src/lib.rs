@@ -157,6 +157,8 @@ pub enum ModelicaCommand {
         extra_sources: Vec<(String, String)>,
         #[serde(default)]
         parameter_overrides: Vec<(String, f64)>,
+        /// Explicit finite input values admitted before solver initialization.
+        initial_inputs: Vec<(String, f64)>,
         #[serde(skip)]
         stream: Option<SimStream>,
     },
@@ -169,6 +171,8 @@ pub enum ModelicaCommand {
     Reset {
         entity: Entity,
         session_id: u64,
+        /// Current admitted inputs, including writes made while paused.
+        initial_inputs: Vec<(String, f64)>,
     },
     Despawn {
         entity: Entity,
@@ -387,6 +391,8 @@ pub struct ModelicaLiveSolverSnapshot {
     pub parameters: ModelicaSolverParameters,
     /// Sorted instance overrides passed into DAE lowering.
     pub parameter_overrides: Vec<(String, f64)>,
+    /// Sorted finite input samples admitted before initialization.
+    pub initial_inputs: Vec<(String, f64)>,
 }
 
 /// Bounded aggregate diagnostics for the live Modelica step handoff.

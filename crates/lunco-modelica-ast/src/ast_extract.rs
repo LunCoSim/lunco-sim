@@ -73,14 +73,11 @@ pub struct ModelInterface {
     pub required_source_roots: BTreeSet<String>,
     /// `parameter` declarations with their authored values.
     pub parameters: HashMap<String, f64>,
-    /// Every declared input, seeded with its authored default (`0.0` when it has
-    /// none). The INTERFACE is every input; the defaults map covers only the
-    /// subset that authored a numeric binding — seeding from defaults alone
-    /// gives an unbound `input Real drive_left` no port at all.
-    pub inputs: HashMap<String, f64>,
-    /// Authored numeric bindings for input variables. Unlike [`Self::inputs`],
-    /// this omits unbound inputs and preserves their distinction from the
-    /// documented zero seed used by the runtime port surface.
+    /// Declared input names. The checked DAE owns initialization values;
+    /// interface discovery never creates a numerical sample.
+    pub inputs: BTreeSet<String>,
+    /// Literal numeric declaration bindings projected for source/lint facts.
+    /// This is not the solver's scoped default evaluation.
     pub input_defaults: HashMap<String, f64>,
     /// Every causal output declared by the model, including output connector
     /// types whose causality is carried by the connector class.
@@ -175,13 +172,7 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
         within,
         required_source_roots,
         parameters: extract_parameters_from_ast(ast),
-        inputs: extract_input_names_from_ast(ast)
-            .into_iter()
-            .map(|name| {
-                let seed = defaults.get(&name).copied().unwrap_or(0.0);
-                (name, seed)
-            })
-            .collect(),
+        inputs: extract_input_names_from_ast(ast).into_iter().collect(),
         input_defaults: defaults,
         outputs: extract_output_names_from_ast(ast),
         variable_metadata: variable_metadata_from_ast(ast),
@@ -826,7 +817,7 @@ pub fn walk_class_type_names<F: FnMut(&str)>(class: &ClassDef, visit: &mut F) {
         let name = ext.base_name.to_string();
         visit(&name);
     }
-    for (_, comp) in class.iter_components() {
+    for (_, comp) in class.components.iter() {
         let t = format!("{}", comp.type_name);
         visit(&t);
     }

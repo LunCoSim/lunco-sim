@@ -13,7 +13,10 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let opts = lunco_modelica_assets::indexer::Options::parse();
-    lunco_modelica_assets::indexer::run(opts);
+    if let Err(error) = lunco_modelica_assets::indexer::run(opts) {
+        eprintln!("source library indexing failed: {error}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

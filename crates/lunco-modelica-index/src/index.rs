@@ -23,10 +23,10 @@
 
 use lunco_doc::{NodeId, TextRange};
 use lunco_modelica_ast::pretty::Placement;
-use rumoca_compile::parsing::ast::{self as ast};
-use rumoca_compile::parsing::{
+use lunco_modelica_ast::{
     Causality as AstCausality, ClassType as AstClassType, Variability as AstVariability,
 };
+use rumoca_compile::parsing::ast::{self as ast};
 use std::collections::HashMap;
 
 // TODO(slotmap): when we hit the perf wall on dense Vec<X> + HashMap<Name, idx>
@@ -854,7 +854,8 @@ fn insert_class_recursive(
     // Direct child class qualified names — rebuild's recursion fills
     // them in below.
     let children: Vec<String> = class_def
-        .iter_classes()
+        .classes
+        .iter()
         .map(|(name, _)| format!("{}.{}", qualified, name))
         .collect();
 
@@ -924,7 +925,7 @@ fn insert_class_recursive(
     let infos = lunco_modelica_ast::ast_extract::extract_components_for_class(class_def);
     let info_by_name: HashMap<String, lunco_modelica_ast::ast_extract::ComponentInfo> =
         infos.into_iter().map(|i| (i.name.clone(), i)).collect();
-    for (name, comp) in class_def.iter_components() {
+    for (name, comp) in class_def.components.iter() {
         let key = idx.alloc_component_key();
         let info = info_by_name.get(name).cloned();
         let (description, modifications) = info
@@ -1023,7 +1024,7 @@ fn insert_class_recursive(
     }
 
     // Recurse nested classes (e.g. examples inside a package).
-    for (nested_name, nested_def) in class_def.iter_classes() {
+    for (nested_name, nested_def) in class_def.classes.iter() {
         let nested_qualified = format!("{}.{}", qualified, nested_name);
         insert_class_recursive(idx, nested_qualified, nested_def, source);
     }

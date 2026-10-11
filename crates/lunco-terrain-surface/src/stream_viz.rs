@@ -1804,19 +1804,10 @@ pub(crate) fn invalidate_visual_products(
     mesh_cache.drop_region(terrain, change.dirty_bounds, root_half_extent);
 }
 
-/// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
-/// sun-visibility texture from `lunco-environment`'s horizon solution. The
-/// When the cache is active it owns terrain-on-terrain occlusion at every
-/// distance; streamed tiles remain directional-shadow receivers so
-/// dynamic-object shadows land on the surface, while the cascade does not
-/// redraw the whole tile set as casters. When it is inactive, the directional
-/// cascade remains the terrain self-shadow producer.
-///
-/// Written by the app glue (which can see both `HorizonShadowCache` and this
-/// crate); consumed by tile materials. Cache freshness does not turn `on` off:
-/// the last committed image remains the presentation value until its in-place
-/// replacement is published. `on == 0` means that no committed cache owns
-/// terrain self-shadow (for example, the sun is below the local horizon).
+/// Cached terrain self-shadow for streamed tiles. Native terrain casting and
+/// receiving remain enabled: the cache only shades the ground, while native
+/// shadow maps also carry terrain occlusion onto vehicles and equipment.
+/// The last committed image remains active until its replacement is published.
 #[derive(Component, Clone)]
 pub struct TileShadowCache {
     pub image: Handle<Image>,
@@ -1840,8 +1831,8 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
         Some(&cache.image.clone().into()),
     );
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
-    // The horizon cache owns terrain self-shadow; the binder applies cast intent.
-    look.no_shadow_cast = cache.on > 0.5;
+    // Cast intent remains the USD-authored look. The ground visibility cache
+    // does not replace native terrain-to-object casting.
 }
 
 fn set_texture(
@@ -5036,7 +5027,7 @@ mod draw_partition_tests {
                 .get::<TerrainAuthoredMaps>(terrain)
                 .expect("initial USD look is projected")
                 .albedo,
-            Some(first)
+            Some(first.into())
         );
 
         *app.world_mut()
@@ -5050,7 +5041,7 @@ mod draw_partition_tests {
                 .get::<TerrainAuthoredMaps>(terrain)
                 .expect("reauthored USD look keeps the terrain view")
                 .albedo,
-            Some(second)
+            Some(second.into())
         );
     }
 
@@ -5283,7 +5274,7 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn late_shadow_cache_keeps_dynamic_shadow_receiver_without_terrain_caster() {
+    fn late_shadow_cache_preserves_terrain_caster_and_receiver() {
         let mut app = App::new();
         app.add_systems(PostUpdate, bind_shadow_cache_to_tiles);
 
@@ -5322,7 +5313,7 @@ mod draw_partition_tests {
         app.update();
 
         let tile_ref = app.world().entity(tile);
-        assert!(tile_ref.get::<ShaderLook>().unwrap().no_shadow_cast);
+        assert!(!tile_ref.get::<ShaderLook>().unwrap().no_shadow_cast);
         assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
         let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
         assert_eq!(
@@ -5338,7 +5329,7 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn disabled_shadow_cache_restores_terrain_caster_for_csm() {
+    fn disabled_shadow_cache_preserves_terrain_caster_and_receiver() {
         let mut app = App::new();
         app.add_systems(PostUpdate, bind_shadow_cache_to_tiles);
 

@@ -6,8 +6,7 @@ within LunCo.Mobility;
 // torque ports. The vehicle composition selects this model through USD; Rust
 // only realizes the resulting ports and wheel/contact mechanics.
 //
-// RUMOCA RULES (same as LegStrut.mo): branch-free equations — `der(x) = expr`
-// with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
+// Continuous drivetrain equations are compiled by Rumoca via
 // `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
 // The outputs are normalized per-side drive demands (−1..1, torque/peak).
