@@ -202,9 +202,13 @@ presentation consumers.
 
 Propagation keeps its accumulator, hold projection, and diagnostic staging
 buffers in the shared `PropagationCache`, so fixed simulation and rollback use
-the same retained storage. A successful target records only its compiled target
-index during the hot pass; it shares the compiled port name when updating the
-once-per-endpoint landed ledger. Live broken/pending snapshots share those
+the same retained storage. A target's first successful write in a compiled
+fabric records its index and publishes to the scene-owned landed ledger. A dense
+publication acknowledgement suppresses further success notifications until
+the fabric rebuilds. Every write and failed-write ledger check remains live.
+`SceneTeardown` clears the propagation cache together with diagnostics, holds
+and binding state, so acknowledgements cannot outlive their ledger. Live
+broken/pending snapshots share those
 compiled names as `Arc<str>` instead of cloning a `String`; warning keys and
 labels are built only on the first terminal fault, not on every failed tick.
 

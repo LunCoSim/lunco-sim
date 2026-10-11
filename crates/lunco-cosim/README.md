@@ -29,6 +29,8 @@ and those slots. A write-only input is a valid target but not a readable source.
 Avian named discovery shares table-derived candidates across resolution,
 declarations and metadata, checking entity membership live; see the
 [port contract](../../docs/architecture/22-domain-cosim.md#core-concepts).
+Successful propagation publishes to diagnostics once per compiled target;
+scene teardown clears its publication cursor with the scene-owned ledger.
 `PortMap<T>` provides dynamic named surfaces with layout-checked process-local
 handles. Structural edits publish a topology revision and recompile the fabric;
 stale handles are rejected rather than retried through a name path. Sparse

@@ -175,10 +175,12 @@ fn reset_scene_state(
     mut diagnostics: ResMut<CosimDiagnostics>,
     mut holds: ResMut<PortHolds>,
     mut revision: ResMut<BindingRevision>,
+    mut propagation: ResMut<systems::propagate::PropagationCache>,
 ) {
     *diagnostics = CosimDiagnostics::default();
     holds.clear_all();
     *revision = BindingRevision::default();
+    *propagation = systems::propagate::PropagationCache::default();
 }
 
 impl Plugin for CoSimPlugin {

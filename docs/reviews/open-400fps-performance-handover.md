@@ -1,5 +1,78 @@
 # High-quality realtime performance handover
 
+## Publish successful wiring diagnostics once per fabric — 2026-10-11
+
+The shared `PropagationCache` retains a dense acknowledgement after a target's
+first successful ledger publication in a compiled fabric. Further successful
+writes skip the repeated entity/name lookup; every write, live validation and
+failed-write ledger check still runs. Rebuilding the fabric clears the cursor.
+`SceneTeardown` now clears the entire propagation cache with diagnostics, holds
+and binding state, before entities are reclaimed. The scene-owned diagnostic
+ledger remains authoritative. Fixed and rollback schedules share the same
+cursor. Solver math, f64 values, clock admission, ordering, quality and external
+libraries are unchanged. This is bookkeeping in the exchange mechanism, with
+no new policy or scripting API.
+
+An inline steady-exchange benchmark performs 768,000 writes to 128 surfaces
+after warm admission. One before/after pair takes 284.129/253.533 ms, a 10.77%
+reduction, with identical final bits `4000000000000000`. The ignored benchmark
+is `settled_diagnostic_publication_benchmark`; it isolates exchange and does
+not establish application throughput. The focused native `publication` run
+passes two functional checks and that benchmark. The private cursor seam covers
+a fabric rebuild with a never-landed target, then real scene teardown while
+entities still exist, followed by fresh ledger publication. The other check
+covers unchanged structural publication/removal/re-admission behavior.
+
+Normal production artifact
+`3e3b0048675018e4a9d9f92fd0f91cf9827956d6179132bb2ac56e1f2cec4dfb`
+runs in owned PID 957828/API 4202. Sandbox smoke passes seven checks before and
+seven after replacement, history recording passes 17, and joint-island mass
+passes ten, including negative mass rejection, editing and island splitting.
+The mass gate emits one verdict. Readiness, diagnostics, advancing physics,
+three invalid-assembly pause guards, public metadata and Modelica reset pass.
+High quality, no vsync/throttle, 50 bodies/33 colliders/20 joints and the
+within-run camera remain intact; the inspected View image retains shadows.
+Warm readiness is 3.160 s and View/Build/View frame medians are
+17.031/17.312/17.121 ms. Main PID 84260 overlaps and remains untouched, so these
+observations do not establish a loading or FPS improvement.
+
+This exact normal artifact passes serial/default four-rover replay, 24 checks
+each, in PIDs 958572/958813. Both retain the preceding 56-value sequence.
+The serial reference SHA remains
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`;
+the default reference changes scheduling metadata only, rather than capturing
+a separate parallel baseline or observing actual thread count. Both apps exit
+zero and close API 4202.
+
+Candidate Tracy artifact
+`9abda3782a3fb50994c203f1fb71b8315073ebb73aa77e3982cea2f5efc4cb27`
+runs in PID 961656/API 4202 with collector 961655/8086. The capture contains
+324,836,276 bytes, matches the collector size and passes native message/phase
+exports. Readiness, replacement, physics progress, pause guards, quality and
+topology pass; the inspected View image retains shadows. Its exact serial
+replay passes 24 checks. All owned apps and the collector exit zero and release
+their ports.
+
+Against the validated Avian-index Tracy artifact below, settled six-second
+View/Build/View diagnostic means fall from 0.062199/0.073952/0.061207 to
+0.004061/0.003737/0.003451 ms: reductions of 93.5%/94.9%/94.4%.
+Whole propagation means fall from 0.297394/0.342384/0.285633 to
+0.253415/0.244549/0.227008 ms: reductions of 14.8%/28.6%/20.5%.
+Baseline call counts are 357/360/360; candidate counts are 360/360/361.
+These are nested owner/phase measurements, not additive costs. Main overlap
+and the visual-resource prompt persist during both captures, leaving clean
+product acceptance open despite the consistent diagnostic-owner improvement.
+
+Both production builds pass with only the existing prepared-cache `clear`
+warning. Three touched Rust files are formatted once after validation; the
+core diagnostics changes are comments only. The normal executable is restored
+from its verified Cargo output after owned-session closure. Skills validation
+passes all 43 skills. Native comparisons, runtime/replay receipts and captures
+remain under `target/entity-tree-perf/`, prefix `landing-publication-`; the
+preceding normal artifact is preserved in a compressed archive. Controlled
+loading, visual FPS, physics throughput and the full thread-profile matrix
+remain open.
+
 ## Index live Avian port candidates — 2026-10-11
 
 The application-owned `lunco-cosim` backend derives immutable named candidates

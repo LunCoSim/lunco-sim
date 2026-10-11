@@ -655,8 +655,11 @@ and reuse the aligned value buffer on steady ticks. Do not probe every target
 against the hold table or clone its presentation snapshot per tick.
 Readable `inputs:*` connection sources use a distinct input-side slot reader;
 write-only inputs can be targets but never become fabricated readable sources.
-Success diagnostics use entity-indexed borrowed-name lookups and retained tick
-scratch. Compiled targets cache surface presence until topology invalidation;
+Success diagnostics publish once per compiled target and retain a dense
+acknowledgement until fabric rebuild. Scene teardown clears the shared
+propagation cache with the scene's diagnostic ledger. Failed writes still check
+the live ledger; an acknowledgement must never admit or bypass a write.
+Compiled targets cache surface presence until topology invalidation;
 pending/broken snapshots share compiled names as `Arc<str>`, and fault warning
 keys are formatted only on first failure rather than every fixed step.
 
