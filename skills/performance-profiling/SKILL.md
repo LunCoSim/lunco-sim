@@ -160,8 +160,8 @@ calls. `SignalRegistry::record_scalar_at_rate` admits and appends through one li
 history lookup; preserve backwards-time segments, retention, archived-source
 reactivation and catalog notifications. A registry benchmark isolates that owner,
 but production retention spans and raw physics/frame tails need separate evidence.
-Modelica's channel-limit check reads the live scalar count after append and
-only hashes history identity for admission when the catalog is full. Preserve
+Modelica and physics channel-limit checks read the live scalar count after
+append and only hash history identity for admission when the catalog is full. Preserve
 existing-channel recording above a lowered limit and rejection after history
 removal; a cached producer identity alone does not prove that history exists.
 For dynamic-body admission, compare `activate_dynamic_bodies` with its native

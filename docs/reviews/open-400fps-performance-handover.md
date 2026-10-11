@@ -1,5 +1,73 @@
 # High-quality realtime performance handover
 
+## Avoid redundant physics-history admission lookups — 2026-10-11
+
+`lunco-usd-sim-telemetry` now applies the live-count admission approach used by
+the Modelica producer. Below the configured channel limit, settled samples
+proceed directly to the registry's rate-and-append lookup. A full catalog still
+checks live history existence, and successful recording reads the resulting
+scalar count. Metadata discovery retains its diagnostic history lookup.
+`SignalRegistry` remains the history owner; the producer's existing settings
+and admission helper own the limit. Sampling cadence, previous-step velocity
+cursors, metadata, f64 values, physics ordering and dependencies are unchanged.
+
+An inline native resource benchmark records 2,304,000 samples across 384
+channels with settled metadata and 16-point retention. A single before/after
+pair takes 318.092/253.043 ms, a 20.45% reduction, with identical retained-history
+digest `d9716d51526de325`. This isolates the producer/registry loop and does not
+establish application throughput. Eight native checks pass, including the
+resource seam for a full catalog, continued recording above a lowered limit,
+cached-history removal rejection and subsequent admission when capacity returns.
+The benchmark is ignored by default and can be run explicitly with
+`cargo test -p lunco-usd-sim-telemetry --lib settled_retention_benchmark -j 4 -- --ignored --nocapture`.
+
+Normal production artifact
+`7634645ee6ba307abd3e41da108562be3b6138c4f70bf2c8170ac55549d247b8`
+runs in owned PID 911455/API 4202. The production
+`telemetry_recording_history.rhai` gate passes 17 checks and sandbox smoke
+passes seven before and seven after replacement. Readiness, diagnostics,
+advancing physics, three invalid-assembly pause guards and Modelica reset pass.
+High quality, no vsync/throttle, 50 bodies/33 colliders/20 joints and the
+within-run camera are preserved. The inspected View image retains shadows.
+View/Build/View raw-frame medians are 17.710/17.246/17.305 ms; warm readiness
+is 3.016 s. Main PID 84260 overlaps and remains untouched, so these observations
+are contended and do not establish a loading or FPS improvement. The app exits
+zero and releases the API.
+
+This exact normal artifact passes serial/default four-rover replay, 24 checks
+each, in owned PIDs 912159/912392. Both retain the preceding 56-value state
+sequence, exit zero and close API 4202. The serial reference SHA is
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`;
+the default reference changes scheduling metadata only and is not a separately
+captured parallel baseline or an observed thread count.
+
+Tracy artifact
+`94468ad20a116b422feaf1142fef6815b5cd0802abf38951d3daf7a87690d8f1`
+runs in owned PID 915164/API 4202 with collector 915163/8086. It preserves the
+same quality and topology, passes readiness, diagnostics, progress and the
+three pause guards, and the inspected post-dismissal View image retains shadows.
+App and collector exit zero and release their ports. Its 320,839,742-byte capture
+matches the collector size and passes native message and CPU exports. This
+exact artifact also passes 24 serial replay checks in owned PID 915939, exiting
+zero and closing API 4202.
+
+Settled six-second View/Build/View owner means are
+0.240940/0.224311/0.198117 ms versus the preceding validated final-variable
+capture's 0.229013/0.260871/0.215282 ms. Candidate call counts are 361/360/361
+versus 360/362/361. The first window is 5.2% slower; the latter two are
+14.0%/8.0% faster. This mixed, contended profiler pair does not establish a
+consistent runtime timing gain. The visual-resource prompt remains during
+measurement and main PID 84260 overlaps both captures.
+
+Normal and Tracy production builds pass with only the existing prepared-cache
+`clear` warning. The touched Rust file is formatted once after validation; the
+normal executable is restored by relinking its verified Cargo output after
+owned-session closure. Benchmark comparison, runtime receipts, replay verdicts,
+native summaries and capture are retained under `target/entity-tree-perf/`,
+prefix `physics-retention-`. Canonical telemetry documentation and the profiling
+skill describe both producers' live-count admission. Controlled loading, visual
+FPS, physics throughput and the full thread-profile matrix remain open.
+
 ## Separate Modelica observable snapshots from clock writes — 2026-10-11
 
 The application-owned output snapshot now lives in the required reflected

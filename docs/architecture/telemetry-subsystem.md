@@ -89,8 +89,8 @@ Rate admission, backwards-time clearing and append share one mutable history loo
 Rejected samples leave history capacity, publisher activity and catalog revision unchanged;
 accepted samples apply retention and reactivate archived publishers at that same boundary.
 
-Modelica channel admission uses the registry's live scalar count. Below the
-configured limit, append can admit either a new or an existing history; the
+Modelica and physics channel admission use the registry's live scalar count.
+Below the configured limit, append can admit either a new or an existing history; the
 producer reads the resulting count after an accepted sample. At the limit,
 it checks live history existence so existing channels continue recording while
 new channels are rejected. Cached producer identities do not authorize a new
