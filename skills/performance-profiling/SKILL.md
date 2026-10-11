@@ -1144,6 +1144,12 @@ facts. Mark the exact idle/movement windows in Tracy messages, keep the initial
 avatar pose fixed, and seed a pointer in SceneView when reproducing native
 picking. Distinguish shader reload events from material/look changes. Verify
 invalid-stage diagnostics and hot-reload invalidation as well as frame time.
+For a hidden DEM continuation with complete terrain counts, compare source
+reflection and material readiness separately. Only source reflection owns
+`ShaderLookSourceInterface`; material retirement must preserve it. Check queue
+admission before source reflection and readiness invalidation before promotion.
+Use `shader_source_lifecycle.rhai` on an admitted celestial DEM scene to verify
+valid-source reload and inactive-path rejection through the production API.
 
 Resolved port writes validate the live owner and metadata before committing.
 When profiling co-simulation exchange, preserve those checks and the all-or-none

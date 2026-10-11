@@ -68,6 +68,13 @@ paths and typed values; it contains no lunar fragment or vertex shader path.
 The source reflection publishes typed shader defaults, so an omitted DEM
 albedo uses its shader-owned default. The exterior composes the site base
 colour with its authored raster weight before fading to the body appearance.
+`ShaderLookSourceInterface` belongs to the render binder's source-reflection
+path, independently of material binding and render readiness. Retiring a
+material or invalidating `ShaderLookReady` preserves those loaded-source facts.
+Source replacement/removal and reload publication are handled by the reflection
+owner. Source request admission precedes reflection; material readiness
+invalidation precedes readiness promotion. Required consumers must not lose a
+valid interface while their material waits for binding or repacking.
 The exterior also carries the site lunar photometry parameters and fades
 its direct-sun response to the body response. Shared PBR and terrain lighting
 helpers own lighting; no heightfield shadow march runs for the collar. The

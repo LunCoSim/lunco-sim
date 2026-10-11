@@ -1,5 +1,39 @@
 # High-quality realtime performance handover
 
+## Shader-source publication ownership — 2026-10-12
+
+Shader-source reflection is independent of material binding. The render binder
+publishes `ShaderLookSourceInterface` only through its reflection owner; retiring
+or invalidating a material preserves the loaded-source facts. Source admission
+precedes reflection, and material readiness invalidation precedes promotion.
+No clocks, simulation math, rendering quality or external-library code change.
+
+The baseline resource seam fails because readiness invalidation removes a valid
+interface. The corrected seam passes material invalidation/retirement and actual
+source removal. On normal baseline `faee8b646cdacd1e9a9935e97ebbfa20309a89cc6e213ac39d9bab7158b799fb`,
+owned Summer Space School PID 2187473 starts with missing source reflection and
+an invisible continuation. Reloading the unchanged terrain shader restores its
+source facts and drawable continuation. The globe owner admits cutout only
+with a drawable collar; missing reflection leaves the globe under the DEM.
+
+Normal fixed artifact
+`e657368fe23e06eb282229804a42c0c2ea403ff275fdc7fb0ca7370efaa11209`
+builds in 2m 46s. Four startup observations retain valid source reflection and a
+visible continuation; inspected final imagery has no flat patches. Earlier gate
+attempts used WorldRoot without a simulation identity or a one-shot visualization
+hook and are not passing test evidence. The production Rhai gate uses the existing
+Twin-scoped scenario host with declared query reads. It passes all four checks,
+including inactive-path rejection, active reload, preserved source identity and
+reflection across 180 observations, and final drawable state. The 20-rover gate
+passes 72 exact checks against the unchanged reference. Gate/replay PIDs
+2278844/2289523 exit zero and release API 4202. The Twin remains unmodified.
+
+Verified archives and receipts are under
+`.lunco/performance-evidence/entity-tree-perf/`, with `shader-source-owner-`
+and `summer-source-owner-` prefixes. The independent Modelica pool experiment
+is excluded from this artifact. This resolves a publication failure; whole-app
+loading-time, visual-FPS and physics-performance acceptance remain open.
+
 ## Startup rock admission identity — 2026-10-12
 
 Summer Space School Twin `7ac54a2e32ab2254003e1696aee2acdac5127d17`

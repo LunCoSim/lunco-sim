@@ -303,6 +303,7 @@ fn loaded_shader_stage_failure(
         })
 }
 
+// Retiring a material does not retire facts about its independently loaded source.
 fn clear_shader_render_components(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
@@ -310,7 +311,6 @@ fn clear_shader_render_components(commands: &mut Commands, entity: Entity) {
         .try_remove::<MeshMaterial3d<StandardMaterial>>()
         .try_remove::<ShaderLookBound>()
         .try_remove::<ShaderLookReady>()
-        .try_remove::<ShaderLookSourceInterface>()
         .try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
 }
 
@@ -1001,11 +1001,13 @@ pub(crate) fn build(app: &mut App) {
             Update,
             (
                 queue_shader_look_source_reflection,
-                reflect_shader_look_source_interfaces,
+                reflect_shader_look_source_interfaces.after(queue_shader_look_source_reflection),
                 refresh_prepared_shader_looks.before(rebind_changed_shader_look),
                 rebind_changed_shader_look,
                 invalidate_shader_look_ready,
-                mark_shader_look_ready.after(crate::reflect_shader_schemas),
+                mark_shader_look_ready
+                    .after(crate::reflect_shader_schemas)
+                    .after(invalidate_shader_look_ready),
                 validate_shader_assets_on_change.after(crate::reflect_shader_schemas),
                 sweep_look_cache::<ShaderLook>,
             ),
@@ -1274,11 +1276,7 @@ fn invalidate_shader_look_ready(
             .iter()
             .any(|id| material_texture_handles(material_asset).any(|handle| handle.id() == *id));
         if shader_changed || image_changed {
-            let mut entity = commands.entity(entity);
-            if shader_changed {
-                entity.try_remove::<ShaderLookSourceInterface>();
-            }
-            entity.try_remove::<ShaderLookReady>();
+            commands.entity(entity).try_remove::<ShaderLookReady>();
         }
     }
 }
@@ -1593,6 +1591,95 @@ mod tests {
             image_dependency_removed(&AssetEvent::Unused { id }),
             Some(id)
         );
+    }
+
+    #[test]
+    fn material_retirement_preserves_reflection_until_the_source_is_removed() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Shader>()
+            .init_asset::<ShaderMaterial>()
+            .init_asset::<Image>()
+            .init_resource::<ShaderSourceCache>();
+        let shader = app.world_mut().resource_mut::<Assets<Shader>>().add(
+            Shader::from_wgsl(
+                "//!@interface test-source\n@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+                "inline.wgsl",
+            ),
+        );
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial {
+                shader: shader.clone(),
+                ..Default::default()
+            });
+        let entity = app
+            .world_mut()
+            .spawn((
+                ShaderLook::new("inline.wgsl"),
+                ShaderLookSourceHandle {
+                    handle: shader.clone(),
+                    shader: "inline.wgsl".into(),
+                },
+                ShaderLookReady,
+                MeshMaterial3d(material),
+            ))
+            .id();
+        app.world_mut()
+            .write_message(AssetEvent::<Shader>::Modified { id: shader.id() });
+        app.world_mut()
+            .run_system_cached(reflect_shader_look_source_interfaces)
+            .unwrap();
+        let reflected = app
+            .world()
+            .get::<ShaderLookSourceInterface>(entity)
+            .unwrap()
+            .clone();
+        assert!(reflected.source_valid);
+        assert_eq!(reflected.identifier.as_deref(), Some("test-source"));
+
+        app.world_mut()
+            .run_system_cached(invalidate_shader_look_ready)
+            .unwrap();
+        assert!(app.world().get::<ShaderLookReady>(entity).is_none());
+        assert_eq!(
+            app.world().get::<ShaderLookSourceInterface>(entity),
+            Some(&reflected)
+        );
+        app.world_mut()
+            .run_system_cached(
+                |mut commands: Commands, entities: Query<Entity, With<ShaderLook>>| {
+                    for entity in &entities {
+                        clear_shader_render_components(&mut commands, entity);
+                    }
+                },
+            )
+            .unwrap();
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<ShaderMaterial>>(entity)
+                .is_none()
+        );
+        assert_eq!(
+            app.world().get::<ShaderLookSourceInterface>(entity),
+            Some(&reflected)
+        );
+
+        app.world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .remove(shader.id());
+        app.world_mut()
+            .write_message(AssetEvent::<Shader>::Removed { id: shader.id() });
+        app.world_mut()
+            .run_system_cached(reflect_shader_look_source_interfaces)
+            .unwrap();
+        assert!(
+            app.world()
+                .get::<ShaderLookSourceInterface>(entity)
+                .is_none()
+        );
+        assert!(app.world().get::<ShaderLookSourcePending>(entity).is_some());
     }
 
     #[test]
