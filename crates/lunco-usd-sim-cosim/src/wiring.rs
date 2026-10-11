@@ -174,6 +174,23 @@ pub(super) struct WiringQueries<'w, 's> {
         Without<lunco_core_session::NotPredictable>,
     >,
     defaults: Query<'w, 's, &'static UsdInputDefaults>,
+    pending_inputs: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static lunco_cosim_core::initialization::PendingInputConnections,
+        ),
+    >,
+    preparing_sources: Query<
+        'w,
+        's,
+        (),
+        (
+            With<UsdPrimPath>,
+            Without<lunco_usd_sim_core::UsdSimProcessed>,
+        ),
+    >,
     outputs: Query<'w, 's, &'static lunco_port_core::OutputPorts>,
     child_of: Query<'w, 's, &'static ChildOf>,
     preview_roots: Query<'w, 's, (), With<UsdPreviewOnly>>,
@@ -270,10 +287,12 @@ pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
         .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdPrimPath>)
         .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_core::GlobalEntityId>)
         .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdInstanceProjection>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_usd_sim_core::UsdSimProcessed>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
         .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_usd_sim_core::UsdSimProcessed>)
         .add_observer(mark_wiring_dirty_for_path_remove)
         .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>)
         .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<UsdInstanceProjection>);
@@ -340,15 +359,9 @@ pub fn modelica_models_terminal<'a>(
         // solver participant.
         (None, Some(component)) => !matches!(component.status, SimStatus::Compiling),
         (None, None) => true,
-        // `SimComponent::status` intentionally remains `Compiling` until the
-        // first solver step has produced live outputs.  That is the public
-        // simulation status, not the source-compilation transaction.  Once
-        // the authoritative Modelica worker has compiled the model, the
-        // binding epoch must be allowed to seal; otherwise scene readiness is
-        // coupled to the first fixed tick and a cold compile can hold the
-        // world indefinitely.  The next fixed tick will promote the wrapper
-        // to Running (or reopen the epoch if endpoint admission is still
-        // pending).
+        // Checked initialization publishes the t=0 sample before simulation
+        // advances. Compilation or a terminal failure can seal this endpoint's
+        // binding epoch independently of its first fixed tick.
         (Some(model), Some(component)) => {
             model.is_compiled
                 || model.last_error.is_some()
@@ -628,6 +641,7 @@ pub(super) fn rewire_usd_connections(
     // Gathered in the same sweep that derives the wires, because "has no wire" is
     // exactly what makes an input a parameter.
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
+    let mut pending_inputs = HashMap::<Entity, std::collections::BTreeSet<String>>::new();
 
     // Direction demand is a composed-wire fact, not a property of every
     // environment probe. The connector stem selects any source (`sun`, `earth`,
@@ -928,7 +942,14 @@ pub(super) fn rewire_usd_connections(
                             // silently dropped wire is how a vehicle ends up with no forces
                             // and no explanation.
                             if let Ok(src_sdf) = SdfPath::new(src_prim) {
-                                if !view.has_prim(&src_sdf) {
+                                if view.has_prim(&src_sdf) {
+                                    if forward.is_none() {
+                                        pending_inputs
+                                            .entry(entity)
+                                            .or_default()
+                                            .insert(sink_conn.to_owned());
+                                    }
+                                } else {
                                     warn!(
                                         "[usd-cosim] {}.{}: connection source '{}' names a prim that does \
                                      not exist on this stage — the wire is dropped. Check the path.",
@@ -940,6 +961,12 @@ pub(super) fn rewire_usd_connections(
                         };
                         (element, src_conn.to_string())
                     };
+                    if forward.is_none() && wiring.preparing_sources.contains(start_element) {
+                        pending_inputs
+                            .entry(entity)
+                            .or_default()
+                            .insert(sink_conn.to_owned());
+                    }
                     if !start_is_input && environment_probe_entities.contains(&start_element) {
                         if let Some(source) =
                             lunco_environment::DirectionSourceId::from_mount_connector(&src_conn)
@@ -1101,6 +1128,26 @@ pub(super) fn rewire_usd_connections(
     facts_cache
         .0
         .retain(|key, _| active_cache_keys.contains(key));
+
+    for (entity, _) in &wiring.pending_inputs {
+        if !pending_inputs.contains_key(&entity) {
+            commands
+                .entity(entity)
+                .remove::<lunco_cosim_core::initialization::PendingInputConnections>();
+        }
+    }
+    for (entity, names) in pending_inputs {
+        if wiring
+            .pending_inputs
+            .get(entity)
+            .is_ok_and(|(_, previous)| previous.0 == names)
+        {
+            continue;
+        }
+        commands.entity(entity).try_insert(
+            lunco_cosim_core::initialization::PendingInputConnections(names),
+        );
+    }
 
     // Publish the authored parameters — but ONLY where they changed. This runs on
     // every structural change (any prim spawning anywhere re-runs the whole pass),

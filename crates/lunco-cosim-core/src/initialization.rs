@@ -4,6 +4,12 @@ use crate::{PortHolds, SimComponent, SimConnection};
 use bevy::prelude::*;
 use lunco_port_core::ports::PortRegistry;
 
+/// Authored causal connections whose producer surfaces are still preparing.
+/// The wiring owner clears these names when it can publish the real edges.
+#[derive(Component, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+pub struct PendingInputConnections(pub std::collections::BTreeSet<String>);
+
 /// Read a causal source through its registered backend. A missing sample is
 /// pending producer admission, never a numerical zero.
 pub fn read_causal_sample(
@@ -35,6 +41,21 @@ pub fn initialization_inputs(
     {
         return Ok(None);
     }
+    let mut values = std::collections::BTreeMap::new();
+    if let Some(pending) = world.get::<PendingInputConnections>(target) {
+        for name in &pending.0 {
+            let Some(value) = world
+                .get_resource::<PortHolds>()
+                .and_then(|holds| holds.get(target, name))
+            else {
+                return Ok(None);
+            };
+            if !value.is_finite() {
+                return Err(format!("initial input '{name}' has a non-finite hold"));
+            }
+            values.insert(name.clone(), value);
+        }
+    }
     let mut query = world.query::<&SimConnection>();
     let mut wires: Vec<_> = query
         .iter(world)
@@ -60,7 +81,6 @@ pub fn initialization_inputs(
     let registry = world
         .get_resource::<PortRegistry>()
         .ok_or("co-simulation port registry unavailable")?;
-    let mut values = std::collections::BTreeMap::new();
     for wire in wires {
         let held = world
             .get_resource::<PortHolds>()
@@ -77,7 +97,6 @@ pub fn initialization_inputs(
         }
         if let Some(component) = world.get::<SimComponent>(wire.start_element) {
             match &component.status {
-                crate::SimStatus::Compiling => return Ok(None),
                 crate::SimStatus::Error(error) => {
                     return Err(format!(
                         "initial input '{}' producer failed: {error}",
@@ -124,4 +143,43 @@ pub fn initialization_inputs(
         }
     }
     Ok(Some(values.into_iter().collect()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_connections_require_samples_or_finite_holds() {
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<PortHolds>();
+        let entity = world
+            .spawn((
+                SimComponent::default(),
+                PendingInputConnections(std::collections::BTreeSet::from(["initial_input".into()])),
+            ))
+            .id();
+        assert_eq!(initialization_inputs(&mut world, entity), Ok(None));
+        let value = f64::from_bits(0x3ff0_0000_0000_0001);
+        world
+            .resource_mut::<PortHolds>()
+            .hold(entity, "initial_input", value);
+        assert_eq!(
+            initialization_inputs(&mut world, entity),
+            Ok(Some(vec![("initial_input".into(), value)]))
+        );
+        world
+            .resource_mut::<PortHolds>()
+            .hold(entity, "initial_input", f64::NAN);
+        assert_eq!(
+            initialization_inputs(&mut world, entity),
+            Err("initial input 'initial_input' has a non-finite hold".into())
+        );
+        world.entity_mut(entity).remove::<PendingInputConnections>();
+        assert_eq!(
+            initialization_inputs(&mut world, entity),
+            Ok(Some(Vec::new()))
+        );
+    }
 }

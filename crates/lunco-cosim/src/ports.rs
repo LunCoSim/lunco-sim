@@ -36,7 +36,7 @@ use lunco_port_core::ports::{
 };
 use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
 
-use lunco_cosim_core::{DeclaredOutputPorts, PORT_NAME, SimComponent, SimConnection};
+use lunco_cosim_core::{DeclaredOutputPorts, PORT_NAME, SimComponent, SimConnection, SimStatus};
 
 /// The fixed port name a [`Port`] exposes (its `f64` `value`).
 
@@ -596,6 +596,13 @@ fn sim_component_topology_key(
     hasher.finish()
 }
 
+/// Only this backend's completed session publishes model outputs. Other port
+/// owners on the same entity can publish independently during preparation.
+fn published_sim_outputs(component: &SimComponent) -> Option<&lunco_cosim_core::ScalarPortMap> {
+    (!matches!(component.status, SimStatus::Compiling | SimStatus::Error(_)))
+        .then_some(&component.outputs)
+}
+
 const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(
@@ -656,7 +663,8 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     },
     read_output: |w, e, n| {
         w.get::<SimComponent>(e)
-            .and_then(|c| c.outputs.get(n).copied())
+            .and_then(published_sim_outputs)
+            .and_then(|outputs| outputs.get(n).copied())
     },
     read_input: |w, e, n| {
         w.get::<SimComponent>(e)
@@ -672,9 +680,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         world.get::<SimComponent>(entity)?.inputs.resolve_slot(name)
     }),
     read_slot: Some(|world, entity, slot| {
-        world
-            .get::<SimComponent>(entity)?
-            .outputs
+        published_sim_outputs(world.get::<SimComponent>(entity)?)?
             .get_slot(slot)
             .copied()
     }),
@@ -1248,6 +1254,51 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_output_availability_preserves_independent_native_ports() {
+        let mut world = World::new();
+        world.init_resource::<PortTopologyRevision>();
+        let value = f64::from_bits(0x3ff0_0000_0000_0001);
+        let entity = world
+            .spawn((
+                avian3d::prelude::RigidBody::Kinematic,
+                avian3d::prelude::Position(bevy::math::DVec3::new(17.0, 2.0, 3.0)),
+                SimComponent {
+                    outputs: std::collections::HashMap::from([("model_output".into(), value)])
+                        .into(),
+                    ..Default::default()
+                },
+            ))
+            .id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+        let slot = registry
+            .resolve_output(&world, entity, "model_output")
+            .unwrap();
+        for status in [
+            SimStatus::Idle,
+            SimStatus::Running,
+            SimStatus::Paused,
+            SimStatus::Compiling,
+            SimStatus::Error("failed session".into()),
+        ] {
+            let published = !matches!(status, SimStatus::Compiling | SimStatus::Error(_));
+            world.get_mut::<SimComponent>(entity).unwrap().status = status;
+            assert_eq!(
+                registry.read_output_port(&world, entity, "model_output"),
+                published.then_some(value)
+            );
+            assert_eq!(
+                registry.read_resolved(&world, entity, &slot),
+                published.then_some(value)
+            );
+            assert_eq!(
+                registry.read_output_port(&world, entity, "position_x"),
+                Some(17.0)
+            );
+        }
+    }
 
     /// Measures live resolved writes through the registered backend precedence.
     #[test]

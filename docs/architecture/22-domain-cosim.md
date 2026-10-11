@@ -868,11 +868,29 @@ physical preparation remains at readiness, and invalid authored samples fault at
 the producer. Participant initialization consumes `lunco_cosim_core::initialization::initialization_inputs`.
 This reads the registered causal source backends in propagation order, applies
 SSP affine sums and authored hold priority, and admits only finite current samples.
+Availability belongs to the selected port backend. Native pose and control ports
+can publish while a Modelica participant on the same entity is compiling. The
+Modelica backend withholds its own outputs while compiling or failed, through
+the same session-state guard for named and resolved reads. Input values and
+port topology remain independently available. A failed producer still rejects
+initial admission with its error.
 A declared scalar port can have no sample. Its stable slot accepts the first
 published value without changing port topology; registry reads return unavailable
 until then. Both direct USD programs and generated domain networks use this
 admission before worker dispatch. Generated compile intents retain their pinned
 document owner while waiting and reject a retired owner before dispatch.
+The USD lifecycle publishes Modelica participant surfaces before rebuilding
+connections, then admits initial inputs after that wiring transaction commits.
+This gives initialization the complete authored connection set in the update
+that exposes a generated participant.
+When an authored source prim is present but its port surface is preparing,
+the wiring owner publishes `PendingInputConnections` on the sink. A native source
+also remains pending until its `UsdSimProcessed` projection boundary; identity or
+an earlier partial surface does not establish complete native port publication.
+That boundary invalidates wiring so child endpoint indirection is rebuilt.
+Initialization waits for those connections unless an authored hold supplies the input. Wiring
+clears the pending names when it publishes the actual edges. This preserves the
+distinction between an unconnected input and a connection awaiting projection.
 A producer preparing its first sample holds initialization at scene readiness;
 its missing sample never becomes an initial zero. USD source dispatch combines
 these samples with unconnected authored input values and passes the typed

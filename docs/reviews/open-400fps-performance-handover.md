@@ -1,6 +1,56 @@
 # High-quality realtime performance handover
 
-## Keep Modelica telemetry metadata in its registry — 2026-10-11
+## Complete initial causal admission after main integration — 2026-10-11
+
+Integration of current main's checked Modelica initialization exposed incomplete
+causal admission. `lunco-cosim` owns model-output availability for named and
+resolved reads, independently of native ports on the same entity.
+`lunco-usd-sim-cosim` publishes participant surfaces before wiring, records
+`PendingInputConnections` while sources prepare, and rebuilds child endpoint
+indirection at `UsdSimProcessed`. Initialization retains finite samples, ordered
+affine sums and hold priority. Preparation does not advance simulation clocks.
+These are generic owner and lifecycle mechanisms; no changeable policy or
+additional hook is needed. The two drivetrain models supply guidance inputs
+through instance modifiers, preserving their formulas and standalone defaults.
+
+The normal production build passes at artifact
+`1ddce2ce4cd15c5ab4f6c6bd6c8760682b277248bd2ec1dd0c435eecd75b78eb`.
+Owned PID 3140494/API 4202 reaches readiness in 2.91 seconds, passes the 18-check
+production telemetry-history gate, and passes scene restart readiness and
+diagnostics. It exits zero and releases the port. Two focused generic resource
+seam tests cover output availability and pending connection/finite hold admission.
+
+The uncontended High-quality View/Builder/View windows retain 50 bodies and
+33 colliders. Median frame times are 10.649, 10.600 and 10.571 ms; p99 values
+are 13.348, 12.234 and 12.368 ms. Physics advances 486/487/487 steps over the
+three eight-second windows and their API checkpoints. The workload inventory
+contains only this owned simulator. These are current measurements, without a
+matched healthy pre-integration baseline; they establish no causal FPS gain.
+
+The current replay reference captures admitted authored pose/radius values and
+the composed guidance bindings at t=0. Selected physics, Modelica, articulated
+and final rows match exactly across serial/24-thread execution for 4/8/20 rovers
+and across all four seeded jitter profiles. Temporary row logging is removed
+before production replay. Zero tolerance and the altered-row negative control
+remain required. Reference provenance records the exact artifact and authored
+input digests. All ten uninstrumented production profiles pass 360 authored
+checks against reference digest
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+The admission and guidance repairs intentionally change initialized Modelica
+state and the subsequent trajectory; this is exact same-build determinism,
+not unchanged behavior against the earlier reference. Full-scene moving,
+terrain and shadow performance acceptance remain open.
+
+The settled live schema has 262 commands; regeneration agrees with the common
+canonical command surface. The 11 networking commands remain in the canonical
+reference because this normal build omits the opt-in networking feature.
+Source and registration contracts for those commands are unchanged.
+
+Current receipts and diagnostic comparisons use the `metadata-publication-`
+and `admission-` prefixes under `target/entity-tree-perf/`. Package-scoped
+application cleanup preserves source, sibling worktrees and shared caches.
+
+## Pre-integration telemetry metadata evidence — 2026-10-11
 
 `lunco-modelica-telemetry` retains a publication flag per runtime variable and
 moves first or changed metadata into `lunco-signal::SignalRegistry`. The registry

@@ -1358,6 +1358,11 @@ The whole-simulation guarantee remains open because:
    bodies; render `Transform` is excluded from initial pose checks and replay
    comparisons. The gate also verifies an
    altered physics row is rejected and emits no trace or result bundle.
+   Reference t=0 state includes the checked causal samples and authored inputs
+   admitted before solver construction. Its provenance identifies the artifact,
+   input digests and paired Compute/jitter validation. A change to that admission
+   contract requires captured current-state evidence and exact paired replay;
+   reference replacement must not weaken tolerance or the negative control.
    `report_verdict` emits the status, check count, and authored failure
    messages in a typed telemetry map. The scene-test runner prints those
    details with its verdict and returns the matching process exit code, so

@@ -1762,3 +1762,10 @@ metadata only from the selected class. It never seeds input values from the
 document-wide class index. The production gate
 `modelica_scoped_input_defaults.rhai` checks distinct class
 defaults, repeated instances, overrides, reset, and invalid-default diagnostics.
+
+Compose a component with bound inputs through instance modifications when the
+parent supplies those values. An additional equation does not replace the
+declaration binding. The two rover drivetrain models bind guidance inputs in
+their `RoverAutopilotGuidance` instance modifiers, retaining the guidance class's
+standalone defaults and the parent formulas. See the
+[Modelica modification rules](https://specification.modelica.org/maint/3.6/inheritance-modification-and-redeclaration.html).

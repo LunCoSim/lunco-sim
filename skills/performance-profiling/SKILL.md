@@ -1081,3 +1081,14 @@ invalid-stage diagnostics and hot-reload invalidation as well as frame time.
 Resolved port writes validate the live owner and metadata before committing.
 When profiling co-simulation exchange, preserve those checks and the all-or-none
 preflight for retained batches; single exclusive writes need one validation pass.
+For initialization stalls, inspect each wire's selected source backend and its
+actual sample. A compiling Modelica participant can share an entity with ready
+native pose/control ports. Initialization reads the registered owner; only the
+Modelica backend withholds model outputs until its session has compiled. Missing
+samples remain pending and producer errors remain terminal.
+Check that participant surfaces publish before connection rebuilding and that
+the wiring transaction commits before initialization. Compare admitted inputs
+with authored connections when a missing-input failure varies between runs.
+`PendingInputConnections` records sources awaiting port-surface projection;
+initialization consumes that owner fact rather than treating omitted edges as
+unconnected inputs.

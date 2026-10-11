@@ -34,6 +34,11 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+When composing a component with bound input defaults, supply replacements as
+instance modifiers. Follow the
+[declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
+and validate the composed participant through its production scene gate.
+
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
 the physical vehicle identity after compile and reload.

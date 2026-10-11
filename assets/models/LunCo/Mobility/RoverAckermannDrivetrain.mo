@@ -35,7 +35,18 @@ model RoverAckermannDrivetrain
   input Real autopilot_yaw_rate "Authoritative rover angular rate about Y (rad/s)";
   input Real piloted "1 while an external session owns manual control";
 
-  RoverAutopilotGuidance guidance(turn_in_place=0.0);
+  RoverAutopilotGuidance guidance(
+    turn_in_place=0.0,
+    enabled=guidance_gate,
+    target_x=autopilot_target_x,
+    target_z=autopilot_target_z,
+    position_x=autopilot_position_x,
+    position_z=autopilot_position_z,
+    yaw=autopilot_yaw + forward_yaw_offset,
+    yaw_rate=autopilot_yaw_rate,
+    speed=autopilot_speed,
+    radius=autopilot_radius,
+    turn_only=autopilot_turn_only);
   Real piloted_gate "Clamped possession signal";
   Real program_gate "Clamped authored-program authority";
   Real guidance_gate "Authored-program waypoint-guidance authority";
@@ -56,21 +67,10 @@ model RoverAckermannDrivetrain
   output Real guidance_steer "Modelica waypoint steer command";
   output Real guidance_heading_error "Modelica waypoint heading error (rad)";
 equation
-  guidance.target_x = autopilot_target_x;
-  guidance.target_z = autopilot_target_z;
-  guidance.position_x = autopilot_position_x;
-  guidance.position_z = autopilot_position_z;
-  guidance.yaw = autopilot_yaw + forward_yaw_offset;
-  guidance.yaw_rate = autopilot_yaw_rate;
-  guidance.speed = autopilot_speed;
-  guidance.radius = autopilot_radius;
-  guidance.turn_only = autopilot_turn_only;
-
   piloted_gate = max(0.0, min(1.0, piloted));
   program_gate = max(0.0, min(1.0, program_active));
   guidance_gate = program_gate * max(0.0, min(1.0, autopilot_enable));
   manual_gate = piloted_gate * (1.0 - program_gate);
-  guidance.enabled = guidance_gate;
   selected_throttle = manual_gate * throttle + guidance_gate * guidance.throttle_cmd;
   selected_steer = manual_gate * steer + guidance_gate * guidance.steer_cmd;
 

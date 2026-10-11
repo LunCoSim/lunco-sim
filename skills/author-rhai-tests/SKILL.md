@@ -147,6 +147,14 @@ a fresh capture alone is not proof that the candidate preserves behavior.
 Record pool width from `clock_snapshot().physics_compute_threads` with
 `physics_profile_known=true`; CLI `threads=0` alone does not observe the width.
 
+For an intentional owner-contract repair that changes initialized state, first
+demonstrate the fault and trace state differences to the authored inputs and
+equations. Compare complete selected rows across Compute widths and jitter
+before replacing the reference, then replay every profile with diagnostic
+instrumentation removed. Keep zero tolerance and the negative control, identify
+the artifact and inputs, and report the behavior change explicitly; paired
+determinism does not imply preservation of the previous trajectory.
+
 A finish helper must update the actor's actual state before reporting. For a
 script-defined receiver method, use `this` in its body and call
 `this.finish(...)`; passing the state map as an ordinary function argument

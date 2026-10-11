@@ -9,6 +9,24 @@ dependencies, or ECS query order leave the same authoritative state at each
 tick. Stable actor/event/worker submission order is implemented; the whole
 contract remains open.
 
+### Current causal-admission replay evidence (2026-10-11)
+
+The checked initialization path admits finite authored and causal inputs before
+solver construction. USD wiring records sources awaiting native projection and
+publishes participant surfaces before connection rebuilding. The two rover
+drivetrains bind guidance inputs through instance modifiers. Initialized
+Modelica state and subsequent trajectories reflect those inputs and bindings.
+
+Artifact `1ddce2ce4cd15c5ab4f6c6bd6c8760682b277248bd2ec1dd0c435eecd75b78eb`
+matches all selected physics, Modelica, articulated and final rows across
+Compute widths 1/24 for 4/8/20 rovers and all four jitter profiles. The refreshed
+reference records that artifact and authored input digests. With temporary row
+logging removed, the ten production profiles pass 360 Rhai checks, including
+zero-tolerance equality and altered-row rejection. This establishes exact
+same-build replay for these fixtures; it does not establish unchanged trajectory
+against the preceding initialization contract or whole-session/cross-machine
+determinism. See the current performance handover for loading and frame evidence.
+
 ### D4 replay profile coverage (2026-09-29)
 
 The production `multi_rover_stress` Rhai gate checks `on_start` at

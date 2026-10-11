@@ -2754,8 +2754,8 @@ impl Plugin for UsdSimCosimPlugin {
         app.add_systems(
             Update,
             (
-                rewire_usd_connections.run_if(wiring_due),
                 wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+                rewire_usd_connections.run_if(wiring_due),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
                 dispatch_loaded_modelica_sources,
@@ -2776,10 +2776,9 @@ impl Plugin for UsdSimCosimPlugin {
                     .after(mark_usd_telemetry_projection_index_dirty)
                     .run_if(telemetry_projection_needed),
             )
-                // Rewire commands must land before the wrapper query, and the
-                // wrapper's component insertion must land before defaults are
-                // seeded. Native deferred synchronization preserves both
-                // ownership boundaries without a duplicate ApplyDeferred node.
+                // Publish participant surfaces before resolving their authored
+                // connections, then commit wiring before input admission.
+                // Native deferred synchronization preserves those boundaries.
                 .chain()
                 .in_set(CosimUpdateSet::Wiring),
         );
