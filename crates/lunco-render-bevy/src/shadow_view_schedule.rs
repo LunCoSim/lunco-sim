@@ -10,7 +10,7 @@ use bevy::{
     ecs::{
         schedule::{
             IntoSystemSet, Schedule, ScheduleBuildSettings, ScheduleCleanupPolicy, ScheduleLabel,
-            SystemSet, common_conditions::any_match_filter,
+            SingleThreadedExecutor, SystemSet, common_conditions::any_match_filter,
         },
         system::ScheduleSystem,
         world::World,
@@ -72,6 +72,8 @@ pub(super) fn finish(app: &mut App) {
 
 fn shared_shadow_schedule(gpu_preprocessing: bool) -> Schedule {
     let mut schedule = Schedule::new(SharedShadowView);
+    // Every native stage depends on the preceding stage; no work can overlap.
+    schedule.set_executor(SingleThreadedExecutor::new());
     schedule.set_build_settings(ScheduleBuildSettings {
         auto_insert_apply_deferred: false,
         ..Default::default()
@@ -193,8 +195,8 @@ fn install_diagnostics(app: &mut App) {
 /// Validate every native parameter before opening a shared shadow span.
 fn begin_shared_shadow_span<const IS_LATE: bool>(
     _world: &World,
-    _view: ViewQuery<(Entity, &ShadowView, &ExtractedView, Has<OcclusionCulling>)>,
-    _phases: Res<ViewBinnedRenderPhases<Shadow>>,
+    view: ViewQuery<(Entity, &ShadowView, &ExtractedView, Has<OcclusionCulling>)>,
+    phases: Res<ViewBinnedRenderPhases<Shadow>>,
     mut ctx: RenderContext,
     recorder: Res<DiagnosticsRecorder>,
 ) {
@@ -204,6 +206,27 @@ fn begin_shared_shadow_span<const IS_LATE: bool>(
         "lunco_shadow_shared_early"
     };
     recorder.begin_time_span(ctx.command_encoder(), name.into());
+    if !IS_LATE {
+        let (entity, shadow, view, _) = view.into_inner();
+        let phase = phases.get(&view.retained_view_entity);
+        let _span = bevy::log::info_span!(
+            "lunco_shadow_view_work",
+            pass = %shadow.pass_name,
+            view = entity.to_bits(),
+            width = view.viewport.z,
+            height = view.viewport.w,
+            phase_empty = ?phase.map(|phase| phase.is_empty()),
+            multidraw_sets = ?phase.map(|phase| phase.multidrawable_meshes.len()),
+            batchable_bins = ?phase.map(|phase| phase.batchable_meshes.len()),
+            unbatchable_bins = ?phase.map(|phase| phase.unbatchable_meshes.len()),
+            non_mesh_bins = ?phase.map(|phase| phase.non_mesh_items.len()),
+        )
+        .entered();
+        recorder.begin_time_span(
+            ctx.command_encoder(),
+            format!("lunco_light_depth/{}", shadow.pass_name).into(),
+        );
+    }
 }
 
 /// Validate every native parameter before opening a camera shadow span.
@@ -229,6 +252,9 @@ fn end_shadow_span<const SHARED: bool, const IS_LATE: bool>(
     mut ctx: RenderContext,
     recorder: Res<DiagnosticsRecorder>,
 ) {
+    if SHARED && !IS_LATE {
+        recorder.end_time_span(ctx.command_encoder());
+    }
     recorder.end_time_span(ctx.command_encoder());
 }
 
@@ -420,19 +446,32 @@ mod tests {
     fn shadow_instrumentation_preserves_native_dependencies_and_buffer_order() {
         for native_owned_edges in [false, true] {
             for auto_insert_apply_deferred in [false, true] {
-                assert_shadow_schedule(native_owned_edges, auto_insert_apply_deferred);
+                for single_threaded in [false, true] {
+                    assert_shadow_schedule(
+                        native_owned_edges,
+                        auto_insert_apply_deferred,
+                        single_threaded,
+                    );
+                }
             }
         }
     }
 
-    fn assert_shadow_schedule(native_owned_edges: bool, auto_insert_apply_deferred: bool) {
-        use bevy::ecs::schedule::ScheduleBuildSettings;
+    fn assert_shadow_schedule(
+        native_owned_edges: bool,
+        auto_insert_apply_deferred: bool,
+        single_threaded: bool,
+    ) {
+        use bevy::ecs::schedule::{ScheduleBuildSettings, SingleThreadedExecutor};
         let mut app = App::new();
         app.edit_schedule(Update, |schedule| {
             schedule.set_build_settings(ScheduleBuildSettings {
                 auto_insert_apply_deferred,
                 ..Default::default()
             });
+            if single_threaded {
+                schedule.set_executor(SingleThreadedExecutor::new());
+            }
         });
         app.init_resource::<ShadowRecords>();
         let shadow = app.world_mut().spawn(TestShadowView).id();

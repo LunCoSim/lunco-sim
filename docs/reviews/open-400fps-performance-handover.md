@@ -1,8 +1,55 @@
 # High-quality realtime performance handover
 
-## Current GPU shadow boundary and normal baseline — 2026-10-11
+## Serial local-shadow execution and GPU attribution — 2026-10-11
 
-Native CPU-self and GPU exports of the current 251,446,854-byte
+The application-owned `SharedShadowView` schedule uses Bevy's native
+`SingleThreadedExecutor`. Its eight admitted GPU systems form a dependency
+chain; dispatching workers between those stages provides no parallel work.
+The CPU preparation mode retains its two ordered shadow passes. Native
+parameters, early/late admission, final deferred buffer application, map
+quality and draw order keep their owners. Frame-level Render, camera Core3d
+and authoritative simulation schedules retain their existing executors. This
+continuous render mechanism needs no Rhai policy hook.
+
+Valid 258,139,840/256,940,323-byte production captures pass native CPU and GPU
+exports. Settled initial authored-camera windows exclude the explicit camera
+command and replacement. Shared-view inclusive CPU means are 0.565/0.241 ms;
+self means are 0.268/0.045 ms. The native inventory remains twelve shared
+early and twelve shared late passes plus one camera late pass in each of
+157/397 complete camera intervals. All twelve 4,096 × 4,096 map phases are
+non-empty, with identical three-to-six multidraw-set counts.
+Empty-phase suppression cannot skip these views; these admission facts do not
+establish static caster inputs. Shared early GPU
+totals are 8.103/6.582 ms per interval. GPU clocks differ, 1,447/2,205 MHz, and
+concurrent workloads differ; these timings are diagnostics, not a causal
+overall FPS gain. Native schedule seam tests pass with both executors,
+including unrelated-view rejection and final buffer order. Owned candidate
+PID 2225990 and collector close with exit zero, releasing API 4202 and
+Tracy 8087. The inspected image retains High shadows and scene detail.
+Receipts and captures use the `shadow-serial-` prefix under
+`target/entity-tree-perf/`; the paired baseline uses `shadow-detail-baseline-`.
+
+Normal artifact
+`98b32e12ef0b8294f39153528d964ee2906a0ff802f57d3009e0d1bc157e5b12`
+passes all ten determinism profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`,
+including jitter and compute widths 1/24. The owned High-quality normal run
+keeps equal View/Builder/View camera poses, clear readiness/diagnostics and
+50 bodies, 33 colliders and 20 joints. Its eight-second windows advance
+487/488/483 physics steps without discarding simulation time. Sampled app-frame
+medians are 15.010/30.968/10.644 ms; post-step physics medians are
+1.543/1.864/1.631 ms and full fixed-tick service medians are
+3.466/4.921/2.869 ms. Sibling USD Cargo PID 2226592 overlaps every workload
+checkpoint, so this does not establish clean loading, visual FPS or physics
+throughput acceptance. Warm readiness is 4.126 s. Builder inspection retains
+High shadows and the telemetry/hierarchy panels. Owned PID 2311207 closes
+with exit zero and releases API 4202. Normal/Tracy builds and all three
+schedule seam tests pass; unchanged authored behavior gates are reused.
+Scoped application cleanup and retirement of superseded task executable
+backups preserve source, captures, receipts, current comparison binaries and
+shared caches. The final normal executable remains available in `target/debug/`.
+
+Native CPU-self and GPU exports of the preceding 251,446,854-byte
 `wheel-fold-after-tracy-20261011` capture identify shadows as the leading
 render cost. Across 146 complete camera intervals, every interval contains
 12 shared early, 12 shared late and one camera late pass. Shared early GPU
@@ -37,9 +84,9 @@ acceptance. The GPU is an NVIDIA GeForce RTX 5060 Laptop GPU. The inspected
 View screenshot retains shadows and scene detail. Unchanged behavior/replay
 gates from the preceding mechanism change are reused rather than repeated.
 
-Owned PID 1819899 closes with exit zero and releases API 4202. No source,
-external library or runtime policy is changed by this audit. Receipts,
-screenshots and logs remain under `target/entity-tree-perf/`, prefixes
+Normal baseline PID 1819899 closes with exit zero and releases API 4202.
+Its original executable is measured separately from the diagnostic extension.
+Receipts, screenshots and logs remain under `target/entity-tree-perf/`, prefixes
 `current-unprofiled-acceptance-`, `current-critical-path-ranking-` and
 `current-shadow-frame-inventory-`. Large domain-synthesis validation spans
 already execute through the owner's background preparation closure; their

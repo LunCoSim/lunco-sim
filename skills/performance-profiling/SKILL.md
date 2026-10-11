@@ -54,12 +54,26 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   timestamps around the native shadow passes. Shared events correspond to
   individual point/spot views; camera events include that camera's directional
   cascades. Check all four names and their event counts before attributing total
-  shadow cost. Late spans can contain only timestamp overhead. Retain native
-  dependency ordering, native-parameter admission before begin and render-context
-  buffer order when changing this adapter. Reapply PBR's system-local early/late
+  shadow cost. Late spans can contain only timestamp overhead. Use the
+  early shared child spans `lunco_light_depth/<pass_name>` when attributing
+  individual maps; native exports prefix them with `lunco_shadow_shared_early/`.
+  Do not sum child and parent times. `lunco_shadow_view_work` supplies admitted
+  viewport dimensions, optional phase emptiness and native bin/set counts.
+  This brief CPU snapshot is not pass execution time; bins are not draw counts
+  and stable counts do not prove static caster inputs. Native labels identify
+  current render allocations, not authored lights. Close each child before its
+  parent. Retain native dependency ordering, native-parameter admission before
+  begin and render-context buffer order when changing this adapter. Reapply
+  PBR's system-local early/late
   ordering rules after removing the original system; retaining its implicit
   type set alone preserves only dependencies targeting that set. Check the
   actual shadow image before admitting a capture as performance evidence.
+  `SharedShadowView` uses the native single-threaded executor for its serial
+  eight-system GPU chain or two CPU-mode shadow passes. Attribute its inclusive
+  and self costs separately; frame-level Render and camera Core3d still use
+  their existing executors. Verify native pass inventory and final buffer order
+  before comparing executor costs. This render adapter does not change solver
+  cadence or authoritative simulation ordering.
   Unsupported timestamp features or
   exhausted per-frame queries leave incomplete GPU evidence, not zero cost.
 - For intermittent long frames, export individual CPU zones and correlate them
