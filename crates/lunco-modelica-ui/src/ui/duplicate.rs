@@ -271,13 +271,8 @@ pub(crate) fn build_duplicate_source(
         .ok_or_else(|| "duplicate source has invalid class spans".to_owned())?;
     let renamed = rewrite_inject_in_one_pass(slice, new_name, imports, spans)
         .ok_or_else(|| "duplicate source has invalid rewrite spans".to_owned())?;
-    // Keep the `within` clause: it gives the copied body the origin package's
-    // lexical scope (e.g. the `SI` unit alias the source library examples rely on), which
-    // a top-level lift would lose — `unresolved type reference: 'SI.Angle'`.
-    // The cost is that the copy's real class name is `<origin_pkg>.<new_name>`,
-    // so the run/compile path must dispatch that QUALIFIED name (see
-    // `within_package_of_source` + its use in `dispatch_experiment`); dispatching the bare
-    // leaf fails `model not found` in Instantiate.
+    // Preserve the origin package's lexical scope. The document index and
+    // run-target resolver retain the copied class's qualified identity.
     let source = match origin_fqn {
         Some(fqn) => {
             let origin_pkg = rumoca_core::parent_scope(fqn).unwrap_or("");

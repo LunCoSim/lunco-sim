@@ -60,6 +60,11 @@ single leading UTF-8 BOM and source coordinates in the original text. Loaders,
 documents, and editor paste retain the authored bytes.
 The production `modelica_source_encoding.rhai` gate verifies exact text, batch
 output and a parser-owned negative diagnostic for the current source generation.
+Run admission uses the document index's current candidates and `within` metadata
+through the shared `sim_target::resolve_requested_class` resolver. Explicit and
+default targets enter the compiler with one qualified identity; dispatch does
+not reparse source or repair package prefixes. `modelica_class_compile.rhai`
+verifies qualified, relative, bare quoted, default and headless run targets.
 [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/) owns AST interface
 projections and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless

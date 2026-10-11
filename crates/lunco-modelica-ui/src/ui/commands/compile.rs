@@ -1093,6 +1093,9 @@ fn dispatch_experiment(
                 }
             };
             let document = host.document();
+            if document.syntax_is_stale() || document.ast_is_stale() {
+                return Err("experiment requires a current parsed Modelica source snapshot".into());
+            }
             // Library classes compile from the loaded session, not a temp
             // overlay — this is what makes a
             // drilled source library example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
@@ -1126,25 +1129,8 @@ fn dispatch_experiment(
         //   3. otherwise the shared default: drilled-in pin → tier-ranked
         //      simulation root (`default_simulation_class`), so this API
         //      path can't drift from the Fast Run popup / Setup form.
-        let model_name = match explicit_class {
-            // Resolve the caller-supplied name (qualified OR bare leaf) to the
-            // canonical qualified class via the shared resolver — so e.g.
-            // `RunExperiment{class:"RoverThermalSystem"}` reaches
-            // `LunarRover.RoverThermalSystem` instead of failing deep in the
-            // compiler with "model not found". Shared with `CompileModel`.
-            Some(req) => match crate::sim_target::resolve_requested_class(
-                &req,
-                &candidates,
-                within.as_deref(),
-            ) {
-                Ok(qualified) => qualified,
-                Err(e) => {
-                    return Err(format!(
-                        "class `{req}` {e}; candidates: [{}]",
-                        candidates.join(", ")
-                    ));
-                }
-            },
+        let requested_class = match explicit_class {
+            Some(requested) => requested,
             None => {
                 let has_drill = crate::sim_default::drilled_class_for_doc(world, doc).is_some();
                 if !has_drill && candidates.len() > 1 {
@@ -1169,38 +1155,27 @@ fn dispatch_experiment(
             }
         };
 
-        // A duplicated library class (OpenClass with Duplicate → editable copy) is emitted
-        // with a `within P;` header, so rumoca compiles it as `P.<class>`. The
-        // `within` is load-bearing — it gives the copied body the origin
-        // package's import scope (e.g. the `SI` unit alias) — so we can't strip
-        // it. Instead, qualify the run target with `P`: dispatching the bare
-        // leaf fails `model not found` in Instantiate, while `P.<class>`
-        // resolves against the merged session. No-op for top-level scratch
-        // models and for read-only library drills (empty overlay source).
-        let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-            Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
-                format!("{pkg}.{model_name}")
-            }
-            _ => model_name,
-        };
+        let model_name = crate::sim_target::resolve_requested_class(
+            &requested_class,
+            &candidates,
+            within.as_deref(),
+        )
+        .map_err(|error| {
+            format!(
+                "class `{requested_class}` {error}; candidates: [{}]",
+                candidates.join(", ")
+            )
+        })?;
 
-        // A duplicated *nested* class (e.g. `AnnotatedRocketStage.RocketStage`)
-        // is emitted as `within P; <leaf>` — dropping the sibling classes it
-        // refers to (`Tank`, `Valve`, `Engine`, …) that live alongside it in
-        // package P. For a filesystem/source library `within`, P is already on the global
-        // session path so those siblings resolve. But a *bundled* example
-        // package is on no search path: compiling the lone leaf fails
-        // `unresolved type reference: 'Tank'`. Re-attach the whole bundled
-        // package as an extra source so `compile_str_multi` merges the siblings
-        // back into the same `within` scope. source library within-packages are not
-        // bundled (return None here) and are left untouched.
-        let extras: Vec<(String, String)> =
-            match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-                Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
-                    .map(|s| vec![(format!("{pkg}.mo"), s)])
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            };
+        // Bundled package source supplies sibling declarations for editable
+        // copies that retain its lexical scope. Filesystem libraries enter
+        // through the compiler's source-root admission instead.
+        let extras: Vec<(String, String)> = match within.as_deref() {
+            Some(pkg) => crate::ui::class_source::bundled_source_for(pkg)
+                .map(|s| vec![(format!("{pkg}.mo"), s)])
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         // Host-authoritative runs: a networked Client never launches sims
         // locally. The RunExperiment / FastRun command replicates to the host,

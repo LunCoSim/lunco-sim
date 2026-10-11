@@ -379,6 +379,12 @@ loaders and editor paste must preserve the text and line endings.
 Verify source preservation, original-source batch compilation and current-generation
 parser rejection through `assets/scenarios/tests/modelica_source_encoding.rhai`.
 
+Run dispatch requires a current parsed document snapshot. Resolve explicit and
+default run targets against the document index's eligible candidates and parsed
+`within` metadata through `sim_target::resolve_requested_class`; use its qualified
+identity unchanged. Verify both run APIs and an unrelated-prefix rejection through
+`assets/scenarios/tests/modelica_class_compile.rhai`.
+
 Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
 query for exact source selection and editing. `relative_class_name` strips only
 the actual authored `within` package. Use `rumoca_core::qualified_name_segments`
