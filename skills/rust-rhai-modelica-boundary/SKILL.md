@@ -134,6 +134,8 @@ the first entity, a fabricated value, or an older behavior.
   string escaping, checked initialization, and visible solver values. Reuse
   those APIs directly. Live scalar metadata comes from checked FMI variables
   admitted with the worker's stepper, rather than document-name guesses. Keep
+  rejected inputs and observation failures terminal at worker admission; only
+  complete finite observations may reach runtime values and streams. Keep
   source-splice authoring and co-simulation admission
   at their LunCoSim owners. See the
   [Rumoca ownership review](../../docs/architecture/29-rumoca-runtime-contracts.md#ownership-review)

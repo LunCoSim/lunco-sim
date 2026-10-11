@@ -33,7 +33,7 @@ impl LiveStepper {
     }
 
     pub fn state(&self) -> Result<rumoca_sim::SessionState, SimulationDiagnosticError> {
-        match self {
+        let state = match self {
             Self::Adaptive(session) => session
                 .state()
                 .map(|state| rumoca_sim::SessionState {
@@ -42,7 +42,20 @@ impl LiveStepper {
                 })
                 .map_err(adaptive_error),
             Self::Fixed(session) => session.state(),
+        }?;
+        if !state.time.is_finite() {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "observation time is not finite: {}",
+                state.time
+            )));
         }
+        if let Some((name, value)) = state.values.iter().find(|(_, value)| !value.is_finite()) {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "observation '{name}' is not finite ({value}) at t={}",
+                state.time
+            )));
+        }
+        Ok(state)
     }
 
     pub fn time(&self) -> f64 {
