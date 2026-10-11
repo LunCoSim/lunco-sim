@@ -375,28 +375,41 @@ the pending unload stays queued and is sent before a later Twin load. A closed
 channel makes unload dispatch terminal: the registry reports a runtime fault,
 retains the queued operation, and rejects later Twin source-root admission
 instead of retrying every update or assuming the old compiler state was cleared.
-Synchronous compiler convenience methods remain for CLI and batch callers. Root
-reads and parsing run on the bounded preparation
-pool. Session installation and ordinary Rumoca DAE compilation remain
-synchronous on the serialized worker owner. A later compile is valid only for
-an actual authored source/topology change or an explicit library-set change;
-normal scene projection and solver stepping do not recompile an unchanged USD
-participant.
+Synchronous compiler convenience methods serve CLI and batch callers. The native
+live host sends root installs and DAE compilation to the single Rumoca actor.
+Root reads, parsing, prepared-FMI cache I/O, lowering and session construction
+use the captured bounded solver workers. A later compile requires an authored
+source/topology change or an explicit library-set change; ordinary projection
+and stepping do not recompile an unchanged participant.
 
-Native admission bounds the combined compiler, source-root, and solve-lowering
-pipeline to the solve-pool worker count plus two staged operations. That small
-lookahead lets the serialized Rumoca owner compile later independent programs
-while existing DAE lowerings occupy the pool, without allowing an unbounded
-queue of retained compilation artifacts. Solve results still commit in
-submission order, regardless of worker completion order.
+The combined compiler, source-root, lowering and construction pipeline admits
+at most the solver-worker count plus two staged operations. Each new session
+receives a persistent owner in submission order. FIFO mailboxes keep its native
+state, JIT backend, stepping and teardown on that thread. Preparation uses the
+same CPU budget. Only typed handles, immutable metadata and checked observations
+cross back to the command owner; native sessions never cross threads.
 
-Live installation is measured separately from asynchronous FMI preparation.
-`modelica_live_plan_admission`, `modelica_live_session_construct`,
-`modelica_compiled_scalar_metadata` and `modelica_initial_observation` identify
-the ordered phases inside `build_stepper`. The thread-affine session remains
-on its worker owner. Compare these child phases with
-`modelica_finish_compile_work` and `modelica_commit_solve_preparation`; their
-inclusive times overlap and must not be added together.
+A scheduling round dispatches at most one initialized transaction per entity
+before awaiting results. It transfers the complete owned input vector, retaining
+the existing micro-step math, bounds and checked observation path. Independent
+owners can execute concurrently. The command owner admits results in its
+existing round order, validates session/library-generation fences before
+construction commit, and retains per-entity command order. Repeated commands
+for one entity wait for its preceding transaction. Despawn drops the handle and
+queues retirement on its owner; cancelled construction receipts retire without
+publishing. Explicit pool shutdown retires every context on its constructing
+thread even when mailbox handles remain. A lost owner produces the existing
+structured worker failure; no retry or replacement solver masks that failure.
+
+`modelica_live_plan_admission` measures command-owner admission.
+`modelica_live_construction_job` records queue wait and measures construction;
+its children are `modelica_live_session_construct`,
+`modelica_compiled_scalar_metadata` and `modelica_initial_observation`.
+`modelica_live_construction_commit` measures ordered publication. Compare worker
+execution, overlap, queue wait and end-to-end readiness separately; child and
+parent inclusive times must not be added together. Step service diagnostics
+report the measured solver-owner work, while pending results retain their
+communication points and ordered commit boundary.
 
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It

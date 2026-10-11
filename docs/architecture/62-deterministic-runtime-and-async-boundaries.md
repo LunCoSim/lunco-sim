@@ -719,21 +719,25 @@ compiler's effective root set and defaults from the remaining contributions.
 If the Modelica channel is temporarily unavailable, unloads remain queued ahead
 of later root installs. Application roots stay installed across Twin closure.
 Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
-and writes run on the bounded solve-preparation pool. The command owner only
-commits the ready solve model. Actor admission is bounded across submitted
-compiles, root installs, and lowerings to the solve-pool worker count plus two
+and writes share bounded persistent workers with live construction and execution.
+Native sessions are constructed, stepped and retired on their assigned thread;
+the command owner receives typed handles and checked observations. One complete
+transaction per initialized entity can execute concurrently within a round, but
+results admit in round order with unchanged communication points and micro-steps.
+Actor admission is bounded across submitted compiles, root installs, lowerings
+and constructions to the solver-worker count plus two
 staged operations. This lookahead keeps the serialized Rumoca owner preparing
 later independent programs while the pool lowers existing DAEs, while keeping
 retained compilation state bounded. Solve results still commit in submission
 order.
 
 The native execution host captures `lunco_modelica_worker::worker::SolvePreparationLimits`
-before launching its worker. The default budget is at most six preparation
-threads, reserving two reported CPU threads for the app and host; a small host
-retains at least one preparation worker. A zero maximum or unavailable host
+before launching its worker. The default budget is at most six solver threads,
+reserving two reported CPU threads for the app and host; a small host retains
+at least one solver worker. A zero maximum or unavailable host
 capacity produces a structured worker failure before preparation admission.
-The budget applies to immutable preparation, not live steppers, solver ticks,
-or commit order. Hosts configure the typed resource before installing
+The budget applies to preparation, construction and live execution; it does
+not change solver clocks, micro-step math or authoritative commit order. Hosts configure the typed resource before installing
 `ModelicaExecutionPlugin`; changing it after launch does not resize the pool.
 
 Parameter updates, resets, and cache-invalidating Step auto-init are

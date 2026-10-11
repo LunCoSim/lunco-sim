@@ -272,14 +272,20 @@ stale-result rejection and exact sample order at the low-level seam, plus
 reader. Preserve detected-symbol/output precedence. Measure this response path
 separately from fixed-step output publication; fewer copies alone do not prove
 throughput gain.
-For loading, separate prepared-FMI lookup/lowering from live installation.
-`modelica_live_plan_admission`, `modelica_live_session_construct`,
-`modelica_compiled_scalar_metadata` and `modelica_initial_observation` divide
-the worker's `build_stepper` boundary. Preserve checked metadata, initial
-observations, native solver selection and thread affinity. Inspect the pinned
-compiler artifact before assuming cloning duplicates its DAE or source map;
-both are already shared by the maintained compiler. Attribute the actual phase
-before adding another cache or execution lane.
+For loading, separate prepared-FMI lookup/lowering, live construction and ordered
+publication. `modelica_live_plan_admission` runs on the command owner;
+`modelica_live_construction_job` records queue wait and measures the native session,
+metadata and initial-observation children. `modelica_live_construction_commit`
+measures publication. Preparation and live sessions share the captured bounded
+worker budget; each session retains its construction thread through stepping
+and retirement. Compare concurrent construction intervals and end-to-end
+readiness, not only summed worker time. A round transfers complete input buffers
+once, runs independent participants concurrently, and admits checked results in
+command order. Require exact replay, terminal observation-failure and scene
+replacement evidence before a scheduling gain claim. Keep solver clocks,
+micro-step math, metadata and generation retirement unchanged. The native
+compiler already shares its DAE and source map; additional metadata caches do
+not address dominant native construction cost.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable

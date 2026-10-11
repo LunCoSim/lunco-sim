@@ -9067,7 +9067,6 @@ dependencies = [
  "lunco-telemetry-core",
  "lunco-time",
  "lunco-workspace",
- "rayon",
  "rumoca-compile",
  "rumoca-ir-solve",
  "rumoca-sim",

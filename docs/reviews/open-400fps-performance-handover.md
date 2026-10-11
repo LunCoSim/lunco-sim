@@ -1,56 +1,49 @@
 # High-quality realtime performance handover
 
-## Live Modelica installation attribution — 2026-10-11
+## Thread-affine native Modelica execution — 2026-10-11
 
-Local main contains the validated source-dispatch admission commit `63aacb8b3`.
-Four diagnostic child spans now separate live plan admission, native session
-construction, checked scalar metadata and initial observation. Calls, values,
-ordering, solver selection and error propagation are unchanged.
+Native live sessions now use persistent application-owned solver workers.
+Preparation, construction and execution share the captured bounded CPU budget;
+no external library or solver math changes. The command owner sends complete
+input transactions and admits checked observations in round order. Each native
+session is constructed, stepped and retired on one thread. Session and library
+generation fences reject stale construction receipts before publication.
 
-`cargo check -p lunco-modelica-worker -j 4` passes before the requested cleanup.
-The explicit `cargo clean` removes 4,492 files / 1.6 GiB from this checkout with
-no owned runtime or build active. Source, retained evidence, sibling sessions
-and shared caches are preserved. The subsequent production build
-`cargo build -p lunco-luncosim --features tracy -j 4` passes in 12m 58s.
-The exact Tracy artifact is
-`9d34260bf6c9187766552169052d71b37ea87bcabb838458ab8ccb953ded975a`.
+The preceding production attribution found native construction responsible for
+99% of live installation time. The candidate's native export contains 18
+construction jobs with exactly one constructor, metadata read and initial
+observation each. Initial/replacement groups overlap at most two/three native
+constructors. Summed work and wall span remain separate; the capture proves
+concurrency, not a product speedup.
 
-The new native capture contains 18 installations, each with exactly one of
-all four child spans. Inclusive installation time totals 1,128.659 ms; native
-session construction accounts for 1,117.477 ms (99.0%), with median 77.744 ms
-and maximum 118.741 ms. Plan admission totals 0.158 ms, scalar metadata
-9.433 ms and initial observations 0.737 ms. Metadata's maximum 6.827 ms occurs
-in one replacement installation; its median is 0.135 ms. Parent and child
-inclusive times must not be added together. This evidence selects live
-construction for the next ownership/scheduling review; another metadata cache
-would not address the dominant installation cost.
+Validation passes: focused worker compile; the low-level non-Send ownership,
+concurrent execution, shutdown and panic-isolation seam; 216 exact production
+replay checks with compute widths 24/1 and solver budgets 6/1; terminal
+observation-failure and six variable-projection checks; 18 telemetry-history
+checks and scene replacement. The normal production input-default scenario
+passes 20 checks, including reset preserving current overrides and visible
+invalid-default rejection. Every owned session exits and releases API 4202;
+the Tracy collector also releases 8087.
 
-The checked FMI component is already prepared separately. The pinned native
-adaptive constructor builds its execution backend and Model Exchange session
-on the owning thread. Its sessions remain thread-affine; the native compiler
-artifact already shares its DAE, flat model and source map. No external-library
-change, duplicate native adapter, cache, lane or solver change is made here.
-Any scheduling change must retain bounded admission, thread affinity, per-model
-command order, generation retirement and ordered authoritative result commits.
+Normal High-quality fixed-camera View/Build/View comparisons preserve 50 bodies,
+33 colliders and 20 joints and advance about 60 physics steps/s. Baseline frame
+medians are 11.478/11.573/11.551 ms; candidate medians are
+11.155/11.385/11.415 ms. Initial readiness is 4.674/3.462 s and restart readiness
+0.933/0.851 s. Foreign simulator/profiler workloads differ between runs and GPU
+utilization approaches 96%; these observations establish no causal speedup.
+Loading, visual-FPS and physics-performance acceptance remain open. The inspected
+candidate restart image retains the scene and shadows.
 
-The 425,067,855-byte capture passes native event export. Its compressed payload
-is 405.30 MiB across 20,403 blocks, matching the collector report after container
-headers. Owned app/collector PIDs 922114/922113 both exit zero and release API
-4202/Tracy 8087. API schemas are stable; the telemetry-history gate passes all
-18 checks; scene replacement, readiness and diagnostics pass. The restart image
-shows the scene and shadows. Settled View/Build/View windows advance
-611/609/608 physics steps with 50 bodies, 33 colliders and 20 joints.
-
-The helper's raw foreign-workload flag includes its own collector. Auditing
-all recorded process samples while excluding both owned PIDs finds no foreign
-Cargo or simulator process in the settled windows. These are still Tracy
-measurements, not normal-product FPS or a loading speedup. The helper is corrected
-for subsequent captures; the original receipt is preserved. Readiness is
-4.988 seconds. Loading, visual and physics acceptance remain open.
-
-Evidence lives under `.lunco/performance-evidence/entity-tree-perf/` with
-`modelica-install-phase-` prefixes; the native events and per-installation
-summary retain the exact source boundaries and timings.
+Exact normal baseline/candidate artifacts are
+`8fbd34e42eefe098ce94bab93aa35ec2feed3eee302c1708b0f6a19fead278c7` /
+`bf458064ff92b50bf8cb339a5202ae5125da1264889526a0a8f57f137f08861c`.
+The candidate Tracy artifact is
+`c18bcc289c94fbf8820c1345e5d8f49ff9c1cd42474a08191f2c7b351ea3d6df`.
+Verified archives and receipts live under
+`.lunco/performance-evidence/entity-tree-perf/modelica-affine-pool-*`.
+The normal link initially exhausted disk space; the authorized checkout-only
+`cargo clean` removed 13.4 GiB, and the subsequent normal build passed in 2m 43s.
+Source, retained evidence, sibling sessions and shared caches were preserved.
 
 ## Admit Modelica source dispatch before its exclusive boundary — 2026-10-11
 

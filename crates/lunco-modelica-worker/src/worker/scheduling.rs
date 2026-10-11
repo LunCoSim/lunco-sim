@@ -8,7 +8,8 @@ use std::collections::{HashMap, VecDeque};
 
 /// The worker's two-lane command scheduler.
 ///
-/// This thread owns live steppers and command ordering. A separate single-owner
+/// This thread owns command ordering and admitted session handles. Persistent
+/// solver workers retain live steppers and FIFO per-session execution. A separate single-owner
 /// actor owns the mutable Rumoca session and compiled-artifact cache. Native
 /// source-root reads and parsing run on the bounded
 /// preparation pool; source-root installs and ordinary compiles are sent to the
