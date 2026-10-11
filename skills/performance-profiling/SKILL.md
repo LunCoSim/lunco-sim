@@ -378,6 +378,13 @@ Before optimizing a panel snapshot's change query, trace its registered reader
 and confirm that reader in the live application. Remove unconsumed producers,
 public exports and dependencies together. Shared widget plugins initialize
 shared infrastructure; active domain panels own their view models.
+
+For fixed-step one-shot mechanisms, measure preparation after admission has
+settled. Raycast mass folding checks the existing eligible-carrier query before
+building additions; its shared ordering validator still checks every source.
+Use the mass mechanism's private math checks and production parity facts, and
+keep an already-failing drive verdict separate from a mass-preparation gain.
+
 Keep topology invalidation separate from the query-heavy snapshot producer:
 mark the revision dirty when scene facts change, then gate snapshot work until
 no prior worker is active. This lets a revision change reject an in-flight tree

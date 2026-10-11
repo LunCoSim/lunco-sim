@@ -812,22 +812,25 @@ pub fn fold_raycast_wheel_mass(
         }
     };
     let mut additions_by_carrier =
-        std::collections::HashMap::<Entity, Vec<(String, f64, DVec3, DVec3)>>::new();
+        std::collections::HashMap::<Entity, Vec<(f64, DVec3, DVec3)>>::new();
     for entity in order {
-        if let Ok((_, wheel, mount, key)) = q_wheels.get(entity) {
-            let key = key.expect("raycast wheel order key was validated");
+        if let Ok((_, wheel, mount, _)) = q_wheels.get(entity) {
+            if !q_body.contains(mount.body) {
+                continue;
+            }
             additions_by_carrier.entry(mount.body).or_default().push((
-                key.0.clone(),
                 wheel.mass,
                 mount.local.translation.as_dvec3(),
                 DVec3::ZERO,
             ));
         } else if let Ok((_, contribution)) = q_contributions.get(entity) {
+            if !q_body.contains(contribution.owner) {
+                continue;
+            }
             additions_by_carrier
                 .entry(contribution.owner)
                 .or_default()
                 .push((
-                    contribution.order_key.0.clone(),
                     contribution.mass,
                     contribution.local.translation.as_dvec3(),
                     contribution.principal,
@@ -840,7 +843,7 @@ pub fn fold_raycast_wheel_mass(
         // land a frame after the component itself. A wheel still reading zero means
         // the vehicle is not ready to fold and must be left for a later tick — never
         // folded at half its real mass.
-        let pending = additions.iter().any(|(_, mass, _, _)| *mass <= 0.0);
+        let pending = additions.iter().any(|(mass, _, _)| *mass <= 0.0);
         if pending || additions.is_empty() {
             continue;
         }
@@ -860,7 +863,7 @@ pub fn fold_raycast_wheel_mass(
             .unwrap_or(DVec3::ZERO);
         let carrier_mass = mass.0 as f64;
 
-        let added: f64 = additions.iter().map(|(_, mass, _, _)| *mass).sum();
+        let added: f64 = additions.iter().map(|(mass, _, _)| *mass).sum();
         let total = carrier_mass + added;
         mass.0 += added as f32;
 
@@ -868,7 +871,7 @@ pub fn fold_raycast_wheel_mass(
         // point mass at its carrier-local mount.
         let com_new = if total > 0.0 {
             let mut moment = com_carrier * carrier_mass;
-            for (_, m, d, _) in &additions {
+            for (m, d, _) in &additions {
                 moment += *d * *m;
             }
             moment / total
@@ -889,7 +892,7 @@ pub fn fold_raycast_wheel_mass(
                 )
             };
             let mut principal = perp(carrier_mass, com_carrier - com_new);
-            for (_, m, d, authored_principal) in &additions {
+            for (m, d, authored_principal) in &additions {
                 principal += perp(*m, *d - com_new);
                 principal += *authored_principal;
             }
@@ -2617,6 +2620,61 @@ mod raycast_wheel_mass_tests {
     //! The vehicle must mass the same whichever `drivetrain` variant realizes its
     //! wheels. See [`fold_raycast_wheel_mass`].
     use super::*;
+
+    #[test]
+    #[ignore = "manual settled mass-fold preparation benchmark"]
+    fn settled_mass_fold_preparation_benchmark() {
+        let mut app = App::new();
+        app.add_systems(Update, fold_raycast_wheel_mass);
+        let mut carriers = Vec::new();
+        for carrier in 0..128 {
+            let entity = app
+                .world_mut()
+                .spawn((Mass(1106.0), RaycastWheelMassFolded))
+                .id();
+            carriers.push(entity);
+            for wheel in 0..4 {
+                app.world_mut().spawn((
+                    WheelRaycast {
+                        mass: 25.0,
+                        ..default()
+                    },
+                    WheelBodyMount {
+                        body: entity,
+                        local: Transform::IDENTITY,
+                    },
+                    lunco_physics::PhysicsOrderKey(format!(
+                        "inline-carrier/{carrier:04}/wheel/{wheel}"
+                    )),
+                ));
+            }
+            for part in 0..2 {
+                app.world_mut().spawn(RaycastMassContribution {
+                    owner: entity,
+                    order_key: lunco_physics::PhysicsOrderKey(format!(
+                        "inline-carrier/{carrier:04}/part/{part}"
+                    )),
+                    local: Transform::IDENTITY,
+                    mass: 3.0,
+                    principal: DVec3::ZERO,
+                });
+            }
+        }
+        app.update();
+        let began = std::time::Instant::now();
+        for _ in 0..2000 {
+            app.update();
+        }
+        let elapsed_ms = began.elapsed().as_secs_f64() * 1000.0;
+        for entity in carriers {
+            assert_eq!(
+                app.world().get::<Mass>(entity).unwrap().0.to_bits(),
+                1106.0_f32.to_bits()
+            );
+            assert!(app.world().get::<RaycastWheelMassFolded>(entity).is_some());
+        }
+        println!("settled mass fold: 128 carriers, 768 sources, 2000 updates, {elapsed_ms:.3} ms");
+    }
 
     /// Build a skid-rover-shaped chassis with four raycast wheels at the mounts
     /// `skid_rover.usda` authors — (±1.0, −0.65, ±1.225), the SAME mounts the

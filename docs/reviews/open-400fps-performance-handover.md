@@ -1,5 +1,55 @@
 # High-quality realtime performance handover
 
+## Limit raycast mass additions to eligible carriers — 2026-10-11
+
+`lunco-mobility::fold_raycast_wheel_mass` retains the shared ordering validator
+for every wheel and reduced-part source, including already-folded or unavailable
+carriers. Its existing `Mass`/`RaycastWheelMassFolded` query now excludes those
+carriers before allocating and populating per-carrier additions. Eligible
+additions retain their validated order and native values. The unread copied
+key is removed from the addition tuple. Pending parameters, mass, centre of
+mass, parallel-axis inertia, commands and the once-only marker keep their
+existing calculations and boundary. This is preparation inside the mechanical
+owner; no cache, policy hook, public API or external-library change is needed.
+
+The private settled resource benchmark uses 128 folded carriers, 768 ordered
+sources and 2,000 updates. Observed preparation time is 182.331/88.827 ms, a
+51.3% reduction, with exact carrier mass bits and markers unchanged. All seven
+native mechanism checks pass, including pending-parameter deferral and
+mass/inertia assertions. The valid 252,307,291/251,446,854-byte application
+captures pass native exports. Their settled system self costs are 484/551
+calls, 0.052012/0.045483 ms mean and 0.105809/0.086792 ms p95. Export selection
+excludes the separate command-application spans. Warm windows follow the
+inactive visual-projection gap. Concurrent workloads differ, so these timings
+are diagnostics, not clean loading, visual FPS or physics-throughput acceptance.
+
+Normal artifact
+`d84101dd9e4f7247a699cb268fdc66191614f7aa3506037ae0c18978cb0d0c28`
+passes all ten determinism profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`,
+including jitter and compute widths 1/24. Production verdicts pass sandbox 7,
+telemetry history 17, mass/island 10 and primitive mesh sharing 42, followed by
+replacement sandbox 7. Readiness, physics progress, same camera, invalid
+assembly pause guards and invalid/valid Modelica resets pass. Inspected Builder
+and Command Deck screenshots retain High quality. Contended frame medians are
+15.773/13.885/15.663 ms; clean throughput acceptance remains open.
+
+The existing drivetrain parity scene fails seven of twenty checks on both
+baseline and candidate: the raycast rover does not drive, while the physical
+rover does. All thirteen mass, geometry and structural checks pass, including
+1,120 kg for each rover. This preserves the observed mass contract; it does
+not establish full drivetrain acceptance or exact equality of every drive
+sample. The pre-existing drive failure remains an open investigation.
+
+Owned normal, replay and Tracy sessions close, releasing API 4202 and Tracy
+8087. No commands are sent to main PID 84260; it is absent at final inspection.
+Normal and Tracy builds pass. Scoped application cleanup removes 3.3 GiB of
+this checkout's outputs; the archived normal executable is verified and
+restored after profiling. Source, sibling sessions and shared caches are
+preserved. Receipts, logs, captures and exports are retained under
+`target/entity-tree-perf/`, prefix `wheel-fold-`; the paired baseline capture
+uses prefix `ui-owner-after-tracy-20261011`.
+
 ## Let registered panels own UI snapshots — 2026-10-11
 
 `lunco-ui` initializes shared selection, embodiment roles and the modal host.
