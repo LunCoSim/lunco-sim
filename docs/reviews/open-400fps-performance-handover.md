@@ -1,5 +1,43 @@
 # High-quality realtime performance handover
 
+## Measure local-shadow reuse candidacy — 2026-10-11
+
+Native exports show twelve nonempty 4096-by-4096 local maps, with three to six
+multidraw sets per map in the settled integrated capture. The ground and rover
+materials consume native PBR lighting, so these maps have real readers.
+The application delegates depth rendering to Bevy; its native shadow atlas
+allocation cache retains textures, while preparation assigns sorted light
+layers and creates each frame's clearing depth attachments.
+
+An owned diagnostic capture measures sorted native visible caster identities,
+mesh identities, GPU pose/geometry-index bits, skin indices and the light's
+extracted projection/transform. In three settled eight-second View/Builder/View
+intervals, ten maps change this digest every sampled frame. Maps 10 and 11
+repeat it on 232/507, 200/457 and 183/572 frames (46%, 44% and 32%). The
+candidate lists contain 4–73 shadow casters and no skinned instances. These are
+visibility candidates, not an inventory of ready draw items. Stable draw-set
+counts do not establish a static depth image. A cache keyed by these candidates
+would cover only part of two maps, leaving most measured GPU cost in place.
+
+These diagnostic digests do not admit a render cache: material/pipeline state,
+mesh contents, morphing, backing texture identity and atlas-layer assignment
+still require independent invalidation. Native preparation shares the spot
+atlas with directional cascades, so a light-count or cascade change can shift
+layers without changing the light's entity identity. No passes are skipped and
+no scene, shader, simulation, quality or external-library source changes remain.
+
+The 407,955,766-byte capture and successful native exports use the
+`shadow-pose-diagnostic-` prefix under `target/entity-tree-perf/`. Owned app and
+collector PIDs 3374477/3374476 exit zero and release API 4202/Tracy 8087. The
+workload snapshots contain only those processes. Temporary instrumentation is
+removed with exact source-byte checks, and the normal artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+is restored and verified. Its existing 360-check replay and 18-check history/
+restart evidence remains valid. The preceding native CPU export ranks
+`prepare_preprocess_bind_groups` at 0.50–0.61 ms mean per settled frame; inspect
+application view admission and its native binding-resource lifetime next.
+This capture does not establish a product performance gain or complete acceptance.
+
 ## Reuse pending-source query metadata — 2026-10-11
 
 `lunco-usd-sim-cosim` retains Bevy's system-local `QueryState` for Modelica

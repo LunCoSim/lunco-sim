@@ -645,6 +645,14 @@ native light extraction is incremental, so focusing a parked preview must
 restore its shadows without requiring a light edit. This saves only maps
 provably irrelevant to all outputs; Bevy's main-world per-light caster
 visibility pass is still a separate cost to measure.
+
+Before adding shadow-content reuse, measure per-map native caster poses and
+light projections across consecutive frames; stable counts are insufficient.
+Reuse admission must also cover mesh/material/pipeline contents, skin/morph
+inputs, backing texture identity and atlas-layer assignment. Spot maps share
+the native directional atlas, so light or cascade changes can shift a layer
+without changing the light entity. A pose digest is diagnostic candidacy only.
+
 Count shadow roots independently of active cameras. Invisible extracted local
 lights retire their native `PointAndSpotLightViewEntities` through the renderer
 adapter; Bevy's cleanup observer removes the associated views. A deferred
