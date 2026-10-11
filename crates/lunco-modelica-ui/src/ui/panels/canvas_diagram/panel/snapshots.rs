@@ -2,7 +2,7 @@
 
 use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_workbench_core::PanelCtx;
 
 /// Publish the active diagram's namespace into the canvas snapshot. This is
@@ -144,13 +144,19 @@ pub(crate) fn stash_snapshots(
         }
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
+                let Some(variables) = ctx.get::<ModelicaVariables>(entity) else {
+                    bevy::log::warn_once!(
+                        "Modelica canvas snapshot unavailable: participant {entity:?} has no required variable state"
+                    );
+                    return;
+                };
                 for (k, v) in &model.parameters {
                     state.values.insert(k.to_string(), *v);
                 }
                 for (k, v) in &model.inputs {
                     state.values.insert(k.to_string(), *v);
                 }
-                for (k, v) in &model.variables {
+                for (k, v) in &variables.values {
                     state.values.insert(k.to_string(), *v);
                 }
                 project_target_unit_scope(&mut state.values, target_unit_instance);

@@ -17,7 +17,7 @@ use lunco_cosim_core::{
     UsdSourcedCosim,
 };
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_modelica_runtime::{ModelicaModel, ModelicaStepDiagnostics};
+use lunco_modelica_runtime::{ModelicaModel, ModelicaStepDiagnostics, ModelicaVariables};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_camera::camera_mount::MountedCamera;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
@@ -686,6 +686,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                 &Transform,
                 Option<&SimComponent>,
                 Option<&ModelicaModel>,
+                Option<&ModelicaVariables>,
                 Option<&avian3d::prelude::LinearVelocity>,
             ),
             With<UsdSourcedCosim>,
@@ -697,9 +698,17 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
         };
 
         let entity_count = q.iter(world).count();
+        for (entity, _, _, _, model, variables, _) in q.iter(world) {
+            if model.is_some() && variables.is_none() {
+                return api_error(
+                    ApiErrorCode::InternalError,
+                    format!("Modelica participant {entity:?} has no required variable state"),
+                );
+            }
+        }
         let entities: Vec<ApiValue> = if include_entities {
             q.iter(world)
-                .map(|(entity, name, tf, comp, model, lv)| {
+                .map(|(entity, name, tf, comp, model, variables, lv)| {
                 let status = comp
                     .map(|c| match &c.status {
                         SimStatus::Idle => "Idle".to_string(),
@@ -763,7 +772,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "has_simcomponent": comp.is_some(),
                     "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
                     "status": status,
-                    "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
+                    "modelica_var_count": model.zip(variables).map(|(_, v)| v.values.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
                     "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
@@ -794,7 +803,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
                         "has_simcomponent": comp.is_some(),
                         "status": status,
-                        "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
+                        "modelica_var_count": model.zip(variables).map(|(_, v)| v.values.len()).unwrap_or(0),
                         "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                         "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
                         "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),

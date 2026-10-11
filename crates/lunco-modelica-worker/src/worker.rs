@@ -22,8 +22,8 @@ use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
     ModelicaCacheLimits, ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot,
     ModelicaModel, ModelicaNotice, ModelicaResult, ModelicaRuntimeProfile,
-    ModelicaSolverCapabilities, ModelicaSolverParameters, NoticeLevel, SimSampleBatch,
-    SimSampleStream,
+    ModelicaSolverCapabilities, ModelicaSolverParameters, ModelicaVariables, NoticeLevel,
+    SimSampleBatch, SimSampleStream,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
@@ -40,7 +40,7 @@ mod compile;
 pub use bridge::{
     handle_modelica_responses, on_remove_modelica, reconcile_modelica_preparation_progress,
     request_modelica_compiles, retire_closed_twin_models, retire_replication_models,
-    spawn_modelica_requests,
+    spawn_modelica_requests, validate_modelica_variable_ownership,
 };
 pub use compile::dispatch_modelica_compile_requests;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1995,8 +1995,8 @@ fn submit_cached_solve_preparation(
 /// (on rumoca `main`) algebraic / output reconstructions via
 /// `EliminationResult`. Non-finite values are dropped so the UI never
 /// plots NaN. Filtering out parameters / inputs happens downstream in
-/// [`handle_modelica_responses`]; we report everything here so the UI has
-/// the full picture and decides what goes into `model.variables`.
+/// [`handle_modelica_responses`]; the admitted variable map and presentation
+/// stream consume this complete observation through their own typed readers.
 pub(crate) trait ObservableStepper {
     fn observable_state(
         &self,
@@ -2413,13 +2413,14 @@ pub fn modelica_worker(
     let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
     // Immutable DAE lowering is dispatched to this bounded pool; the native
     // Rumoca session itself is owned by a separate single-thread actor.
-    let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits, preparation_limits) {
-        Ok(pool) => pool,
-        Err(error) => {
-            let _ = tx.send(ModelicaResult::worker_failure(error));
-            return;
-        }
-    };
+    let mut solve_preparation_pool =
+        match SolvePreparationPool::new(disk_limits, preparation_limits) {
+            Ok(pool) => pool,
+            Err(error) => {
+                let _ = tx.send(ModelicaResult::worker_failure(error));
+                return;
+            }
+        };
     let mut compiler =
         match CompilerActor::new(solve_preparation_pool.tx.clone(), compiled_capacity) {
             Ok(compiler) => compiler,

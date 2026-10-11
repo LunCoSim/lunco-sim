@@ -1,7 +1,7 @@
 //! Runtime projection of Modelica state into the shared signal registry.
 //!
 //! A Modelica solver exposes its complete current state through
-//! [`ModelicaModel::variables`].  Retaining that state is a simulation concern,
+//! [`ModelicaVariables::values`]. Retaining that state is a simulation concern,
 //! not a plot concern: an inspector, API client, recorder, or graph may all
 //! consume the same history.  This module therefore owns the render-free
 //! projection and applies the shared telemetry rate, retention, and
@@ -22,7 +22,7 @@ use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_index::index::ComponentNameLookup;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout, ModelicaVariables};
 
 /// Plugin that retains landed Modelica state in the shared telemetry registry.
 ///
@@ -46,7 +46,14 @@ impl Plugin for ModelicaTelemetryPlugin {
 /// changes. Keep that projection off render-only frames while still observing
 /// document and settings edits independently of solver responses.
 fn modelica_telemetry_inputs_changed(
-    models: Query<(), Or<(Changed<ModelicaModel>, Changed<ModelicaSignalLayout>)>>,
+    models: Query<
+        (),
+        Or<(
+            Changed<ModelicaModel>,
+            Changed<ModelicaVariables>,
+            Changed<ModelicaSignalLayout>,
+        )>,
+    >,
     documents: Option<Res<DocumentRegistry<ModelicaDocument>>>,
     settings: Option<Res<TelemetrySettings>>,
 ) -> bool {
@@ -90,7 +97,7 @@ struct RuntimeSignalCache {
 ///
 /// The system runs in `Update`, after worker admission in `First` and the
 /// lifecycle cycle, where
-/// [`ModelicaModel::current_time`] and [`ModelicaModel::variables`] describe the
+/// [`ModelicaModel::current_time`] and [`ModelicaVariables::values`] describe the
 /// same landed solver result.  Sampling is paced by model time rather than by
 /// render frames, so a fast UI cannot inflate the recorded rate and a headless
 /// run follows the same policy.
@@ -103,6 +110,7 @@ pub fn retain_modelica_runtime_state(
     models: Query<(
         Entity,
         &ModelicaModel,
+        &ModelicaVariables,
         Option<Ref<ModelicaSignalLayout>>,
         Option<&GlobalEntityId>,
         Option<&SignalSource>,
@@ -131,7 +139,7 @@ pub fn retain_modelica_runtime_state(
     // the registry provides this count without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, model, layout, global_owner, signal_source) in &models {
+    for (entity, model, variables, layout, global_owner, signal_source) in &models {
         let document_host = documents
             .as_ref()
             .and_then(|documents| documents.host(model.document));
@@ -173,7 +181,7 @@ pub fn retain_modelica_runtime_state(
         };
 
         let mut retained_any = false;
-        for (name, &value) in &model.variables {
+        for (name, &value) in &variables.values {
             if !value.is_finite() || name.is_empty() {
                 continue;
             }
@@ -348,7 +356,7 @@ mod tests {
     use super::*;
     use bevy::app::Update;
 
-    fn app_with_model(model: ModelicaModel) -> (App, Entity) {
+    fn app_with_model(model: ModelicaModel, variables: ModelicaVariables) -> (App, Entity) {
         let mut app = App::new();
         app.insert_resource(TelemetrySettings::default());
         app.insert_resource(SignalRegistry::default());
@@ -359,21 +367,22 @@ mod tests {
         );
         let entity = app
             .world_mut()
-            .spawn((model, ModelicaSignalLayout::default()))
+            .spawn((model, variables, ModelicaSignalLayout::default()))
             .id();
         (app, entity)
     }
 
     #[test]
     fn runtime_state_is_retained_without_a_plot_binding() {
-        let mut model = ModelicaModel {
+        let model = ModelicaModel {
             model_name: "LunCo.Test.Sensor".into(),
             source_uri: "lunco://models/LunCo/Test/Sensor.mo".into(),
             current_time: 0.0,
             ..Default::default()
         };
-        model.variables.insert("soc".to_string(), 0.95);
-        let (mut app, entity) = app_with_model(model);
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("soc".to_string(), 0.95);
+        let (mut app, entity) = app_with_model(model, variables);
 
         app.update();
 
@@ -410,8 +419,7 @@ mod tests {
 
     #[test]
     fn projected_member_metadata_is_used_for_generated_channel_names() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("member_current".to_string(), 3.0);
+        let model = ModelicaModel::default();
         let mut layout = ModelicaSignalLayout::default();
         layout.metadata.insert(
             "member_current".to_string(),
@@ -431,10 +439,7 @@ mod tests {
 
     #[test]
     fn projected_modelica_identity_is_retained_for_solver_names() {
-        let mut model = ModelicaModel::default();
-        model
-            .variables
-            .insert("unit.Camera.power_draw_w".to_string(), 3.0);
+        let model = ModelicaModel::default();
         let mut layout = ModelicaSignalLayout::default();
         layout.provenance_prefixes.push((
             "unit.Camera.".to_string(),
@@ -459,8 +464,7 @@ mod tests {
 
     #[test]
     fn flattened_electrical_connector_fields_keep_units_and_meaning() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("unit.Battery.p.v".to_string(), 28.0);
+        let model = ModelicaModel::default();
         let mut layout = ModelicaSignalLayout::default();
         layout.provenance_prefixes.push((
             "unit.Battery.".to_string(),
@@ -485,9 +489,10 @@ mod tests {
 
     #[test]
     fn runtime_state_uses_rate_and_retains_steady_time_samples() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("speed".to_string(), 1.0);
-        let (mut app, entity) = app_with_model(model);
+        let model = ModelicaModel::default();
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("speed".to_string(), 1.0);
+        let (mut app, entity) = app_with_model(model, variables);
         let signal = SignalRef::new(entity, "speed");
 
         app.update();
@@ -495,7 +500,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.01;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         assert_eq!(
@@ -511,7 +521,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.2;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         let history = app
@@ -529,7 +544,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.4;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         assert_eq!(
@@ -546,7 +566,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.61;
-            value.variables.insert("speed".to_string(), 2.1);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.1);
         }
         app.update();
         assert_eq!(
@@ -561,13 +586,14 @@ mod tests {
 
     #[test]
     fn a_new_solver_session_clears_previous_history() {
-        let mut model = ModelicaModel {
+        let model = ModelicaModel {
             session_id: 1,
             current_time: 1.0,
             ..Default::default()
         };
-        model.variables.insert("x".to_string(), 4.0);
-        let (mut app, entity) = app_with_model(model);
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("x".to_string(), 4.0);
+        let (mut app, entity) = app_with_model(model, variables);
         let signal = SignalRef::new(entity, "x");
         app.update();
 
@@ -576,7 +602,12 @@ mod tests {
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.session_id = 2;
             value.current_time = 0.0;
-            value.variables.insert("x".to_string(), 8.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("x".to_string(), 8.0);
         }
         app.update();
 
@@ -592,10 +623,11 @@ mod tests {
 
     #[test]
     fn channel_limit_uses_live_registry_admission_after_removal() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("a".into(), 1.0);
-        model.variables.insert("b".into(), 2.0);
-        let (mut app, entity) = app_with_model(model);
+        let model = ModelicaModel::default();
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("a".into(), 1.0);
+        variables.values.insert("b".into(), 2.0);
+        let (mut app, entity) = app_with_model(model, variables);
         app.world_mut()
             .resource_mut::<TelemetrySettings>()
             .max_channels = 1;

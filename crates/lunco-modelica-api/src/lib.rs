@@ -17,7 +17,7 @@ use lunco_api::queries::{ApiQueryError, ApiQueryResult, api_param_array, api_par
 use lunco_api::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentOrigin};
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_workspace::WorkspaceResource;
 
 use lunco_experiments::ExperimentOrigins;
@@ -1464,6 +1464,13 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             }));
         };
 
+        let Some(variables) = world.get::<ModelicaVariables>(entity) else {
+            return query_error(
+                ApiErrorCode::InternalError,
+                format!("Modelica participant {entity:?} has no required variable state"),
+            );
+        };
+
         // Project to typed values, optionally honoring the `names` filter.
         // Filter is applied uniformly across parameters/inputs/variables
         // because the agent does not always know which bucket a name
@@ -1491,7 +1498,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             "paused": model.paused,
             "parameters": project(&model.parameters),
             "inputs": project(&model.inputs),
-            "variables": project(&model.variables),
+            "variables": project(&variables.values),
         }))
     }
 }

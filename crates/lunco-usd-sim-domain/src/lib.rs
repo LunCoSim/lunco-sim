@@ -18,7 +18,7 @@ use lunco_modelica_ast::ast_extract::{
 use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
-    ModelicaSignalProvenance, NoticeLevel,
+    ModelicaSignalProvenance, ModelicaVariables, NoticeLevel,
 };
 use lunco_modelica_runtime::{ModelicaSource, resolve_communication_period_secs};
 use lunco_usd_bevy_core::program::{
@@ -1365,6 +1365,7 @@ fn commit_domain_projection(
                     last_error: Some(message.clone()),
                     ..default()
                 },
+                ModelicaVariables::default(),
                 UsdSourcedCosim,
                 DomainProjectionState { fingerprint },
                 GeneratedModelicaSource {
@@ -1474,7 +1475,9 @@ fn commit_domain_projection(
             });
             error!("[domain-projection] {} rejected: {message}", prim.path);
             retire_sim_interface(commands, entity);
-            commands.entity(entity).try_insert(model);
+            commands
+                .entity(entity)
+                .try_insert((model, ModelicaVariables::default()));
             return false;
         }
     };
@@ -1501,6 +1504,7 @@ fn commit_domain_projection(
     retire_sim_interface(commands, entity);
     commands.entity(entity).try_insert((
         model,
+        ModelicaVariables::default(),
         signal_layout,
         UsdSourcedCosim,
         lunco_port_core::PortSurfacePending,

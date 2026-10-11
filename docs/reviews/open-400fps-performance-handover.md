@@ -1,5 +1,121 @@
 # High-quality realtime performance handover
 
+## Separate Modelica observable snapshots from clock writes — 2026-10-11
+
+The application-owned output snapshot now lives in the required reflected
+`ModelicaVariables.values` component. `ModelicaModel` retains parameters,
+inputs, clocks, session and status. Worker admission commits both serially;
+co-simulation copies outputs when native variable change detection fires or a
+consumer is admitted. Compile replacement, reset and retirement clear the
+snapshot through their existing owner boundaries. Missing live state faults
+visibly and cannot be revived by a buffered worker result. All reflected,
+telemetry, API, canvas, runner and co-simulation readers use the same component;
+external API variable fields keep their wire shape. Solver math, f64 precision,
+communication periods, tick order, scene quality and dependencies are unchanged.
+
+The normal pre-change production artifact
+`202c637ecd9d5225fd4c363c68c455701a6f2031442ac99e0d647a7ab269d138`
+ran in owned PID 818738/API 4202. During 364 physics ticks, each of nine
+participants admitted 61 samples at its authored 0.1-second communication period.
+The corresponding instrumentation baseline below copies nine snapshots on every
+fixed tick. This establishes repeated publication between accepted samples;
+it does not infer duplicate wire consumers or provider evaluations.
+`output-admission-baseline-20261011.json` records participant names, counts,
+readiness, progress, artifact identity and clean owned-session closure. Main
+PID 84260 remained active and untouched.
+
+The authored `modelica_variable_projection` gate checks snapshot retention
+while a participant is paused, then compares the native reflected map and
+public output against the accepted result after a commanded solver resume.
+`modelica_variables_missing` uses the production runner's expected-fault verdict
+for required state removal. A low-level resource test exercises restoration
+followed by already-buffered lifecycle results for two participants, including
+an exhausted session identity. Per-model terminal state protects the participant
+that is not represented by the scene's first-fault record. Native telemetry, output projection, preparation and Twin
+retirement checks cover the migrated readers and lifecycle seams.
+
+Final normal production artifact
+`2986a6ea4ccfa59295c6df4afee95422118af8f2e19cdcf6ce0210faa7136134`
+passes the six-check projection gate and named required-state fault in owned
+PIDs 886582 and 886625/API 4202. The public RocketEngine reader passes 15 checks
+(PID 886683), and serial/default four-rover replay each passes 24 checks
+(PIDs 886719/886826) against the retained 56-value state sequence. All exit zero
+and release the API. The default reference changes scheduling metadata only;
+it is not a separately captured parallel baseline or proof of an observed
+thread count. The fixtures were authored and their scenario labels normalized
+through exact document operations, with saved-state readback.
+
+Final normal PID 893291/API 4202 checks HTTP 409 rejection of an unknown
+document, then resolves the generated physical participant's document through
+`GeneratedModelicaSource.doc_uri` and its exact recorded workspace origin.
+Reset changes session 2 to 3, rewinds time 8 s to 0, and initializes 321
+variables. Scene replacement passes readiness, diagnostics and seven sandbox
+checks. This session retains High quality, metadata and three invalid-assembly
+pause guards; it exits zero and releases the API. Incomplete lifecycle-driver
+attempts are excluded.
+
+Earlier normal rendered PID 865991 uses artifact
+`cb2d72dc42fdfd0e0b3bd8667f5cca8a4ac75b2395df917cbcd2a51f15b6d9d0`,
+which has the same publication mechanism before the terminal-state refinement.
+It passes readiness, diagnostics, advancing physics, metadata, three pause
+guards and seven sandbox checks at High quality with 50 bodies/33 colliders/
+20 joints. Its camera stays identical across View/Build/View; raw frame p50 is
+17.140/17.619/17.220 ms. The inspected post-dismissal View image retains shadows.
+The windows finish before the driver fails to catch the expected reset
+rejection, so those observations do not prove reset/replacement. No unprofiled
+frame window from the final normal artifact is claimed.
+
+Final Tracy artifact
+`2f73f470f49671b63d6e05ea400e5bdbd2fe30b4a2aeba0c65ef04d6793c06ba`
+runs in owned PID 890161/API 4202 with collector 890160/8086. It retains the same
+High quality, body/collider/joint counts and within-run camera, and passes
+readiness, diagnostics, progress, three pause guards and replacement. The
+inspected post-dismissal View image retains shadows. Warm readiness is 4.189 s.
+The visual-resource prompt remains during measurement; main PID 84260 overlaps
+all rendered runs and remains untouched. App and collector exit zero and
+release their ports. The 326,653,531-byte capture matches the reported
+compressed size and passes native messages and CPU exports. This exact Tracy
+artifact also passes serial/default replay, 24 checks each, in owned
+PIDs 890968/891176 with zero exits and released ports.
+
+Settled six-second windows show the following owner results. Per-call means
+normalize 360/362/361 candidate versus 360/361/360 baseline tick counts.
+Nested phase time is not added to its parent.
+
+| Perspective | Copies before / after | Publication mean before / after (ms) | Mean reduction |
+| --- | --- | --- | --- |
+| View | 3240 / 420 | 0.29600 / 0.10664 | 64.0% |
+| Build | 3249 / 420 | 0.33284 / 0.10901 | 67.2% |
+| View | 3240 / 427 | 0.29367 / 0.10401 | 64.6% |
+
+Variable-copy totals fall from 75.789/86.731/74.702 ms to
+10.609/10.912/10.335 ms. Input-seeding totals are
+17.084/17.256/16.603 ms. Worker-admission totals are
+74.021/81.012/66.934 ms versus 74.959/75.672/68.632 ms;
+telemetry totals are 92.097/111.511/75.359 ms versus
+90.496/99.562/78.624 ms. Builder's adjacent totals increase, so neither adjacent
+owner is claimed faster. The new required-state guard totals
+2.051/1.731/2.147 ms, averaging 5.3–6.3 microseconds per call across First/Update.
+Publication, worker admission, telemetry and the new guard are separate
+scheduled owners. Their combined totals are 206.558/233.717/181.986 ms versus
+272.015/295.389/252.976 ms, a 20.9–28.1% reduction across these measured owners.
+These diagnostics establish reduced publication cost and net measured work
+across this boundary, not overall application throughput.
+`modelica-variables-final-tracy-20261011-publication-summary.json` records native
+exports and exact settled windows; earlier candidate captures are superseded.
+
+Focused native checks pass: six worker-admission/fault seams, seven telemetry
+checks, seven Modelica co-simulation checks, preparation and Twin retirement.
+Normal and Tracy production builds pass with only the existing prepared-cache
+`clear` warning. The final normal artifact is preserved in a verified gzip and
+restored after owned runtime closure by relinking its verified Cargo output,
+which leaves the normal and Tracy output files intact. Sixteen touched Rust
+files were formatted once; the final terminal-state refinement and two-actor
+fixture retain that formatting. Skill validation covers 43 skills.
+
+Controlled loading, visual FPS, physics throughput and the full thread profile
+matrix remain open. These contended/profiler runs do not establish those outcomes.
+
 ## Attribute fixed output publication and link preparation — 2026-10-11
 
 The fixed exchange and connectivity owners expose phase-level trace spans.

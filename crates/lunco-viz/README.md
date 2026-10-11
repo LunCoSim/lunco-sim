@@ -228,44 +228,10 @@ lunco-modelica-core     lunco-cosim (Avian bridge)      USD projection packages
 `egui_plot`). Nothing viz-side knows about Modelica, USD, Avian, or any
 specific domain.
 
-## Usage sketch (once it matures)
+## Modelica samples
 
-```rust,ignore
-// Domain side (Modelica worker, Avian bridge, etc.):
-app.add_plugins(LuncoVizPlugin);
-
-// Publish samples each frame:
-fn publish_modelica_samples(
-    q_models: Query<&ModelicaModel>,
-    mut registry: ResMut<SignalRegistry>,
-) {
-    for model in &q_models {
-        for (name, value) in &model.variables {
-            registry.push_scalar(
-                SignalRef::new(model.entity, name),
-                model.current_time,
-                *value,
-            );
-        }
-    }
-}
-
-// UI side: a user opens a new graph from the tab strip:
-fn on_new_plot(world: &mut World) {
-    let id = VizId::next();
-    world.resource_mut::<VisualizationRegistry>().insert(
-        id,
-        VisualizationConfig {
-            kind: VizKindId::line_plot(),
-            view: ViewTarget::Panel2D,
-            inputs: vec![/* bound later via drag-drop or inspector */],
-            style: VizStyle::default(),
-            ..default()
-        },
-    );
-    world.commands().trigger(OpenTab {
-        kind: VIZ_PANEL_KIND,
-        instance: id.raw(),
-    });
-}
-```
+`ModelicaExecutionPlugin` installs `ModelicaTelemetryPlugin`. That owner reads
+`ModelicaModel` clocks and the required `ModelicaVariables.values` snapshot,
+then retains samples through the shared `SignalRegistry` rate, deadband and
+channel admission. Visualization panels consume that registry. Do not install
+another per-frame Modelica publisher beside the telemetry owner.

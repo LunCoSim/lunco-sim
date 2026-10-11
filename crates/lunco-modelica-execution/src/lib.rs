@@ -12,7 +12,8 @@ use crossbeam_channel::unbounded;
 #[cfg(target_arch = "wasm32")]
 use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 use lunco_modelica_runtime::{
-    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
+    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet,
+    ModelicaVariables, SimSampleStream,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -169,17 +170,23 @@ impl Plugin for ModelicaExecutionPlugin {
         app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
         app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
         app.register_type::<ModelicaModel>()
+            .register_type::<ModelicaVariables>()
             .add_observer(lunco_modelica_worker::worker::on_remove_modelica)
             .add_observer(lunco_modelica_worker::worker::retire_closed_twin_models)
             .add_observer(lunco_modelica_worker::worker::retire_replication_models)
             .add_systems(
                 First,
-                lunco_modelica_worker::worker::handle_modelica_responses
+                (
+                    lunco_modelica_worker::worker::validate_modelica_variable_ownership,
+                    lunco_modelica_worker::worker::handle_modelica_responses,
+                )
+                    .chain()
                     .in_set(ModelicaSet::HandleResponses),
             )
             .add_systems(
                 Update,
                 (
+                    lunco_modelica_worker::worker::validate_modelica_variable_ownership,
                     lunco_modelica_worker::worker::request_modelica_compiles,
                     lunco_modelica_worker::worker::dispatch_modelica_compile_requests,
                 )

@@ -229,13 +229,20 @@ slot borrow; measure that copy separately from solver response admission.
 update; `modelica_outputs_seed_inputs` isolates omitted-input seeding. Both are
 children of fixed-step output publication, so compare their total time with
 that owner over the same settled window. Their call counts are per participant,
-not per simulation tick. Preserve the reflected map's reader contract before
-choosing a change-detection or ownership refactor.
+not per simulation tick. The required `ModelicaVariables.values` component owns
+the full native f64 reflected snapshot; `ModelicaModel` owns clocks, inputs,
+parameters and status. Serial worker admission marks the snapshot changed only
+when value bits change. Reflection writes also participate in native detection.
+Added models, USD participant markers and destination components force initial
+publication. Run the production `modelica_variable_projection` and
+`modelica_variables_missing` gates when changing this boundary, plus exact
+state replay and lifecycle resource checks for late results and retirement.
 Preserve reordering, same-size source replacement, target
 edits, clone/clear/compaction retirement and native-bit no-op detection when
 changing that mechanism. Do not infer unchanged source topology from map length
-or cached iteration order. Keep Modelica's reflected variable map and the
-fixed-step publication boundary unchanged, and measure the actual copy owner.
+or cached iteration order. Preserve the full reflected snapshot and fixed-step
+publication boundary, and measure both copying and total owner time; moving work
+to another phase is not sufficient evidence of a throughput gain.
 For port-write metadata, preserve the live validation boundary. `PortMetadata`
 borrows static source/authority text through native `Cow` and owns dynamic text;
 check both representations and content equality, then verify public metadata

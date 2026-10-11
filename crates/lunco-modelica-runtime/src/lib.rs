@@ -476,9 +476,21 @@ impl ModelicaStepDiagnostics {
     }
 }
 
+/// Landed observable variables of one Modelica participant.
+///
+/// Native component change detection tracks the output snapshot independently
+/// of input and communication-clock updates. The worker commits this map and
+/// the model clock together at its serial result-admission boundary.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct ModelicaVariables {
+    pub values: HashMap<String, f64>,
+}
+
 /// Component attached to every live Modelica participant.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
+#[require(ModelicaVariables)]
 pub struct ModelicaModel {
     pub model_name: String,
     #[reflect(ignore)]
@@ -495,7 +507,6 @@ pub struct ModelicaModel {
     pub inputs: HashMap<String, f64>,
     #[reflect(ignore)]
     pub compiled_input_names: BTreeSet<String>,
-    pub variables: HashMap<String, f64>,
     #[reflect(ignore)]
     pub last_error: Option<String>,
     #[reflect(ignore)]
@@ -539,7 +550,6 @@ impl Default for ModelicaModel {
             parameters: HashMap::new(),
             inputs: HashMap::new(),
             compiled_input_names: BTreeSet::new(),
-            variables: HashMap::new(),
             last_error: None,
             document: lunco_doc::DocumentId::default(),
             is_stepping: false,

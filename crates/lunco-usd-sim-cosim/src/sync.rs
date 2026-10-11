@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot};
@@ -71,28 +71,39 @@ fn upsert_ports<'a>(
 /// outputs remain available to every physics step.
 pub fn sync_modelica_outputs(
     mut q: Query<
-        (&ModelicaModel, &mut SimComponent),
+        (
+            Ref<ModelicaModel>,
+            Ref<ModelicaVariables>,
+            Ref<UsdSourcedCosim>,
+            &mut SimComponent,
+        ),
         (
             With<UsdSourcedCosim>,
             Or<(
                 Changed<ModelicaModel>,
+                Changed<ModelicaVariables>,
                 Added<SimComponent>,
                 Added<UsdSourcedCosim>,
             )>,
         ),
     >,
 ) {
-    for (model, mut comp) in &mut q {
+    for (model, variables, source, mut comp) in &mut q {
+        let publish_outputs =
+            variables.is_changed() || model.is_added() || source.is_added() || comp.is_added();
         let changed = {
             let comp = comp.bypass_change_detection();
-            let output_span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
-            let mut changed = comp.outputs.upsert_samples(
-                model
-                    .variables
-                    .iter()
-                    .map(|(name, value)| (name.as_str(), value)),
-            );
-            drop(output_span);
+            let mut changed = if publish_outputs {
+                let _span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
+                comp.outputs.upsert_samples(
+                    variables
+                        .values
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value)),
+                )
+            } else {
+                false
+            };
             let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
                 if !comp.inputs.contains_key(k) {
@@ -101,7 +112,7 @@ pub fn sync_modelica_outputs(
                 }
             }
             drop(input_span);
-            let status = modelica_status(model);
+            let status = modelica_status(&model);
             if comp.status != status {
                 comp.status = status;
                 changed = true;

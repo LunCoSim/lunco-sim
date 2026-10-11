@@ -155,7 +155,7 @@ def Sphere "RedBalloon" (
 | Property | Purpose |
 |---|---|
 | `uniform token info:implementationSource` | Selects exactly one implementation arm: `id`, `sourceAsset`, or `sourceCode`. A populated non-selected arm is invalid. |
-| `uniform asset info:sourceAsset` | The program's file. The ENGINE that runs it comes from the extension — `.mo` dispatches `ModelicaCommand::Compile` to the worker and (once `model.variables` populates) wraps the result in a `SimComponent`; `.py` registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). `asset`, never `string`: only an `asset` is visible to USD's resolver and travels with the scene. |
+| `uniform asset info:sourceAsset` | The program's file. The ENGINE that runs it comes from the extension — `.mo` dispatches compilation to the Modelica worker, projects declared ports into a `SimComponent`, and publishes admitted `ModelicaVariables.values` snapshots to its outputs; `.py` registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). `asset`, never `string`: only an `asset` is visible to USD's resolver and travels with the scene. |
 | `uniform token info:sourceAsset:subIdentifier` | Which definition inside the source, when the file declares more than one. |
 | `uniform string info:sourceCode` | The program's text, authored in place instead of in a file. |
 | `uniform bool lunco:program:realtimeSafe` | The author's promise that the program steps fast enough to be trusted with a FORCE. Absent ⇒ not promised, and the wiring pass refuses it a `force_*`/`torque_*` port on a client-predicted body. |

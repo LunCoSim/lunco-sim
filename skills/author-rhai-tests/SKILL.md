@@ -48,6 +48,15 @@ source, then use the generic helpers in
 `assets/scripting/tools/sysml_requirements.rhai` and the public query/command
 surface to evaluate it.
 
+For Modelica observable publication, use the required `ModelicaVariables.values`
+reflection surface and public output ports. `modelica_variable_projection`
+checks snapshot retention while paused, then resumes the solver after a public
+input command to compare the native snapshot, output port and accepted result.
+`modelica_variables_missing` removes
+required state and uses the runner's expected-runtime-fault verdict for
+`modelica-variables-missing`; a stopped clock must not leave the test waiting
+for another tick. Buffered-result rejection remains a low-level lifecycle seam.
+
 ## Authoring workflow
 
 1. Split the behavior into the smallest independently verifiable component

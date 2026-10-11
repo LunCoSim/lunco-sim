@@ -6,7 +6,7 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::ui::workbench_state::WorkbenchState;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 
 /// Per-input metadata snapshot — built once per render from
 /// [`lunco_modelica_index::index::ModelicaIndex`] so the grid loop doesn't reborrow
@@ -443,8 +443,12 @@ impl Panel for TelemetryPanel {
             .show(ui, |ui| {
                 let (model_vars, model_inputs) = if let Some(e) = entity {
                     if let Some(m) = ctx.get::<ModelicaModel>(e) {
+                        let Some(variables) = ctx.get::<ModelicaVariables>(e) else {
+                            ui.label("Modelica variable state is missing.");
+                            return;
+                        };
                         (
-                            m.variables.keys().cloned().collect::<Vec<_>>(),
+                            variables.values.keys().cloned().collect::<Vec<_>>(),
                             m.inputs.keys().cloned().collect::<Vec<_>>(),
                         )
                     } else {

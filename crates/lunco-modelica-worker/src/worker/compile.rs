@@ -374,7 +374,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         parameters: parameters.clone(),
         inputs,
         compiled_input_names: BTreeSet::new(),
-        variables: HashMap::new(),
         last_error: None,
         document: doc,
         is_stepping: true,
@@ -394,7 +393,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     if !entry.contains::<Name>() {
         entry.insert(Name::new(model_name.clone()));
     }
-    entry.insert(model);
+    entry.insert((model, super::ModelicaVariables::default()));
     if let Some(mut diagnostics) = world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>() {
         diagnostics.mark_started(doc);
     }

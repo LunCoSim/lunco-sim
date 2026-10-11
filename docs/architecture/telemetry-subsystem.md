@@ -398,9 +398,10 @@ Three lanes, and they are not interchangeable:
 
 ### 5b. Model state and explicit channels share one retention plane
 
-`ModelicaModel::parameters`, `inputs`, and `variables` are the live model-inspector surface, and
+`ModelicaModel::parameters` and `inputs`, plus the required
+`ModelicaVariables::values` snapshot, are the live model-inspector surface, and
 `CosimStatus`/`SnapshotVariables` expose the same state to agents and API clients. After a solver
-response lands, `lunco-modelica-telemetry` retains finite `variables` in the shared
+response lands, `lunco-modelica-telemetry` retains finite `ModelicaVariables::values` in the shared
 `SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to the shared deadband,
 retention, and channel cap. The projection clears a solver session's old history when the
 authoritative Modelica `session_id` changes, so reloads cannot mix time bases.

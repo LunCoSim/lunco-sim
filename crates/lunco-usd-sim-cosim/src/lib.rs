@@ -9,7 +9,7 @@
 //!   worker channel, and publishes the `SimComponent` — the entity's
 //!   port interface — immediately from the parsed declaration, so wires
 //!   into the model resolve before the solver has answered
-//!   (`SimStatus::Compiling` until `model.variables` populates).
+//!   (`SimStatus::Compiling` until `ModelicaVariables.values` populates).
 //! - **Python**: opens the script, registers a `ScriptDocument`,
 //!   attaches `ScriptedModel`, and creates the matching `SimComponent`.
 //! - **Wiring**: [`rewire_usd_connections`] derives one `SimConnection`
@@ -32,7 +32,7 @@ use lunco_cosim_core::{
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica_runtime::source_asset::ModelicaSource;
 use lunco_modelica_runtime::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout,
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout, ModelicaVariables,
 };
 #[cfg(feature = "python")]
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
@@ -1540,6 +1540,7 @@ fn acausal_connector_state(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> (b
 fn modelica_port_contract_error(
     contract: &UsdModelicaPortContract,
     model: &ModelicaModel,
+    variables: &ModelicaVariables,
 ) -> Option<String> {
     let missing_inputs: Vec<_> = contract
         .inputs
@@ -1557,10 +1558,10 @@ fn modelica_port_contract_error(
         // USD input is intentionally absent from the Modelica DAE; a same-
         // named compiled output proves this is the cross-domain loop rather
         // than a typo in a Modelica input name.
-        .filter(|name| !model.variables.contains_key(*name))
+        .filter(|name| !variables.values.contains_key(*name))
         .cloned()
         .collect();
-    let actual_outputs: BTreeSet<_> = model.variables.keys().cloned().collect();
+    let actual_outputs: BTreeSet<_> = variables.values.keys().cloned().collect();
     let missing_outputs: Vec<_> = contract
         .outputs
         .difference(&actual_outputs)
@@ -1597,11 +1598,12 @@ fn validate_usd_modelica_port_contracts(
         Entity,
         &UsdModelicaPortContract,
         &mut ModelicaModel,
+        &ModelicaVariables,
         Option<&ValidatedUsdModelicaPortContract>,
     )>,
     mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
 ) {
-    for (entity, contract, mut model, validated) in &mut q {
+    for (entity, contract, mut model, variables, validated) in &mut q {
         if model.is_compiling || !model.is_compiled {
             continue;
         }
@@ -1609,7 +1611,7 @@ fn validate_usd_modelica_port_contracts(
             continue;
         }
 
-        if let Some(error) = modelica_port_contract_error(contract, &model) {
+        if let Some(error) = modelica_port_contract_error(contract, &model, variables) {
             model.paused = true;
             model.last_error = Some(error.clone());
             notices.write(lunco_modelica_runtime::ModelicaNotice {
@@ -2057,7 +2059,12 @@ pub fn dispatch_loaded_python_sources(
 pub(crate) fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
     q_new: Query<
-        (Entity, &ModelicaModel, Option<&UsdModelicaPortContract>),
+        (
+            Entity,
+            &ModelicaModel,
+            &ModelicaVariables,
+            Option<&UsdModelicaPortContract>,
+        ),
         (With<UsdSourcedCosim>, Without<SimComponent>),
     >,
     mut pending: ResMut<PendingModelicaWrapWork>,
@@ -2073,7 +2080,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         .collect();
     candidates.sort_unstable_by_key(|(entity, ..)| *entity);
 
-    for (entity, model, contract) in candidates {
+    for (entity, model, variables, contract) in candidates {
         let mut entity_commands = commands.entity(entity);
         entity_commands.try_insert(SimComponent {
             model_name: model.model_name.clone(),
@@ -2081,7 +2088,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
             inputs: model.inputs.clone().into(),
             // Outputs are the SOLUTION — empty until the worker answers.
             // `sync_modelica_outputs` fills them and flips the status.
-            outputs: model.variables.clone().into(),
+            outputs: variables.values.clone().into(),
             status: sync::modelica_status(model),
             is_stepping: model.is_stepping,
         });
@@ -2126,6 +2133,7 @@ pub(crate) fn request_modelica_parameter_recompile(
             Entity,
             &UsdInputDefaults,
             &mut ModelicaModel,
+            &mut ModelicaVariables,
             &mut SimComponent,
         ),
         (
@@ -2136,7 +2144,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         ),
     >,
 ) {
-    for (entity, defaults, mut model, mut component) in &mut q {
+    for (entity, defaults, mut model, mut variables, mut component) in &mut q {
         let parameter_changed = defaults.0.iter().any(|(name, value)| {
             model
                 .parameters
@@ -2179,7 +2187,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         model.target_time = 0.0;
         model.next_communication_time = 0.0;
         model.last_step_time = 0.0;
-        model.variables.clear();
+        variables.values.clear();
         component.outputs.clear();
         component.status = SimStatus::Compiling;
 
@@ -3218,7 +3226,6 @@ mod tests {
     #[test]
     fn declared_inputs_are_exposed_before_the_solver_answers() {
         let model = dispatched_but_unsolved();
-        assert!(model.variables.is_empty(), "precondition: not solved yet");
 
         let mut app = App::new();
         let e = app.world_mut().spawn((UsdSourcedCosim, model)).id();
@@ -3372,9 +3379,11 @@ mod tests {
         };
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
-        model.variables.insert("mass".into(), 1.0);
+        let variables = ModelicaVariables {
+            values: [("mass".to_owned(), 1.0)].into(),
+        };
 
-        let error = modelica_port_contract_error(&contract, &model)
+        let error = modelica_port_contract_error(&contract, &model, &variables)
             .expect("a USD port the DAE does not expose must fail projection");
         assert!(error.contains("typo"));
         assert!(error.contains("thrust"));
@@ -3388,9 +3397,14 @@ mod tests {
         };
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
-        model.variables.insert("thrust".into(), 42.0);
+        let variables = ModelicaVariables {
+            values: [("thrust".to_owned(), 42.0)].into(),
+        };
 
-        assert_eq!(modelica_port_contract_error(&contract, &model), None);
+        assert_eq!(
+            modelica_port_contract_error(&contract, &model, &variables),
+            None
+        );
     }
 
     #[test]
@@ -3403,8 +3417,12 @@ mod tests {
         model
             .parameters
             .insert("filter_time_constant_s".into(), 0.02);
+        let variables = ModelicaVariables::default();
 
-        assert_eq!(modelica_port_contract_error(&contract, &model), None);
+        assert_eq!(
+            modelica_port_contract_error(&contract, &model, &variables),
+            None
+        );
     }
 
     #[test]
@@ -3415,10 +3433,12 @@ mod tests {
         };
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names.clear();
-        model.variables.insert("force_y".into(), 42.0);
+        let variables = ModelicaVariables {
+            values: [("force_y".to_owned(), 42.0)].into(),
+        };
 
         assert_eq!(
-            modelica_port_contract_error(&contract, &model),
+            modelica_port_contract_error(&contract, &model, &variables),
             None,
             "a same-prim USD physics sink must not be reported as a Modelica input"
         );
@@ -3451,17 +3471,21 @@ mod tests {
     #[test]
     fn stable_modelica_outputs_do_not_dirty_the_shared_component() {
         let mut world = World::new();
-        let mut model = ModelicaModel {
+        let model = ModelicaModel {
             is_compiled: true,
             current_time: 1.0,
             ..Default::default()
         };
-        model.variables.insert("force_y".into(), 4.0);
+        let variables = ModelicaVariables {
+            values: [("force_y".to_owned(), 4.0)].into(),
+        };
         let component = SimComponent {
             status: SimStatus::Running,
             ..Default::default()
         };
-        let entity = world.spawn((model, component, UsdSourcedCosim)).id();
+        let entity = world
+            .spawn((model, variables, component, UsdSourcedCosim))
+            .id();
 
         world
             .run_system_cached(sync::sync_modelica_outputs)
@@ -3491,9 +3515,9 @@ mod tests {
 
         world
             .entity_mut(entity)
-            .get_mut::<ModelicaModel>()
-            .expect("model remains present")
-            .variables
+            .get_mut::<ModelicaVariables>()
+            .expect("variable state remains present")
+            .values
             .insert("force_y".into(), 5.0);
         world
             .run_system_cached(sync::sync_modelica_outputs)

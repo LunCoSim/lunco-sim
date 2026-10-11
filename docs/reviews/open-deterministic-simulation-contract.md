@@ -305,7 +305,7 @@ worker owns each `LiveStepper`; its adapter exposes observable `SessionState`,
 time, inputs, and reset, but no portable snapshot/restore operation. Rumoca's
 adaptive `SimulationSession` hides its solver backend, and LunCoSim's fixed-step
 session keeps its state vector, parameters, step index, and time origin private.
-`ModelicaModel.variables` and `inputs` are main-thread projections, not a
+`ModelicaVariables.values` and `ModelicaModel.inputs` are main-thread projections, not a
 complete solver checkpoint. Arbitrary-tick replay therefore needs either a
 solver-owned snapshot/restore contract for every enabled backend or a
 genesis-only capture contract that rebuilds all steppers before the first

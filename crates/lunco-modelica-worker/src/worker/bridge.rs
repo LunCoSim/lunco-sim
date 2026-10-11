@@ -10,11 +10,22 @@ pub fn on_remove_modelica(
         &ModelicaModel,
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
     )>,
+    mut variables: Query<&mut ModelicaVariables>,
     mut sim_registry: ResMut<lunco_signal::SimRegistry>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
+    if let Ok(mut variables) = variables.get_mut(entity) {
+        variables.values.clear();
+    }
+    commands.queue(move |world: &mut World| {
+        if let Ok(mut owner) = world.get_entity_mut(entity) {
+            if !owner.contains::<ModelicaModel>() {
+                owner.remove::<ModelicaVariables>();
+            }
+        }
+    });
     if let Ok((model, epoch)) = models.get(entity) {
         let retained = model
             .session_id
@@ -45,6 +56,61 @@ pub fn on_remove_modelica(
         "[modelica] observer: sent Despawn to Modelica for entity {:?}",
         entity
     );
+}
+
+fn reject_missing_modelica_variables(
+    entity: Entity,
+    model: &mut ModelicaModel,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+) {
+    let detail = format!(
+        "Modelica participant `{}` has no required ModelicaVariables state",
+        model.model_name
+    );
+    let first_report = model.last_error.as_deref() != Some(detail.as_str());
+    if !first_report {
+        return;
+    }
+    model.paused = true;
+    model.is_compiling = false;
+    model.is_compiled = false;
+    model.is_stepping = false;
+    model.in_flight_step = None;
+    model.last_accepted_step = None;
+    model.resume_after_compile = false;
+    model.live_solver_snapshot = None;
+    model.last_error = Some(detail.clone());
+    if let Some(faults) = faults {
+        faults.raise(
+            "modelica-variables-missing",
+            Some(entity),
+            model.model_name.clone(),
+            detail.clone(),
+        );
+    }
+    error!("[modelica] {detail}");
+}
+
+/// Fault live participants whose required output state was removed. Despawned
+/// participants never match this query; ordinary teardown remains a close edge.
+pub fn validate_modelica_variable_ownership(
+    mut models: Query<
+        (
+            Entity,
+            &mut ModelicaModel,
+            Option<&lunco_core::GlobalEntityId>,
+        ),
+        Without<ModelicaVariables>,
+    >,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+) {
+    let mut missing: Vec<_> = models.iter_mut().collect();
+    missing.sort_unstable_by_key(|(entity, _, gid)| {
+        (gid.map(lunco_core::GlobalEntityId::get), entity.to_bits())
+    });
+    for (entity, mut model, _) in missing {
+        reject_missing_modelica_variables(entity, &mut model, faults.as_deref_mut());
+    }
 }
 
 /// Admit first-compile intent from the application lifecycle cycle.
@@ -149,7 +215,12 @@ pub fn request_modelica_compiles(
 /// Intentionally paused models and models outside the shared causal closure do
 /// not gate world time.
 pub fn reconcile_modelica_preparation_progress(
-    models: Query<(Entity, &ModelicaModel, Option<&lunco_core::GlobalEntityId>)>,
+    models: Query<(
+        Entity,
+        &ModelicaModel,
+        Option<&ModelicaVariables>,
+        Option<&lunco_core::GlobalEntityId>,
+    )>,
     mut removed_models: RemovedComponents<ModelicaModel>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
@@ -158,14 +229,14 @@ pub fn reconcile_modelica_preparation_progress(
         return;
     };
     let mut models: Vec<_> = models.iter().collect();
-    models.sort_unstable_by_key(|(entity, _, global_id)| {
+    models.sort_unstable_by_key(|(entity, _, _, global_id)| {
         (
             global_id.map(lunco_core::GlobalEntityId::get),
             entity.to_bits(),
         )
     });
 
-    for (entity, model, _) in models {
+    for (entity, model, variables, _) in models {
         let key = lunco_core_runtime::SimulationProgressKey::modelica_participant(entity);
         let causal_participant = participants.as_deref().is_some_and(|participants| {
             participants.modelica_entities.contains(&entity)
@@ -175,7 +246,8 @@ pub fn reconcile_modelica_preparation_progress(
         let preparation_pending = model.last_error.is_none()
             && (!model.is_compiled
                 || model.is_compiling
-                || (!model.paused && model.variables.is_empty()));
+                || (!model.paused
+                    && variables.is_none_or(|variables| variables.values.is_empty())));
 
         if causal_participant && run_requested && preparation_pending {
             progress.acquire(
@@ -321,9 +393,9 @@ mod compile_admission_tests {
         assert!(app.world().resource::<SimulationProgress>().is_held());
 
         app.world_mut()
-            .get_mut::<ModelicaModel>(active)
+            .get_mut::<ModelicaVariables>(active)
             .unwrap()
-            .variables
+            .values
             .insert("x".to_owned(), 1.0);
         app.world_mut().run_schedule(PreUpdate);
         assert!(!app.world().resource::<SimulationProgress>().is_held());
@@ -389,6 +461,7 @@ pub fn spawn_modelica_requests(
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
+        Option<&ModelicaVariables>,
         Option<&lunco_core::GlobalEntityId>,
     )>,
     mut lag: ResMut<CosimLag>,
@@ -413,14 +486,18 @@ pub fn spawn_modelica_requests(
     // Unaddressable local models use their world-local entity key only as a
     // tie-breaker; networked/authored participants carry GlobalEntityId.
     let mut models: Vec<_> = q_models.iter_mut().collect();
-    models.sort_unstable_by_key(|(entity, _, global_id)| {
+    models.sort_unstable_by_key(|(entity, _, _, global_id)| {
         (
             global_id.map(lunco_core::GlobalEntityId::get),
             entity.to_bits(),
         )
     });
 
-    for (entity, mut model, _) in models {
+    for (entity, mut model, variables, _) in models {
+        if variables.is_none() {
+            reject_missing_modelica_variables(entity, &mut model, faults.as_deref_mut());
+            continue;
+        }
         let shared_clock_participant = participants
             .as_deref()
             .is_none_or(|participants| participants.requires_barrier(entity));
@@ -627,8 +704,12 @@ pub fn spawn_modelica_requests(
 /// The worker reports the solver cause; the main-thread model still owns the
 /// last accepted output sample. Sorting keeps this diagnostic stable across
 /// runs despite the model's hash-map storage.
-fn failed_modelica_step_detail(model: &ModelicaModel, error: &str) -> String {
-    let mut values = model.variables.iter().collect::<Vec<_>>();
+fn failed_modelica_step_detail(
+    model: &ModelicaModel,
+    variables: &ModelicaVariables,
+    error: &str,
+) -> String {
+    let mut values = variables.values.iter().collect::<Vec<_>>();
     values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut detail = format!(
@@ -674,6 +755,7 @@ pub fn handle_modelica_responses(
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
+        Option<&mut ModelicaVariables>,
         Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
     )>,
@@ -807,7 +889,27 @@ pub fn handle_modelica_responses(
         }
 
         let lifecycle_result = result.is_new_model || result.is_parameter_update || result.is_reset;
-        if let Ok((_, mut model, source, epoch)) = q_models.get_mut(result.entity) {
+        // Restoring a component cannot revive a faulted participant through an
+        // already queued worker result. Scene teardown retires this fault.
+        if faults
+            .as_deref()
+            .and_then(|faults| faults.first.as_ref())
+            .is_some_and(|fault| {
+                fault.kind == "modelica-variables-missing" && fault.entity == Some(result.entity)
+            })
+        {
+            continue;
+        }
+        if let Ok((_, mut model, variables, source, epoch)) = q_models.get_mut(result.entity) {
+            // Terminal participants have no pending lifecycle operation. This
+            // also protects participants beyond the first recorded scene fault.
+            if lifecycle_result
+                && model.last_error.is_some()
+                && !model.is_compiling
+                && !model.is_stepping
+            {
+                continue;
+            }
             if source.is_some_and(|source| {
                 !source.is_current(
                     workspace.as_deref().map(|workspace| &workspace.0),
@@ -828,6 +930,11 @@ pub fn handle_modelica_responses(
                 }
                 continue;
             }
+            let Some(mut variables) = variables else {
+                reject_missing_modelica_variables(result.entity, &mut model, faults.as_deref_mut());
+                continue;
+            };
+            let mut variables_changed = false;
             if result.session_id > model.session_id {
                 let detail = format!(
                     "Modelica worker returned future session {} for `{}` (current session {})",
@@ -1224,7 +1331,7 @@ pub fn handle_modelica_responses(
                     "Solver error"
                 };
                 let detail = if result.step_id.is_some() {
-                    failed_modelica_step_detail(&model, err)
+                    failed_modelica_step_detail(&model, &variables, err)
                 } else {
                     err.clone()
                 };
@@ -1269,7 +1376,9 @@ pub fn handle_modelica_responses(
             }
 
             if result.is_new_model {
-                model.variables.clear();
+                let values = &mut variables.bypass_change_detection().values;
+                variables_changed |= !values.is_empty();
+                values.clear();
                 // A successful Compile leaves the model PAUSED/ready — we do
                 // NOT auto-start a live realtime sim. The one exception is
                 // `RunActiveModel`, which set `resume_after_compile = true`
@@ -1347,19 +1456,29 @@ pub fn handle_modelica_responses(
                 model.target_time = 0.0;
                 model.next_communication_time = 0.0;
                 model.last_step_time = 0.0;
-                model.variables.clear();
+                let values = &mut variables.bypass_change_detection().values;
+                variables_changed |= !values.is_empty();
+                values.clear();
                 // Preserve inputs and parameters
             }
 
             // Update observable variables from detected symbols and step outputs
             for (name, val) in result.detected_symbols.iter().chain(outputs.iter()) {
                 if !model.inputs.contains_key(name) && !model.parameters.contains_key(name) {
-                    if let Some(current) = model.variables.get_mut(name) {
-                        *current = *val;
+                    let values = &mut variables.bypass_change_detection().values;
+                    if let Some(current) = values.get_mut(name) {
+                        if current.to_bits() != val.to_bits() {
+                            *current = *val;
+                            variables_changed = true;
+                        }
                     } else {
-                        model.variables.insert(name.clone(), *val);
+                        values.insert(name.clone(), *val);
+                        variables_changed = true;
                     }
                 }
+            }
+            if variables_changed {
+                variables.set_changed();
             }
 
             // CQ-524: only advance the model clock on a genuine step or
@@ -1438,7 +1557,7 @@ pub fn handle_modelica_responses(
                     error.clone(),
                 );
             }
-            for (entity, mut model, _, _) in &mut q_models {
+            for (entity, mut model, _, _, _) in &mut q_models {
                 model.paused = true;
                 model.is_compiling = false;
                 model.is_compiled = false;
@@ -1474,7 +1593,7 @@ pub fn handle_modelica_responses(
     // may then consume the fresh output and dispatch the next communication
     // point; an outstanding causal participant still holds the whole loop.
     if let Some(mut coupling) = coupling {
-        coupling.held = q_models.iter().any(|(entity, model, _, _)| {
+        coupling.held = q_models.iter().any(|(entity, model, _, _, _)| {
             let shared_clock_participant = participants
                 .as_deref()
                 .is_none_or(|participants| participants.requires_barrier(entity));
@@ -1649,6 +1768,88 @@ mod compile_fault_tests {
     }
 
     #[test]
+    fn missing_variable_state_rejects_late_lifecycle_results_after_restoration() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<SimSampleStream>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(
+                First,
+                (
+                    validate_modelica_variable_ownership,
+                    handle_modelica_responses,
+                )
+                    .chain(),
+            );
+        let (results, received) = crossbeam_channel::unbounded();
+        let (commands, _requests) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: commands,
+            rx: received,
+        });
+        let entities: Vec<_> = [1, u64::MAX]
+            .into_iter()
+            .map(|session_id| {
+                app.world_mut()
+                    .spawn(ModelicaModel {
+                        model_name: "Plant".to_owned(),
+                        session_id,
+                        is_compiled: true,
+                        ..Default::default()
+                    })
+                    .id()
+            })
+            .collect();
+        for &entity in &entities {
+            app.world_mut()
+                .entity_mut(entity)
+                .remove::<ModelicaVariables>();
+        }
+        app.world_mut().run_schedule(First);
+        let details: Vec<_> = entities
+            .iter()
+            .map(|&entity| {
+                app.world()
+                    .get::<ModelicaModel>(entity)
+                    .unwrap()
+                    .last_error
+                    .clone()
+            })
+            .collect();
+        for &entity in &entities {
+            let session_id = app.world().get::<ModelicaModel>(entity).unwrap().session_id;
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(ModelicaVariables::default());
+            results
+                .send(ModelicaResult {
+                    entity,
+                    session_id,
+                    is_new_model: true,
+                    live_solver_snapshot: Some(test_solver_snapshot()),
+                    outputs: vec![("x".to_owned(), 1.0)],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        app.world_mut().run_schedule(First);
+        for (entity, detail) in entities.into_iter().zip(details) {
+            let model = app.world().get::<ModelicaModel>(entity).unwrap();
+            assert!(model.paused && !model.is_compiled && !model.is_compiling);
+            assert_eq!(model.last_error, detail);
+            assert!(model.live_solver_snapshot.is_none());
+            assert!(
+                app.world()
+                    .get::<ModelicaVariables>(entity)
+                    .unwrap()
+                    .values
+                    .is_empty()
+            );
+        }
+        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+    }
+
+    #[test]
     fn accepted_step_reuses_variable_keys_and_transfers_sample_buffers() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
@@ -1664,28 +1865,32 @@ mod compile_fault_tests {
         let input_key = inputs[0].0.as_ptr();
         let entity = app
             .world_mut()
-            .spawn(ModelicaModel {
-                session_id: 1,
-                is_compiled: true,
-                is_stepping: true,
-                inputs: [("command".to_owned(), 0.25)].into(),
-                parameters: [("gain".to_owned(), 2.0)].into(),
-                variables: [("x".to_owned(), 0.0)].into(),
-                in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
-                    step_id: 1,
-                    start_time: 0.0,
-                    stop_time: 0.05,
-                    sampled_inputs: inputs,
-                    submitted_at: web_time::Instant::now(),
-                }),
-                ..Default::default()
-            })
+            .spawn((
+                ModelicaModel {
+                    session_id: 1,
+                    is_compiled: true,
+                    is_stepping: true,
+                    inputs: [("command".to_owned(), 0.25)].into(),
+                    parameters: [("gain".to_owned(), 2.0)].into(),
+                    in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
+                        step_id: 1,
+                        start_time: 0.0,
+                        stop_time: 0.05,
+                        sampled_inputs: inputs,
+                        submitted_at: web_time::Instant::now(),
+                    }),
+                    ..Default::default()
+                },
+                ModelicaVariables {
+                    values: [("x".to_owned(), 0.0)].into(),
+                },
+            ))
             .id();
         let variable_key = app
             .world()
-            .get::<ModelicaModel>(entity)
+            .get::<ModelicaVariables>(entity)
             .unwrap()
-            .variables
+            .values
             .get_key_value("x")
             .unwrap()
             .0
@@ -1711,7 +1916,7 @@ mod compile_fault_tests {
         app.world_mut().run_schedule(First);
         assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
         assert_eq!(
-            app.world().get::<ModelicaModel>(entity).unwrap().variables["x"],
+            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
             0.0
         );
         results
@@ -1727,17 +1932,15 @@ mod compile_fault_tests {
             .unwrap();
         app.world_mut().run_schedule(First);
         let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
         assert_eq!(
-            model.variables.get_key_value("x").unwrap().0.as_ptr(),
+            variables.get_key_value("x").unwrap().0.as_ptr(),
             variable_key
         );
-        assert_eq!(model.variables["x"].to_bits(), (-0.0_f64).to_bits());
-        assert_eq!(
-            model.variables["new"].to_bits(),
-            1.2345678901234567_f64.to_bits()
-        );
-        assert!(!model.variables.contains_key("command"));
-        assert!(!model.variables.contains_key("gain"));
+        assert_eq!(variables["x"].to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(variables["new"].to_bits(), 1.2345678901234567_f64.to_bits());
+        assert!(!variables.contains_key("command"));
+        assert!(!variables.contains_key("gain"));
         let accepted = model.last_accepted_step.as_ref().unwrap();
         assert_eq!(accepted.inputs[0].0.as_ptr(), input_key);
         assert_eq!(&*accepted.outputs, expected);
@@ -1766,8 +1969,9 @@ mod compile_fault_tests {
             .unwrap();
         app.world_mut().run_schedule(First);
         let model = app.world().get::<ModelicaModel>(entity).unwrap();
-        assert_eq!(model.variables.len(), 1);
-        assert_eq!(model.variables["x"], 3.0);
+        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables["x"], 3.0);
         assert!(model.last_accepted_step.is_none());
         assert_eq!(&*retained_outputs, expected);
         assert_eq!(
@@ -2201,7 +2405,13 @@ mod document_runtime_owner_tests {
             .expect("replacement participant");
         assert!(model.is_compiling);
         assert!(!model.is_compiled);
-        assert!(model.variables.is_empty());
+        assert!(
+            app.world()
+                .get::<ModelicaVariables>(geometry)
+                .unwrap()
+                .values
+                .is_empty()
+        );
         assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
     }
 }

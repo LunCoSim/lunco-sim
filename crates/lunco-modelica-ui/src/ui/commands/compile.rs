@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 
 #[cfg(feature = "api")]
 use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
@@ -1789,40 +1789,81 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
 }
 
 #[on_command(ResetActiveModel)]
-pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
+pub fn on_reset_active_model(
+    trigger: On<ResetActiveModel>,
+    mut commands: Commands,
+    #[cfg(feature = "api")] active_id: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
+) {
     let raw = trigger.event().doc_id;
+    #[cfg(feature = "api")]
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending_request
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        let Some(entity) = entity_for_doc(world, doc) else {
-            return;
-        };
-        // Snapshot session_id, bump it so stale Step results fence out,
-        // then ship Reset to the worker.
-        let session_id = {
-            let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
-                return;
-            };
-            model.session_id += 1;
-            model.is_stepping = true;
-            model.in_flight_step = None;
-            model.next_step_id = 1;
-            model.current_time = 0.0;
-            // Reset rewinds the world clock this model is coupled to as well
-            // (A3) — otherwise the reset model would immediately owe the
-            // catch-up path every second the pre-reset one had simulated.
-            model.target_time = 0.0;
-            model.last_step_time = 0.0;
-            model.variables.clear();
-            model.session_id
-        };
-        if let Some(channels) = world.get_resource::<lunco_modelica_runtime::ModelicaChannels>() {
-            let _ = channels
-                .tx
-                .send(lunco_modelica_runtime::ModelicaCommand::Reset { entity, session_id });
+        let result = reset_active_model(world, raw);
+        if let Err(message) = &result {
+            bevy::log::warn!("ResetActiveModel rejected: {message}");
         }
+        #[cfg(feature = "api")]
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result.map(|()| Ack::new(OpId::new())),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
     });
+}
+
+fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(), String> {
+    let doc = resolve_doc_or_active(world, raw).ok_or("No Modelica document selected")?;
+    let entity = entity_for_doc(world, doc).ok_or("The document has no runtime participant")?;
+    let model = world
+        .get::<ModelicaModel>(entity)
+        .ok_or("The document has no live Modelica model")?;
+    let session_id = model
+        .session_id
+        .checked_add(1)
+        .ok_or("Modelica session identity exhausted")?;
+    let channels = world
+        .get_resource::<lunco_modelica_runtime::ModelicaChannels>()
+        .ok_or("Modelica worker transport is unavailable")?
+        .tx
+        .clone();
+    let Some(mut variables) = world.get_mut::<ModelicaVariables>(entity) else {
+        let message = format!("participant {entity:?} has no required variable state");
+        if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+            faults.raise(
+                "modelica-variables-missing",
+                Some(entity),
+                "ModelicaVariables",
+                message.clone(),
+            );
+        }
+        return Err(message);
+    };
+    variables.values.clear();
+    drop(variables);
+    let mut model = world
+        .get_mut::<ModelicaModel>(entity)
+        .expect("validated live participant");
+    model.session_id = session_id;
+    model.is_stepping = true;
+    model.in_flight_step = None;
+    model.next_step_id = 1;
+    model.current_time = 0.0;
+    // Reset rewinds the clock this model is coupled to; it must not owe
+    // catch-up work from the pre-reset communication session.
+    model.target_time = 0.0;
+    model.last_step_time = 0.0;
+    drop(model);
+    channels
+        .send(lunco_modelica_runtime::ModelicaCommand::Reset { entity, session_id })
+        .map_err(|error| format!("Modelica reset dispatch failed: {error}"))
 }
 
 // ─── Compile command plugin ────────────────────────────────────────────────
@@ -1843,6 +1884,8 @@ impl Plugin for CompileCommandsPlugin {
         register_all_commands(app);
         #[cfg(feature = "api")]
         app.register_deferred_command::<RunExperiment>();
+        #[cfg(feature = "api")]
+        app.register_deferred_command::<ResetActiveModel>();
     }
 }
 

@@ -259,7 +259,8 @@ lowering duration, rather than attributing existing source isolation to this key
        │
        ▼
   ECS projection  (Tier 2: runtime)
-    - ModelicaModel component: parameters, inputs, variables, paused, session_id
+    - ModelicaModel component: parameters, inputs, clocks, paused, session_id
+    - Required ModelicaVariables component: full native f64 observable map
     - ModelicaChannels resource: crossbeam channels to background worker
     - Background worker thread: owns SimulationSession instances, async
        │
@@ -715,7 +716,7 @@ First:
   ClockProjectionSet             — project remaining holds before TimeSystems samples time
 
 FixedUpdate:
-  (sync_modelica_outputs)         — ModelicaModel.variables → SimComponent.outputs
+  (sync_modelica_outputs)         — ModelicaVariables.values → SimComponent.outputs
   CosimSet::Propagate             — propagate_connections
   CosimApplySet::ApplyForces       — apply_sim_forces
   (sync_inputs_to_modelica)       — SimComponent.inputs → ModelicaModel.inputs
@@ -732,9 +733,26 @@ The remaining cross-domain admission and replay requirements are recorded in
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
 Fixed-step publication exposes `modelica_outputs_copy_variables` and
-`modelica_outputs_seed_inputs` trace spans for each participant. These separate
-port-snapshot copying from omitted-input seeding inside `sync_modelica_outputs`;
-they do not change the publication order or Modelica's reflected state contract.
+`modelica_outputs_seed_inputs` trace spans. The copy span runs when the required
+`ModelicaVariables.values` snapshot changes, or a model, USD participant marker,
+or destination component is added. Input seeding and status still follow
+`ModelicaModel` changes. Worker admission commits the map and communication clock
+serially in `First`; it preserves native f64 bits, detected-symbol/output
+precedence, and existing keys. Clock/input writes alone do not dirty the snapshot.
+Compile replacement and reset clear it; model removal retires it. Missing
+variable state on a live participant raises `modelica-variables-missing` and
+rejects buffered results until scene teardown. Per-model terminal state also
+rejects lifecycle results without pending compile/reset work, so the single
+first-fault record does not leave other failed participants exposed.
+Reflection, telemetry, canvas,
+co-simulation and API readers consume this one map. External API variable fields
+retain their existing shape. `ResetActiveModel` completes through command-result
+admission and rejects missing runtime state visibly.
+
+Production gates `modelica_variable_projection` and `modelica_variables_missing`
+cover retained publication while paused, resumed solver replacement,
+and the required-state fault. Exact multi-rover replay checks the fixed-step
+consumer; neither the solver nor communication schedule changes.
 
 Standalone Modelica port topology publication excludes entities with
 `SimComponent`, matching its port backend. The co-simulation port owner
