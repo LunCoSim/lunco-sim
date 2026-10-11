@@ -20,12 +20,10 @@ pub fn avian_backend_point_is_valid(point: DVec3) -> bool {
     avian_backend_vector_is_valid(point)
 }
 
-/// Check a rotation before it crosses into Avian.
+/// Check Avian's rigid rotation precondition using Glam's unit tolerance.
 #[inline]
 pub fn avian_backend_rotation_is_valid(rotation: DQuat) -> bool {
-    rotation.is_finite()
-        && rotation.as_quat().is_finite()
-        && rotation.length_squared() > f64::EPSILON
+    rotation.is_finite() && rotation.as_quat().is_finite() && rotation.is_normalized()
 }
 
 /// Check a pose before it crosses into Avian.
@@ -78,7 +76,7 @@ mod tests {
     use bevy::math::{DQuat, DVec3};
 
     #[test]
-    fn backend_admission_rejects_nonrepresentable_geometry() {
+    fn backend_admission_rejects_nonrepresentable_geometry_and_rotation() {
         assert!(avian_backend_point_is_valid(DVec3::ZERO));
         assert!(!avian_backend_point_is_valid(DVec3::new(
             f64::MAX,
@@ -86,6 +84,18 @@ mod tests {
             0.0
         )));
         assert!(avian_backend_rotation_is_valid(DQuat::IDENTITY));
+        assert!(!avian_backend_rotation_is_valid(DQuat::from_xyzw(
+            0.0, 0.0, 0.0, 2.0
+        )));
+        assert!(!avian_backend_pose_is_valid(
+            DVec3::ZERO,
+            DQuat::from_xyzw(0.0, 0.0, 0.0, 0.5)
+        ));
+        assert!(avian_backend_rotation_is_valid(
+            DQuat::from_rotation_y(70.0_f64.to_radians())
+                .as_quat()
+                .as_dquat()
+        ));
         assert!(!avian_backend_rotation_is_valid(DQuat::from_xyzw(
             0.0, 0.0, 0.0, 0.0
         )));

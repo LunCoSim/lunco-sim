@@ -14,6 +14,9 @@ use big_space::prelude::*;
 use crate::GridAnchor;
 use crate::world::{ActivePhysicsFrame, WorldGrid};
 
+/// Maximum hierarchy depth admitted by BigSpace coordinate readers.
+pub const MAX_SPATIAL_HIERARCHY_DEPTH: usize = 32;
+
 /// Failure while resolving a BigSpace coordinate chain.
 ///
 /// A missing intermediate spatial component is not a valid "best effort"
@@ -761,7 +764,7 @@ pub fn ancestor_grid_anchor(
     q_anchors: &Query<(), With<GridAnchor>>,
 ) -> Option<Entity> {
     let mut current = entity;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if q_anchors.contains(current) {
             return Some(current);
         }
@@ -786,7 +789,7 @@ pub fn ancestor_grid<'a>(
     q_grids: &'a Query<&Grid>,
 ) -> Option<(Entity, &'a Grid)> {
     let mut current = entity;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if let Ok(grid) = q_grids.get(current) {
             return Some((current, grid));
         }
@@ -812,7 +815,7 @@ pub fn common_grid(
 ) -> Option<Entity> {
     let mut first_grids = Vec::with_capacity(16);
     let mut current = first;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if q_grids.get(current).is_ok() {
             first_grids.push(current);
         }
@@ -823,7 +826,7 @@ pub fn common_grid(
     }
 
     let mut current = second;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if q_grids.get(current).is_ok() && first_grids.contains(&current) {
             return Some(current);
         }
@@ -939,11 +942,11 @@ pub fn world_pose<F: QueryFilter>(
         .map(|(c, t)| (c.copied(), *t))
         .map_err(|_| CoordinateError::MissingSpatial { entity })?;
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
-    let mut visited = Vec::with_capacity(32);
+    let mut visited = Vec::with_capacity(MAX_SPATIAL_HIERARCHY_DEPTH);
     let mut current = entity;
     let mut cur_cell = first_cell;
     let mut cur_tf = first_tf;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if visited.contains(&current) {
             return Err(CoordinateError::Cycle { entity: current });
         }
@@ -982,8 +985,11 @@ pub fn world_pose<F: QueryFilter>(
         }
         current = parent;
     }
-    if visited.len() == 32 && q_parents.get(current).is_ok() {
-        return Err(CoordinateError::DepthExceeded { entity, limit: 32 });
+    if visited.len() == MAX_SPATIAL_HIERARCHY_DEPTH && q_parents.get(current).is_ok() {
+        return Err(CoordinateError::DepthExceeded {
+            entity,
+            limit: MAX_SPATIAL_HIERARCHY_DEPTH,
+        });
     }
     // Compose top-down (root first): world = parent_world × local at each level,
     // so each ancestor's rotation IS applied to its descendants' offsets. The
@@ -1012,7 +1018,7 @@ pub fn world_pose_changed<F: QueryFilter>(
     q_changed: &Query<(), F>,
 ) -> bool {
     let mut current = entity;
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         if q_changed.get(current).is_ok() {
             return true;
         }
@@ -1055,7 +1061,7 @@ pub fn grid_relative_pose<F: QueryFilter>(
     let mut current_cell = cell.copied();
     let mut current_transform = *transform;
 
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         let parent = q_parents.get(current).ok()?.parent();
         let local_position = match (current_cell.as_ref(), q_grids.get(parent)) {
             (Some(cell), Ok(grid)) => grid.grid_position_double(cell, &current_transform),
@@ -1330,7 +1336,7 @@ pub fn grid_relative_pose_seeded<F: QueryFilter>(
     let mut current_cell = initial_cell.copied();
     let mut current_transform = *initial_transform;
 
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         let parent = q_parents.get(current).ok()?.parent();
         let local_position = match (current_cell.as_ref(), q_grids.get(parent)) {
             (Some(cell), Ok(grid)) => grid.grid_position_double(cell, &current_transform),
@@ -1638,7 +1644,7 @@ pub fn world_pose_seeded<F: QueryFilter>(
 
     let mut current = entity;
     let mut visited = vec![entity];
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
         let parent = match q_parents.get(current) {
             Ok(co) => co.parent(),
             Err(_) => break,
@@ -1671,8 +1677,11 @@ pub fn world_pose_seeded<F: QueryFilter>(
         chain.push((local_position, tf.rotation));
         current = parent;
     }
-    if visited.len() == 32 && q_parents.get(current).is_ok() {
-        return Err(CoordinateError::DepthExceeded { entity, limit: 32 });
+    if visited.len() == MAX_SPATIAL_HIERARCHY_DEPTH && q_parents.get(current).is_ok() {
+        return Err(CoordinateError::DepthExceeded {
+            entity,
+            limit: MAX_SPATIAL_HIERARCHY_DEPTH,
+        });
     }
 
     let mut pos = bevy::math::DVec3::ZERO;

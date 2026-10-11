@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def Sphere "Body" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+    }
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def Scope "Verdict" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/invalid_physics_rotation.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def DistantLight "Light"
+    {
+    }
+}

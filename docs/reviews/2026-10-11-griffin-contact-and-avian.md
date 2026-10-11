@@ -1,11 +1,11 @@
 # Griffin contact and Avian integration review
 
-The accepted production artifact passes startup engine-off impact, powered
-rover-leg collision, native drive, continuous-contact, startup-admission and
-negative-owner gates. The bounded scripting contract also passes. This review
-covers contact correctness, native drives, collider provenance and the document
-operations needed to author that provenance. The requested 0.5 ms full physics
-budget remains unmet; passing correctness gates does not establish it.
+The current production artifact passes startup engine-off impact, powered
+rover-leg collision in both compute profiles, spring startup, continuous contacts
+and terminal rejection of a non-unit physical ancestor rotation. This review
+covers contact correctness, native drives, collider provenance and admission.
+The requested 0.5 ms full physics budget remains unmet. Full-state replay and
+cross-platform acceptance remain open.
 
 ## Authoritative owners
 
@@ -127,6 +127,23 @@ the structural members and their body owners; Rust applies generic validation.
 Griffin regenerates source geometry first, then its 40 landing-gear proxies
 after the document generation composes.
 
+Native mass aggregation stops at independent nested rigid-body boundaries and
+consumes geometry-derived mass only for live collider markers. Explicit authored
+mass remains independent of collider geometry. Compound part order follows
+canonical composed source identity. Rootless collider-transform propagation runs
+in fixed preparation before native scale cooking and mass reduction; constructor
+scale cannot be replaced from stale render GlobalTransform.
+
+`lunco-physics::avian_backend_pose_is_valid` owns backend pose admission. A rigid
+rotation must meet Glam's existing unit-quaternion tolerance, alongside finite,
+backend-representable positions. The bridge checks raw body, ancestor and target
+frame rotations before spatial composition can normalize them. Missing poses,
+cycles and excessive coordinate depth are rejected without a hierarchy panic.
+Admission and fixed preparation share the frame diagnostic owner and structural
+invalidation contract. Refusing the frame publishes diagnostics and its hold at
+either boundary. Collider preparation validates rotations and ancestry before
+composition, leaves rejected transforms unchanged, and holds integration.
+
 The document owner removes attributes and relationships through local property
 operations with `RestoreProperty` inverses. Undo preserves unrelated edits and
 exact target list operations. Live projection consumes the document's resolved
@@ -189,63 +206,45 @@ in their caller. See the [Cargo profile contract](https://doc.rust-lang.org/carg
 ## Verification
 
 Production binary: `cargo build -p lunco-luncosim -j 4`, repository target and
-regular sccache. The accepted artifact SHA256 is
-`f747d6043c11b37827a0ce95a96c9f0ef95e2affcb38008ffd7ae54f8ba27065`.
-Eleven physics/startup runs used owned API ports 6311–6321; the bounded scripting
-contract used port 6324. All ran at
-60 Hz and zero jitter. Spring startup also passed eight independent default-pool
-launches on ports 4201 and 4206–4212 before the contact arithmetic correction.
-Griffin collision passed with both one and default compute pools;
-other gates used the default pool. Each accepted gate returned exit zero.
-Receipts and complete timing histories are outside the build tree, under
-`/home/rod/.local/state/luncosim-physics-audit-20261011/`; every owned process and port was released.
+regular sccache. The current artifact SHA256 is
+`5e1998376d84ab44e6302d494767db6ef8bd83ca237a2623ff9e31aa3ced1562`.
+Six production runs used owned API ports 6372–6377 at 60 Hz and zero jitter.
+Every gate returned exit zero and released its process and port. Receipts,
+workload snapshots and complete timing histories are retained under
+`/home/rod/.local/state/luncosim-physics-audit-20261011/`.
 
 | Production gate | Result |
 | --- | --- |
-| `PRISMATIC_SPRING` | 26 checks; tick-zero startup and consecutive ticks, loaded equilibrium, momentum balance, sleeping reaction retention and disable clearing |
-| `SCENARIO_SOURCE_FAILURE` | Expected `scenario-source-load-failed` fault from a live, typed program attachment |
-| `NATIVE_FORCE_DRIVES` | 18 checks; both-endpoint inertia, SI law, zero gains/caps, damping, stop reactions and unbounded caps |
-| `CONTINUOUS_CONTACTS` | 12 checks; coupled contact, rotating fixed attachment, exact pair scope and initial-contact boundaries |
-| `DERIVED_PRIMITIVE_COLLISION` | Expected `usd-avian-collider-invalid` fault after live source drift |
-| `INVALID_JOINT_ENDPOINTS` | Expected `usd-physics-joint-invalid` fault after live endpoint aliasing |
-| `LINT_SELFTEST` | 53 checks, including isolated invalid drive cases and valid controls |
-| `PRISMATIC_DRIVE` | 5 checks under gravity |
-| `SCRIPTING_ASSET_CONTRACTS` | 38 checks through bounded runtime discovery, actual tool evaluation and authored source validation |
-| `GRIFFIN_ROVER_LEG_COLLISION` | 88 checks over 900 ticks; all 40 admitted structural sources and actual collision response |
+| `INVALID_PHYSICS_ROTATION` | Public ancestor-transform edit raises terminal `avian-backend-pose-invalid` at tick two without a process crash |
+| `GRIFFIN_ROVER_LEG_COLLISION`, default pool | 88 checks over 900 ticks; all 40 admitted structural sources and actual rover collision response |
+| `GRIFFIN_ROVER_LEG_COLLISION`, one thread | Same 88 checks and exactly equal selected contact/motion records |
 | `GRIFFIN_ENGINE_OFF_IMPACT` | 9 checks over 1800 ticks; no thrust, pad centers/rims, stops and final four-pad support |
+| `PRISMATIC_SPRING` | 26 checks, including tick-zero startup and consecutive ticks, equilibrium and reaction lifecycle |
+| `CONTINUOUS_CONTACTS` | 12 checks for coupled contact, rotating attachment, pair scope and initial-contact boundaries |
 
-The current production impact measured maximum native penetration 2.229524 mm,
-minimum sampled pad clearance -2.344583 mm, hard-stop error 4.317259 nm and final
-ground speed 1.556063 mm/s. The rover reached 2.454570 m/s and contacted the PX
-shock-barrel tube collider, with maximum pair penetration 0.059465 mm and a
-positive native collision impulse. No collision filters or authored mechanical
-limits were weakened to obtain these verdicts.
+The impact measured maximum native penetration 2.232526 mm, minimum sampled
+pad clearance -2.346275 mm and hard-stop error 4.212971 nm. Delivered thrust
+remained zero and all four feet supported the lander. The rover reached
+2.454570 m/s and contacted the PX shock-barrel tube collider with maximum pair
+penetration 0.059622 mm and positive native impulse. The selected rover records
+match the prior accepted admission artifact exactly in both compute profiles;
+the impact penetration, clearance and travel error also match. Selected-state
+comparisons do not establish complete replay.
 
-Low-level tests cover contact trajectory bounds, SO(3) derivatives, finite mesh
-features and native normal constraints, immutable contact-cache lifetime, local
-property undo and resolved weak-property projection. The current native kernel
-passed all twenty-four `ccd::tests`, including the overlapping-cylinder fixture,
-finite-edge/swapped-frame geometry, exact starting and linear poses, offset
-pivots, conservative positive-time witnesses, finite-triangle depth certificates, radial separation axes, changed-trajectory
-impacts, swept-BVH admission, retained query errors and scoped-query equality
-across one- and four-thread pools. The scoped-query negative case exposed a
-nonfinite endpoint hidden by floating-point minimum reduction; it rejects that
-endpoint after the owner correction. The new baseline motion/query tests failed before
-the native corrections. Scalar aligned-mask
-tests passed the truth table and five native valid/malformed-tuple tests; SIMD
-passed all six native boolean serialization tests. The current production
-artifact passes all ten distinct gates in the table; its second rover run uses
-one thread. The low-level cache test proves that changed starting poses
-invalidate native geometry recursively and that a retained candidate direction
-cannot hide a new positive-time impact.
+Focused owner tests pass for non-unit/zero/nonrepresentable rotation rejection,
+valid float-widened rotations, invalid body and ancestor rotations, disconnected
+and excessive-depth coordinate chains, earliest frame diagnostics and holds,
+and rejected collider preparation leaving the transform unchanged. The native
+rotation predicate test failed before correction. The production negative gate
+exercises the public Rhai reflection surface, after initially valid admission.
+Its USD fixture was authored and read back through document operations.
 
-The new negative fixture reproduced a 3.896484 micrometre intersection rounded
-to zero by world-space support subtraction at a common translation of 1e11
-metres. Support certificates now use native relative poses and outward
-arithmetic allowances; both pair orientations retain the intersection.
-A second failing baseline reproduced the same crossing lost in a material-witness
-gap. Material gaps and collider-to-COM witness offsets subtract origins before
-adding local geometry; the large-translation and local results match exactly.
+The unchanged contact-kernel evidence includes twenty-four `ccd::tests`, native
+joint/drive mechanisms, scalar/SIMD serialization, source-admission lifecycle,
+and collider mass/scale/part-order seams. Earlier accepted production gates for
+native drives, derived-source rejection, aliased joint endpoints, lint,
+prismatic drives and bounded scripting are recorded in their separate receipts;
+they were not repeated as equivalent coverage for this pose-admission change.
 
 ## Source admission
 
@@ -288,153 +287,47 @@ comparison does not establish full-state replay.
 ## Measured performance limitation
 
 Uninstrumented full `PhysicsTotalDiagnostics.step_time` includes CCD and joints.
-The accepted artifact's complete rover acceptance windows are ticks 240–780.
-The impact row covers all observed steps. Workload snapshots recorded another
-worktree's Tracy build during all three runs and a rendered app later in the
-batch. These contention-affected measurements do not
-meet the requested 0.5 ms budget; every observed Griffin step exceeded it.
+The current artifact's rover windows cover every tick from 240 through 780.
+The impact row covers all retained observed steps. Workload snapshots record
+another worktree's Cargo test/build and a rendered app during this batch; these
+are contention-affected measurements. Every observed Griffin step exceeded the
+requested 0.5 ms budget.
 
 | Scene and compute profile | Samples | p50 ms | p95 ms | p99 ms | Maximum ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Griffin rover, default | 541 | 3.383507 | 5.254241 | 6.062250 | 9.636693 |
-| Griffin rover, one thread | 541 | 3.468677 | 4.941276 | 5.890489 | 6.765031 |
-| Griffin engine-off impact, default | 1797 | 3.105088 | 4.799952 | 6.257234 | 44.268047 |
+| Griffin rover, default | 541 | 3.334155 | 4.510673 | 5.122725 | 6.325722 |
+| Griffin rover, one thread | 541 | 3.191339 | 4.395879 | 5.783851 | 7.265377 |
+| Griffin engine-off impact, default | 1794 | 3.124765 | 4.957377 | 6.572262 | 47.523061 |
 
-A subsequent default rover run on API 6325 passed the same contact verdict.
-Its complete 541-sample window measured p50 3.361306 ms and p95 5.959958 ms.
-A different worktree's Rust compiler was active at its completion, so this
-repeat also does not establish uncontended timing.
+The earlier settled admission artifact's complete 541-step rover window measured
+p50 2.895677 ms and p95 3.859498 ms, also entirely above 0.5 ms. Its independent
+repeats measured p50 3.200186 and 3.173246 ms. A late step measured 2.901798 ms
+total, including 2.073163 ms continuous solving, 1.834217 ms sweeps and
+0.172571 ms joint closure. Native work outside CCD also exceeds 0.5 ms.
+The scene retains eight substeps, 34 bodies, 14 dynamic bodies, 33 colliders and
+18 joints. Geometry, filters, mechanical limits and tolerances remain unchanged.
 
-One late rover sample at step 898 measured 4.026709 ms total, 2.437502 ms in
-continuous solving, 2.099177 ms in its sweeps and 0.182553 ms in its joint
-closure. The native remainder also exceeds 0.5 ms, so optimizing CCD alone
-cannot establish the full requested budget. The native step retained eight
-substeps, 34 bodies, 14 dynamic bodies, 33 colliders and 18 admitted joints.
+The complete diagnostic capture `geometry-mass-griffin-rover-complete.tracy`
+uses artifact
+`f3fdb10f3ed8b4ce358b273c3a15b078af2e9186c14e73c6d0934aaf23b4863b`.
+It passed the 900-tick rover gate on owned API 6353 with a verified capture-client
+connection on 8086; both ports closed. Its self-time export attributes
+465.900 ms to 14552 leaf-trajectory preparations, 534.478 ms to 61641 symmetric
+joint sweeps, 358.763 ms to 900 native narrow-phase updates, and 223.303 ms to
+25000 initial triangle/cylinder contacts. Each sweep admits 1770 prepared pairs
+from 113 unique leaves. Profiler totals are diagnostic attribution with overhead,
+not product timing or evidence that the budget is met.
 
-The scripting contract's full catalog request exceeded Rhai's aggregate string
-limit: the external catalog response contains 117,061 string bytes, while the
-shared sandbox permits 65,536. The consumer now uses the existing bounded
-`ScriptComplete` owner for exact verbs, prelude functions, tool namespaces and
-policy-hook discovery. Its 38-check production verdict passes without changing
-sandbox limits or adding another discovery API.
+The bridge's initial geometry, scale and mass records match in default and
+one-thread diagnostic launches. All 1920 body/collider/compound rows and 917
+prepared-contact rows match exactly after normalizing allocation-only IDs.
+This closes the observed initial ramp-mass divergence in those launches; it
+does not replace full physics/Modelica replay acceptance.
 
-A fresh, complete Tracy capture (`fresh-griffin-rover-complete.tracy`) retained
-7,234,361 zones over 21.95 seconds. The owned session used API 6273 and Tracy
-8086, and exact process/socket ownership was recorded. This diagnostic artifact
-predates the relative-pose, body-dispatch and support-chord changes. Its self
-spans attribute 886.49 ms across 73,366 initial triangle/cylinder queries,
-596.34 ms to support bounds and 489.33 ms to symmetric joint closure across the
-whole capture. Native integration and inertia loops each dispatched about
-14 tasks per call. These are attribution values across overlapping threads,
-not product timing. Captures and acceptance receipts live outside `target/`.
-Native independent-body kernels use the existing solver configuration's batch
-bound: small populations execute directly, larger ones retain adaptive batches.
-No geometry, filters, substeps, tolerances or ticks were reduced.
-
-The subsequent diagnostic artifact
-`e7325190798c98bfb61de14e762d36e3a83a77479c57793ad168cdabeb7b3ffb`
-passes the rover gate on API 6326. The complete capture
-`current-griffin-rover-complete.tracy` records 6,203,042 zones over 28.83 seconds;
-owned PID 515694/socket ownership is recorded in `current-tracy-connections.txt`.
-Its initial triangle/cylinder queries fall to 25,050, with 295.731 ms aggregate
-self time. Native integration and inertia kernels no longer dispatch the small
-independent-body worker queries. Small candidate batches still dominate their
-caller spans, motivating bounded CCD work assignment. These remain diagnostic
-values, with concurrent builds, rather than uncontended product timing.
-`ContinuousCollisionSettings.minimum_query_batch_size` bounds queries per worker
-(default 64; zero permits one); smaller populations run the same kernel directly.
-All 24 focused continuous-owner tests pass, including exact mixed witness, TOI,
-error and cache equality between direct and four-thread execution. The normal
-artifact `3f0fb57d4796f1f1b4d82da3350d83d2fa7f920bdcf39a3b6f5cf7127ddcac8d`
-passes six production gates on APIs 6331–6336: default and one-thread rover,
-engine-off impact, prismatic spring, continuous contacts and the expected
-derived-primitive rejection. Its default rover window measures p50 3.168396 ms,
-p95 4.511023 ms and p99 5.957073 ms; the one-thread window measures p50
-3.108544 ms. Every one of those 541-step windows exceeds 0.5 ms. Concurrent
-worktree builds prevent treating these as uncontended acceptance.
-
-The dispatch comparison is not full-state replay evidence. Diagnostic launches
-on APIs 6339 and 6340 differ in ramp center-of-mass values at the first physics
-step, before the batch-setting commands at steps four/six. Entity allocation
-IDs also differ, but removing only those IDs from the comparison retains the
-mass-property divergence. All six ramp sections differ, including leaf sections.
-The initial cause therefore precedes query dispatch. APIs 6341/6342 probe the
-existing typed `QueryPhysicsState` owner for collider source paths and mass
-overrides; these 120-tick runs intentionally end without the 900-tick verdict.
-
-The native mass helper reproduces a separate ownership fault: a parent with
-mass 2 and an owned mass-4 descendant reports 1506 when an independent nested
-body and its descendant contribute 1500. The smallest generic helper test
-fails before the correction. The native correction stops traversal at each
-nested rigid-body boundary while retaining siblings, reparenting and body
-removal semantics. Compound cooking also orders eligible source prims by
-composed identity so native part indices and reduction order do not depend on
-USD child presentation order. Production and initial-state comparisons below
-validate the admitted geometry and mass contract.
-Diagnostic compound records expose native scale, local part poses and native
-part mass properties to locate the remaining first divergence.
-
-The bridge also propagated collider transforms in the nested physics schedule,
-after native fixed preparation had already cooked scale and mass. Rootless
-propagation now runs before those preparation consumers. Native collider
-insertion no longer replaces constructor scale from render GlobalTransform;
-ordered preparation owns transform-driven scale. A focused native bridge seam
-checks constructor scale with deliberately stale render data, then first-step
-and changed-ancestor scale/mass agreement. It passes, as do both native mass
-helper seams and the composed live/prepared compound-order test. Normal artifact
-`2c895800b3d94e916a83eb01e73961f5482cf80f2674a80622b088b96da0454d`
-passes seven production gates on APIs 6343–6349: default/one-thread rover,
-engine-off impact, spring, native drives, continuous contacts and prismatic
-drive. Both rover runs report exactly equal endpoint, velocity, impulse and
-penetration values, including the shock-barrel source path. This remains
-selected-state evidence, not complete replay acceptance.
-
-Its default rover ticks 240–780 measure p50 3.385463 ms, p95 4.538225 ms,
-p99 5.479994 ms and maximum 9.049829 ms. The one-thread window measures
-p50 3.191029 ms, p95 4.288098 ms, p99 4.706639 ms and maximum 4.849035 ms.
-Both windows contain 541 samples, all over 0.5 ms. Impact's 1795 observed
-steps measure p50 3.117933 ms. Another worktree's Tracy build is concurrent;
-these are contention-affected measurements and the budget remains unmet.
-
-APIs 6350/6351 compare 120 diagnostic ticks with default and one compute
-thread. All 1920 body/collider/compound records and 917 prepared-contact
-records match exactly after normalizing allocation-only entity/contact IDs.
-The first-step native geometry, scale and mass records also match. This
-resolves the observed initial ramp mass divergence in these launches;
-it does not replace the complete physics/Modelica replay gate.
-API 6352 repeats the rover verdict after concurrent Cargo builds finish.
-Its complete 541-step window measures p50 2.895677 ms, p95 3.859498 ms,
-p99 4.345595 ms and maximum 4.665442 ms, all over 0.5 ms. Its workload
-snapshot is retained. The verified normal artifact is archived outside
-`target/`; subsequent disk recovery cleans only this checkout's build outputs.
-The native helper also admits geometry-derived mass only for live collider
-markers. Retained required components cannot keep a removed collider's mass
-in the reduction; explicit authored mass remains independent of geometry.
-The simulation installer uses the same level-3 development code generation
-as the physics owner and workspace math owner, because it instantiates native
-systems with USD collision hooks. Assertions, substeps, geometry and tolerances
-are retained; this compiler setting alone is not timing acceptance.
-
-The current Tracy artifact
-`f3fdb10f3ed8b4ce358b273c3a15b078af2e9186c14e73c6d0934aaf23b4863b`
-passes the 900-tick rover gate on owned API 6353 with a verified capture-client
-connection on 8086. Both ports close. Its self-time export attributes 465.900 ms
-to 14552 leaf-trajectory preparations, 534.478 ms to 61641 symmetric joint
-sweeps, 358.763 ms to 900 native narrow-phase updates, and 223.303 ms to 25000
-initial triangle/cylinder contacts. These are diagnostic totals with profiler
-overhead, not acceptance timing. Each sweep admits 1770 prepared pairs from
-113 unique leaves; unchanged leaves have been repeating the same native bound.
-Owned normal production repeats on APIs 6358/6360 pass all 88 rover checks
-and close their ports. Their complete 541-step windows measure p50 3.200186 /
-3.173246 ms and p95 4.394266 / 4.285523 ms with the same verified
-`2c895800b3d94e916a83eb01e73961f5482cf80f2674a80622b088b96da0454d`
-artifact. This current full-step evidence still rejects the 0.5 ms budget.
-
-The maintained four-rover exact reference separately expects 434 Modelica
-variables while the current authored owner publishes 438. The added guidance
-variables are `arrival_gate`, `travel_direction`, `wheel_approach` and
-`wheel_steer` under `network_system.Drivetrain.guidance`. Its comparator now
-reports added/removed names and still rejects mismatches with zero numerical
-tolerance. That stale reference has not been regenerated and is not replay
-acceptance. Full fixed-transaction cadence, viewport performance and
-cross-platform exact state replay remain distinct verification gates.
+The maintained four-rover exact reference expects 434 Modelica variables while
+the current authored owner publishes 438. Added guidance variables are
+`arrival_gate`, `travel_direction`, `wheel_approach` and `wheel_steer` under
+`network_system.Drivetrain.guidance`. The comparator reports added/removed names
+and rejects mismatches with zero numerical tolerance. The stale reference has
+not been regenerated. Full fixed-transaction cadence, viewport performance and
+cross-platform exact state replay remain separate verification gates.

@@ -2312,7 +2312,7 @@ pub(crate) fn validate_initial_physics_poses(
                     severity: lunco_core::DiagnosticSeverity::Error,
                     producer: "physics-initialization".to_string(),
                     subject: subject_label.to_string(),
-                    message: "authored initial position or rotation is not finite and f32-representable; dynamic admission remains held".to_string(),
+                    message: "authored initial pose requires a finite f32-representable position and a unit rotation; dynamic admission remains held".to_string(),
                 });
                 continue;
             }

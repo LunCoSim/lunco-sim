@@ -602,6 +602,25 @@ the existing worker pipeline, and completed ring batches enter in canonical
 coordinate order. Invalid samples or failed cooks raise `terrain-collision-cook`
 and hold the runtime before admitting an incomplete batch.
 
+`lunco-physics::avian_backend_pose_is_valid` owns native pose admission:
+positions must be finite and representable by Avian's spatial backend, and
+rotations must satisfy Glam's existing unit-quaternion tolerance. The USD/Avian
+bridge checks body, ancestor and target-frame transform rotations before spatial
+composition; normalization cannot turn invalid authored input into admitted
+state. Invalid rotations and failed bridge pose resolution raise
+`avian-backend-pose-invalid` and hold physics before solver admission. Structural
+frame disconnection retains its `physics-frame` diagnostic and hold. The production
+`invalid_physics_rotation` scene exercises this boundary through a public Rhai
+transform edit and requires the terminal fault without a process crash.
+Hierarchy preflight shares the coordinate reader's
+`MAX_SPATIAL_HIERARCHY_DEPTH` bound and reports cycles and excessive depth.
+Admission and fixed preparation use the same frame diagnostic owner and
+structural invalidation contract; a refused frame publishes its diagnostic and
+hold at either boundary.
+Collider-transform preparation checks rotations before composition and raises
+`avian-collider-topology-invalid` for ancestry failures. A rejected preparation
+leaves the collider transform unchanged and holds dynamics before integration.
+
 The shared simulation installs `lunco-physics::ContinuousCollisionPlugin`
 with the same `UsdCollisionFilter` as Avian's broad phase. Continuous contact
 inequalities run inside each native substep, after position integration and

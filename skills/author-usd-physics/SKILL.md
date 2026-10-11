@@ -743,6 +743,18 @@ then derive proxies from that settled revision. Put moving members below their
 rigid body and fixed mounting hardware below the parent body; joint-pair
 self-collision suppression must not suppress contact with a separate rover.
 
+Native poses require finite backend-representable positions and unit rotations
+under Glam's existing tolerance. The USD/Avian bridge validates body and ancestor
+transform rotations before spatial composition and collider preparation.
+Non-unit rotations and failed bridge pose resolution raise
+`avian-backend-pose-invalid` and hold physics;
+it must not be repaired through silent normalization. Use the production
+`invalid_physics_rotation` gate for the public transform-edit fault boundary.
+Collider ancestry failures raise `avian-collider-topology-invalid`; preparation
+must leave the collider transform unchanged and refuse the invalid update.
+Admission and fixed preparation share the frame diagnostic owner; rejecting a
+frame must publish its diagnostic and hold at the boundary that observes it.
+
 The shared simulation installs `lunco-physics::ContinuousCollisionPlugin` with
 Avian's body-only CCD disabled. Prepared native contact points supply continuous
 inequalities and receive the applied normal impulse through their native cache.
