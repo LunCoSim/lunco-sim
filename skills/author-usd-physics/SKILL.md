@@ -546,6 +546,10 @@ belong to the same compound. The root shape is identity-local to the body; its
 authored transform is applied by the body's ECS transform once, while child
 transforms are accumulated from the body frame. This remains true when the
 body arrives through a reference or a prepared runtime-instance projection.
+Eligible source prims are ordered by composed prim identity before compound
+cooking; native part indices and `collider_source_paths` use that same order.
+Native mass reduction stops at nested rigid bodies as collision collection
+does: their mass properties belong exclusively to their own body.
 
 `physics:collisionEnabled=true` is an opt-in on an already-declared collider;
 it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
@@ -781,6 +785,13 @@ terrain after settling.
 
 ## Native drive integration and contact ownership
 
+Independent native body loops use Bevy's adaptive batching with the shared
+`SolverConfig.minimum_body_batch_size` lower bound, default 64. Populations at
+or below that bound execute the same kernel directly on the caller. Larger
+populations retain adaptive parallel batches. This setting changes work
+assignment only. Verify full-step timing separately from diagnostic
+task counts, retaining body arithmetic, substeps and contact/joint order.
+
 Force and acceleration coefficients retain dimensional native motor models.
 The pinned Avian owner integrates them implicitly using the actual coordinate
 inverse effective inertia and anchor velocities. Omitted stiffness/damping have
@@ -798,15 +809,84 @@ without using zero-time cast witnesses. Their applied normal correction updates
 the native impulse accumulator used by friction, restitution and warm starting.
 Material inequalities and hard joints close before a full geometry refresh;
 the refreshed sweep must be clear before the tick can commit.
+One serial closure system acquires the body query for both directions of every
+native joint kind. Unique leaf trajectories enter Parry's swept BVH, with
+pair-specific CCD eligibility and prepared hook/layer decisions retained.
+Candidate order follows the stable prepared pair table. Body motion is shared
+across leaves within each immutable sweep. The native BVH topology lasts for
+one prepared step; every corrected trajectory replaces exact leaf bounds and
+refits ancestors with zero change-detection margin. Both moving bounds and full offset-COM
+arcs must be tested. A witness chord remainder can certify a clear trajectory
+without extremum search; uncertain trajectories keep the complete search.
 
 New impact witnesses stay admitted until the next native contact preparation.
 Native closest-contact axes and whole-arc support bounds certify separation
-of finite features without a directional cast. The same bound can certify an initially
-intersecting convex leaf only when its native contact depth matches its support
-depth and that depth cannot increase. An infinite face-plane overlap or another
-compound leaf's contact does not establish initial contact.
-Initial native geometry is cached only within one substep and per composite
+of finite features without a directional cast. Cylinder radial features supply
+another candidate axis, with the cap component removed; the actual full shapes
+must still pass the whole-arc bound. Cached separation axes are rechecked after
+every endpoint change. The same bound can certify an initially
+intersecting convex leaf only when its minimum translation depth matches its
+support depth and that depth cannot increase beyond tolerance. A finite triangle
+depth certificate uses either the whole convex projection's clearance at all
+three edges or an interior ball at a real finite triangle point inside a native
+cylinder. Its native nearest-boundary distance supplies the lower depth bound;
+the support depth supplies the matching upper bound. The whole-arc gap must
+respect the lower bound. Edge and deep-overlap cases without a proof use native
+GJK/EPA. An infinite face-plane overlap or another compound leaf's contact does
+not establish initial contact. A chord between opposite native cylinder supports
+can supply a plane-crossing candidate for tilted geometry. Its finite triangle
+projection must produce a real strictly interior cylinder witness; touching,
+finite-edge misses and uncertain witnesses keep the full native query.
+Initial depth certificates and native geometry
+are cached only within one substep and per composite
 leaf. Every changed endpoint trajectory still recomputes its whole-arc bound.
+Candidate separation directions may survive substeps of the same prepared
+physics step, with fresh full-shape support bounds on every use. Capturing new
+starting poses invalidates all native contacts, depth and overlap proofs in
+every composite leaf; rebuilding the physics-step pair table clears all caches.
+One immutable convex query interval shares its native endpoint poses and local
+bounding spheres across axis tests, and is rebuilt for every changed sweep.
+Support-gap certificates use native relative poses and outward arithmetic
+allowances. Material-witness gaps and collider-to-COM offsets also subtract
+origins before adding local geometry. Validate both pair orientations of small
+clearances and material crossings under large common translations.
+An immutable deep initial contact rules out other clear separating axes at
+time zero; its cached axis is checked first without repeating impossible tests.
+Enclosing initial queries must return validated native geometry for separated
+shapes as well as overlaps; missing results fault instead of proving clear space.
+Candidate geometry uses a synchronous Bevy compute-pool scope over immutable
+shapes and trajectories. `ContinuousCollisionSettings.minimum_query_batch_size`
+bounds queries per worker (default 64; zero permits one). Smaller populations
+execute the same kernel directly. Workers own disjoint contact caches and native EPA
+workspaces; joined results and failures are consumed in prepared pair order
+before any body correction. Verify native witness and error equality across
+pool sizes, then require authored production replay evidence separately.
+Native triangle/cylinder and triangle/cuboid references specialise the same
+GJK/EPA entry point; both pair orientations retain the generic kernel's witness,
+normal and depth without virtual support calls inside its iterations. Native EPA
+scratch is reusable allocation storage; every query resets its geometry. Exact
+single-point touching must retain its generating support normal and real material
+witnesses. Include a non-origin corner fixture and missing-provenance negative
+case when changing the native contact kernel.
+An upward-rounded native relative-point displacement bound may certify the
+existing convex-leaf residual tolerance directly. The complete bound includes
+both offset pivots and native arithmetic at the actual coordinate and geometry
+scale, and must be re-established on changed trajectories. Larger
+or uncertain bounds retain native geometry; prepared material-contact checks
+still run. Test beyond-tolerance movement, rotation with a remote pivot and
+large-coordinate pose rounding. A strictly interior cylinder witness at a real
+finite triangle point can prove initial intersection without an MTD query.
+Only a conservative motion bound below Parry's unchanged directional impact
+criterion can omit that query; Parry owns the criterion for both callers.
+Changed trajectories revalidate the motion bound. Test its strict threshold,
+offset pivots, separated finite edges and tiny positive-time impacts.
+Exactly unchanged poses need no new crossing query; existing prepared contacts
+retain their continuous inequality checks.
+The native initial-overlap speed certificate retains the existing directional
+thickness threshold and accounts for both offset pivots. It does not certify a
+future positive-time cast or a zero-thickness pair. Keep exact starting poses,
+finite-edge negative cases, positive-time witnesses and production landing/rover
+verdicts when changing these native kernels; measure full Avian step time.
 For a particular compound member, consume `parts[].source1`/`source2` and
 `normal_impulse`; these resolve native contact part identities through admitted
 collider provenance. The containing body's impulse alone does not identify the

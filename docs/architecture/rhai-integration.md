@@ -30,7 +30,9 @@ built script-free, with optional Python, and for `wasm32-unknown-unknown`.
 - **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
   (live `this` state, defined hooks, generation, running/paused).
 - **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface
-  (verbs/hooks/prelude/tools/commands/queries).
+  (verbs/hooks/prelude/tools/commands/queries). Rhai callers use bounded
+  `ScriptComplete { prefix, limit }` queries over the same owner; a full catalog
+  value can exceed the shared sandbox size limit.
 - **Browser tool surface** — `lunco-web` exposes `mountRhaiTool`, which mounts a
   trusted HTML fragment and stylesheet and routes explicit `data-rhai` actions
   or `application/rhai` script blocks through the existing `lunco_rhai` bridge.

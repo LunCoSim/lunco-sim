@@ -155,22 +155,8 @@ impl Plugin for DeterministicJointSolverPlugin {
                 .chain()
                 .in_set(SubstepSolverSystems::Damping),
         );
-        app.init_schedule(PhysicsJointPositionSchedule).add_systems(
-            PhysicsJointPositionSchedule,
-            (
-                stable_solve_xpbd_joint::<FixedJoint, FixedJointSolverData, true, false>,
-                stable_solve_xpbd_joint::<RevoluteJoint, RevoluteJointSolverData, true, false>,
-                stable_solve_xpbd_joint::<SphericalJoint, SphericalJointSolverData, true, false>,
-                stable_solve_xpbd_joint::<PrismaticJoint, PrismaticJointSolverData, true, false>,
-                stable_solve_xpbd_joint::<DistanceJoint, DistanceJointSolverData, true, false>,
-                stable_solve_xpbd_joint::<DistanceJoint, DistanceJointSolverData, true, true>,
-                stable_solve_xpbd_joint::<PrismaticJoint, PrismaticJointSolverData, true, true>,
-                stable_solve_xpbd_joint::<SphericalJoint, SphericalJointSolverData, true, true>,
-                stable_solve_xpbd_joint::<RevoluteJoint, RevoluteJointSolverData, true, true>,
-                stable_solve_xpbd_joint::<FixedJoint, FixedJointSolverData, true, true>,
-            )
-                .chain(),
-        );
+        app.init_schedule(PhysicsJointPositionSchedule)
+            .add_systems(PhysicsJointPositionSchedule, symmetric_joint_position_sweep);
         // The symmetric native sweeps are ordered serially. A closure iteration
         // must execute them directly, without worker dispatch between passes.
         app.get_schedule_mut(PhysicsJointPositionSchedule)
@@ -333,14 +319,103 @@ fn stable_solve_xpbd_joint<C, D, const POSITION_ONLY: bool, const REVERSE: bool>
         + XpbdConstraint<2, SolverData = D>,
     D: Component<Mutability = Mutable>,
 {
+    solve_ordered_joint::<C, D, POSITION_ONLY, REVERSE>(
+        &bodies,
+        &mut joints,
+        &order,
+        time.delta_secs_f64(),
+        &scope,
+        &mut holds,
+        faults.as_deref_mut(),
+        &mut physics_time,
+    );
+}
+
+/// One native query acquisition and one serial system boundary for the entire
+/// symmetric sweep. Constraint type order and per-type entity order are the
+/// same in both directions; ordinary passes retain their extension-point sets.
+fn symmetric_joint_position_sweep(
+    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
+    mut fixed: Query<
+        (&mut FixedJoint, &mut FixedJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    mut revolute: Query<
+        (&mut RevoluteJoint, &mut RevoluteJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    mut spherical: Query<
+        (&mut SphericalJoint, &mut SphericalJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    mut prismatic: Query<
+        (&mut PrismaticJoint, &mut PrismaticJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    mut distance: Query<
+        (&mut DistanceJoint, &mut DistanceJointSolverData),
+        (Without<RigidBody>, Without<JointDisabled>),
+    >,
+    order: Res<JointSolverOrder>,
+    time: Res<Time>,
+    scope: Res<PhysicsJointPositionScope>,
+    mut holds: ResMut<PhysicsHolds>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut physics_time: ResMut<Time<Physics>>,
+) {
+    macro_rules! pass {
+        ($kind:ty, $data:ty, $query:ident, $reverse:literal) => {
+            if !solve_ordered_joint::<$kind, $data, true, $reverse>(
+                &bodies,
+                &mut $query,
+                &order,
+                time.delta_secs_f64(),
+                &scope,
+                &mut holds,
+                faults.as_deref_mut(),
+                &mut physics_time,
+            ) {
+                return;
+            }
+        };
+    }
+    pass!(FixedJoint, FixedJointSolverData, fixed, false);
+    pass!(RevoluteJoint, RevoluteJointSolverData, revolute, false);
+    pass!(SphericalJoint, SphericalJointSolverData, spherical, false);
+    pass!(PrismaticJoint, PrismaticJointSolverData, prismatic, false);
+    pass!(DistanceJoint, DistanceJointSolverData, distance, false);
+    pass!(DistanceJoint, DistanceJointSolverData, distance, true);
+    pass!(PrismaticJoint, PrismaticJointSolverData, prismatic, true);
+    pass!(SphericalJoint, SphericalJointSolverData, spherical, true);
+    pass!(RevoluteJoint, RevoluteJointSolverData, revolute, true);
+    pass!(FixedJoint, FixedJointSolverData, fixed, true);
+}
+
+fn solve_ordered_joint<C, D, const POSITION_ONLY: bool, const REVERSE: bool>(
+    bodies: &Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
+    joints: &mut Query<(&mut C, &mut D), (Without<RigidBody>, Without<JointDisabled>)>,
+    order: &JointSolverOrder,
+    delta_secs: f64,
+    scope: &PhysicsJointPositionScope,
+    holds: &mut PhysicsHolds,
+    mut faults: Option<&mut lunco_core::RuntimeFaults>,
+    physics_time: &mut Time<Physics>,
+) -> bool
+where
+    C: Component<Mutability = Mutable>
+        + EntityConstraint<2>
+        + OrderedJoint
+        + HardJointConstraint
+        + XpbdConstraint<2, SolverData = D>,
+    D: Component<Mutability = Mutable>,
+{
     if faults
         .as_deref()
         .is_some_and(lunco_core::RuntimeFaults::active)
     {
-        return;
+        return false;
     }
     let ordered = C::solver_entities(&order);
-    let delta_secs = time.delta_secs_f64();
     let mut dummy_body1 = SolverBody::default();
     let mut dummy_body2 = SolverBody::default();
 
@@ -352,26 +427,26 @@ fn stable_solve_xpbd_joint<C, D, const POSITION_ONLY: bool, const REVERSE: bool>
         }];
         let Ok((mut joint, mut solver_data)) = joints.get_mut(*entity) else {
             report_stale_joint_order(
-                &mut holds,
+                holds,
                 faults.as_deref_mut(),
-                &mut physics_time,
+                physics_time,
                 *entity,
                 std::any::type_name::<C>(),
             );
-            return;
+            return false;
         };
         let [entity1, entity2] = joint.entities();
         if entity1 == entity2 {
             report_joint_solver_fault(
-                &mut holds,
+                holds,
                 faults.as_deref_mut(),
-                &mut physics_time,
+                physics_time,
                 *entity,
                 std::any::type_name::<C>(),
                 "physics-joint-endpoints-invalid",
                 "joint endpoints resolve to the same body",
             );
-            return;
+            return false;
         }
         if POSITION_ONLY
             && scope
@@ -415,6 +490,7 @@ fn stable_solve_xpbd_joint<C, D, const POSITION_ONLY: bool, const REVERSE: bool>
             );
         }
     }
+    true
 }
 
 fn stable_joint_damping<C: Component + EntityConstraint<2> + OrderedJoint>(

@@ -448,9 +448,11 @@ impl EPA {
         }
 
         if simplex.dimension() == 0 {
-            let mut n: Vector = Vector::ZERO;
-            n[1] = 1.0;
-            return Some((Vector::ZERO, Vector::ZERO, n));
+            // A support point at the CSO origin is touching. Its support
+            // direction separates both normal cones and owns the normal.
+            let point = &self.vertices[0];
+            let normal = point.support_direction?.try_normalize()?;
+            return Some((point.orig1, point.orig2, normal));
         } else if simplex.dimension() == 3 {
             let dp1 = self.vertices[1] - self.vertices[0];
             let dp2 = self.vertices[2] - self.vertices[0];

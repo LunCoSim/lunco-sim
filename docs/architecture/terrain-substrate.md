@@ -629,44 +629,144 @@ axial spin from the material correspondence: with axis `a` and angular increment
 `omega`, `k = omega - a*(omega dot a)` and the geometry acceleration is bounded
 by `radius*(|k|^2 + |k'|)`. The occupied cylinder is unchanged by that spin;
 COM-offset acceleration and changing tilt remain in the bound.
-Each immutable sweep reuses leaf trajectories and bounds across candidate pairs;
-any position correction requires a fresh sweep snapshot. Native support maps
+Each immutable sweep computes each body's solved motion once and shares it
+across its leaves. Each unique leaf's whole-arc bound is computed once.
+Admitted candidate queries run in a synchronous Bevy compute-pool scope over
+immutable leaf trajectories and shapes. Each chunk owns its contact caches and
+reusable native EPA workspace. `ContinuousCollisionSettings.minimum_query_batch_size`
+sets the minimum queries per worker (default 64); smaller populations execute
+the identical kernel directly. Zero permits one query per worker. Joined results, diagnostics and failures are
+consumed in prepared pair order before any body correction; worker completion
+order cannot select an authoritative result. The same query path serves one
+and multiple compute threads. Geometry caches remain local to the immutable
+starting state of one substep. Candidate separation directions and EPA capacity
+can survive later substeps of the prepared physics step; directions supply no
+geometry or clearance and require a fresh full-shape whole-arc bound.
+Each convex leaf query shares native endpoint poses and local bounding spheres
+across its candidate-axis tests. This immutable interval is rebuilt whenever
+the sweep's motion or geometry changes; it retains no result across corrections.
+Support gaps use native relative poses before adding local occupied geometry,
+so a large common world translation cannot erase a small clearance. Endpoint
+gap and curvature bounds include outward arithmetic allowances; nonfinite
+intermediate bounds reject the query before they can certify an interval.
+Material-witness gaps subtract body centers before adding their relative
+offsets. New native witnesses subtract collider and COM origins before adding
+rotated local points, preserving crossings under a large common translation.
+Parry's native BVH admits overlapping swept bounds for active CCD leaves;
+the prepared pair table retains collision hooks, layers and pair-specific
+dynamic-body eligibility. Candidates execute in prepared stable pair order,
+independent of BVH traversal order. Its topology is built once per prepared
+physics step; every changed trajectory replaces exact leaf bounds and refits
+ancestors with zero change-detection margin. Refitting expands and shrinks bounds.
+Unchanged poses cannot create a new crossing; prepared native inequalities
+still own their existing contacts. Initial geometry is allocated lazily for admitted candidates and
+retains its immutable substep lifetime. Native support maps
 certify separation along triangle axes over the complete arc. Native finite
 triangle projections supply inexpensive candidate edge axes. Native closest
 contacts provide additional axes for separated finite features; their full-shape
-support bound must stay clear over the entire arc. An initially
+support bound must stay clear over the entire arc. Cylinder radial features
+supply an additional axis with the cap component removed. It is a candidate,
+not a geometric assumption: the complete occupied shapes must still pass the
+same full-arc support bound. Successful separation axes are checked first on
+later closure sweeps, and invalidated when changed endpoints no longer pass.
+An initially
 intersecting convex leaf may also omit a directional cast when a native contact
 normal, matching full-shape support depth, certifies no increase in that depth.
-The bound includes feature changes; a finite triangle must have a real native
-initial contact. Contact with another compound leaf supplies no such certificate.
-Initial native contact geometry is cached per exact composite leaf within one
+The bound includes feature changes. A finite triangle's initial depth may also
+be certified from native supports and finite geometry. A real triangle point
+inside a cylinder owns an interior ball whose radius is its native distance to
+the nearest boundary. Every shorter translation retains intersection with that
+point. Alternatively, the whole convex projection can clear all three triangle
+edges by the support depth plus tolerance. A matching support upper bound
+proves the minimum translation depth; the whole-arc gap must remain above the
+proven lower depth minus tolerance. Finite-edge and deep overlaps without either
+proof retain the native contact query. Cylinder point projection chooses a
+nearest feature even when cap/side distances tie.
+Contact with another compound leaf supplies no certificate.
+A strictly interior cylinder witness at a real finite triangle point
+can also prove initial intersection without its minimum translation depth.
+For tilted cylinders whose center projection is outside the solid, opposite
+native support points provide a chord crossing the triangle's plane. The finite
+triangle projection must still supply a real point strictly inside the cylinder,
+with the native arithmetic margin. Plane crossing alone proves nothing about
+finite overlap; touching and uncertified witnesses retain native queries.
+Projection candidates are reconstructed from finite nonnegative native
+barycentric weights, so triangle membership does not depend on the conditioning
+of the closest-point calculation. The interior-radius margin includes pose,
+triangle and cylinder arithmetic; uncertain candidates retain native queries.
+When the conservative point-displacement bound cannot meet Parry's unchanged
+directional impact criterion, that proven overlap needs no query. Parry owns
+this criterion for both native casts and the continuous owner. Separated shapes
+retain their positive-time queries, and prepared material inequalities still
+enforce their existing position tolerance. Changed trajectories revalidate the
+motion bound; an initial intersection certificate is never a clear-space cache.
+Initial depth certificates and native contact geometry are cached per exact composite leaf within one
 substep. Position closure changes endpoints, so every sweep recomputes its
 whole-arc support bound; unchanged starting geometry does not repeat GJK.
-The cache expires before the next substep captures its starting poses.
+Starting geometry expires before the next substep captures its starting poses,
+including every composite leaf's overlap proof, depth certificate and native
+contact. Only advisory separation directions survive; all pair caches expire
+when the next physics step rebuilds its admitted geometry. A cached
+minimum translation depth beyond tolerance rules out a clear separating axis at
+the initial pose, so closure need not repeat other separation-only axes.
 Convex triangle starting contacts seed Parry's native GJK/EPA with their finite
 feature axis. The native cast, bisection and fresh contact kernel own the geometry;
 the search direction supplies no assumed plane penetration. Native
-dispatcher witnesses retain their respective local frames until the initial
+triangle/cylinder and triangle/cuboid references specialise that same entry
+point, retaining both pair orientations and the generic kernel's exact geometry.
+Native dispatcher witnesses retain their respective local frames until the initial
 contact owner transforms them to world space. Nonfinite witnesses, invalid
-normals, unsupported queries or an unbounded query without geometry fault the
+normals, unsupported queries, or missing geometry from an unbounded cast query
+or an enclosing initial query fault the
 continuous solve. The adapter retains those failures across Parry's optional-hit
-boundary, so an incomplete query cannot certify a clear trajectory.
+boundary, so an incomplete query cannot certify a clear trajectory. Initial
+query witnesses are validated before entering their immutable cache. Native EPA
+scratch retains buffer capacity across queries, with a reset of current geometry
+on every call. A single-point touching simplex retains actual material witnesses
+and its generating support direction. Missing direction provenance rejects the
+query instead of inventing a normal.
+The native upward-rounded relative-point displacement bound can also certify a
+convex leaf's residual tolerance directly. Every occupied-shape support gap,
+including its initial contact axis, changes by at most that complete bound.
+The proof includes both offset pivots and native arithmetic margin at the actual
+coordinate and geometry scale, and is re-evaluated after corrections;
+larger or uncertain bounds retain native geometry. This does not enlarge the
+contact tolerance or replace prepared material-contact checks.
 The pinned Parry f64 owner uses maintained GJK distance bounds to classify
 stalled simplices, retaining intersections for overlapping axisymmetric shapes.
 Its enhanced determinism feature enables scalar vector math alongside libm and
 ordered maps. The native Bevy/glam type contract remains unchanged.
+Its nonlinear motion evaluator preserves the exact supplied starting pose and
+evaluates the analytic COM-pivot trajectory without cancelling world transforms.
+The native directional initial-overlap handler uses an upward-rounded relative
+point-speed bound, including both offset pivots, to prove when its unchanged
+thickness criterion cannot be reached. That proof omits only impossible initial
+overlap sampling; positive-time casts and zero-thickness shapes retain their
+native queries. Development builds explicitly optimise the workspace math and
+physics owners while retaining assertions and overflow checks.
 Contact projection alternates with the native hard-geometry joint schedule,
 restricted to the affected connected bodies. It does not reintegrate motors or
 repeat compliant channels. Its symmetric sweeps reverse both constraint kinds
 and identities, propagating corrections through the prepared topology in both
 directions. The ordered native passes execute on one thread;
-closure does not dispatch workers between sequential constraints.
+closure acquires the body query once for all ten forward/reverse native passes
+and does not dispatch workers between sequential constraints.
+Native independent body preparation, integration, inertia refresh and writeback
+use Bevy's adaptive parallel-query batching with
+`SolverConfig.minimum_body_batch_size` (default 64). Populations at or below
+that bound execute the same kernel directly on the caller; larger populations
+retain native adaptive batching. A conservative query upper bound chooses
+dispatch without visiting entities. Both native body and integrator plugins initialize the existing solver
+configuration without replacing a supplied value. This controls work assignment;
+per-body arithmetic and ordered contact/joint passes remain unchanged.
+
 Ordinary substeps integrate each motor once. Admitted
 material inequalities and native joints close before a full geometry refresh;
 only a clear refreshed sweep can commit within `ContinuousCollisionSettings`.
-Material-witness constraints
-bound separation throughout the trajectory, including contact paths with clear
-endpoints; their SO(3) Jacobian maps corrections to the solved endpoint.
+Material-witness constraints bound separation throughout the trajectory,
+including contact paths with clear endpoints. A whole-arc chord remainder can
+certify a clear path directly; uncertain paths retain the extremum search.
+Their SO(3) Jacobian maps corrections to the solved endpoint.
 
 Prepared native contact points supply their own anchors and separation offsets
 to continuous closure. Their trajectories may recover initial penetration but

@@ -7,7 +7,9 @@ use super::{SolverBody, SolverBodyInertia};
 use crate::{
     AngularVelocity, LinearVelocity, PhysicsSchedule, Position, RigidBody, RigidBodyActiveFilter,
     RigidBodyDisabled, Rotation, Sleeping, SolverSystems, Vector,
-    dynamics::solver::{SolverDiagnostics, solver_body::SolverBodyFlags},
+    dynamics::solver::{
+        SolverConfig, SolverDiagnostics, for_each_independent_body, solver_body::SolverBodyFlags,
+    },
     prelude::{
         AppDiagnosticsExt, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Dominance,
         LockedAxes,
@@ -39,6 +41,7 @@ pub struct SolverBodyPlugin;
 
 impl Plugin for SolverBodyPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<SolverConfig>();
         // Add or remove solver bodies when `RigidBody` component is added or replaced.
         app.add_observer(on_insert_rigid_body);
 
@@ -191,9 +194,12 @@ fn prepare_solver_bodies(
         Option<&LockedAxes>,
         Option<&Dominance>,
     )>,
+    config: Res<SolverConfig>,
 ) {
     #[allow(unused_variables)]
-    query.par_iter_mut().for_each(
+    for_each_independent_body(
+        &mut query,
+        config.minimum_body_batch_size,
         |(
             rb,
             mut solver_body,
@@ -269,11 +275,14 @@ fn writeback_solver_bodies(
         &mut LinearVelocity,
         &mut AngularVelocity,
     )>,
+    config: Res<SolverConfig>,
     mut diagnostics: ResMut<SolverDiagnostics>,
 ) {
     let start = bevy::platform::time::Instant::now();
 
-    query.par_iter_mut().for_each(
+    for_each_independent_body(
+        &mut query,
+        config.minimum_body_batch_size,
         |(solver_body, mut pos, mut rot, com, mut lin_vel, mut ang_vel)| {
             // Write back the position and rotation deltas,
             // rotating the body around its center of mass.
@@ -294,12 +303,15 @@ fn writeback_solver_bodies(
 #[cfg(feature = "3d")]
 pub(crate) fn update_solver_body_angular_inertia(
     mut query: Query<(&mut SolverBodyInertia, &ComputedAngularInertia, &Rotation)>,
+    config: Res<SolverConfig>,
 ) {
-    query
-        .par_iter_mut()
-        .for_each(|(mut inertia, angular_inertia, rotation)| {
+    for_each_independent_body(
+        &mut query,
+        config.minimum_body_batch_size,
+        |(mut inertia, angular_inertia, rotation)| {
             inertia.update_effective_inv_angular_inertia(angular_inertia, rotation.0);
-        });
+        },
+    );
 }
 
 #[cfg(test)]

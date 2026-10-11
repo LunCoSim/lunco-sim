@@ -202,7 +202,8 @@ list.
 
 The same rule now covers the scripting asset surface itself. The production
 `scripting_asset_contracts` scene validates the active prelude and policies
-through `ScriptingCatalog` and one-shot `ValidateAsset` preparation, and exercises the shipped Rhai
+through bounded `ScriptComplete` discovery over the same catalog owner and
+one-shot `ValidateAsset` preparation, and exercises the shipped Rhai
 tool libraries through their registered modules. Rust no longer enumerates or
 opens `assets/scripting/` from a package integration test; standalone probes in
 `assets/scripting/tests/` are run by `scripts/api/run_rhai_test.sh` when a live

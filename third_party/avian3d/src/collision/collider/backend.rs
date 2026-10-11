@@ -121,24 +121,10 @@ impl<C: ScalableCollider> Plugin for ColliderBackendPlugin<C> {
                 }
             })
             .on_insert(|mut world, ctx| {
-                let scale = world
-                    .entity(ctx.entity)
-                    .get::<GlobalTransform>()
-                    .map(|gt| gt.scale())
-                    .unwrap_or_default();
-                #[cfg(feature = "2d")]
-                let scale = scale.xy();
-
                 let mut entity_mut = world.entity_mut(ctx.entity);
-
-                // Make sure the collider is initialized with the correct scale.
-                // This overwrites the scale set by the constructor, but that one is
-                // meant to be only changed after initialization.
-                entity_mut
-                    .get_mut::<C>()
-                    .unwrap()
-                    .set_scale(scale.adjust_precision(), 10);
-
+                // The constructor owns the inserted shape. Transform-driven
+                // scale is applied by the ordered preparation system, after
+                // collider transforms are current and before mass reduction.
                 let collider = entity_mut.get::<C>().unwrap();
 
                 let density = entity_mut

@@ -29,10 +29,10 @@ impl PointQuery for Cylinder {
                 let dist_to_bottom = pt.y - (-self.half_height);
                 let dist_to_side = self.radius - planar_dist_from_basis_center;
 
-                if dist_to_top < dist_to_bottom && dist_to_top < dist_to_side {
+                if dist_to_top <= dist_to_bottom && dist_to_top <= dist_to_side {
                     let projection_on_top = Vector::new(pt.x, self.half_height, pt.z);
                     PointProjection::new(true, projection_on_top)
-                } else if dist_to_bottom < dist_to_top && dist_to_bottom < dist_to_side {
+                } else if dist_to_bottom <= dist_to_side {
                     let projection_on_bottom = Vector::new(pt.x, -self.half_height, pt.z);
                     PointProjection::new(true, projection_on_bottom)
                 } else {

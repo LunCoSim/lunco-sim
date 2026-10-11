@@ -17,6 +17,8 @@ pub struct CsoPoint {
     pub orig1: Vector,
     /// The original point on the second shape used to compute `self.point`.
     pub orig2: Vector,
+    /// Native support direction, when this point was obtained from both shapes.
+    pub(crate) support_direction: Option<Vector>,
 }
 
 impl CsoPoint {
@@ -25,6 +27,7 @@ impl CsoPoint {
         point: Vector::ZERO,
         orig1: Vector::ZERO,
         orig2: Vector::ZERO,
+        support_direction: None,
     };
 
     /// Initializes a CSO point with `orig1 - orig2`.
@@ -41,6 +44,7 @@ impl CsoPoint {
             point,
             orig1,
             orig2,
+            support_direction: None,
         }
     }
 
@@ -63,7 +67,10 @@ impl CsoPoint {
         let sp1 = g1.local_support_point_toward(dir);
         let sp2 = g2.support_point_toward(pos12, -dir);
 
-        CsoPoint::new(sp1, sp2)
+        Self {
+            support_direction: Some(dir),
+            ..Self::new(sp1, sp2)
+        }
     }
 
     /// Computes the support point of the CSO of `g1` and `g2` toward the direction `dir`.
@@ -75,12 +82,18 @@ impl CsoPoint {
         let sp1 = g1.local_support_point(dir);
         let sp2 = g2.support_point(pos12, -dir);
 
-        CsoPoint::new(sp1, sp2)
+        Self {
+            support_direction: Some(dir),
+            ..Self::new(sp1, sp2)
+        }
     }
 
     /// Translate the CSO point.
     pub fn translate(&self, dir: Vector) -> Self {
-        CsoPoint::new_with_point(self.point + dir, self.orig1, self.orig2)
+        Self {
+            point: self.point + dir,
+            ..*self
+        }
     }
 
     /// Translate in-place the CSO point.

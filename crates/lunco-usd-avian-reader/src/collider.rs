@@ -326,6 +326,7 @@ fn collider_geometry_parts(
 }
 
 /// Geometry and provenance admitted together by the compound collider reader.
+#[derive(Debug)]
 pub struct AuthoredCompoundCollider {
     pub shapes: Vec<(Position, Rotation, Collider)>,
     pub source_paths: Vec<String>,
@@ -361,6 +362,10 @@ pub fn collect_child_colliders_from_usd(
     if !candidates.is_empty() && reader.has_api_schema(parent_path, ptok::API_COLLISION) {
         candidates.insert(0, (parent_path.clone(), Transform::IDENTITY));
     }
+    // Equivalent composed readers must produce the same native part indices
+    // and mass-property reduction order. USD child presentation order does not
+    // define physical assembly order; composed prim identity does.
+    candidates.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
 
     // `UsdGeomImageable.purpose` decides which of a body's descendants are its
     // COLLISION geometry, when the body carries more than one description of its

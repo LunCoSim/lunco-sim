@@ -377,10 +377,8 @@ fn drain_pending_twin_tools(
             continue;
         }
         let Some(source) = assets.get(&item.handle) else {
-            warn!(
-                "[tool_libs] `{}` became ready without source",
-                item.relative_path
-            );
+            pending.ready.insert(id);
+            still_pending.push(item);
             continue;
         };
         if !workspace
@@ -397,16 +395,24 @@ fn drain_pending_twin_tools(
             );
             continue;
         };
-        if let Err(error) =
-            driver
-                .runtime
-                .commit_asset_dependency_closure(&item.handle, &assets, &asset_server)
-        {
-            warn!(
-                "[tool_libs] cannot prepare imports for `{}`: {error}",
-                item.relative_path
-            );
-            continue;
+        match driver.runtime.try_commit_asset_dependency_closure(
+            &item.handle,
+            &assets,
+            &asset_server,
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                pending.ready.insert(id);
+                still_pending.push(item);
+                continue;
+            }
+            Err(error) => {
+                warn!(
+                    "[tool_libs] cannot prepare imports for `{}`: {error}",
+                    item.relative_path
+                );
+                continue;
+            }
         }
         let validation = match driver.runtime.validate_prepared_tool_library(
             &item.library_name,

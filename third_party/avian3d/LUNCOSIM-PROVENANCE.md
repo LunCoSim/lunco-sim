@@ -51,3 +51,26 @@ same coordinate; none narrows the canonical rotation to rendering precision.
 Native contact manifolds retain Parry's composite subshape identities. The USD
 adapter maps those identities through admitted collider provenance, so authored
 Rhai gates can identify a contacting structural member within a compound body.
+
+The native mass helper stops descendant reduction at nested rigid bodies.
+Each body owns its own mass properties and its collider frame; a nested body's
+mass and descendants cannot enter its parent's reduction. Traversal continues
+through non-body grouping nodes and retains siblings after a nested boundary.
+Collider insertion retains the constructor's scale and computes its initial
+mass from that geometry. The native preparation system applies transform-driven
+scale before mass reduction; render GlobalTransform does not rescale a newly
+inserted collider.
+Only live collider markers admit geometry-derived mass. Required mass-property
+components retained after collider removal cannot contribute retired geometry;
+independent explicit mass components still retain their authored contribution.
+
+Native independent body queries use Bevy's batching strategy with the shared
+`SolverConfig.minimum_body_batch_size` lower bound (default 64). Populations at or below
+that bound execute the same body kernel directly on the caller; larger
+populations retain native adaptive sizing. A conservative query population
+upper bound chooses dispatch without visiting entities.
+Velocity-increment preparation/clearing, integration, solver-body preparation,
+angular-inertia refresh and writeback consume the same setting. Both standalone
+body and integrator plugins initialize that resource without replacing an
+installed configuration. This is a local scheduling change: body equations,
+filters, precision, substeps and ordered contact/joint solving are unchanged.

@@ -31,6 +31,19 @@ part of cross-session replay ordering. If one scenario's synchronous command
 must be visible to another in the same pass, test that handoff through a
 production Rhai scene with stable actor identities.
 
+File-backed scenarios hold the shared simulation clock from USD source-path
+publication or `RunScenarioAsset` admission through root/import loading,
+compilation, dependency planning, and `on_start`. The shared source-closure
+owner waits for every native source value to publish in main-world `Assets`
+before atomically committing source and AST registries. The same boundary
+applies to preludes and Twin tool libraries; native load completion alone does
+not permit activation. At process startup, assert
+`sim_tick() == 0` in `on_start` and consecutive ticks beginning at one in the
+authored test. Loading a source asynchronously must not allow physics to run
+before its actor exists. A malformed or missing authored source emits a
+structured runtime fault and retains admission until replacement or removal;
+replacement and Twin/scene teardown retire only that source operation's key.
+
 For mission operations, read the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
 before authoring the scenario. Treat the ConOps, mode transitions, command and
@@ -252,7 +265,10 @@ in Modelica, and do not turn the recipe into an `on_tick` loop. See the
    way.
 
 Full reference: [`docs/scripting-guide.md`](../../docs/scripting-guide.md). The
-authoritative callable surface in one place: the `ScriptingCatalog` query.
+authoritative callable surface in one place: the `ScriptingCatalog` query for
+external authoring clients. Inside Rhai, use the existing bounded
+`ScriptComplete { prefix, limit }` query for discovery; the aggregate full
+catalog can exceed the sandbox value-size limit.
 
 ## 1. Lifecycle hooks — the shape of every scenario
 

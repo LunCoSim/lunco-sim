@@ -24,6 +24,24 @@ pub enum NonlinearShapeCastMode {
 }
 
 impl NonlinearShapeCastMode {
+    /// Whether a proven initial intersection cannot meet this mode's impact
+    /// criterion under a conservative relative material-point displacement
+    /// bound. This does not certify an initially separated trajectory.
+    pub fn initial_overlap_motion_is_inert(&self, displacement_bound: Real) -> bool {
+        match *self {
+            Self::Directional {
+                sum_linear_thickness,
+                ..
+            } => {
+                sum_linear_thickness.is_finite()
+                    && sum_linear_thickness > 0.0
+                    && displacement_bound.is_finite()
+                    && displacement_bound >= 0.0
+                    && displacement_bound < sum_linear_thickness
+            }
+            Self::StopAtPenetration => false,
+        }
+    }
     /// Initializes a directional `NonlinearShapeCastMode`.
     ///
     /// With the "directional" shape-cast mode, the nonlinear shape-casting won't
@@ -241,6 +259,101 @@ where
     }
 }
 
+// L1 bounds the Euclidean norm. Round every positive operation upwards so
+// a speed certificate cannot depend on a rounded-down length or product.
+fn speed_norm_bound(vector: Vector) -> Real {
+    vector
+        .to_array()
+        .into_iter()
+        .fold(0.0, |sum, value| (sum + value.abs().next_up()).next_up())
+}
+
+fn angular_point_speed_bound(motion: &NonlinearRigidMotion, shape: &dyn Shape) -> Real {
+    #[cfg(not(feature = "dim3"))]
+    let angular = motion.angvel.abs();
+    #[cfg(feature = "dim3")]
+    let angular = speed_norm_bound(motion.angvel);
+    #[cfg(not(feature = "dim3"))]
+    let stationary = motion.angvel == 0.0;
+    #[cfg(feature = "dim3")]
+    let stationary = motion.angvel == Vector::ZERO;
+    if stationary {
+        return 0.0;
+    }
+    let sphere = shape.compute_local_bounding_sphere();
+    if !sphere.radius.is_finite() || sphere.radius < 0.0 || !sphere.center.is_finite() {
+        return Real::INFINITY;
+    }
+    let radius =
+        (sphere.radius.next_up() + speed_norm_bound(sphere.center - motion.local_center)).next_up();
+    // Include the native support/witness and rotation arithmetic's rounding.
+    (angular.next_up() * radius * (1.0 + 64.0 * Real::EPSILON)).next_up()
+}
+
+fn point_arithmetic_scale(
+    motion: &NonlinearRigidMotion,
+    shape: &dyn Shape,
+    duration: Real,
+) -> Real {
+    let sphere = shape.compute_local_bounding_sphere();
+    if !sphere.radius.is_finite()
+        || sphere.radius < 0.0
+        || !sphere.center.is_finite()
+        || !motion.start.translation.is_finite()
+    {
+        return Real::INFINITY;
+    }
+    let scale = (speed_norm_bound(motion.start.translation)
+        + speed_norm_bound(motion.local_center))
+    .next_up();
+    let scale = (scale + speed_norm_bound(sphere.center)).next_up();
+    let scale = (scale + sphere.radius.next_up()).next_up();
+    (scale + (speed_norm_bound(motion.linvel) * duration.next_up()).next_up()).next_up()
+}
+
+/// Upward-rounded bound on every pair of material points' relative displacement
+/// over a nonnegative duration, including rotation about each actual local pivot
+/// and an arithmetic margin for evaluating native poses and material points.
+/// An invalid duration, nonfinite motion, or nonfinite bound produces infinity,
+/// which cannot certify a finite displacement limit. Rigid poses must be valid.
+pub fn relative_point_displacement_bound(
+    motion1: &NonlinearRigidMotion,
+    shape1: &dyn Shape,
+    motion2: &NonlinearRigidMotion,
+    shape2: &dyn Shape,
+    duration: Real,
+) -> Real {
+    if !duration.is_finite()
+        || duration < 0.0
+        || !motion1.linvel.is_finite()
+        || !motion2.linvel.is_finite()
+        || !motion1.angvel.is_finite()
+        || !motion2.angvel.is_finite()
+        || !motion1.local_center.is_finite()
+        || !motion2.local_center.is_finite()
+    {
+        return Real::INFINITY;
+    }
+    let speed = (speed_norm_bound(motion2.linvel - motion1.linvel)
+        + angular_point_speed_bound(motion1, shape1))
+    .next_up();
+    let speed = (speed + angular_point_speed_bound(motion2, shape2)).next_up();
+    let displacement = (speed * duration.next_up()).next_up();
+    // Native pose, rotation and witness evaluation use a bounded sequence of
+    // scalar operations. Include their absolute coordinate/geometry scale;
+    // a velocity-only relative bound cannot cover a rounded pose increment.
+    let scale = (point_arithmetic_scale(motion1, shape1, duration)
+        + point_arithmetic_scale(motion2, shape2, duration))
+    .next_up();
+    let arithmetic = (scale * (64.0 * Real::EPSILON)).next_up();
+    let bound = (displacement + arithmetic).next_up();
+    if bound.is_finite() {
+        bound
+    } else {
+        Real::INFINITY
+    }
+}
+
 fn handle_penetration_at_start_time<D, SM1, SM2>(
     dispatcher: &D,
     motion1: &NonlinearRigidMotion,
@@ -259,6 +372,22 @@ where
     SM1: ?Sized + SupportMap,
     SM2: ?Sized + SupportMap,
 {
+    let displacement =
+        relative_point_displacement_bound(motion1, g1, motion2, g2, end_time - start_time);
+    // Every contact's normal velocity is bounded by the relative linear
+    // speed plus both shapes' angular point speeds about their actual pivots.
+    // Here the native impact criterion is at least sum_linear_thickness;
+    // if this strict bound is smaller, no sample can satisfy that criterion.
+    // This only certifies the directional initial-overlap path. Future TOIs
+    // and StopAtPenetration still consume their native impact geometry.
+    if (NonlinearShapeCastMode::Directional {
+        sum_linear_thickness,
+        max_angular_thickness,
+    })
+    .initial_overlap_motion_is_inert(displacement)
+    {
+        return None;
+    }
     // Because we are doing non-linear CCD, we need an iterative method here.
     // First we need to check if the `time_of_impact = start_time` is legitimate, i.e.,
     // if tunnelling will happen if we don't clamp the motion.

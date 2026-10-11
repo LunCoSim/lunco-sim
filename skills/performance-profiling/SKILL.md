@@ -56,6 +56,24 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Architecture checks
 
+For native physics ordering investigations, enable
+`lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
+owner records native body and collider identities, poses, mass/inertia and
+velocities, plus contact-graph IDs, colours, manifold indices and prepared
+point geometry at the physics clock. Compare the first divergence before
+attributing a difference to pool size. This logging is diagnostic and must be
+disabled for performance acceptance. Partial pose checkpoints do not prove
+full-state replay.
+Compound audit rows include native scale and local part mass properties.
+If the first divergence is already in COM, compare admitted geometry and
+mass ownership before attributing later motion to the query dispatcher.
+
+For continuous-query dispatch, compare the CCD owner's bounded
+`minimum_query_batch_size` with its unconstrained zero setting using the same
+scene and ordered inputs. Small batches execute the same kernel directly;
+larger batches join before authoritative correction. Preserve native query
+results and compare complete physics time, including CCD and joints.
+
 For authored image preparation, trace `lunco-materials` typed
 `PreparedShaderImage` loading: native decoding and owned RGBA8 filtering precede
 source/child publication. CPU filtering awaits the async compute pool with an
@@ -786,11 +804,26 @@ For articulated continuous-contact cost, enable
 `ccd_native_shape_cast`, `ccd_cast_native_contact` and
 `ccd_cast_native_closest_points`. Shape-type fields identify
 the native pair kernels. Nested spans overlap; do not add them to their parent.
+`ccd_leaf_trajectories`, `ccd_swept_bvh` and `ccd_candidate_geometry` separate
+the sweep's preparation, native broad phase and candidate work. To profile
+these stages without millions of support/witness zones, use
+`RUST_LOG=info,lunco_physics::ccd=debug,lunco_physics::ccd::support=info,lunco_physics::ccd::minimum=info`.
+The disabled spans are diagnostic only; physics still evaluates their bounds.
 Keep fresh native geometry, whole-arc certification, stable part order and joint
 closure when optimizing these queries. Compare separate unprofiled runs over
 the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`
 and recording sample coverage. Those samples establish physics-step timing;
 they do not establish the complete fixed transaction or uncontended viewport FPS.
+
+Inspect effective compiler profiles as well as runtime work. The root's explicit
+development overrides optimize `lunco-physics`, the workspace glam math owner
+and `lunco-luncosim-simulation`, which instantiates native systems with USD hooks,
+at level 3, retaining development assertions and overflow checks. Cargo's
+dependency wildcard excludes workspace members, and generic native kernels can
+be instantiated under their caller's optimization level. Preserve these native
+math profiles when changing workspace membership; verify the physical gates and
+the exact normal artifact after a profile change. See
+[Cargo profiles and generics](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides-and-generics).
 
 When `tick_rhai_scenarios` or `tick_rhai_scenario_visualization` has an outlier,
 compare the nested `rhai_user_scenario_hook`, `rhai_user_event_hook`,

@@ -53,12 +53,14 @@ fn simulation_dependencies(me, ctx) {
            find_path("/PrismaticSpringTest/StrutLegLike"),
            find_path("/PrismaticSpringTest/BobExt"),
            find_path("/PrismaticSpringTest/BobComp"),
+           find_path("/PrismaticSpringTest/BobLegLike"),
        ],
        entity_writes: [find_path("/PrismaticSpringTest/StrutExt")],
        query_reads: ["QueryPhysicsState"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
+    this.start_tick=sim_tick();this.last_tick=this.start_tick;this.first_tick_gap=();
     this.t = 0.0;
     this.settle_s = 5.0;    // free ring-down of a 4000 N/m, 2200 N·s/m strut
     this.sample_s = 0.5;
@@ -88,6 +90,12 @@ fn on_start(me, ctx) {
 
 fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
+    let tick=sim_tick();
+    if tick!=this.last_tick+1 && this.first_tick_gap==() {
+        this.first_tick_gap=#{previous:this.last_tick,current:tick};
+        print("SPRING_TICK_GAP " + this.first_tick_gap);
+    }
+    this.last_tick=tick;
     if this.phase == "disabled" {
         this.phase="done";
         this.final_sample.disabled_force=get(this.ext,"force");
@@ -109,7 +117,9 @@ fn on_tick(me, ctx) {
     let fc = get(this.comp, "force");
     let xl = get(this.leglike, "displacement");
     let pl = world_pos(this.bob_leglike);
-    if this.leglike_x0 == () && pl != () { this.leglike_x0 = pl[0]; }
+    if this.leglike_x0 == () && pl != () {
+        this.leglike_x0 = pl[0];
+    }
 
     let state_e=query("QueryPhysicsState",#{id:this.bob_ext});
     let state_c=query("QueryPhysicsState",#{id:this.bob_comp});
@@ -134,6 +144,7 @@ fn on_tick(me, ctx) {
 
     if this.t >= this.settle_s {
         this.final_sample=#{
+            start_tick:this.start_tick,first_tick_gap:this.first_tick_gap,
             ext_stroke: xe, ext_force: fe,
             comp_stroke: xc, comp_force: fc,
             ext_pos: world_pos(this.bob_ext),
@@ -166,6 +177,8 @@ fn on_tick(me, ctx) {
 //                    means the joint failed open rather than stiff.
 fn verdict(s) {
     let f = [];
+    f.push(t_true(s.start_tick==0,"spring actor starts at the admitted tick-zero state (actual="+s.start_tick+")"));
+    f.push(t_true(s.first_tick_gap==(),"spring actor observes every admitted tick: "+s.first_tick_gap));
     f.push(t_true(s.scene_root_id >= 0,
         "canonical Twin scene root is not registered: " + SCENE_ROOT_NAME));
     f.push(t_true(s.scene_root_path == SCENE_ROOT_PATH,

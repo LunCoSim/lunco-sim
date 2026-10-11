@@ -15,10 +15,38 @@ use crate::{
     prelude::*,
 };
 use bevy::{
-    ecs::{query::QueryData, system::lifetimeless::Read},
+    ecs::{
+        batching::BatchingStrategy,
+        query::{IterQueryData, QueryData, QueryFilter},
+        system::lifetimeless::Read,
+    },
     prelude::*,
 };
 use core::cmp::Ordering;
+
+/// Apply an independent body kernel without dispatching a single small batch.
+/// Query iteration provides a conservative population upper bound without
+/// visiting entities; larger populations retain native adaptive parallel batches.
+#[inline]
+pub(crate) fn for_each_independent_body<D: IterQueryData, F: QueryFilter>(
+    query: &mut Query<D, F>,
+    minimum_batch_size: usize,
+    function: impl for<'w, 's> Fn(D::Item<'w, 's>) + Send + Sync + Clone,
+) {
+    if query
+        .iter_mut()
+        .size_hint()
+        .1
+        .is_some_and(|count| count <= minimum_batch_size)
+    {
+        query.iter_mut().for_each(function);
+    } else {
+        query
+            .par_iter_mut()
+            .batching_strategy(BatchingStrategy::new().min_batch_size(minimum_batch_size))
+            .for_each(function);
+    }
+}
 
 /// Manages and solves contacts, joints, and other constraints.
 ///
@@ -214,6 +242,15 @@ impl Default for PhysicsLengthUnit {
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct SolverConfig {
+    /// Minimum number of independent bodies in a Bevy parallel-query batch.
+    /// Populations at or below this bound run directly on the caller.
+    /// Large populations retain Bevy's adaptive batch sizing.
+    /// This changes work assignment only, never equations or substep count.
+    /// Zero leaves the lower batch-size bound unconstrained.
+    ///
+    /// Default: `64`.
+    pub minimum_body_batch_size: usize,
+
     /// The damping ratio used for contact stabilization.
     ///
     /// Lower values make contacts more compliant or "springy",
@@ -291,6 +328,7 @@ pub struct SolverConfig {
 impl Default for SolverConfig {
     fn default() -> Self {
         Self {
+            minimum_body_batch_size: 64,
             contact_damping_ratio: 10.0,
             contact_frequency_factor: 1.5,
             max_overlap_solve_speed: 4.0,

@@ -83,6 +83,10 @@ transforms fail during projection, mutable runtime pose/AABB failures raise
 origins return no hit without becoming a simulation fault. Use the existing
 bridge and scene-teardown tests for the first two, and a production Rhai scene
 test for the public query contract; do not add a second per-producer filter.
+Collider insertion preserves constructor geometry; `GlobalTransform` cannot
+choose physical scale. Rootless collider propagation runs in native fixed
+preparation before scale cooking and mass reduction, so the first solver step
+and later scale edits consume the current geometry and COM together.
 For a line joining two frames, convert both endpoints into one semantic frame
 before generating cell-local geometry. For authored motion directly beneath a
 BigSpace `Grid`, use standard USD `double3 xformOp:translate` samples and split

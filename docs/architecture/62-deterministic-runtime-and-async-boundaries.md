@@ -223,6 +223,21 @@ Terrain initial-pose support validation also waits for the active root's
 structural and USD simulation projection to settle before checking colliders;
 bounded projection order cannot admit a body while its authored support
 collider is still absent.
+The Rhai runtime acquires `ScriptSourcePreparation` when USD publishes an
+`EmbeddedScenarioPath` or `RunScenarioAsset` admits a file request, before the
+source has a document identity. Each operation uses the scripting admission
+allocator's exact key. Root and recursive imports must be loaded and published
+in main-world `Assets` before the serial attachment pass transfers admission to
+compilation. `lunco-scripting-rhai-world` validates the complete source closure
+before committing either the source registry or prepared AST registry. Native
+load completion alone is insufficient; pending publication retains the request
+and its hold. Invalid closures commit neither registry. Built-in preludes and
+Twin tool libraries use that same closure owner. Replacement,
+component removal, and despawn retire only the discarded operation's key.
+An authored source failure emits a structured runtime fault and retains its
+hold until source replacement or retirement; it is not retried every frame.
+All initial sources must finish before any startup actor can initialize, so
+asset completion order cannot choose the startup actor set.
 Rhai compilation, dependency planning, initialization, and `on_start` run in an
 ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at

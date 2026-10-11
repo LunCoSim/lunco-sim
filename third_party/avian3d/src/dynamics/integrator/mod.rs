@@ -8,7 +8,7 @@ use bevy::{
     ecs::{intern::Interned, query::QueryData, schedule::ScheduleLabel},
     prelude::*,
 };
-use dynamics::solver::SolverDiagnostics;
+use dynamics::solver::{SolverConfig, SolverDiagnostics, for_each_independent_body};
 
 use super::solver::solver_body::SolverBody;
 
@@ -47,7 +47,8 @@ impl Plugin for IntegratorPlugin {
         // Add `VelocityIntegrationData` to all `SolverBody`s.
         app.register_required_components::<SolverBody, VelocityIntegrationData>();
 
-        app.init_resource::<Gravity>();
+        app.init_resource::<Gravity>()
+            .init_resource::<SolverConfig>();
 
         app.configure_sets(
             PhysicsSchedule,
@@ -267,6 +268,7 @@ pub fn pre_process_velocity_increments(
         Option<&LockedAxes>,
     )>,
     gravity: Res<Gravity>,
+    config: Res<SolverConfig>,
     time: Res<Time<Substeps>>,
     mut diagnostics: ResMut<SolverDiagnostics>,
 ) {
@@ -275,7 +277,9 @@ pub fn pre_process_velocity_increments(
     let delta_secs = time.delta_secs_f64() as Scalar;
 
     // TODO: Do we want to skip kinematic bodies here?
-    bodies.par_iter_mut().for_each(
+    for_each_independent_body(
+        &mut bodies,
+        config.minimum_body_batch_size,
         |(rb, mut integration, lin_damping, ang_damping, gravity_scale, locked_axes)| {
             if !rb.is_dynamic() {
                 // Skip non-dynamic bodies.
@@ -315,14 +319,19 @@ pub fn pre_process_velocity_increments(
 /// Clears the velocity increments of bodies after the substepping loop.
 fn clear_velocity_increments(
     mut bodies: Query<&mut VelocityIntegrationData, With<SolverBody>>,
+    config: Res<SolverConfig>,
     mut diagnostics: ResMut<SolverDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 
-    bodies.par_iter_mut().for_each(|mut integration| {
-        integration.linear_increment = Vector::ZERO;
-        integration.angular_increment = AngularVector::ZERO;
-    });
+    for_each_independent_body(
+        &mut bodies,
+        config.minimum_body_batch_size,
+        |mut integration| {
+            integration.linear_increment = Vector::ZERO;
+            integration.angular_increment = AngularVector::ZERO;
+        },
+    );
 
     diagnostics.update_velocity_increments += start.elapsed();
 }
@@ -345,6 +354,7 @@ pub fn integrate_velocities(
         VelocityIntegrationQuery,
         (RigidBodyActiveFilter, Without<CustomVelocityIntegration>),
     >,
+    config: Res<SolverConfig>,
     mut diagnostics: ResMut<SolverDiagnostics>,
     #[cfg(feature = "3d")] time: Res<Time>,
 ) {
@@ -353,7 +363,7 @@ pub fn integrate_velocities(
     #[cfg(feature = "3d")]
     let delta_secs = time.delta_secs_f64() as Scalar;
 
-    bodies.par_iter_mut().for_each(|mut body| {
+    for_each_independent_body(&mut bodies, config.minimum_body_batch_size, |mut body| {
         if body.solver_body.flags.is_kinematic() {
             // Skip kinematic bodies.
             return;
@@ -502,6 +512,7 @@ fn clamp_velocities(
 /// Integrates the positions of bodies based on their velocities and the time step.
 pub fn integrate_positions(
     mut solver_bodies: Query<&mut SolverBody, Without<CustomPositionIntegration>>,
+    config: Res<SolverConfig>,
     time: Res<Time>,
     mut diagnostics: ResMut<SolverDiagnostics>,
 ) {
@@ -509,7 +520,7 @@ pub fn integrate_positions(
 
     let delta_secs = time.delta_seconds_adjusted();
 
-    solver_bodies.par_iter_mut().for_each(|body| {
+    for_each_independent_body(&mut solver_bodies, config.minimum_body_batch_size, |body| {
         let SolverBody {
             linear_velocity,
             angular_velocity,

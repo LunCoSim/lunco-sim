@@ -109,6 +109,13 @@ changing the model or adding an Earth/Sun/Moon conversion path. Render
 projection may read a finalized `GlobalTransform` only after BigSpace
 propagation, for presentation and shadow consumers.
 
+The physics bridge propagates rootless `ColliderTransform` values in native
+`FixedPostUpdate` preparation, before Avian cooks collider scale and reduces
+mass properties. The nested solver consumes that same prepared geometry and
+COM. Collider insertion retains the constructor's shape and scale; it never
+rescales geometry from a presentation `GlobalTransform`. Native transform-driven
+scale changes enter through the ordered preparation consumer.
+
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
 the input to BigSpace's dirty-subtree pruning; assigning an equal value still

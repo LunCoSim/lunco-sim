@@ -14,7 +14,9 @@ its fourth lane on roundtrip. Native scalar and SIMD serde tests cover valid
 roundtrips and malformed tuple lengths; the mixed-mask truth table checks every
 lane combination. Tuple visitors use the actual aligned mask's type name. The
 imported package is a workspace member so these native tests use the repository
-target and profile.
+target and profile. Its explicit development profile retains level-3 native
+math code generation and development invariant checks; Cargo's dependency
+wildcard excludes workspace members.
 
 Functional changes are confined to `src/features/impl_serde.rs`; imported
 documentation and templates have trailing whitespace normalized. No vector layout, floating-point

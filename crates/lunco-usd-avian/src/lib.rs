@@ -3803,6 +3803,12 @@ def Cube "Part" (
         double3 xformOp:translate = (0, 2, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
+    def Cube "BaseCap" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
 }
 "#;
         let recipe = StageRecipe::new(
@@ -3817,16 +3823,25 @@ def Cube "Part" (
         let assembly = SdfPath::new("/Scene/Assembly").unwrap();
         let live_view = live.view();
         assert!(live_view.has_prim(&SdfPath::new("/Scene/Assembly/EndCap").unwrap()));
-        let live_shapes = collect_child_colliders_from_usd(&live_view, &assembly)
-            .expect("live composed reference has valid collision transforms")
-            .shapes;
+        let live_parts = collect_child_colliders_from_usd(&live_view, &assembly)
+            .expect("live composed reference has valid collision transforms");
+        assert_eq!(
+            live_parts.source_paths,
+            [
+                "/Scene/Assembly",
+                "/Scene/Assembly/BaseCap",
+                "/Scene/Assembly/EndCap"
+            ]
+        );
+        let live_shapes = live_parts.shapes;
         assert_eq!(
             live_shapes.len(),
-            2,
+            3,
             "live composition must keep root and child shapes"
         );
         assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(live_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe::new(
             "child.usda",
@@ -3839,16 +3854,25 @@ def Cube "Part" (
             .expect("remap referenced body plan");
         let instance_root = SdfPath::new("/Scene/PreparedAssembly").unwrap();
         assert!(instance.has_prim(&SdfPath::new("/Scene/PreparedAssembly/EndCap").unwrap()));
-        let prepared_shapes = collect_child_colliders_from_usd(&instance, &instance_root)
-            .expect("prepared reference has valid collision transforms")
-            .shapes;
+        let prepared_parts = collect_child_colliders_from_usd(&instance, &instance_root)
+            .expect("prepared reference has valid collision transforms");
+        assert_eq!(
+            prepared_parts.source_paths,
+            [
+                "/Scene/PreparedAssembly",
+                "/Scene/PreparedAssembly/BaseCap",
+                "/Scene/PreparedAssembly/EndCap"
+            ]
+        );
+        let prepared_shapes = prepared_parts.shapes;
         assert_eq!(
             prepared_shapes.len(),
-            2,
+            3,
             "prepared composition must keep root and child shapes"
         );
         assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(prepared_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

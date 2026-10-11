@@ -139,7 +139,8 @@ pub use self::nonlinear_shape_cast_voxels_shape::{
 pub use self::nonlinear_rigid_motion::NonlinearRigidMotion;
 pub use self::nonlinear_shape_cast::cast_shapes_nonlinear;
 pub use self::nonlinear_shape_cast_support_map_support_map::{
-    cast_shapes_nonlinear_support_map_support_map, NonlinearShapeCastMode,
+    cast_shapes_nonlinear_support_map_support_map, relative_point_displacement_bound,
+    NonlinearShapeCastMode,
 };
 
 #[cfg(feature = "alloc")]

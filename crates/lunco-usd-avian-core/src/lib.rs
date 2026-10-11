@@ -468,6 +468,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
+                .before(PhysicsTransformSystems::Propagate)
                 .before(PhysicsSystems::StepSimulation),
         );
         app.add_systems(
@@ -488,22 +489,18 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .before(PhysicsSystems::Last),
         );
         app.add_systems(
-            PhysicsSchedule,
+            FixedPostUpdate,
             propagate_collider_transforms_rootless
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsTransformSystems::Propagate)
                 .after(PhysicsBridgeSystems::Read)
-                .before(PhysicsStepSystems::First),
+                .before(PhysicsSystems::StepSimulation),
         );
-        // Bridge-owned ColliderTransform propagation. avian's own
-        // `propagate_collider_transforms` only descends from tree roots that
-        // carry a `Transform` — with the canonical (Transform-free) BigSpace
-        // root it is a silent no-op, and `ColliderTransform` (offset AND
-        // scale — `update_collider_scale`'s child branch reads it) would
-        // freeze at spawn values: measured 2026-07-11 as the 4000×-scaled
-        // sandbox Ground collapsing to ~1 m. This system computes every
-        // collider's transform directly from its `ColliderOf` chain instead,
-        // no tree root involved. Same set as avian's pass (which no-ops).
+        // The bridge supplies ColliderTransform in Avian's preparation
+        // schedule, before native scale cooking and mass-property reduction.
+        // Both must consume the current hierarchy before the nested solver
+        // reads its geometry and COM. BigSpace's root has no Transform, so
+        // propagation follows each collider's ancestor chain directly.
     }
 }
 
@@ -1876,6 +1873,77 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn collider_preparation_consumes_current_rootless_scale_before_mass_reduction() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            PhysicsPlugins::default(),
+            BigSpacePhysicsBridgePlugin,
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(Gravity::ZERO);
+        let root = app.world_mut().spawn(Grid::default()).id();
+        app.world_mut()
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(root));
+        let group = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_scale(Vec3::splat(2.0)),
+                ChildOf(root),
+            ))
+            .id();
+        let mut collider = Collider::cuboid(1.0, 1.0, 1.0);
+        collider.set_scale(DVec3::splat(3.0), 10);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                collider,
+                Transform::from_scale(Vec3::splat(3.0)),
+                GlobalTransform::from(Transform::from_scale(Vec3::splat(99.0))),
+                ChildOf(group),
+            ))
+            .id();
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(3.0)
+        );
+        assert_eq!(
+            app.world()
+                .get::<ColliderMassProperties>(body)
+                .unwrap()
+                .mass,
+            27.0
+        );
+        app.finish();
+        app.cleanup();
+        app.world_mut().run_schedule(PreUpdate);
+        assert!(app.world().resource::<PhysicsFrameContractStatus>().ready);
+        app.world_mut().run_schedule(FixedPostUpdate);
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(6.0)
+        );
+        assert_eq!(
+            app.world().get::<ComputedMass>(body).unwrap().value(),
+            216.0
+        );
+
+        app.world_mut().get_mut::<Transform>(group).unwrap().scale = Vec3::splat(4.0);
+        app.world_mut().run_schedule(FixedPostUpdate);
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(12.0)
+        );
+        assert_eq!(
+            app.world().get::<ComputedMass>(body).unwrap().value(),
+            1728.0
+        );
+    }
 
     #[test]
     fn frame_contract_lifecycle_ticks_reach_each_consumer_without_pose_invalidation() {

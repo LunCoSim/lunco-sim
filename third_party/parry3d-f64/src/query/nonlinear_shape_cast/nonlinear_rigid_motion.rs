@@ -563,8 +563,23 @@ impl NonlinearRigidMotion {
     /// # }
     /// ```
     pub fn position_at_time(&self, t: Real) -> Pose {
-        let center = self.start * self.local_center;
-        let shift = Pose::from_translation(center);
-        (shift * Pose::new(self.linvel * t, self.angvel * t)) * (shift.inverse() * self.start)
+        if t == 0.0 {
+            return self.start;
+        }
+        #[cfg(not(feature = "dim3"))]
+        let translating = self.angvel == 0.0;
+        #[cfg(feature = "dim3")]
+        let translating = self.angvel == Vector::ZERO;
+        let translation = self.start.translation + self.linvel * t;
+        if translating {
+            return Pose::from_parts(translation, self.start.rotation);
+        }
+        let rotation = Pose::new(Vector::ZERO, self.angvel * t).rotation * self.start.rotation;
+        // Keep the pivot's linear trajectory without composing cancelling
+        // world translations. The centre offset remains in the local frame.
+        Pose::from_parts(
+            translation + (self.start.rotation * self.local_center - rotation * self.local_center),
+            rotation,
+        )
     }
 }

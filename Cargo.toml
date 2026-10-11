@@ -638,6 +638,19 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 3
 
+# Workspace math owners instantiate the native collision and joint kernels.
+# Cargo's dependency wildcard excludes workspace members; retain optimized
+# code generation here along with the development profile's invariant checks.
+[profile.dev.package."glam:0.32.1"]
+opt-level = 3
+
+[profile.dev.package.lunco-physics]
+opt-level = 3
+
+# This installer monomorphizes native physics systems with the USD pair hook.
+[profile.dev.package.lunco-luncosim-simulation]
+opt-level = 3
+
 # Keep Avian's overflow checks enabled in development. Physics teardown is
 # explicitly retired through Avian's graph-removal components above, so the
 # development profile must retain the engine's assertions as a real invariant

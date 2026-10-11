@@ -35,37 +35,33 @@ fn rhai_contract_sources() {
     ]
 }
 
-fn contains_name(entries, name) {
-    for entry in entries {
-        if entry.name == name { return true; }
+fn completions(prefix) {
+    let response = query("ScriptComplete", #{prefix: prefix, limit: 200});
+    if response == () || response.candidates == () {
+        throw "ScriptComplete omitted its bounded candidate response for " + prefix;
+    }
+    response.candidates
+}
+
+fn contains_completion(name, kind) {
+    for entry in completions(name) {
+        if entry.label == name && entry.kind == kind { return true; }
     }
     false
 }
 
-fn contains_hook(entries, name) {
-    for entry in entries {
-        if entry.id == name { return true; }
+fn contains_tool(namespace) {
+    for entry in completions(namespace + "::") {
+        if entry.kind == "tool" && entry.label.starts_with(namespace + "::") { return true; }
     }
     false
 }
 
-fn contains_function(entries, name) {
-    for entry in entries {
-        if entry.name == name { return true; }
+fn has_no_prelude_matches(prefix) {
+    for entry in completions(prefix) {
+        if entry.kind == "prelude" { return false; }
     }
-    false
-}
-
-fn tool_has_function(tools, tool_name, function_name) {
-    for tool in tools {
-        if tool.name != tool_name { continue; }
-        for function in tool.functions {
-            if function.starts_with(function_name + "/") {
-                return true;
-            }
-        }
-    }
-    false
+    true
 }
 
 fn validate_rhai(path, failures, reports) {
@@ -79,7 +75,7 @@ fn validate_rhai(path, failures, reports) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ScriptingCatalog", "ValidateAsset"], required_inputs: [] }
+       query_reads: ["ScriptComplete", "ValidateAsset"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -103,9 +99,8 @@ fn on_tick(me, ctx) {
     if !this.preflight.done { return; }
 
     let failures = [];
-    let catalog = query("ScriptingCatalog", #{});
-    failures.push(t_true(catalog != (),
-        "ScriptingCatalog did not publish the authored scripting surface"));
+    failures.push(t_true(contains_completion("ScriptingCatalog", "query"),
+        "the authoring catalog is not discoverable through the bounded runtime surface"));
 
     for sample in [
         #{
@@ -124,42 +119,33 @@ fn on_tick(me, ctx) {
             "asset URI resolution changed source authority: " + sample.document));
     }
 
-    if catalog != () {
-        failures.push(t_true(catalog.verbs != ()
-                && contains_name(catalog.verbs, "asset_source_relative_uri"),
-            "ScriptingCatalog is missing asset_source_relative_uri"));
-        let prelude = catalog.prelude;
-        failures.push(t_true(prelude != () && prelude.len() > 0,
-            "the active Rhai prelude is empty or failed to compile"));
+    {
+        failures.push(t_true(contains_completion("asset_source_relative_uri", "verb"),
+            "runtime completion is missing asset_source_relative_uri"));
         for function_name in [
             "compile_timeline", "point3", "report_verdict", "set_property", "links",
             "world_point", "read_ports", "read_ports_batch", "actuator_status",
             "write_ports", "write_ports_batch"
         ] {
-            failures.push(t_true(prelude != () && contains_function(prelude, function_name),
+            failures.push(t_true(contains_completion(function_name, "prelude"),
                 "active prelude is missing " + function_name));
         }
-        for function in prelude {
-            failures.push(t_true(!function.name.starts_with("attach_")
-                    && !function.name.starts_with("program_")
-                    && function.name != "detach_component",
-                "prelude leaked a global assembly helper: " + function.name));
+        for prefix in ["attach_", "program_", "detach_component"] {
+            failures.push(t_true(has_no_prelude_matches(prefix),
+                "prelude leaked a global assembly helper matching " + prefix));
         }
-
-        let tools = catalog.tools;
-        failures.push(t_true(contains_hook(catalog.policy_hooks, "scripting.source.classify"),
+        failures.push(t_true(contains_completion("scripting.source.classify", "policy-hook"),
             "source classification policy hook is not reflected"));
         for tool_name in [
             "assembly_audit", "assembly_builder", "assembly_edit", "assembly_ui",
             "authoring_inspection", "model_authoring", "program_editor"
         ] {
-            failures.push(t_true(contains_name(tools, tool_name),
+            failures.push(t_true(contains_tool(tool_name),
                 "tool library is not discoverable: " + tool_name));
         }
-        failures.push(t_true(tool_has_function(tools, "assembly_builder",
-                "lunar_albedo_material_plan"),
+        failures.push(t_true(contains_completion("assembly_builder::lunar_albedo_material_plan", "tool"),
             "assembly_builder does not expose lunar_albedo_material_plan"));
-        failures.push(t_true(tool_has_function(tools, "assembly_ui", "panel_templates"),
+        failures.push(t_true(contains_completion("assembly_ui::panel_templates", "tool"),
             "assembly_ui does not expose panel_templates"));
 
         let clock = clock_snapshot();

@@ -256,7 +256,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-scripting-bridge-usd`** | Domain adapter for composed USD document generations and prim-path identity lookups, including document-scoped lookup for paths that may repeat across mounted stages. It owns the USD document/scene dependencies needed by those projections. |
 | **`lunco-scripting`** | Language/runtime-neutral scripting host: document ownership, backend-neutral scenario lifecycle, scheduling, hot reload, teardown, lifecycle/document commands, and optional Python one-shot execution. Window audience detection is an opt-in application feature. The Rhai world runtime is isolated in `lunco-scripting-rhai-runtime`; this crate does not own product-level Rhai policy, tools, or timelines. |
 | **`lunco-scripting-rhai-runtime`** | Production Rhai application boundary: command registration, tool/timeline persistence, `.rhai` asset dependency loading, and composition of the language-neutral host with `lunco-scripting-rhai-world`. It keeps application-facing integration separate from the high-churn world/policy closure. |
-| **`lunco-scripting-rhai-world`** | Reusable Rhai world/runtime substrate: reflected world bridge, `RhaiScenarioRuntime` with per-entity committed source content closures, authored application/Twin policy activation, policy status projection, and optional Twin-scoped native hook providers. It is usable by Rhai catalog/diagnostic consumers without pulling the application command/tool/timeline composition package. |
+| **`lunco-scripting-rhai-world`** | Reusable Rhai world/runtime substrate: reflected world bridge, `RhaiScenarioRuntime` with per-entity committed source content closures and atomic native-source/AST closure publication, authored application/Twin policy activation, policy status projection, and optional Twin-scoped native hook providers. It is usable by Rhai catalog/diagnostic consumers without pulling the application command/tool/timeline composition package. |
 | **`lunco-scripting-rhai-core`** | Reusable Rhai backend substrate: asset-scoped module resolution, native vector/quaternion functions, task-tree lowering, typed UI request values, persisted-name validation, and the Rhai-to-`HookValue`/reflected-write boundary. It does not own JSON, the scenario host, or product-level policy. |
 | **`lunco-scripting-rhai`** | Rhai authoring/query surface: catalog discovery, script diagnostics, and dataset queries. It is a production package installed by Rhai hosts, but is separate from the language-neutral scripting lifecycle so editor/query changes do not rebuild that core. |
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + layered registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast), standard/core/application/Twin scope resolution, and discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
@@ -1395,7 +1395,7 @@ Production API capability for Modelica hosts. It registers the domain-owned quer
 Language/runtime-neutral scripting host. It owns document lifecycle, backend-neutral scenario execution, scheduling, hot reload, pause, teardown, lifecycle/document commands, and the optional Python one-shot backend. Window audience detection is opt-in (`window-audience`) so headless builds remain window-free. It does not own the Rhai interpreter, world bridge, Rhai commands, policies, tools, timelines, or Rhai source assets. Those belong to `lunco-scripting-rhai-world` and `lunco-scripting-rhai-runtime`.
 
 **`lunco-scripting-rhai-runtime`**
-Production Rhai application boundary. It owns Rhai command registration, tool/timeline persistence, and the `.rhai` asset/import graph, and composes the language-neutral scripting host with `lunco-scripting-rhai-world`. Keeping this application closure separate means command/tool/timeline edits do not rebuild the reflected world/policy runtime.
+Production Rhai application boundary. It owns Rhai command registration, tool/timeline persistence, and the `.rhai` asset/import graph, and composes the language-neutral scripting host with `lunco-scripting-rhai-world`. File requests and USD source paths hold shared simulation admission through root/import loading; exact operation keys retire on replacement, removal, or teardown, then the compilation owner carries admission through startup. Invalid authored source loading faults and holds its operation. Keeping this application closure separate means command/tool/timeline edits do not rebuild the reflected world/policy runtime.
 
 **`lunco-scripting-rhai-world`**
 Reusable Rhai world/runtime substrate. It owns the reflected world bridge, `RhaiScenarioRuntime` and its per-entity committed source content closures, authored application/Twin policy activation, policy status projection, and optional Twin-scoped native hook providers. Catalog and diagnostics consumers depend on this package directly instead of the application command/tool/timeline composition.
@@ -1497,12 +1497,32 @@ Headless launcher for the luncosim runtime — a three-line binary that depends 
 The patched published Avian 0.7.0 source lives in `third_party/avian3d` with
 its licence and provenance. Native joints own implicit dimensional force and
 acceleration integration, effective inertia, saturation, and hard-only geometry
-passes. `lunco-physics` owns stable ordering and continuous impact closure;
+passes. Native mass reduction stops at nested bodies and excludes retired
+collider geometry. Collider insertion retains constructor scale; the
+`lunco-usd-avian-core` bridge supplies rootless collider transforms before
+native scale cooking and mass reduction in fixed preparation.
+`lunco-physics` owns stable ordering and continuous impact closure;
 `lunco-cosim` admits native prismatic force writeback for its measured force port.
 
 The pinned Parry f64 source in `third_party/parry3d-f64` retains the native
 Bevy/glam type contract while supplying maintained GJK stall classification and
-scalar enhanced determinism. `third_party/glam` retains aligned-mask tuple
+scalar enhanced determinism, exact initial poses and conservative directional
+initial-overlap speed certificates and minimum-distance cylinder point
+projection at tied features. Exact single-point touching retains real material
+witnesses and the generating native support direction; missing provenance
+rejects the query. Native contact queries accept reusable EPA scratch while
+resetting current geometry. `lunco-physics` pools unique CCD leaves and uses
+the native swept BVH while retaining prepared pair filtering and ordering.
+Its `ContinuousCollisionSettings.minimum_query_batch_size` bounds scoped
+query work assignment; smaller populations run directly with identical
+ordered results, while larger batches use the native compute pool.
+It also certifies finite-triangle minimum translation depths using all three
+edges or an interior ball at a real triangle point, with native supports and
+nearest-boundary point projection.
+The shared native relative-point displacement bound can certify convex-leaf
+residual tolerance directly, including offset pivots and coordinate-scale
+arithmetic margin, without changing the authored contact tolerance.
+`third_party/glam` retains aligned-mask tuple
 serialization for scalar Bevy reflection. Each dependency records its source
 and changes in `LUNCOSIM-PROVENANCE.md`. Continuous native-query failures remain
 owned by `lunco-physics`, which refuses the affected tick's pose writeback.

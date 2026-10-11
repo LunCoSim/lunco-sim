@@ -362,44 +362,11 @@ impl EPA {
         }
 
         if simplex.dimension() == 0 {
-            const MAX_ITERS: usize = 100; // If there is no convergence, just use whatever direction was extracted so fare
-
-            // The contact is vertex-vertex.
-            // We need to determine a valid normal that lies
-            // on both vertices' normal cone.
-            let mut n = Vector::Y;
-
-            // First, find a vector on the first vertex tangent cone.
-            let orig1 = self.vertices[0].orig1;
-            for _ in 0..MAX_ITERS {
-                let supp1 = g1.local_support_point(n);
-                if let Some(tangent) = (supp1 - orig1).try_normalize() {
-                    if n.dot(tangent) < _eps_tol {
-                        break;
-                    }
-
-                    n = Vector::new(-tangent.y, tangent.x);
-                } else {
-                    break;
-                }
-            }
-
-            // Second, ensure the direction lies on the second vertex's tangent cone.
-            let orig2 = self.vertices[0].orig2;
-            for _ in 0..MAX_ITERS {
-                let supp2 = g2.support_point(pos12, -n);
-                if let Some(tangent) = (supp2 - orig2).try_normalize() {
-                    if (-n).dot(tangent) < _eps_tol {
-                        break;
-                    }
-
-                    n = Vector::new(-tangent.y, tangent.x);
-                } else {
-                    break;
-                }
-            }
-
-            return Some((Vector::ZERO, Vector::ZERO, n));
+            // A support point at the CSO origin is touching. Its support
+            // direction separates both normal cones and owns the normal.
+            let point = &self.vertices[0];
+            let normal = point.support_direction?.try_normalize()?;
+            return Some((point.orig1, point.orig2, normal));
         } else if simplex.dimension() == 2 {
             let dp1 = self.vertices[1] - self.vertices[0];
             let dp2 = self.vertices[2] - self.vertices[0];

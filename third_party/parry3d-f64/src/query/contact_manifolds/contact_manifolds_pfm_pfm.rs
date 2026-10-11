@@ -71,6 +71,7 @@ pub fn contact_manifold_pfm_pfm<'a, ManifoldData, ContactData, S1, S2>(
         pfm2,
         total_prediction,
         &mut VoronoiSimplex::new(),
+        &mut query::epa::EPA::new(),
         init_dir,
     );
 

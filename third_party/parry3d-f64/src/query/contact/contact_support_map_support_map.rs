@@ -16,7 +16,15 @@ where
     G2: ?Sized + SupportMap,
 {
     let simplex = &mut VoronoiSimplex::new();
-    match contact_support_map_support_map_with_params(pos12, g1, g2, prediction, simplex, None) {
+    match contact_support_map_support_map_with_params(
+        pos12,
+        g1,
+        g2,
+        prediction,
+        simplex,
+        &mut EPA::new(),
+        None,
+    ) {
         GJKResult::ClosestPoints(point1, point2_1, normal1) => {
             let dist = (point2_1 - point1).dot(normal1);
             let point2 = pos12.inverse_transform_point(point2_1);
@@ -31,7 +39,8 @@ where
 
 /// Contact between support-mapped shapes (`Cuboid`, `ConvexHull`, etc.)
 ///
-/// This allows a more fine grained control other the underlying GJK algorigtm.
+/// This allows finer control over the underlying GJK algorithm. Reusing the
+/// simplex and EPA scratch retains allocations; each query resets their geometry.
 /// The vector-typed result is the vector that should be passed as `init` for
 /// subsequent executions of the algorithm. It is also the contact
 /// normal (that points toward the outside of the first solid).
@@ -41,6 +50,7 @@ pub fn contact_support_map_support_map_with_params<G1, G2>(
     g2: &G2,
     prediction: Real,
     simplex: &mut VoronoiSimplex,
+    epa: &mut EPA,
     init_dir: Option<Vector>,
 ) -> GJKResult
 where
@@ -63,7 +73,6 @@ where
     }
 
     // The point is inside of the CSO: use the fallback algorithm
-    let mut epa = EPA::new();
     if let Some((p1, p2, n)) = epa.closest_points(pos12, g1, g2, simplex) {
         return GJKResult::ClosestPoints(p1, p2, n);
     }

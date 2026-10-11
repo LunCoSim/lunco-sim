@@ -22,6 +22,7 @@ pub struct MassPropertyHelper<'w, 's> {
             Option<Read<ColliderMassProperties>>,
             Option<Read<ColliderTransform>>,
             Has<Sensor>,
+            Has<ColliderMarker>,
         ),
         Or<(
             With<Mass>,
@@ -30,6 +31,7 @@ pub struct MassPropertyHelper<'w, 's> {
             (
                 With<ColliderMassProperties>,
                 With<ColliderTransform>,
+                With<ColliderMarker>,
                 Without<Sensor>,
             ),
         )>,
@@ -50,6 +52,7 @@ pub struct MassPropertyHelper<'w, 's> {
         ),
     >,
     children: Query<'w, 's, Read<Children>>,
+    bodies: Query<'w, 's, (), With<RigidBody>>,
 }
 
 impl MassPropertyHelper<'_, '_> {
@@ -134,28 +137,47 @@ impl MassPropertyHelper<'_, '_> {
     }
 
     /// Computes the total mass properties of the given entity,
-    /// taking into account the mass properties of descendants.
+    /// taking into account descendants up to each nested rigid-body boundary.
     ///
     /// This ignores the [`NoAutoMass`], [`NoAutoAngularInertia`], and [`NoAutoCenterOfMass`] marker components.
     pub fn total_mass_properties(&self, entity: Entity) -> MassProperties {
         core::iter::once(self.local_mass_properties(entity))
             .chain(
-                self.children
-                    .iter_descendants(entity)
+                self.owned_descendants(entity)
                     .map(|child| self.local_mass_properties(child)),
             )
             .flatten()
             .sum()
     }
 
-    /// Computes the total mass properties of the descendants of the given entity.
+    /// Computes the mass properties of descendants owned by the given entity.
+    /// Nested rigid bodies and their descendants belong to their own body.
     ///
     /// This ignores the [`NoAutoMass`], [`NoAutoAngularInertia`], and [`NoAutoCenterOfMass`] marker components.
     pub fn descendants_mass_properties(&self, entity: Entity) -> MassProperties {
-        self.children
-            .iter_descendants(entity)
+        self.owned_descendants(entity)
             .filter_map(|child| self.local_mass_properties(child))
             .sum()
+    }
+
+    fn owned_descendants(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
+        let mut pending = self
+            .children
+            .get(entity)
+            .map(|children| children.iter().rev().collect::<Vec<_>>())
+            .unwrap_or_default();
+        core::iter::from_fn(move || {
+            while let Some(child) = pending.pop() {
+                if self.bodies.contains(child) {
+                    continue;
+                }
+                if let Ok(children) = self.children.get(child) {
+                    pending.extend(children.iter().rev());
+                }
+                return Some(child);
+            }
+            None
+        })
     }
 
     /// Computes the local mass properties of the given entity.
@@ -165,8 +187,16 @@ impl MassPropertyHelper<'_, '_> {
     ///
     /// If the entity has no mass properties or the entity does not exist, `None` is returned.
     pub fn local_mass_properties(&self, entity: Entity) -> Option<MassProperties> {
-        let (mass, angular_inertia, center_of_mass, collider_mass, collider_transform, is_sensor) =
-            self.query.get(entity).ok()?;
+        let (
+            mass,
+            angular_inertia,
+            center_of_mass,
+            collider_mass,
+            collider_transform,
+            is_sensor,
+            is_collider,
+        ) = self.query.get(entity).ok()?;
+        let collider_mass = collider_mass.filter(|_| is_collider);
 
         // Initialize the mass properties with the collider's mass properties or zero.
         let mut mass_props = collider_mass
