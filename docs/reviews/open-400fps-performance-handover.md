@@ -28,6 +28,16 @@ reflection across 180 observations, and final drawable state. The 20-rover gate
 passes 72 exact checks against the unchanged reference. Gate/replay PIDs
 2278844/2289523 exit zero and release API 4202. The Twin remains unmodified.
 
+Integration preserves main's original UTF-8 parser and current-document run-target
+admission changes (`50f282252` and `34800c051`). On merged `8f8c4c2bc`, the normal
+production build passes in 2m 15s. Exact artifact
+`c0e390c3f0a9c93f442739aabebab702ea847821303f1b4f008803fe208577c1`
+passes the four-check Twin-scoped source-lifecycle gate and all 72 exact
+20-rover replay checks against the unchanged reference. The inspected Summer
+Space School image has valid source reflection, a ready visible continuation
+and no flat patches. Owned gate/replay PIDs 2466258/2469368 exit zero and release
+API 4202. The exact binary archive is verified; the Twin remains clean.
+
 Verified archives and receipts are under
 `.lunco/performance-evidence/entity-tree-perf/`, with `shader-source-owner-`
 and `summer-source-owner-` prefixes. The independent Modelica pool experiment
@@ -78,13 +88,10 @@ runtime fault. The 20-rover production replay passes all 72 exact checks against
 the unchanged reference. Owned Twin/replay/repeat PIDs
 2145688/2150361/2162147 exit zero and release API 4202.
 
-Whole-startup visual stability remains open: the first integrated image shows
-large flat terrain patches despite complete stream/derived counts. Its hidden
-continuation has no reflected source shader at 27.7 seconds. The same exact
-artifact's repeat has a visible continuation, valid source reflection and no
-such patches. This correlation requires source/material publication tracing;
-it does not establish the patches' cause. The duplicate rock-field reset is
-resolved independently of this remaining visual issue.
+The first integrated startup also exposed missing source reflection and a hidden
+terrain continuation despite complete stream/derived counts; its repeat rendered
+correctly. The shader-source ownership section above records the independent
+root cause, fix and integrated production acceptance for that publication fault.
 
 ## Thread-affine native Modelica execution — 2026-10-11
 
