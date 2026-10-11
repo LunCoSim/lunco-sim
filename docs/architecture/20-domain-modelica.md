@@ -1141,6 +1141,15 @@ Modelica equation and state ownership. See the
 [co-simulation public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
 for initialization, runtime writes, and missing-sample admission.
 
+The USD source dispatcher remains after wiring and authored-default publication
+in the ordered Update chain. Native `PendingModelicaSource` membership and the
+absence of `SceneLoadInFlight` admit its exclusive World boundary. A settled
+scene with no pending sources skips that boundary; deferred source insertion,
+recompile and scene replacement wake it through current component membership.
+While sources or causal producer samples are preparing, admission continues at
+the same boundary. Prim-path dispatch order and initialization sampling are
+unchanged.
+
 ## 7. Type vs. instance distinction
 
 Every `.mo` file defines a **Modelica type** (`model Balloon`, `model SolarPanel`).

@@ -21,6 +21,7 @@
 //! No domain-specific ECS marker is inserted here. The translator is the
 //! authoritative path for USD-defined cosim entities.
 
+use bevy::ecs::schedule::common_conditions::{any_with_component, not, resource_exists};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_core::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
@@ -1721,15 +1722,14 @@ fn validate_usd_modelica_port_contracts(
 
 /// Admit loaded sources from unconnected authored values and current causal
 /// producer samples, then dispatch checked solver preparation. Loading remains
-/// pending while its source or physical producers are preparing.
+/// pending while its source or physical producers are preparing. Native run
+/// conditions admit this exclusive boundary only after scene projection settles
+/// and while a source remains pending.
 pub(crate) fn dispatch_loaded_modelica_sources(
     world: &mut World,
     mut pending: Local<QueryState<Entity, With<PendingModelicaSource>>>,
 ) {
     let entities: Vec<_> = pending.iter(world).collect();
-    if entities.is_empty() || world.contains_resource::<SceneLoadInFlight>() {
-        return;
-    }
     world.run_schedule(lunco_cosim_core::schedule::InitializationSampling);
     let admissions: HashMap<_, _> = entities
         .into_iter()
@@ -2760,7 +2760,9 @@ impl Plugin for UsdSimCosimPlugin {
                 rewire_usd_connections.run_if(wiring_due),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
-                dispatch_loaded_modelica_sources,
+                dispatch_loaded_modelica_sources
+                    .run_if(any_with_component::<PendingModelicaSource>)
+                    .run_if(not(resource_exists::<SceneLoadInFlight>)),
                 // Run the lifecycle trigger after wrapper/source publication,
                 // because those systems may add the runtime surface in this
                 // same chain after the domain projection pass has completed.
@@ -2854,11 +2856,80 @@ impl Plugin for UsdSimCosimPlugin {
 mod tests {
     use super::*;
     use crate::sync::{
-        EventBinding, copy_modelica_input_values, event_rising_edge, fire_connected_events,
-        modelica_status, parse_event_severity,
+        copy_modelica_input_values, event_rising_edge, modelica_status, parse_event_severity,
     };
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
+
+    #[test]
+    fn source_dispatch_preserves_deferred_admission_and_scene_hold() {
+        #[derive(Resource, Default)]
+        struct InitializationRuns(usize);
+
+        fn count_initializations(mut runs: ResMut<InitializationRuns>) {
+            runs.0 += 1;
+        }
+
+        fn queue_source(mut commands: Commands) {
+            commands.spawn(PendingModelicaSource {
+                handle: Handle::default(),
+                asset_path: String::new(),
+                session_id: 1,
+                resume_after_compile: false,
+            });
+        }
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<ModelicaSource>()
+            .add_message::<lunco_modelica_runtime::ModelicaNotice>()
+            .init_resource::<InitializationRuns>()
+            .init_schedule(lunco_cosim_core::schedule::InitializationSampling)
+            .add_systems(
+                lunco_cosim_core::schedule::InitializationSampling,
+                count_initializations,
+            );
+        app.add_systems(
+            Update,
+            dispatch_loaded_modelica_sources
+                .run_if(any_with_component::<PendingModelicaSource>)
+                .run_if(not(resource_exists::<SceneLoadInFlight>)),
+        );
+        app.update();
+        assert_eq!(app.world().resource::<InitializationRuns>().0, 0);
+
+        // Source admission is deferred before the exclusive boundary, just as
+        // it is in the production wiring chain.
+        app.add_systems(
+            Update,
+            queue_source
+                .run_if(run_once)
+                .before(dispatch_loaded_modelica_sources),
+        );
+        app.update();
+        assert_eq!(app.world().resource::<InitializationRuns>().0, 1);
+
+        app.insert_resource(SceneLoadInFlight {
+            transition_id: lunco_core::SceneTransitionCoordinator::default()
+                .start(lunco_core::SceneTransition::Clear),
+            path: String::new(),
+            stage_id: Handle::<UsdStageAsset>::default().id(),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<InitializationRuns>().0, 1);
+        app.world_mut().remove_resource::<SceneLoadInFlight>();
+        app.update();
+        assert_eq!(app.world().resource::<InitializationRuns>().0, 2);
+
+        let pending = app
+            .world_mut()
+            .query_filtered::<Entity, With<PendingModelicaSource>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().despawn(pending);
+        app.update();
+        assert_eq!(app.world().resource::<InitializationRuns>().0, 2);
+    }
 
     fn count_wiring_runs(mut runs: ResMut<WiringRuns>, mut dirty: ResMut<UsdWiringDirty>) {
         runs.0 += 1;

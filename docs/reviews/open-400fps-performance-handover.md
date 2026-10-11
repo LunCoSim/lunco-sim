@@ -1,5 +1,57 @@
 # High-quality realtime performance handover
 
+## Admit Modelica source dispatch before its exclusive boundary — 2026-10-11
+
+The USD co-simulation owner uses native pending-source membership and the
+scene-transaction resource to admit source dispatch at its existing ordered
+wiring/defaults boundary. A settled scene with no pending sources skips the
+exclusive system and its World flush. Initial source publication, recompile
+and replacement retain initialization sampling and prim-path compile order.
+This moves an existing engine admission invariant into native run conditions;
+it adds no policy hook, cache, clock, precision conversion or external change.
+
+The focused private ECS test passes deferred source insertion in the same
+Update boundary, held scene transactions, resumption and final-source retirement.
+The normal production artifact is
+`319be0052b4ed35584393d2631239f910c22a3604f57c81d70ff75da47c8da69`.
+Its stable API schema, 18-check telemetry-history gate and scene replacement
+pass. Both 20-rover profiles pass 144 exact checks at widths 24/1 against
+unchanged reference
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+Normal PID 665260 and replay PIDs 666483/666743 exit zero, releasing API 4202.
+Final formatting changes no runtime behavior; source fingerprints and the
+pre-format patch are retained alongside the exact artifacts.
+
+The separate native capture has two source-dispatch calls: initial admission
+and scene replacement. All three settled eight-second View/Build/View windows
+have zero calls; the pending-membership condition averages 2.35/2.11/1.73
+microseconds across 237/219/376 checks. The older native baseline called the
+exclusive dispatcher 513/454/588 times in its corresponding windows, averaging
+103.89/106.23/89.40 microseconds. The changed source bases and workloads do not
+permit a causal elapsed-time comparison. The avoided idle calls are verified;
+whole-app FPS and loading improvement remain unproven.
+
+The 383,668,920-byte capture passes native dispatch, membership and message
+exports. Its 383,596,370-byte compressed payload agrees with reported 365.83
+MiB after container headers. Owned app/collector PIDs 632153/632152 exit zero
+and release API 4202/Tracy 8087. The first unconnected collector attempt is
+invalid profiling evidence; the accepted run explicitly sets `TRACY_PORT=8087`.
+
+The normal High-quality fixed-camera windows preserve 50 bodies, 33 colliders
+and 20 joints, advancing 609/610/606 physics steps. Frame medians are
+10.985/11.421/11.313 ms and readiness is 4.969 seconds. Sibling main/tutorials
+builds overlap; the baseline also overlaps owned offline analysis. These are
+contention-affected observations, not clean FPS or loading acceptance. The
+restart image retains the rendered scene and shadows. The three known authored
+initial-pose pauses remain visible. Broader loading, visual and physics targets
+remain open.
+
+After verifying owned app/build termination, the additional focused
+`cargo clean -p lunco-luncosim` removes 49 files / 4.5 GiB. Source, sibling
+worktrees and shared caches remain intact. Evidence lives under
+`.lunco/performance-evidence/entity-tree-perf/`, with `modelica-source-gate-`
+prefixes. The normal production executable remains available in `target/debug`.
+
 ## Native entity-tree marker admission — 2026-10-11
 
 The scene-edit UI admits `Mesh3d`, `SelectableRoot` and `SceneCamera` additions
@@ -70,8 +122,9 @@ exactly. Its authored observation-failure scene passes the expected terminal
 `modelica-step-failed` verdict without a process crash (owned PID 493809).
 Both 20-rover reference profiles pass 144 checks at widths 24/1 (owned PIDs
 511607/513031). These processes exit zero and release API 4202. Final-merge
-receipts use `entity-tree-admission-final-merge-`; the current normal executable
-is this merged artifact. Earlier history and frame evidence retain their exact
+receipts use `entity-tree-admission-final-merge-`; the normal executable at that
+checkpoint used this merged artifact. Earlier history and frame evidence retain
+their exact
 source bases rather than being claimed as post-merge measurements.
 
 Full `cargo clean` removes 21,581 files / 23.0 GiB after owned sessions close.

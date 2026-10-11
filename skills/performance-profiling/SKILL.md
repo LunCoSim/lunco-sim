@@ -192,6 +192,13 @@ identities before structural mutation. Preserve that system's serial schedule
 position and lifecycle ordering. A settled-frame saving also needs live
 add/remove or replacement evidence, since queries must admit newly matched
 archetypes after startup.
+For USD Modelica source dispatch, inspect pending membership before attributing
+its exclusive span to initialization. Empty calls still flush the World. The
+native component/scene-transaction run conditions skip that boundary only when
+there is no admissible source work. Verify deferred source insertion, scene
+holds and replacement, while retaining the wiring/defaults chain, prim-path
+compile order and initialization sampling. A removed idle span proves avoided
+work; it does not by itself prove loading or whole-app FPS gains.
 The co-simulation endpoint lifecycle publisher uses this native exclusive query
 parameter. Validate its same-frame ready transition and run sandbox binding
 acceptance again after scene replacement; keep immediate endpoint insertion and
