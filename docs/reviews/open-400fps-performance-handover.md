@@ -41,6 +41,16 @@ The candidate Tracy artifact is
 `c18bcc289c94fbf8820c1345e5d8f49ff9c1cd42474a08191f2c7b351ea3d6df`.
 Verified archives and receipts live under
 `.lunco/performance-evidence/entity-tree-perf/modelica-affine-pool-*`.
+Integration preserves newer local-main commits `17b68238c` and `5c9bbee16`.
+The integrated normal production build passes in 4m 09s. Its exact artifact is
+`d55d8e228139bcf5dc60c0fd773a3f8915568d66c61440fecf8579b9a4f268d2`.
+On that artifact, 72 additional exact 20-rover checks, 31 compiled-metadata
+reset/recompile checks, the expected terminal solver-fault gate, scene
+replacement, and the low-level affinity/shutdown/failure seam pass. The brief
+metadata gate advances physics but does not establish sustained mixed-load
+cadence. Preparation and live work share FIFO workers; mixed-load cadence
+acceptance remains open alongside uncontended loading and FPS acceptance.
+
 The normal link initially exhausted disk space; the authorized checkout-only
 `cargo clean` removed 13.4 GiB, and the subsequent normal build passed in 2m 43s.
 Source, retained evidence, sibling sessions and shared caches were preserved.
