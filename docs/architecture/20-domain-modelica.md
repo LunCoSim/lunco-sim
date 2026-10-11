@@ -110,6 +110,11 @@ failure or unexpected worker disconnect travels through the typed worker-wide
 records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
 and step state, and rejects later compiles. This application-owned failure
 survives scene teardown; a buffered success cannot revive a dead worker.
+Participant input, integration, and observation failures are terminal step
+results in both native and browser workers. Only a complete finite observation
+can publish runtime values or a presentation stream. See the
+[checked Rumoca runtime contract](29-rumoca-runtime-contracts.md) for ownership
+and its production negative gate.
 
 Qualified source names share the AST owner's `strip_within_prefix` rule: an
 authored `within` package is removed only at a complete dotted segment boundary.

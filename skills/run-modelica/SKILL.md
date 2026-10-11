@@ -895,6 +895,17 @@ enter `Compile.initial_inputs`; no interface placeholder is an initialization
 value. An unbound input without a declaration default or admitted runtime value
 fails visibly. Reset and reinitialization admit current input values before
 solving initialization equations.
+Input rejection and invalid solver observations stop the affected participant
+with a `modelica-step-failed` runtime fault. Check this boundary through the
+production negative gate:
+
+```sh
+"$LUNCOSIM_BIN" test --scene assets/scenes/tests/modelica_observation_failure.usda \
+  --max-ticks 120 --threads 1 --api 4261
+```
+
+Use an explicit free port owned by the task. A passing gate requires the declared
+terminal fault; advancing past the invalid observation fails the authored verdict.
 
 `modelica_controller_inputs.rhai` accepts the exact authored DescentGuidance
 source snapshot in `RunScenarioAsset.params` (`source` and

@@ -238,6 +238,7 @@ fn build_stepper(
         LiveStepper,
         ModelicaLiveSolverSnapshot,
         std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
+        Vec<(String, f64)>,
     ),
     rumoca_sim::SimulationDiagnosticError,
 > {
@@ -302,7 +303,8 @@ fn build_stepper(
                 })
         })
         .collect();
-    Ok((stepper, plan.snapshot, variable_metadata))
+    let symbols = collect_stepper_observables(&stepper)?;
+    Ok((stepper, plan.snapshot, variable_metadata, symbols))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -868,7 +870,7 @@ fn finish_compile_work(
         prepared_solve_cache,
     );
     match stepper_result {
-        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
+        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
             let CompileWork {
                 entity,
                 session_id,
@@ -894,7 +896,6 @@ fn finish_compile_work(
                     (Some(variable_metadata), None)
                 };
             let input_names = stepper.input_names().to_vec();
-            let symbols = collect_stepper_observables(&stepper);
             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
             cached_models.insert(
                 entity,
@@ -1755,6 +1756,7 @@ fn artifact_still_valid(cached_hash: u64, cached_gen: u64, hash: u64, library_ge
 #[cfg(target_arch = "wasm32")]
 struct CacheRebuild {
     model_name: String,
+    source: Arc<str>,
     /// Revision of the compiler-owned source roots used by this artifact.
     library_revision: Option<u64>,
     /// The instance values that must be supplied to Rumoca when the cached DAE
@@ -1802,6 +1804,7 @@ fn rebuild_from_cache(
         )
     };
     let unit = assemble_compile_unit(&source, extras);
+    let diagnostic_source = Arc::clone(&source);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
     if artifact_still_valid(cached_hash, cached_gen, hash, library_gen) {
         let library_revision = Some(backend.library_revision());
@@ -1812,6 +1815,7 @@ fn rebuild_from_cache(
             .clone();
         return Some(CacheRebuild {
             model_name,
+            source: diagnostic_source,
             library_revision,
             parameter_overrides,
             initial_inputs,
@@ -1829,6 +1833,7 @@ fn rebuild_from_cache(
     }
     Some(CacheRebuild {
         model_name,
+        source: diagnostic_source,
         library_revision: Some(result.library_revision),
         parameter_overrides,
         initial_inputs,
@@ -2066,42 +2071,33 @@ fn submit_cached_solve_preparation(
     }
 }
 
-/// Collect states, inputs and reconstructed algebraic/output observations from
-/// the checked runtime projection. Non-finite values are dropped so the UI never
-/// plots NaN. Filtering out parameters / inputs happens downstream in
-/// [`handle_modelica_responses`]; the admitted variable map and presentation
-/// stream consume this complete observation through their own typed readers.
-pub(crate) trait ObservableStepper {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError>;
-}
-
-impl ObservableStepper for LiveStepper {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
-        self.state()
-    }
-}
-
-impl ObservableStepper for rumoca_sim::SimulationSession {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
-        self.state()
-    }
-}
-
-pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> Vec<(String, f64)> {
-    let Ok(state) = stepper.observable_state() else {
-        return Vec::new();
-    };
-    state
+/// Project the admitted live observation without hiding solver diagnostics.
+fn collect_stepper_observables(
+    stepper: &LiveStepper,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    Ok(stepper
+        .state()?
         .values
         .into_iter()
-        .filter(|(name, val)| val.is_finite() && name != "time")
-        .collect()
+        .filter(|(name, _)| name != "time")
+        .collect())
+}
+
+/// Admit causal inputs, integrate, and read the complete checked observation
+/// before the worker publishes any part of the transaction.
+fn advance_checked_step(
+    stepper: &mut LiveStepper,
+    inputs: &[(String, f64)],
+    dt: f64,
+    stop_time: f64,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    for (name, value) in inputs {
+        stepper.set_input(name, *value)?;
+    }
+    integrate_macro_step(stepper, dt)?;
+    validate_step_completion(stepper.time(), stop_time)
+        .map_err(rumoca_sim::SimulationDiagnosticError::Solver)?;
+    collect_stepper_observables(stepper)
 }
 
 fn capture_initial_inputs(
@@ -2448,27 +2444,6 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
     }
 }
 
-/// `set_input` with the dedup-warn the hot Step path uses: a rejected input
-/// means the compiled model exposes no such runtime slot, so the wired value
-/// is silently discarded forever — warn ONCE per (entity, name).
-#[cfg(not(target_arch = "wasm32"))]
-fn set_input_or_warn(
-    stepper: &mut LiveStepper,
-    rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
-    entity: Entity,
-    name: &str,
-    val: f64,
-) {
-    if stepper.set_input(name, val).is_err() && rejected_inputs.insert((entity, name.to_string())) {
-        warn!(
-            "[modelica] {entity:?} rejected input '{name}' — the \
-             compiled model exposes no such runtime slot, so the \
-             wired value is DISCARDED and the model keeps its \
-             declared default. Verify the admitted model's runtime input names."
-        );
-    }
-}
-
 /// The background worker that owns !Send live steppers, per-entity source
 /// metadata, and the two-lane command scheduler. A separate native actor owns
 /// the mutable Rumoca session and shared compiled-artifact cache.
@@ -2500,8 +2475,6 @@ pub fn modelica_worker(
     // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
-    // Solver input rejections are reported once per entity and qualified name.
-    let mut rejected_inputs: std::collections::HashSet<(Entity, String)> = Default::default();
     // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
     // rebuild steppers from `CachedModel::compiled` without recompiling.
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
@@ -3245,27 +3218,11 @@ pub fn modelica_worker(
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
                                 let step_started = web_time::Instant::now();
-                                for (name, val) in inputs {
-                                    set_input_or_warn(
-                                        stepper,
-                                        &mut rejected_inputs,
-                                        entity,
-                                        &name,
-                                        val,
-                                    );
-                                }
-                                // Macro step: integrate the requested `dt` — the
-                                // gap between the model's clock and the world's —
-                                // as a fixed ladder of micro-steps.
-                                let step_err = integrate_macro_step(stepper, dt)
-                                    .err()
-                                    .map(|error| error.to_string())
-                                    .or_else(|| {
-                                        validate_step_completion(stepper.time(), stop_time).err()
-                                    });
+                                let step_outcome =
+                                    advance_checked_step(stepper, &inputs, dt, stop_time);
                                 let worker_step_duration_ns =
                                     step_started.elapsed().as_nanos() as u64;
-                                if let Some(e) = step_err {
+                                if let Err(e) = &step_outcome {
                                     let mut r = step_result_ok(entity, session_id, step_id);
                                     r.new_time = stepper.time();
                                     r.step_id = Some(step_id);
@@ -3280,7 +3237,8 @@ pub fn modelica_worker(
                                 } else {
                                     // The checked session observation includes
                                     // reconstructed algebraics, outputs, and inputs.
-                                    let outputs = collect_stepper_observables(stepper);
+                                    let outputs = step_outcome
+                                        .expect("successful step outcome checked above");
                                     let new_time = stepper.time();
                                     // Publish the immutable stream projection
                                     // for same-address-space readers. The
@@ -3396,7 +3354,6 @@ pub fn modelica_worker(
                     sim_streams.remove(&entity);
                     current_sessions.remove(&entity);
                     realtime_models.remove(&entity);
-                    rejected_inputs.retain(|(candidate, _)| *candidate != entity);
                 }
                 let _ = tx.send(panic_result);
             }
@@ -3619,29 +3576,42 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     };
                     if let Some(mut rb) = rebuild {
                         merge_initial_inputs(&mut rb.initial_inputs, &inputs);
-                        if let Ok(comp_res) = rb.outcome {
-                            if let Ok((mut s, live_solver_snapshot, variable_metadata)) =
-                                build_stepper(
-                                    &comp_res,
-                                    profile_for(entity, &w.realtime_models),
-                                    &rb.parameter_overrides,
-                                    &rb.initial_inputs,
-                                    comp_res.prepared_source_key,
-                                    rb.library_revision,
-                                    &mut w.prepared_solve_cache,
-                                )
-                            {
-                                for (name, val) in &inputs {
-                                    let _ = s.set_input(name, *val);
-                                }
-                                if let Some(cached) = w.cached_models.get_mut(&entity) {
-                                    cached.live_solver_snapshot = live_solver_snapshot;
-                                    cached.pending_variable_metadata = Some(variable_metadata);
-                                }
-                                w.steppers
-                                    .insert(entity, (session_id, model_name.clone(), s));
+                        let comp_res = match rb.outcome {
+                            Ok(comp_res) => comp_res,
+                            Err(error) => {
+                                let mut result = step_result_ok(entity, session_id, step_id);
+                                result.error = Some(format!("Initialization failed: {error}"));
+                                result.compile_diagnostics = rb.compile_diagnostics;
+                                send(result);
+                                return;
                             }
+                        };
+                        let (stepper, live_solver_snapshot, variable_metadata, _) =
+                            match build_stepper(
+                                &comp_res,
+                                profile_for(entity, &w.realtime_models),
+                                &rb.parameter_overrides,
+                                &rb.initial_inputs,
+                                comp_res.prepared_source_key,
+                                rb.library_revision,
+                                &mut w.prepared_solve_cache,
+                            ) {
+                                Ok(built) => built,
+                                Err(error) => {
+                                    let mut result = step_result_ok(entity, session_id, step_id);
+                                    result.error = Some(format!("Initialization failed: {error}"));
+                                    result.compile_diagnostics =
+                                        diagnostics_from_sim_error(&error, &rb.source);
+                                    send(result);
+                                    return;
+                                }
+                            };
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.live_solver_snapshot = live_solver_snapshot;
+                            cached.pending_variable_metadata = Some(variable_metadata);
                         }
+                        w.steppers
+                            .insert(entity, (session_id, model_name.clone(), stepper));
                     }
                 }
             }
@@ -3665,17 +3635,10 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     let step_started = web_time::Instant::now();
-                    for (name, val) in &inputs {
-                        let _ = stepper.set_input(name, *val);
-                    }
-                    // Same macro-step ladder as the native worker.
-                    let step_err = integrate_macro_step(stepper, dt)
-                        .err()
-                        .map(|error| error.to_string())
-                        .or_else(|| validate_step_completion(stepper.time(), stop_time).err());
+                    let step_outcome = advance_checked_step(stepper, &inputs, dt, stop_time);
                     let worker_step_duration_ns = step_started.elapsed().as_nanos() as u64;
 
-                    if let Some(e) = step_err {
+                    if let Err(e) = &step_outcome {
                         send(ModelicaResult {
                             entity,
                             session_id,
@@ -3694,7 +3657,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         });
                         w.steppers.remove(&entity);
                     } else {
-                        let outputs = collect_stepper_observables(stepper);
+                        let outputs = step_outcome.expect("successful step outcome checked above");
                         if let Some(stream) = w.sim_streams.get(&entity) {
                             let prev = stream.load();
                             let next = SimSnapshot::advance(&prev, stepper.time(), &outputs);
@@ -3726,14 +3689,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     send(step_result_ok(entity, session_id, step_id));
                 }
             } else {
-                // No stepper for this entity. The Bevy-side
-                // `spawn_modelica_requests` is supposed to catch this
-                // and dispatch a Compile first; if we got here the
-                // user pressed Run on a never-compiled model AND the
-                // auto-compile hook didn't fire (e.g. doc id is
-                // missing). Surface a message that tells the user
-                // what to do next instead of "Sim engine failed to
-                // start." which doesn't.
+                // Stepping requires a successfully installed compiled session.
                 send(ModelicaResult {
                     entity,
                     session_id,
@@ -3802,9 +3758,8 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
-                        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                             w.cached_models.insert(
                                 entity,
@@ -3932,8 +3887,8 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some(rb) = rebuild {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok((stepper, live_solver_snapshot, variable_metadata)) =
-                            build_stepper(
+                        let (stepper, live_solver_snapshot, variable_metadata, symbols) =
+                            match build_stepper(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
@@ -3941,45 +3896,37 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 comp_res.prepared_source_key,
                                 rb.library_revision,
                                 &mut w.prepared_solve_cache,
-                            )
-                        {
-                            let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
-                            w.steppers
-                                .insert(entity, (session_id, rb.model_name.clone(), stepper));
-                            if let Some(stream) = w.sim_streams.get(&entity) {
-                                stream.store(Arc::new(SimSnapshot::empty_at_zero()));
-                            }
-                            if let Some(cached) = w.cached_models.get_mut(&entity) {
-                                cached.live_solver_snapshot = live_solver_snapshot.clone();
-                                cached.pending_variable_metadata = None;
-                            }
-                            let mut result = reset_ok(
-                                entity,
-                                session_id,
-                                symbols,
-                                input_names,
-                                "Reset complete.",
-                            );
-                            result.live_solver_snapshot = Some(live_solver_snapshot);
-                            result.variable_metadata = Some(variable_metadata);
-                            send(result);
-                        } else {
-                            send(ModelicaResult {
-                                entity,
-                                session_id,
-                                new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(),
-                                error: Some("Stepper init failed".to_string()),
-                                log_message: None,
-                                is_new_model: false,
-                                is_parameter_update: false,
-                                is_reset: true,
-                                detected_input_names: Vec::new(),
-                                ..Default::default()
-                            });
+                            ) {
+                                Ok(built) => built,
+                                Err(error) => {
+                                    send(ModelicaResult {
+                                        entity,
+                                        session_id,
+                                        is_reset: true,
+                                        error: Some(format!("Reset stepper error: {error}")),
+                                        compile_diagnostics: diagnostics_from_sim_error(
+                                            &error, &rb.source,
+                                        ),
+                                        ..Default::default()
+                                    });
+                                    return;
+                                }
+                            };
+                        let input_names: Vec<String> = stepper.input_names().to_vec();
+                        w.steppers
+                            .insert(entity, (session_id, rb.model_name.clone(), stepper));
+                        if let Some(stream) = w.sim_streams.get(&entity) {
+                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
                         }
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.live_solver_snapshot = live_solver_snapshot.clone();
+                            cached.pending_variable_metadata = None;
+                        }
+                        let mut result =
+                            reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
+                        result.live_solver_snapshot = Some(live_solver_snapshot);
+                        result.variable_metadata = Some(variable_metadata);
+                        send(result);
                     }
                     Err(e) => {
                         send(ModelicaResult {
@@ -4069,9 +4016,8 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
-                        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                             w.cached_models.insert(
                                 entity,
@@ -5068,3 +5014,49 @@ mod live_solver_snapshot_tests {
 }
 
 // ===========================================================================
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod checked_step_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_worker_inputs_return_diagnostics_without_advancing() {
+        let source = "model Probe input Real admitted=1; output Real observed; equation observed=admitted; end Probe;";
+        let compiled = ModelicaCompiler::new()
+            .compile_str("Probe", source, "Probe.mo")
+            .unwrap();
+        for (name, value) in [("unadmitted", 99.0), ("admitted", f64::NAN)] {
+            let plan = live_build_plan(
+                solver::RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
+                &[],
+                &[("admitted".into(), 1.0)],
+                0,
+                Some(0),
+            )
+            .unwrap();
+            let component =
+                rumoca_sim::prepare_fmi_component(&compiled.dae, &plan.options).unwrap();
+            let mut stepper = lunco_modelica_solver::simulation_session::live_from_fmi_component(
+                &component,
+                &plan.spec,
+                plan.options,
+            )
+            .unwrap();
+            let error = advance_checked_step(
+                &mut stepper,
+                &[(name.to_owned(), value)],
+                LIVE_MICRO_DT,
+                LIVE_MICRO_DT,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().to_ascii_lowercase().contains("input"),
+                "{error}"
+            );
+            assert_eq!(stepper.time(), 0.0);
+        }
+    }
+}

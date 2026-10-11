@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "Probe" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/ObservationFailureProbe.mo@
+        uniform bool lunco:program:realtimeSafe = false
+        double outputs:observed = 0.0
+    }
+    def Scope "Test" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/modelica_observation_failure.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+}

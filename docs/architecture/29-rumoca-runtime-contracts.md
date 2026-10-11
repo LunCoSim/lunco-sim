@@ -33,6 +33,12 @@ Run inputs and tunable parameters enter `SimOptions::initial_inputs` and
 parameter dependents. The compiled DAE stays immutable across sweep points. Reset carries current
 admitted inputs explicitly across the worker boundary, including values changed
 while the participant is paused.
+Native and browser workers apply every admitted input through Rumoca's checked
+session API. Input rejection, integration failure, incomplete advancement, and
+observation failure terminate the step without publishing values or a stream
+snapshot. The live solver boundary requires finite time and visible values;
+invalid observations produce a `modelica-step-failed` runtime fault. Initial
+observations are checked before compile, reset, or parameter-update success.
 The source-library bundle stores `ParsedSourceDocument` with expanded source
 text and syntax together. Admission uses `replace_in_memory_source_set`;
 source spans and portable content identities address those retained bytes.
@@ -151,3 +157,7 @@ checks repeated leaf names, inherited array units, scalar bounds, undocumented
 connector-shaped names, reset, unchanged compiled facts during draft edits, and replacement after
 recompilation. Browser compilation is a separate
 check from browser runtime acceptance.
+The production `modelica_observation_failure.usda` gate declares the expected
+terminal fault when a zero-state model's output becomes non-finite. A low-level
+worker test checks unknown and non-finite input packets before integration;
+the public command surface rejects those packets before they reach the worker.
