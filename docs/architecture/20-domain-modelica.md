@@ -55,9 +55,13 @@ attached to 3D entities (Space Systems) in the USD scene.
 The Modelica runtime is **rumoca**, our fork:
 [`github.com/LunCoSim/rumoca`](https://github.com/LunCoSim/rumoca).
 
-The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/).
-It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
-AST interface projections, and parse-time lint facts. It has no Bevy, document,
+Rumoca's `rumoca-phase-parse` owns strict and recovering parsing, including a
+single leading UTF-8 BOM and source coordinates in the original text. Loaders,
+documents, and editor paste retain the authored bytes.
+The production `modelica_source_encoding.rhai` gate verifies exact text, batch
+output and a parser-owned negative diagnostic for the current source generation.
+[`lunco-modelica-ast`](../../crates/lunco-modelica-ast/) owns AST interface
+projections and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless
  document and source-editing seams; `lunco-modelica-compiler` owns the
  headless Rumoca session and compiler-side source admission;

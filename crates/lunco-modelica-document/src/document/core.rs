@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
-#[cfg(not(target_arch = "wasm32"))]
-use lunco_modelica_ast::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
+#[cfg(not(target_arch = "wasm32"))]
+use rumoca_phase_parse::parse_to_syntax;
 
 use super::ops::{CHANGE_HISTORY_CAPACITY, FreshAst, ModelicaChange, ModelicaOp};
 use lunco_modelica_index::index::ModelicaIndex;
@@ -467,15 +467,9 @@ impl ModelicaDocument {
     /// diff is a no-op (the source structure already matches the index), so no
     /// spurious `ClassAdded`/`Removed` is emitted.
     fn reparse_source_ast(&mut self) {
-        // There is exactly ONE way to turn live source into a SyntaxCache:
-        // `SyntaxCache::from_source`, which parses with error RECOVERY so a
-        // broken class never wipes its healthy siblings. refresh_ast_now MUST
-        // NOT parse the source any other way — the old divergence here was a
-        // strict `parse_to_ast` that returned an empty AST on any error,
-        // silently emptying the class tree (browser/index) while the async
-        // worker path (`from_source` → `install_parse_results`) kept it. Source
-        // library bundle adoption is an engine concern; this document package
-        // intentionally has one local parser path.
+        // Recovering syntax retains healthy declarations and current source
+        // diagnostics. Documents use this same local parser path for edits;
+        // source-library bundle admission belongs to the engine.
         self.syntax = Arc::new(SyntaxCache::from_source(&self.source, self.generation));
         self.rebuild_index();
         self.last_source_edit_at = None;

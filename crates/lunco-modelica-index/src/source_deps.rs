@@ -19,7 +19,7 @@ pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
 
 /// Scan source text for the source-root segments it references.
 pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<String> {
-    lunco_modelica_ast::parse_to_ast(source, uri)
+    rumoca_phase_parse::parse_to_ast(source, uri)
         .map(|ast| scan_source_root_deps(&ast))
         .unwrap_or_default()
 }

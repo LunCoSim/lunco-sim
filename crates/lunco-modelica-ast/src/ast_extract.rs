@@ -40,13 +40,13 @@ pub fn is_plot_node_record_call(expr: &Expression) -> bool {
 /// high-level API that extracts all symbols in one pass.
 fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
     // Interface metadata uses the compiler's tolerant syntax projection.
-    crate::parse_to_syntax(source, file_label)
+    rumoca_phase_parse::parse_to_syntax(source, file_label)
         .best_effort()
         .clone()
 }
 
 fn parse(source: &str) -> Option<StoredDefinition> {
-    let syntax = crate::parse_to_syntax(source, "model.mo");
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
     (!syntax.has_errors()).then(|| syntax.best_effort().clone())
 }
 
@@ -980,7 +980,7 @@ mod tests {
   input Real drive = sin(gain);
   Real temperature(unit="\"K\"") "\"Case\" " + "temperature\\n";
 end Metadata;"#;
-        let ast = crate::parse_to_ast(source, "metadata.mo").expect("valid metadata");
+        let ast = rumoca_phase_parse::parse_to_ast(source, "metadata.mo").expect("valid metadata");
         let class = &ast.classes["Metadata"];
         let components = extract_components_for_class(class);
         let value = components.iter().find(|c| c.name == "value").unwrap();
@@ -1019,13 +1019,13 @@ end Metadata;"#;
                 "encapsulated\npartial model Part Real value; end Part\n;",
             ),
         ] {
-            let syntax = crate::parse_to_syntax(source, "class-span.mo");
+            let syntax = rumoca_phase_parse::parse_to_syntax(source, "class-span.mo");
             assert!(!syntax.has_errors());
             let ast = syntax.parsed().expect("valid inline source");
             let class = &ast.classes["Root"].classes["B"].classes["Part"];
             let (start, end) = class_full_text_span(class, source);
             assert_eq!(&source[start..end], expected);
-            assert!(!crate::parse_to_syntax(expected, "extracted.mo").has_errors());
+            assert!(!rumoca_phase_parse::parse_to_syntax(expected, "extracted.mo").has_errors());
         }
     }
 

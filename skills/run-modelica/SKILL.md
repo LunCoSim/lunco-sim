@@ -373,6 +373,12 @@ use `Duplicate to edit`, then perform the same placement check. A drag that
 appears to work but disappears on reload is a product bug, not an acceptable
 generated-model editing mode.
 
+Parse original UTF-8 source through `rumoca_phase_parse`'s strict or recovering
+entry point. The parser accepts a single leading BOM and keeps raw byte offsets;
+loaders and editor paste must preserve the text and line endings.
+Verify source preservation, original-source batch compilation and current-generation
+parser rejection through `assets/scenarios/tests/modelica_source_encoding.rhai`.
+
 Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
 query for exact source selection and editing. `relative_class_name` strips only
 the actual authored `within` package. Use `rumoca_core::qualified_name_segments`

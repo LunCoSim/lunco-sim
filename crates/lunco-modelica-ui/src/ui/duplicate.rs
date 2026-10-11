@@ -29,7 +29,7 @@ pub(crate) fn extract_class_spans_inline(
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
-    let syntax = lunco_modelica_ast::parse_to_syntax(source, "duplicate-inline.mo");
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "duplicate-inline.mo");
     if syntax.has_errors() {
         return None;
     }
@@ -131,7 +131,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Result<Vec
 
 #[cfg(not(target_arch = "wasm32"))]
 fn package_imports(source: &str) -> Result<Vec<String>, String> {
-    let syntax = lunco_modelica_ast::parse_to_syntax(source, "duplicate-package.mo");
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "duplicate-package.mo");
     if syntax.has_errors() {
         return Err("package has syntax errors".into());
     }
@@ -289,7 +289,7 @@ pub(crate) fn build_duplicate_source(
         }
         None => renamed,
     };
-    let syntax = lunco_modelica_ast::parse_to_syntax(&source, "duplicate-result.mo");
+    let syntax = rumoca_phase_parse::parse_to_syntax(&source, "duplicate-result.mo");
     if syntax.has_errors() || syntax.parsed().is_none() {
         return Err("rewritten duplicate contains invalid Modelica syntax".to_owned());
     }
@@ -300,11 +300,9 @@ pub(crate) fn build_duplicate_source(
 mod tests {
     use super::*;
 
-    /// The exact oracle the engine uses to gate diagram projection: the
-    /// lenient parser's recovery error set. `parse_to_ast(..).is_ok()`
-    /// would lie — rumoca recovers from errors and still returns a tree.
+    /// Gate diagram projection on the recovering syntax diagnostics.
     fn parses_clean(src: &str) -> bool {
-        !lunco_modelica_ast::parse_to_syntax(src, "dup-test.mo").has_errors()
+        !rumoca_phase_parse::parse_to_syntax(src, "dup-test.mo").has_errors()
     }
 
     /// Mirror the read-only duplicate flow: extract spans from the full

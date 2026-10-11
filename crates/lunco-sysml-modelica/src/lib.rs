@@ -4,15 +4,16 @@
 //! This crate is deliberately downstream of [`lunco_sysml_ir`]. It does not
 //! inspect SysML text, infer types from names, or implement a second Modelica
 //! parser. The backend renders only typed IR nodes, then uses
-//! `lunco-modelica-ast::parse_to_ast` so Rumoca owns Modelica syntax and
+//! `rumoca_phase_parse::parse_to_ast` so Rumoca owns Modelica syntax and
 //! recovery/validation.
 
-use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
+use lunco_modelica_ast::StoredDefinition;
 use lunco_sysml_ast::{SysmlFeatureHandle, SysmlFeaturePath};
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
     IrStandardConstant, IrStandardFunction, IrType, IrValueType,
 };
+use rumoca_phase_parse::parse_to_ast;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 

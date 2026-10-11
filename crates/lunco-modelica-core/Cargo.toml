@@ -25,6 +25,7 @@ server = ["api"]
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+rumoca-phase-parse.workspace = true
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-hooks = { path = "../lunco-hooks" }

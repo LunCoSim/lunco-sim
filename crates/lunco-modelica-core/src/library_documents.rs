@@ -66,7 +66,7 @@ pub async fn load_library_class(
     #[cfg(not(target_arch = "wasm32"))]
     let ast: StoredDefinition = match bundled_ast {
         Some(ast) => ast,
-        None => lunco_modelica_ast::parse_to_ast(&full_source, &key)
+        None => rumoca_phase_parse::parse_to_ast(&full_source, &key)
             .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
     };
 
@@ -120,17 +120,17 @@ mod tests {
     #[test]
     fn library_class_selection_requires_exact_qualified_identity() {
         let source = "package Root package A model Part Real fromA; end Part; end A; package B model Part Real fromB; end Part; end B; end Root;";
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "siblings.mo");
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "siblings.mo");
         let ast = syntax.parsed().expect("valid inline source");
         let selected =
             super::selected_class_source(ast, source, "Root.B.Part").expect("exact class");
         assert!(selected.starts_with("within Root.B;\nmodel Part"));
         assert!(selected.contains("fromB"));
         assert!(!selected.contains("fromA"));
-        assert!(!lunco_modelica_ast::parse_to_syntax(&selected, "selected.mo").has_errors());
+        assert!(!rumoca_phase_parse::parse_to_syntax(&selected, "selected.mo").has_errors());
         assert!(super::selected_class_source(ast, source, "Root.C.Part").is_err());
         let source = "within Root.B; model Part Real fromB; end Part;";
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "within.mo");
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "within.mo");
         let ast = syntax.parsed().expect("valid inline source");
         assert!(super::selected_class_source(ast, source, "Root.B.Part").is_ok());
         assert!(super::selected_class_source(ast, source, "Root.BPart").is_err());

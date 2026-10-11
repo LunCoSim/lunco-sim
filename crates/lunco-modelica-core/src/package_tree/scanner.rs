@@ -184,7 +184,7 @@ pub(crate) fn scan_library_dir_native(dir: &Path, package_path: String) -> Vec<P
     if pkg_mo.is_file() {
         if let Ok(source) = std::fs::read_to_string(&pkg_mo) {
             let ast =
-                lunco_modelica_ast::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
+                rumoca_phase_parse::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
             if let Some((_, top_class)) = ast.classes.iter().next() {
                 let existing_names: std::collections::HashSet<String> =
                     results.iter().map(|n| n.name().to_string()).collect();
@@ -279,7 +279,7 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
     let Ok(source) = std::fs::read_to_string(path) else {
         return leaf_unknown();
     };
-    let ast = lunco_modelica_ast::parse_to_recovered_ast(&source, &path.display().to_string());
+    let ast = rumoca_phase_parse::parse_to_recovered_ast(&source, &path.display().to_string());
     let Some((_, top_class)) = ast.classes.iter().next() else {
         return leaf_unknown();
     };
@@ -287,7 +287,7 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
 }
 
 pub fn peek_class_kind_from_source(src: &str) -> Option<lunco_modelica_index::index::ClassKind> {
-    let ast = lunco_modelica_ast::parse_to_recovered_ast(src, "");
+    let ast = rumoca_phase_parse::parse_to_recovered_ast(src, "");
     ast.classes
         .iter()
         .next()

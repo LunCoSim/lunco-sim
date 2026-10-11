@@ -6,9 +6,9 @@
 //! components survive.
 
 use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica_ast::parse_to_ast;
 use lunco_modelica_ast::pretty::Placement;
 use rumoca_ir_ast::{ClassDef, Component, Expression};
+use rumoca_phase_parse::parse_to_ast;
 
 /// End-to-end harness — parse, run `op`, apply its splice, reparse, return the
 /// post-mutation `Component`.

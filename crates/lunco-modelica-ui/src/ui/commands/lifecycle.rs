@@ -1868,7 +1868,7 @@ mod file_diagnostic_lifecycle_tests {
         let unique = unique_in_memory_name(&cache, &base);
         assert_eq!(unique, "'Part NameCopy2'");
         assert!(
-            !lunco_modelica_ast::parse_to_syntax(
+            !rumoca_phase_parse::parse_to_syntax(
                 &format!("model {unique} end {unique};"),
                 "inline.mo"
             )

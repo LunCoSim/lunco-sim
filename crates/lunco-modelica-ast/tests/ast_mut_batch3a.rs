@@ -8,9 +8,9 @@
 //! `host.apply` lives in `tests/op_to_patch_batch3a.rs`.
 
 use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica_ast::parse_to_ast;
 use lunco_modelica_ast::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
 use rumoca_ir_ast::{ClassDef, StoredDefinition};
+use rumoca_phase_parse::parse_to_ast;
 
 fn mutate_class<F>(source: &str, class_name: &str, op: F) -> ClassDef
 where

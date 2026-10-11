@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use lunco_modelica_ast::parse_to_ast;
+//! use rumoca_phase_parse::parse_to_ast;
 //! use lunco_modelica_core::diagram::ModelicaComponentBuilder;
 //!
 //! let ast = parse_to_ast(source, "model.mo").unwrap();
@@ -68,27 +68,6 @@ impl ModelicaComponentBuilder {
             diagram_type: DiagramType::BlockDiagram,
             target_class: None,
         }
-    }
-
-    /// Create a new builder from raw Modelica source code.
-    ///
-    /// Uses rumoca's error-recovering `parse_to_syntax(...).best_effort()`
-    /// so partial / semantically-invalid sources still produce a
-    /// usable AST. The editor and diagram renderer should never go
-    /// blank just because the user typed a duplicate name, a missing
-    /// semicolon, or a half-finished construct — those are
-    /// diagnostics, not "the file ceased to exist" signals, and they
-    /// should match OMEdit / Dymola's "show everything, flag the
-    /// problem" behaviour.
-    ///
-    /// Returns `None` only if rumoca couldn't even construct a
-    /// recovery tree (i.e. catastrophically broken input). In
-    /// practice `parse_to_syntax` always returns *something*, so the
-    /// `None` branch is defensive.
-    pub fn from_source(source: &str) -> Option<Self> {
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "model.mo");
-        let ast: StoredDefinition = syntax.best_effort().clone();
-        Some(Self::from_ast(std::sync::Arc::new(ast)))
     }
 
     /// Set the diagram type to generate.
@@ -1014,6 +993,12 @@ fn collect_class_names(class: &ClassDef, prefix: &str, names: &mut Vec<(String, 
 mod tests {
     use super::*;
 
+    fn source_builder(source: &str) -> ModelicaComponentBuilder {
+        let ast = rumoca_phase_parse::parse_to_ast(source, "diagram-fixture.mo")
+            .expect("valid diagram source fixture");
+        ModelicaComponentBuilder::from_ast(std::sync::Arc::new(ast))
+    }
+
     #[test]
     fn test_block_diagram_rc_circuit() {
         let source = r#"
@@ -1057,7 +1042,7 @@ equation
   p.v - n.v = V;
 end VoltageSource;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::BlockDiagram)
             .target_class("RC_Circuit")
@@ -1094,7 +1079,7 @@ equation
   m * der(v) = -k * x;
 end SpringMass;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder.build();
 
         // SpringMass has no connect() equations, so no edges
@@ -1122,7 +1107,7 @@ model Capacitor
   Pin n;
 end Capacitor;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::ConnectionDiagram)
             .target_class("RC_Circuit")
@@ -1150,7 +1135,7 @@ package MyLib
   end Circuits;
 end MyLib;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder.diagram_type(DiagramType::PackageHierarchy).build();
 
         // Should have MyLib, Components, Resistor, Circuits, RC
@@ -1224,7 +1209,7 @@ block Gain
   RealOutput y;
 end Gain;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::BlockDiagram)
             .target_class("PID")
@@ -1262,7 +1247,7 @@ package MyLib
   end C;
 end MyLib;
 "#;
-        let ast = lunco_modelica_ast::parse_to_ast(source, "test.mo").unwrap();
+        let ast = rumoca_phase_parse::parse_to_ast(source, "test.mo").unwrap();
         let names = list_class_names(&ast);
         assert!(names.contains(&"MyLib".to_string()));
         assert!(names.contains(&"MyLib.A".to_string()));

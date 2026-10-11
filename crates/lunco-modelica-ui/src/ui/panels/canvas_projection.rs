@@ -544,7 +544,7 @@ pub fn import_model_to_diagram_from_ast(
             .join(".");
         if !pkg.is_empty() {
             if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                if let Ok(pkg_ast) = lunco_modelica_ast::parse_to_ast(&bundled, "within-pkg.mo") {
+                if let Ok(pkg_ast) = rumoca_phase_parse::parse_to_ast(&bundled, "within-pkg.mo") {
                     for (_top_name, top_class) in pkg_ast.classes.iter() {
                         for (nested_name, nested_class) in top_class.classes.iter() {
                             register_local_class(
@@ -1546,7 +1546,7 @@ end CompositeFixture;
     fn composite_slim_slice_projects_component_nodes() {
         let full = COMPOSITE_SOURCE;
         // Reproduce load_library_class's slice: within + RocketStage body.
-        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
         let class = ast_full
             .get_class_by_qualified_name("CompositeFixture.RocketStage")
             .expect("RocketStage in package");
@@ -1554,7 +1554,7 @@ end CompositeFixture;
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let ast =
-            std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(&slim, "rs_slim.mo").unwrap());
+            std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap());
         let layout = DiagramAutoLayoutSettings::default();
         let diagram = import_model_to_diagram_from_ast(
             ast,
@@ -1593,7 +1593,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            lunco_modelica_ast::parse_to_ast(source, "generated.mo")
+            rumoca_phase_parse::parse_to_ast(source, "generated.mo")
                 .expect("generated source fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1643,7 +1643,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            lunco_modelica_ast::parse_to_ast(source, "generated-placement.mo")
+            rumoca_phase_parse::parse_to_ast(source, "generated-placement.mo")
                 .expect("generated placement fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1682,13 +1682,13 @@ end Unit_One;
         let full = COMPOSITE_SOURCE;
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
-            let ast = std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(src, "x.mo").unwrap());
+            let ast = std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap());
             import_model_to_diagram_from_ast(ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout)
                 .map(|d| d.nodes.len())
                 .unwrap_or(0)
         };
         // slim slice with no target
-        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
         let class = ast_full
             .get_class_by_qualified_name("CompositeFixture.RocketStage")
             .unwrap();

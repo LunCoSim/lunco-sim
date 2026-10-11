@@ -1063,19 +1063,7 @@ impl Panel for CodeEditorPanel {
             // since the previous frame, and apply it at the cursor (or
             // replace the selection).
             if !is_ro {
-                if let Some(raw_paste) = crate::ui::wasm_clipboard::take_pending_paste() {
-                    // Normalise line endings + strip a leading BOM. The
-                    // OS clipboard frequently delivers CRLF (Windows) or
-                    // CR-only (rare, but some terminals) sequences;
-                    // rumoca's lexer expects LF and panics on a non-
-                    // char-boundary slice when it tries to advance over
-                    // a CR. The BOM strip handles UTF-8-with-BOM text
-                    // pasted from Windows tools.
-                    let paste_text = raw_paste.replace("\r\n", "\n").replace('\r', "\n");
-                    let paste_text = paste_text
-                        .strip_prefix('\u{FEFF}')
-                        .map(|s| s.to_string())
-                        .unwrap_or(paste_text);
+                if let Some(paste_text) = crate::ui::wasm_clipboard::take_pending_paste() {
                     let (start, end) = selection_chars.unwrap_or_else(|| {
                         let cur = egui::TextEdit::load_state(ui.ctx(), text_edit_id)
                             .and_then(|s| s.cursor.char_range())
@@ -1177,14 +1165,9 @@ impl Panel for CodeEditorPanel {
             if buffer_changed {
                 let buf_state = &mut *buf;
                 buf_state.text = new_text.clone();
-                // NOTE: do NOT call `extract_model_name(&buf_state.text)`
-                // here. That function runs a full rumoca parse which
-                // takes seconds on a non-trivial source and visibly
-                // stalls the UI on every keystroke (see warning in
-                // `ast_extract.rs::extract_model_name` doc — and we
-                // hit a real freeze + occasional rumoca panic when this
-                // ran per-edit). `detected_name` is updated through the
-                // worker-parsed AST path on commit/flush; the live UI
+                // Keep full source parsing off the UI thread.
+                // `detected_name` is updated through the worker-parsed
+                // AST path on commit/flush; the live UI
                 // consumers (inspector, model_view, package_browser,
                 // canvas overlays) read it from the per-doc Index on
                 // the registry, which is refreshed off-thread.

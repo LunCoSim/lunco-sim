@@ -742,7 +742,7 @@ mod tests {
     use super::target_unit_instance;
 
     fn fixture() -> rumoca_compile::parsing::ast::StoredDefinition {
-        lunco_modelica_ast::parse_to_ast(
+        rumoca_phase_parse::parse_to_ast(
             r#"
 model Root
   Unit_One left;
@@ -774,7 +774,7 @@ end Unit_Two;
 
     #[test]
     fn repeated_unit_types_are_not_guessed() {
-        let ast = lunco_modelica_ast::parse_to_ast(
+        let ast = rumoca_phase_parse::parse_to_ast(
             r#"
 model Root
   Unit_One left;

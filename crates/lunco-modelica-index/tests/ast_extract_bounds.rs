@@ -15,7 +15,7 @@ end BoundsFixture;
 
 #[test]
 fn bounds_extraction_finds_valve_opening_min_max() {
-    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "bounds_fixture.mo").expect("parses");
+    let ast = rumoca_phase_parse::parse_to_ast(SOURCE, "bounds_fixture.mo").expect("parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, SOURCE);
     let entry = index
@@ -40,7 +40,7 @@ equation
   thrust = throttle * max_rate;
 end DescriptionFixture;
 "#;
-    let ast = lunco_modelica_ast::parse_to_ast(source, "description_fixture.mo")
+    let ast = rumoca_phase_parse::parse_to_ast(source, "description_fixture.mo")
         .expect("description fixture parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, source);
