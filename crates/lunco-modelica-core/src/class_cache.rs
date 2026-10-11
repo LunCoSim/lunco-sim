@@ -19,7 +19,7 @@
 //! ## Bootstrap timing
 //!
 //! Web: `engine_resource::drive_source_bundle_bootstrap` calls
-//! `replace_parsed_source_set("source-bundle", DurableExternal, …)` once the parsed
+//! `replace_in_memory_source_set("source-bundle", DurableExternal, …)` once the parsed
 //! bundle is resident. After that point every source library class is resolvable without
 //! per-class disk I/O.
 //!
@@ -198,14 +198,14 @@ pub fn peek_or_load_class_blocking(
         lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
             bundle
                 .iter()
-                .any(|(candidate, _)| candidate == &uri)
+                .any(|document| document.uri() == uri)
                 .then_some(bundle)
         });
     if let Some(bundle) = library_bundle {
         let mut engine = handle.lock();
         if !engine.source_set_installed("source-bundle") {
             let docs = (**bundle).clone();
-            let count = engine.replace_parsed_source_set(
+            let count = engine.replace_in_memory_source_set(
                 "source-bundle",
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
                 docs,

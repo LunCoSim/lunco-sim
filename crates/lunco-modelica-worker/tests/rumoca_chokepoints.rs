@@ -1,17 +1,4 @@
-//! Source-scanning guards for the rumoca workaround chokepoints
-//! (`docs/architecture/29-rumoca-workarounds.md`). The guards scan both the
-//! compiler package and the runtime packages so moving a runtime seam cannot
-//! accidentally leave the compiler-side invariants untested.
-//!
-//! A workaround only works if EVERY path goes through it. These bugs are all
-//! silent — a bypassed path doesn't crash, it just quietly returns wrong numbers
-//! (a frozen model clock, a demoted input, a corrupted binding). So discipline
-//! and a code comment are not enough: the bypasses have to be mechanically
-//! impossible to add back without a test going red.
-//!
-//! An audit at the 0.9.20 bump found FIVE live bypasses of the input-strip alone
-//! — including the entire experiments/FastRun surface, i.e. the very feature
-//! whose job is to override inputs. That is what these guards exist to prevent.
+//! Source ownership checks for the Modelica runtime construction boundaries.
 
 use std::path::{Path, PathBuf};
 
@@ -47,21 +34,7 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
-/// **`SimOptions` may only be constructed by the ONE canonical translator.**
-///
-/// `SimulationSession` silently clamps every `step`/`advance_to` at
-/// `SimOptions::t_end`, and the `Default` is `1.0` — so a hand-rolled
-/// `SimOptions` parks the model clock at t=1s and reports a frozen model as a
-/// successful run (a 60 s rocket burn once drained exactly 1 s of propellant).
-///
-/// `lunco_modelica_solver::solver_backends::rumoca_options` is the only place
-/// that builds one: it turns
-/// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
-/// policy entry points state parameters and delegate to it, never construct:
-/// * `lunco_modelica_runner::stepper_options_from_bounds` — batch / offline / FastRun
-/// * `lunco_modelica_worker::worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
-///
-/// Everything else — including `src/bin/` — must take options from one of those.
+/// Solver options are translated once from the registered capability and params.
 #[test]
 fn sim_options_are_built_only_by_the_canonical_builders() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -92,26 +65,14 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
     assert!(
         offenders.is_empty(),
         "SimOptions is built only by `lunco_modelica_solver::solver_backends::rumoca_options`, reached \
-         through `stepper_options_from_bounds` (batch) or `live_stepper_options` (live) — \
-         a hand-rolled one inherits t_end=1.0 and silently freezes the model \
-         clock. See docs/architecture/29-rumoca-workarounds.md §1.\n\
+         through `stepper_options_from_bounds` (batch) or `live_stepper_options` (live); see \
+         docs/architecture/29-rumoca-runtime-contracts.md.\n\
          Offending sites:\n  {}",
         offenders.join("\n  ")
     );
 }
 
-/// **No production path may re-emit source through rumoca's `to_modelica()`.**
-///
-/// The emitter is a lossy round-trip: it drops comments, and it conflates a
-/// component's `start` modifier with its declaration binding — so
-/// `parameter Real m(start = 1, min = 0) = 5` comes back as `m(min = 0) = 1`
-/// and `parameter Real k = 2.0` as `k = 0.0`. Structural ops used to rebuild a
-/// whole class with it, which meant dragging one icon on the canvas silently
-/// rewrote every other declaration in that class. Wrong numbers, no error.
-///
-/// Ops now splice: they rewrite the bytes they own and copy the rest of the
-/// source through untouched (`ast_mut/edit.rs`). Nothing in `src/` may call the
-/// emitter again. See docs/architecture/29-rumoca-workarounds.md §5.
+/// Authored edits preserve unclaimed source bytes through splices.
 #[test]
 fn source_is_never_regenerated_through_the_rumoca_emitter() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -137,12 +98,7 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
 
     assert!(
         offenders.is_empty(),
-        "rumoca's `to_modelica()` emitter must not be used to produce source: it drops \
-         comments and corrupts declarations that carry both a `start` modifier and a \
-         binding. Author the bytes you mean to change as a splice (`ast_mut::Edit`), and \
-         render genuinely NEW nodes with `lunco_modelica_ast::pretty`. \
-         See docs/architecture/29-rumoca-workarounds.md §5.\n\
-         Offending sites:\n  {}",
+        "source edits must use the shared span-splice owner; offending sites:\n {}",
         offenders.join("\n  ")
     );
 }
@@ -165,7 +121,7 @@ fn user_source_is_seated_through_one_owner() {
 
     // Exactly one compile-session write is expected: `seat_user_source`, the
     // chokepoint for a user model document. Library roots are parsed and
-    // installed through `replace_parsed_source_set` in
+    // installed through `replace_in_memory_source_set` in
     // `load_source_root_in_memory`, so they do not add a second
     // `update_document`/`add_document` site.
     assert_eq!(

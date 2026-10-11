@@ -29,9 +29,9 @@
 //        kind  "algebraic" | "state" | "parameter" | "discrete" | "input" |
 //              "unknown" (inherited through `extends`, a sub-component member
 //              like `tank.level`, or the parse lost the declaration)
-//        form  "if-expression"  `x = if c then e else 0`   ← the silent zero
+//        form  "if-expression"  `x = if c then e else 0`
 //              "if-equation"    `if c then x = a; end if;`
-//              "when-equation"  a discrete event — a DIFFERENT defect
+//              "when-equation"  a discrete event
 //              "if-statement" / "when-statement" in an algorithm section
 //        section  "equation" | "initial-equation" | "algorithm" |
 //                 "initial-algorithm"
@@ -85,100 +85,6 @@ fn input_shadows_parameter(facts) {
     out
 }
 
-/// **An algebraic observable is defined behind a branch.**
-///
-/// rumoca's solver path is BRANCH-FREE, and its elimination reconstructor
-/// substitutes continuous expressions only. `x = if cond then e else 0` therefore
-/// parses, compiles, and then evaluates as literal **0** at every step — the
-/// variable reports a plausible-looking zero instead of failing, and every
-/// observable computed from it goes to zero with it. This is the defect that made
-/// `RocketEngine`'s thrust read 0 at full throttle.
-///
-/// The fix is always to rewrite the equation branch-free: a one-sided quantity is
-/// a `max(0, …)`, a two-sided clamp is `min(hi, max(lo, …))`, and a gate is a
-/// product of such terms rather than a test. Keep the arithmetic; drop the
-/// branch.
-fn conditional_algebraic_observable(facts) {
-    let out = [];
-    for eq in facts.conditional_constructs {
-        if eq.form != "if-expression" { continue; }
-        if eq.kind != "algebraic" { continue; }
-        let name = eq.name;
-        let msg = "`";
-        msg += name;
-        msg += "` is an algebraic variable defined behind a conditional. rumoca's";
-        msg += " solver path is branch-free and reconstructs continuous";
-        msg += " expressions only, so this equation evaluates as literal 0 at";
-        msg += " every step — silently, with no compile or run error. Rewrite it";
-        msg += " branch-free: a one-sided quantity (a contact force, a";
-        msg += " non-negative flow) becomes `max(0.0, ...)`, a bounded one";
-        msg += " `min(hi, max(lo, ...))`, and a gate becomes a PRODUCT of such";
-        msg += " terms instead of a test. Keep the arithmetic, drop the `if`.";
-        out.push(finding("conditional-algebraic-observable", "error", name, msg));
-    }
-    out
-}
-
-/// The same branch, on a variable this file does not declare — inherited through
-/// `extends`, a member of a sub-component (`tank.level`), or a declaration the
-/// recovering parser lost. It is reported SEPARATELY and as a warning because the
-/// facts cannot prove the variable is a continuous algebraic: acting on it needs
-/// the author to look, and an error here would be a guess wearing certainty.
-fn conditional_equation_of_unknown_variable(facts) {
-    let out = [];
-    for eq in facts.conditional_constructs {
-        if eq.form != "if-expression" { continue; }
-        if eq.kind != "unknown" { continue; }
-        let subject = eq.name;
-        if subject == "" { subject = "equation"; }
-        let msg = "The equation at line ";
-        msg += eq.line;
-        msg += " defines `";
-        msg += subject;
-        msg += "` from a conditional expression. rumoca's solver path is";
-        msg += " branch-free, so a conditional here reads as literal 0 if the";
-        msg += " variable is continuous. This file does not declare `";
-        msg += subject;
-        msg += "` (it is inherited, a sub-component member, or the parse lost";
-        msg += " the declaration), so the check cannot prove that — check it,";
-        msg += " and if it is continuous rewrite the branch as `max`/`min`";
-        msg += " arithmetic.";
-        out.push(finding("conditional-equation-unresolved", "warning", subject, msg));
-    }
-    out
-}
-
-/// **A branch construct is unsupported by the current Rumoca execution path.**
-///
-/// The AST projection stays neutral. This reloadable rule covers structural
-/// equation/algorithm branches and conditional expressions on other declared
-/// variable kinds; the specialized rules retain the actionable algebraic and
-/// unresolved cases.
-fn unsupported_conditional_construct(facts) {
-    let out = [];
-    for construct in facts.conditional_constructs {
-        if construct.form == "if-expression" {
-            if construct.kind == "algebraic" || construct.kind == "unknown" { continue; }
-        }
-        let subject = construct.name;
-        if subject == "" { subject = "equation"; }
-        let msg = "The `";
-        msg += construct.form;
-        msg += "` at line ";
-        msg += construct.line;
-        msg += " in the `";
-        msg += construct.section;
-        msg += "` section is not supported by rumoca's branch-free execution path. Rewrite the model with branch-free arithmetic such as `max()` or `min()`.";
-        out.push(finding("conditional-construct-unsupported", "error", subject, msg));
-    }
-    out
-}
-
 fn lint_modelica(facts) {
-    let out = [];
-    for f in input_shadows_parameter(facts) { out.push(f); }
-    for f in conditional_algebraic_observable(facts) { out.push(f); }
-    for f in conditional_equation_of_unknown_variable(facts) { out.push(f); }
-    for f in unsupported_conditional_construct(facts) { out.push(f); }
-    out
+    input_shadows_parameter(facts)
 }

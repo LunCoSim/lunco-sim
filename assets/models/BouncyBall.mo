@@ -13,11 +13,8 @@ model BouncyBall
 equation
   v = der(h);
 
-  // Continuous floor force model for better solver stability. rumoca is branch-free
-  // (`if` in an equation section reconstructs as literal 0, so f_floor would read zero
-  // and the ball would fall straight through), so contact is a continuous gate rather
-  // than a test: exactly 0 above the floor, exactly 1 once penetration exceeds h_band.
-  // Inside the gate the force is the unchanged compliant spring-damper.
+  // Compliant contact ramps from zero above the floor to one after h_band
+  // penetration; the force inside the band uses the spring-damper law.
   contact = min(max(-h / h_band, 0.0), 1.0);
   f_floor = (-k_floor * h - d_floor * v) * contact;
 

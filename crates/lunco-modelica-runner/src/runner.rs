@@ -3,26 +3,10 @@
 //!
 //! See `docs/architecture/25-experiments.md` for the design.
 //!
-//! ## Parameter / input injection
-//!
-//! Inputs and parameter overrides are applied at the **DAE level** by
-//! rebinding each target variable's `start` after a single clean compile
-//! (see [`apply_value_bindings_to_dae`]) — the authored source is never
-//! mutated for an individual run. One compile is shared across a whole
-//! sweep. A target that is neither a top-level DAE parameter nor input
-//! (or a non-scalar value) is a hard error rather than a silent re-compile.
-//!
-//! - Fast Runs use the configured bounded scheduler on native and wasm.
-//!
-//! ## Compile-once parameter sweeps
-//! Overrides are applied at the *DAE* level, not by reflattening per run.
-//! `run_inner` compiles the source ONCE, caches the resulting `Dae` keyed by
-//! a hash of the model source (`dae_cache`; see [`dae_cache_key`]), and for
-//! each sweep point rebinds the target variables' `start` to literals via
-//! [`apply_value_bindings_to_dae`]. This relies on rumoca's
-//! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
-//! derived parameters symbolic so they recompute at `SimulationSession::new`.
-//! Invalid binding targets or non-scalar values produce a terminal run error.
+//! Run values enter `SimOptions::param_overrides` and `initial_inputs` at
+//! simulation preparation. The checked compiled DAE remains immutable and
+//! shared across parameter sweeps. Rumoca validates targets, recomputes
+//! parameter dependents, and initializes the model with the admitted inputs.
 
 #[cfg(target_arch = "wasm32")]
 use lunco_core_runtime::LockExt;
@@ -42,12 +26,6 @@ use lunco_experiments::{
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
 use rumoca_compile::compile::Dae;
-// Used by `apply_value_bindings_to_dae` on both platforms: native and wasm
-// inject run values at the DAE level.
-use rumoca_compile::parsing::ir_core::{
-    Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
-};
-
 /// Immutable Modelica source and runtime owner supplied at run admission.
 #[derive(Clone, Debug)]
 pub struct ModelSource {
@@ -640,19 +618,8 @@ pub fn pump_wasm_forwarders() {
     }
 }
 
-/// Body of the run thread. Compiles, runs the simulation, posts
-/// updates. All errors funnel into `RunUpdate::Failed`. Cancellation
-/// observed between steps via the shared `AtomicBool`.
-/// Key for the compile-once DAE cache. Folds in model identity, the model
-/// **source body**, and extra sources — but NOT overrides (those are applied to
-/// the cached DAE), so a sweep that varies only overrides hits one cache entry.
-///
-/// CQ-525: the source body MUST be hashed in. Without it, editing a model's
-/// body while keeping its name/filename produced an identical key, serving a
-/// stale DAE; correctness then leaned entirely on the external whole-cache
-/// clear. (The old `after_inputs` param was always `""` — inputs are bound at
-/// the DAE level, not baked into source — so it contributed nothing and is
-/// dropped.)
+/// Exact source and runtime identity for the immutable compile cache. Run values
+/// enter simulation options, so sweeps reuse this artifact.
 #[cfg(not(target_arch = "wasm32"))]
 fn dae_cache_key(src: &ModelSource) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -667,50 +634,28 @@ fn dae_cache_key(src: &ModelSource) -> u64 {
     h.finish()
 }
 
-/// Apply value bindings — both parameter overrides AND experiment input
-/// values — directly to a compiled DAE by rebinding each target variable's
-/// `start` to a literal. This is THE single place run values are injected;
-/// the authored source remains unchanged. Both the native runner and the wasm
-/// worker call it, so the two platforms inject identically.
-///
-/// A target is looked up first among DAE `parameters`, then `inputs`:
-/// - **Parameters** rely on rumoca's `preserve_overridable_param_starts` fold
-///   keeping computed dependents symbolic, so overriding a base (e.g. `Isp`)
-///   recomputes its dependents (e.g. `massRatio`) at `SimulationSession::new` via
-///   `build_params`.
-/// - **Inputs**: the build seeds each input's initial value from its `start`
-///   once (the batch solver never calls `set_input`), so rebinding `start`
-///   here pins the input to a constant for the run — the DAE-level analog of
-///   the DAE-level equivalent of pinning an input for a batch run, with no
-///   source mutation or second compile required.
-///
-/// Returns `Err` when a target is neither a parameter nor an input, or the
-/// value isn't a scalar literal — a hard error so the run cannot diverge from
-/// the compiled source contract.
-pub fn apply_value_bindings_to_dae(
-    dae: &mut Dae,
-    bindings: &BTreeMap<ParamPath, ParamValue>,
+/// Admit finite scalar run values through Rumoca's parameter and input options.
+pub fn apply_run_values(
+    options: &mut rumoca_sim::SimOptions,
+    inputs: &BTreeMap<ParamPath, ParamValue>,
+    overrides: &BTreeMap<ParamPath, ParamValue>,
 ) -> Result<(), String> {
-    for (path, value) in bindings {
-        let key = DaeVarName::new(path.0.clone());
-        let var = dae
-            .variables
-            .parameters
-            .get_mut(&key)
-            .or_else(|| dae.variables.inputs.get_mut(&key))
-            .ok_or_else(|| format!("'{}' is not a top-level DAE parameter or input", path.0))?;
-        let lit = match value {
-            ParamValue::Real(x) => DaeLiteral::Real(*x),
-            ParamValue::Int(x) => DaeLiteral::Integer(*x),
-            ParamValue::Bool(b) => DaeLiteral::Boolean(*b),
-            ParamValue::String(s) => DaeLiteral::String(s.clone()),
-            _ => return Err(format!("binding for '{}' is not a scalar literal", path.0)),
-        };
-        var.start = Some(DaeExpression::Literal {
-            value: lit,
-            span: DaeSpan::DUMMY,
-        });
+    fn numeric(values: &BTreeMap<ParamPath, ParamValue>) -> Result<Vec<(String, f64)>, String> {
+        values.iter().map(|(path, value)| {
+            let value = match value {
+                ParamValue::Real(value) => *value,
+                ParamValue::Int(value) if value.unsigned_abs() <= (1_u64 << 53) => *value as f64,
+                ParamValue::Bool(value) => f64::from(*value),
+                _ => return Err(format!("binding for '{}' requires a finite numeric or Boolean scalar representable exactly as f64", path.0)),
+            };
+            if !value.is_finite() { return Err(format!("binding for '{}' must be finite", path.0)); }
+            Ok((path.0.clone(), value))
+        }).collect()
     }
+    let inputs = numeric(inputs)?;
+    let overrides = numeric(overrides)?;
+    options.initial_inputs = inputs;
+    options.param_overrides = overrides;
     Ok(())
 }
 
@@ -724,7 +669,7 @@ fn run_inner(
     cancel: Arc<AtomicBool>,
     tx: Sender<RunUpdate>,
 ) {
-    let _cancellation = rumoca_solver::SolverCancellationGuard::install(cancel.clone());
+    let _cancellation = rumoca_eval_solve::EvaluationCancellationGuard::install(cancel.clone());
     let t_wall = web_time::Instant::now();
 
     if cancel.load(Ordering::SeqCst) {
@@ -733,7 +678,7 @@ fn run_inner(
     }
 
     // Announce that this job has left the queue and is now executing. The
-    // batch path is one blocking `simulate_solve_model` call that emits
+    // batch path is one blocking `simulate_fmi_component` call that emits
     // no mid-solve `Progress`, so without this the registry status would sit
     // at `Queued` (set at dispatch) for the entire compile + solve and only
     // flip straight to `Done` — making a long-grinding run look stuck in a
@@ -768,7 +713,7 @@ fn run_inner(
 
     // Compile-once: compile the CLEAN model source (no inputs/overrides baked
     // in) a single time and cache the resulting DAE. Inputs and overrides are
-    // applied to the DAE afterwards (see `apply_value_bindings_to_dae`), so a
+    // applied to simulation options (see `apply_run_values`), so a
     // whole parameter/input sweep shares ONE compile and recompiles zero times.
     let key = dae_cache_key(&source);
     let cached = state.lock().ok().and_then(|s| {
@@ -846,32 +791,6 @@ fn run_inner(
         return;
     }
 
-    // Merge inputs + overrides into one binding set and apply at the DAE level
-    // — the SINGLE injection path, no source rewriting. Inputs and parameter
-    // overrides are the same operation (pin a top-level variable to a value),
-    // so they share `apply_value_bindings_to_dae`. An empty set reuses the
-    // cached base DAE untouched.
-    let mut bindings = inputs;
-    bindings.extend(overrides);
-    let run_dae: Arc<Dae> = if bindings.is_empty() {
-        base_dae
-    } else {
-        let mut d = (*base_dae).clone();
-        if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("parameter/input binding failed: {reason}"),
-                partial: None,
-            });
-            return;
-        }
-        Arc::new(d)
-    };
-
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
-
     // Drive the run through the SHARED `drive_run` — the SAME entry point the
     // wasm worker (`lunica_worker::run_fast_in_worker`) calls, so native and
     // web can NOT diverge on solver selection / sampling. The only
@@ -882,30 +801,26 @@ fn run_inner(
         cancel,
         source_content,
     };
-    drive_run(&run_dae, &bounds, source.result_limits, t_wall, &mut sink);
+    drive_run(
+        &base_dae,
+        &bounds,
+        &inputs,
+        &overrides,
+        source.result_limits,
+        t_wall,
+        &mut sink,
+    );
 }
 
-/// THE single simulation entry point, shared by the native runner
-/// ([`run_inner`]) and the wasm worker (`lunica_worker::run_fast_in_worker`).
-///
-/// Branches on [`RunBounds::runtime`](lunco_experiments::RunBounds::runtime):
-///   * [`Batch`](lunco_experiments::RuntimeMode::Batch) (default) — the
-///     dense-output [`run_batch_sim`] solve. The solver free-steps with its
-///     own adaptive step and output is dense-interpolated, so the solver step
-///     is decoupled from the output `dt`. This is why stiff long-horizon
-///     models (the lunar rover thermal system, the orbital-datacenter eclipse
-///     switch) complete here, where the interactive stepper — bounded by the
-///     output `dt` — collapses (`BDF step: step size too small at t=0`) unless
-///     `dt` is driven down to a few thousand seconds.
-///   * [`Interactive`](lunco_experiments::RuntimeMode::Interactive) — the live
-///     [`run_stepping_loop`], for streamable / steerable runs.
-///
-/// Keeping this one function (rather than each platform open-coding the match)
-/// is what guarantees the worker can't fall back to a stepper-only path again:
-/// the divergence that made stiff models run natively but fail in the browser.
+/// Shared native and Web Worker simulation entry point. Batch runs use the
+/// admitted dense output grid; interactive runs advance the selected live
+/// session and stream observations. Both paths apply the same run values,
+/// cancellation, and retained-output budget.
 pub fn drive_run(
     dae: &Dae,
     bounds: &RunBounds,
+    inputs: &BTreeMap<ParamPath, ParamValue>,
+    overrides: &BTreeMap<ParamPath, ParamValue>,
     limits: lunco_experiments::RunResultLimits,
     started: web_time::Instant,
     sink: &mut impl RunSink,
@@ -944,7 +859,7 @@ pub fn drive_run(
     // Solver options (tolerance / family / initial step) — the SINGLE source
     // (`stepper_options_from_bounds`) both runtimes derive from. An incapable
     // authored solver fails the run here rather than per-step later.
-    let stepper_opts = match stepper_options_from_bounds(bounds) {
+    let mut stepper_opts = match stepper_options_from_bounds(bounds) {
         Ok(opts) => opts,
         Err(err) => {
             sink.emit(RunUpdate::Failed {
@@ -954,6 +869,13 @@ pub fn drive_run(
             return;
         }
     };
+    if let Err(error) = apply_run_values(&mut stepper_opts, inputs, overrides) {
+        sink.emit(RunUpdate::Failed {
+            error,
+            partial: None,
+        });
+        return;
+    }
     match bounds.runtime {
         lunco_experiments::RuntimeMode::Batch => {
             // The batch solver reads its output grid from `opts.dt` (one column
@@ -1001,7 +923,7 @@ pub fn drive_run(
 }
 
 /// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
-/// solver ([`rumoca_sim::simulate_solve_model`]) and emit the trajectory
+/// solver ([`rumoca_sim::simulate_fmi_component`]) and emit the trajectory
 /// as a single [`RunUpdate::Completed`]. Unlike [`run_stepping_loop`], the
 /// solver owns its own adaptive time loop and the output samples are taken by
 /// dense interpolation, so the solver step size is independent of the output
@@ -1042,7 +964,7 @@ fn run_batch_sim(
             return;
         }
     };
-    let model = match rumoca_sim::lower_for_simulation_with_overrides(dae, opts) {
+    let model = match rumoca_sim::prepare_fmi_component(dae, opts) {
         Ok(model) => model,
         Err(error) => {
             sink.emit(RunUpdate::Failed {
@@ -1053,7 +975,7 @@ fn run_batch_sim(
         }
     };
     let admission = budget
-        .sample_capacity(model.visible_names.len())
+        .sample_capacity(model.runtime_view().model().visible_names.len())
         .and_then(|capacity| {
             rumoca_solver::timeline::output_sample_count(
                 opts.t_start,
@@ -1069,7 +991,7 @@ fn run_batch_sim(
         });
         return;
     }
-    let result = match rumoca_sim::simulate_solve_model(&model, opts) {
+    let result = match rumoca_sim::simulate_fmi_component(model, opts) {
         Ok(r) => r,
         Err(e) => {
             if sink.is_cancelled() {
@@ -1252,48 +1174,8 @@ impl RunSink for ChannelSink {
     }
 }
 
-/// Build the solver [`SimOptions`](rumoca_sim::SimOptions) from [`RunBounds`].
-/// The SINGLE source of the tolerance / solver-family / initial-step defaults,
-/// shared by native and the wasm worker so they can't drift.
-///
-/// Defaults follow the Modelica convention, tuned for what works across the
-/// stiff multi-day horizons:
-///   * tolerance default = 1e-6 (the standard Modelica / OMC / Dymola default).
-///     The non-interactive batch runtime (the default) honours it on the stiff
-///     thermal models; per-run editable via the experiments Setup dialog.
-///   * solver default = BDF. (Earlier this was TR-BDF2, on the rationale that
-///     "BDF dies at the second sunrise louver crossing" — but that predates the
-///     rumoca solve-IR fix for connection flow-sum unknowns. With that fix BDF
-///     now completes the full multi-lunar-cycle horizon on the stiff thermal
-///     models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34) hit
-///     "nonlinear solver failures (50)" within the first lunar hour on the same
-///     models. BDF is the robust default again; the SDIRK tableaus stay opt-in.)
-///
-/// Background: docs/numeric-experiments/README.md § Known working solver configurations
-///
-/// The worker's live interactive sim (`lunco_modelica_worker::worker::build_stepper`) previously had
-/// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,
-/// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
-/// delegates here, collapsing that divergence: one tolerance default, one
-/// `atol`/`rtol` policy, one solver family across live + batch.
-/// Default solver tolerance when neither the run bounds nor the model's
-/// `experiment(Tolerance=…)` annotation supplies one. Applied to BOTH `atol`
-/// and `rtol` (scalar). This is the standard Modelica default (`1e-6`, the same
-/// value OMC/Dymola assume): with the non-interactive batch runtime as the
-/// default ([`RuntimeMode::Batch`](lunco_experiments::RuntimeMode::Batch)) the
-/// dense-output solver honours it across the stiff multi-cycle horizons (the
-/// lunar rover thermal system completes its full two-lunar-day run at `1e-6`),
-/// so there's no reason to loosen below the Modelica convention. It stays
-/// per-run editable through the experiments Setup dialog (`bounds.tolerance`).
-///
-/// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
-/// share this policy: an adaptive-implicit solver whose step sequence comes
-/// from per-machine error estimates must not run inside the client-predicted
-/// fixed-step loop. It has its own configuration in
-/// `lunco_modelica_worker::worker::live_stepper_options`
-/// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces
-/// are meant to differ here — see
-/// `docs/architecture/28-modelica-realtime-physics.md` §2a.
+/// Offline runs use the Modelica tolerance default unless bounds or annotations
+/// supply a value. Live prediction uses its separate fixed-step policy.
 pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
 /// Offline run configuration rejection from its bounds or solver owner.
@@ -1312,30 +1194,8 @@ impl std::fmt::Display for RunConfigurationError {
     }
 }
 
-/// The ONE place `SimOptions` is built for an offline/batch run — the app, the
-/// wasm worker, `modelica_run` and `modelica_tester` all come through here
-/// rather than hand-rolling options, so a policy change lands everywhere at once.
-///
-/// Carrying `bounds.t_start/t_end` through is load-bearing on BOTH runtimes, and
-/// silently so:
-/// * the non-interactive batch solve (`simulate_solve_model`) integrates
-///   `opts.t_start..opts.t_end`. Left at the `SimOptions::default()` `0.0..1.0`,
-///   a run stops at t=1 with a fine output grid that pins the solver onto
-///   closely spaced stop-times and collapses ("step size too small") in the
-///   first second.
-/// * `SimulationSession` (rumoca ≥0.9.20) **clamps every `step`/`advance_to` at
-///   `opts.t_end`**. With the default horizon an interactive run parks at t=1s
-///   and quietly reports a frozen model instead of erroring — the failure mode
-///   that made a 60 s rocket burn drain exactly 1 s of propellant.
-///
-/// Both this and the live path resolve through `lunco_experiments::solver`, which
-/// is the point: two paths choosing independently is how a live model ends up on
-/// a family the batch path would have refused.
-///
-/// Fallible on purpose. A solver that cannot be resolved or built is reported to
-/// the caller, never swapped for one that happens to work: a run that silently
-/// used a different integrator than the one asked for produces numbers the user
-/// attributes to their choice.
+/// Resolve the registered offline solver and translate the admitted run bounds.
+/// Unknown or incapable solvers return a terminal configuration error.
 pub fn stepper_options_from_bounds(
     bounds: &RunBounds,
 ) -> Result<rumoca_sim::SimOptions, RunConfigurationError> {
@@ -1707,10 +1567,7 @@ pub struct DetectedParam {
     /// `"foo"`, `true`). `None` if the parameter has no literal
     /// default (e.g. expression-bound, inherited).
     pub default_literal: Option<String>,
-    /// Whether the DAE-level value-binding override path can rebind this
-    /// declaration's `start`. False for non-literal RHS (expression
-    /// bindings), for arrays / records, and for params not found at the
-    /// top level.
+    /// Whether this scalar declaration can enter the numeric run-options path.
     pub supportable: bool,
     /// Reason override is unsupported, when `!supportable`. Surfaced
     /// in the editor as a tooltip.
@@ -1721,10 +1578,8 @@ pub struct DetectedParam {
     pub description: Option<String>,
 }
 
-/// One detected top-level `input` declaration. Modelica `input` vars
-/// have no defaults — at runtime the stepper sets them via
-/// `set_input(name, value)`. For batch Fast Run the runner pins them through
-/// the same compiled-DAE binding path used for parameter overrides.
+/// One parsed input declaration. Live sessions use `set_input`; batch runs use
+/// `initial_inputs`. An omitted override retains its compiled declaration value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedInput {
     pub name: String,
@@ -1760,17 +1615,9 @@ pub fn detect_top_level_inputs(
 /// declared default and the Modelica description-comment directly, so the
 /// editor no longer textually re-scans the file every frame.
 ///
-/// **Supportability** reflects the actual injection path: run values are
-/// applied by [`apply_value_bindings_to_dae`], which rebinds a DAE
-/// parameter's `start` to a scalar literal. Every top-level *scalar*
-/// parameter is therefore overridable — default-bound or not, literal or
-/// computed. Only array/record parameters (which can't be rebound to a
-/// scalar) are greyed out. This is strictly more capable than the old
-/// textual heuristic, which refused any parameter whose default wasn't a
-/// bare literal.
-///
-/// Inherited parameters (declared in an `extends` base) are not yet
-/// surfaced — they don't live in this class's own component list.
+/// Numeric scalar values enter Rumoca's override-aware preparation. Arrays,
+/// records, and String values cannot enter that path. The compiler and lowering
+/// owner make the final admission decision for tunability and effective types.
 pub fn detect_top_level_literal_parameters(
     class: &rumoca_compile::parsing::ast::ClassDef,
 ) -> Vec<DetectedParam> {
@@ -1780,7 +1627,7 @@ pub fn detect_top_level_literal_parameters(
             // Arrays/records can't be rebound to a scalar literal by the
             // DAE value-binding path, so grey those rows; bracket in the
             // type name is the cheap, reliable array signal.
-            let is_array = c.type_name.contains('[');
+            let unsupported = c.type_name.contains('[') || c.type_name == "String";
             DetectedParam {
                 name: c.name,
                 type_name: c.type_name,
@@ -1788,8 +1635,9 @@ pub fn detect_top_level_literal_parameters(
                 // straight from the AST; non-numeric defaults show as "—"
                 // but are still overridable.
                 default_literal: c.default.map(|x| format!("{x}")),
-                supportable: !is_array,
-                reason: is_array.then(|| "array/record parameters can't be overridden".to_string()),
+                supportable: !unsupported,
+                reason: unsupported
+                    .then(|| "run overrides require numeric or Boolean scalars".to_string()),
                 description: {
                     let d = c.description.trim();
                     if d.is_empty() {
@@ -1820,7 +1668,7 @@ pub struct ExperimentDraft {
     pub overrides: BTreeMap<ParamPath, ParamValue>,
     /// User-set values for `input` variables. Stored separately from
     /// parameter overrides so the UI can preserve the two authored concepts
-    /// while the runner applies both through one DAE-level binding path.
+    /// while the runner admits them into separate parameter/input option fields.
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds_override: Option<RunBounds>,
 }
@@ -2168,7 +2016,7 @@ mod tests {
                 &mut runner.state.lock().expect("state"),
                 input,
                 dae_cache_key(input),
-                Arc::new(Dae::default()),
+                checked_test_dae(),
                 &cancel,
                 lunco_experiments::SourceContentIdentity::Unavailable {
                     reason: "inline cache fixture".into(),
@@ -2186,7 +2034,7 @@ mod tests {
                 &mut state,
                 &owned,
                 dae_cache_key(&owned),
-                Arc::new(Dae::default()),
+                checked_test_dae(),
                 &cancel,
                 lunco_experiments::SourceContentIdentity::Unavailable {
                     reason: "inline cache fixture".into(),
@@ -2201,13 +2049,25 @@ mod tests {
             &mut runner.state.lock().expect("state"),
             &source,
             dae_cache_key(&source),
-            Arc::new(Dae::default()),
+            checked_test_dae(),
             &AtomicBool::new(false),
             lunco_experiments::SourceContentIdentity::Unavailable {
                 reason: "inline cache fixture".into(),
             },
         );
         assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 2);
+    }
+
+    fn checked_test_dae() -> Arc<Dae> {
+        let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
+        compiler
+            .compile_str(
+                "CacheFixture",
+                "model CacheFixture Real x; equation x=1; end CacheFixture;",
+                "cache.mo",
+            )
+            .expect("checked test model")
+            .dae
     }
 
     /// Submitting more runs than `max_parallel` must NOT reject the extras
@@ -2299,8 +2159,10 @@ mod tests {
         }
         let mut sink = Capture(Vec::new());
         drive_run(
-            &Dae::default(),
+            &checked_test_dae(),
             &exp.bounds,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             lunco_experiments::RunResultLimits::default(),
             web_time::Instant::now(),
             &mut sink,

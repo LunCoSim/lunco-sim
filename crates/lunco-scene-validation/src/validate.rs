@@ -567,11 +567,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         .iter()
         .map(|(name, value)| (name.clone(), *value))
         .collect();
-    let inputs: std::collections::BTreeMap<String, f64> = interface
-        .inputs
-        .iter()
-        .map(|(name, value)| (name.clone(), *value))
-        .collect();
+    let inputs = &interface.inputs;
 
     // The domain's own facts, for the authored rules. Merged at TOP LEVEL by
     // `apply_lint_policy` — see the warning there about nesting. All
@@ -583,6 +579,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         "model": model_name,
         "params": parameters,
         "inputs": inputs,
+        "input_defaults": interface.input_defaults,
         // Outputs are not knowable at the parse phase — they are the model's
         // variables, which exist only after a compile.
         "outputs": serde_json::Value::Null,

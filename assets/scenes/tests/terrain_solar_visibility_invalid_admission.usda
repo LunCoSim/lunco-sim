@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "InvalidSolarAdmission"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "InvalidSolarAdmission" (
+    prepend references = @lunco://scenes/tests/modelica_runtime_contracts.usda@</ModelicaRuntimeContracts>
+)
+{
+    def Scope "Scenario"
+    {
+        def Xform "Test" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_solar_visibility_invalid.rhai@
+            uniform token info:implementationSource = "sourceAsset"
+        }
+    }
+}

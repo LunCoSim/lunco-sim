@@ -6,8 +6,7 @@ within LunCo.Mobility;
 // rather than a vehicle-class command. The drive state remains a shared
 // motor/axle state and is published through generic torque ports.
 //
-// RUMOCA RULES (same as LegStrut.mo): branch-free equations — `der(x) = expr`
-// with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
+// Continuous drivetrain equations are compiled by Rumoca via
 // `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
 // Drive outputs are normalized demands (−1..1); heading outputs are radians.

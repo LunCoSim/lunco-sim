@@ -77,13 +77,8 @@ model CommsLink
   parameter Real range_min_m = 1.0 "Floor on range — d=0 would divide by zero";
 
   // ── Gate widths ─────────────────────────────────────────────────────────────
-  // rumoca is BRANCH-FREE: an `if` in an equation section is not compiled — the
-  // guarded algebraic is reconstructed as literal 0. So every discrete verdict in
-  // this model is carried by a continuous 0..1 gate built from `max`/`min` instead
-  // of a test. Each gate is exactly 0 on the "off" side and exactly 1 once its
-  // argument clears the band below, so behaviour is unchanged outside a narrow
-  // transition that a real system has anyway (a modem does not lose lock in an
-  // infinitely thin dB, and a buffer does not stop filling in zero bits).
+  // Continuous transition bands model connection, demodulation, and buffer
+  // thresholds with finite widths.
   parameter Real conn_band = 0.01 "Width of the connected-flag gate, 0..1 units";
   parameter Real margin_band_db = 0.1 "Width of the demod-threshold gate, dB";
   parameter Real overflow_band_frac = 1.0e-4

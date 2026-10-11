@@ -1,17 +1,5 @@
-//! **The splice contract: an op may only change the bytes it means to change.**
-//!
-//! Structural ops used to be turned into text by re-emitting the whole class
-//! through rumoca's `to_modelica()`. That round-trip is lossy, so a single
-//! canvas drag rewrote every sibling declaration in the class:
-//!
-//! ```text
-//! parameter Real m(start = 1, min = 0, unit = "kg") = 5   ->   m(min = 0, unit = "kg") = 1
-//! parameter Real k = 2.0                                  ->   k = 0.0
-//! ```
-//!
-//! Wrong numbers, no error, from moving an icon. These tests pin the fix: for
-//! each op, every line the op did not target must be byte-identical afterwards.
-//! See `docs/architecture/29-rumoca-workarounds.md` §5.
+//! Each document operation changes only its owned source ranges. These tests
+//! verify untouched declarations, comments, and formatting remain byte-identical.
 
 use std::sync::Arc;
 
@@ -19,7 +7,7 @@ use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::pretty::{self, Placement, PortRef};
 use lunco_modelica_document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 
-/// A class carrying everything the old emitter destroyed: a multi-modifier
+/// A class carrying source-preservation cases: a multi-modifier
 /// declaration with a binding *and* a description, a plain bound parameter,
 /// comments, and a connect with a routed line.
 const SRC: &str = r#"within Foo.Bar;
@@ -200,9 +188,7 @@ fn remove_component_deletes_only_its_own_line() {
 
 #[test]
 fn set_connection_line_actually_writes_the_route() {
-    // Under the AST-only scheme this op was a silent no-op: rumoca's
-    // `Equation::Connect` has no annotation field, so there was nothing to
-    // mutate and the whole class was rewritten for nothing.
+    // Connect routing is a source-span edit owned by the annotation reader.
     let after = apply(ModelicaOp::SetConnectionLine {
         class: "Foo.Bar.Sys".into(),
         from: PortRef {

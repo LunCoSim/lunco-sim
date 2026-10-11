@@ -9,8 +9,10 @@ resolution for any tagged target, lunar-sky lighting parameters (`LunarSun`,
 `FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked
 horizon terrain self-shadowing (`HorizonShadowPlugin`). Environment probes expose
 f64 gravity values and publish demanded unit direction triplets through ordinary
-co-simulation outputs.
-**Designed to grow into:** atmosphere, solar *radiation* (irradiance/eclipse),
+co-simulation outputs. `SunState` retains direct-normal physical irradiance
+separately from render lux. The terrain-surface owner publishes demanded sampled
+visibility and irradiance; see the [physical illumination contract](../../docs/architecture/terrain-layered-rendering.md).
+**Designed to grow into:** atmosphere, celestial eclipse geometry,
 magnetic field, ambient temperature — anything else that varies with position
 and body.
 
@@ -288,7 +290,8 @@ diagnosed rather than replaced with a fabricated environmental value.
 - [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model
-- [ ] **Solar radiation** — `LocalRadiation` irradiance + eclipse occlusion (distinct from the direction bridge above)
+- [x] **Physical solar inputs** — direct-normal irradiance, sampled terrain/selected-proxy visibility, and required cosimulation samples
+- [ ] **Celestial eclipses** — complete body occlusion beyond admitted finite DEM terrain
 - [ ] **Magnetic field** — `LocalMagneticField`, dipole + IGRF models
 - [ ] **Ambient temperature** — for thermal subsystem models (radiator design, electronics cooling)
 

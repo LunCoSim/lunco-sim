@@ -18,19 +18,18 @@ use std::collections::HashMap;
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
 ///
-/// A durable worker error wins. Compilation also is not readiness: its result
-/// contains an initial algebraic snapshot, but no live inputs have reached the
-/// solver yet. A model becomes `Running` only after its first successful solver
-/// advance, so load readiness cannot release physics onto zero-valued,
-/// compile-time ports.
-/// One place keeps bind-time insertion and per-tick sync consistent.
+/// A successful checked compile has initialized the solver with admitted
+/// inputs and committed its t=0 observation. Idle is ready for its first tick;
+/// a pending source or solver remains Compiling, and errors are durable.
 pub(crate) fn modelica_status(model: &ModelicaModel) -> SimStatus {
     if let Some(error) = &model.last_error {
         SimStatus::Error(error.clone())
-    } else if !model.is_compiled || model.current_time <= 0.0 {
+    } else if !model.is_compiled {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
+    } else if model.current_time == 0.0 {
+        SimStatus::Idle
     } else {
         SimStatus::Running
     }
@@ -106,7 +105,7 @@ pub fn sync_modelica_outputs(
             };
             let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
-                if !comp.inputs.contains_key(k) {
+                if comp.inputs.get(k).is_none() {
                     comp.inputs.insert(k.clone(), *v);
                     changed = true;
                 }

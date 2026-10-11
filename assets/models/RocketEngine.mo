@@ -18,13 +18,7 @@ model RocketEngine
   Real impulse(start=0) "Total impulse delivered (N·s)";
 
   // ── Observables ──
-  // rumoca is BRANCH-FREE: an `if` in an equation section is not compiled — the
-  // guarded algebraic is reconstructed as literal 0, so every dependent observable
-  // silently reads zero. A Boolean `burning` intermediate does not help either: the
-  // algebraic-elimination reconstructor only evaluates continuous substitutions.
-  // So the "engine is burning" test is carried by CONTINUOUS 0..1 gate variables
-  // built from `max`/`min` — exactly 0 when off, exactly 1 in the operating region,
-  // with a narrow ramp between that also spares the solver a step discontinuity.
+  // Continuous gates model the throttle deadband and propellant cutoff.
   Real prop_gate "Propellant-remaining gate, 0..1 (0 once the tank is dry)";
   Real thr_gate "Throttle deadband gate, 0..1 (1 for throttle >= 2*throttle_min)";
   Real m_dot "Instantaneous mass flow (kg/s)";

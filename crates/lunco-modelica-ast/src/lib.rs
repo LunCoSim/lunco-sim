@@ -14,10 +14,9 @@ pub mod lint_facts;
 pub mod pretty;
 pub mod source_memo;
 
-/// Rumoca's causality classification, re-exported from the Modelica AST
-/// boundary so downstream domain projections do not depend on Rumoca's core
-/// crate just to inspect parsed Modelica members.
-pub use rumoca_core::Causality;
+/// Rumoca's parsed declaration classifications, exposed by the Modelica AST
+/// boundary for runtime and authoring projections.
+pub use rumoca_core::{Causality, ClassType, OpBinary, OpUnary, Span, Token, Variability};
 /// Rumoca's parsed definition tree, the value returned by this crate's parse
 /// functions and consumed by AST/fact extractors.
 pub use rumoca_ir_ast::StoredDefinition;

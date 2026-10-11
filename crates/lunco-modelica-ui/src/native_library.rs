@@ -117,15 +117,21 @@ fn spawn_native_index(
                 lunco_modelica_assets::indexer::run_with_cancel(
                     lunco_modelica_assets::indexer::Options::for_source_root(root.clone()),
                     Some(cancel.clone()),
-                );
-            }))
-            .is_ok();
+                )
+            }));
 
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
 
-            if !completed || !root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
+            let outcome = completed
+                .map_err(|_| "source library indexer panicked".to_owned())
+                .and_then(|result| result);
+            if let Err(error) = outcome {
+                set_install_state(&slot, LibraryLoadState::Failed(error));
+                return;
+            }
+            if !root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
                 set_install_state(
                     &slot,
                     LibraryLoadState::Failed(format!(

@@ -671,18 +671,35 @@ fn propagate_connections_with_cache(
     // transaction, so a stale locator is never silently rerouted by name.
     for w in &compiled.wires {
         let read_src = |w: &CompiledWire| {
-            if w.src_is_input {
-                registry.read_input_port(world, w.src_entity, &w.src_port)
-            } else {
-                registry.read_output_port(world, w.src_entity, &w.src_port)
-            }
+            lunco_cosim_core::initialization::read_causal_sample(
+                &registry,
+                world,
+                w.src_entity,
+                &w.src_port,
+                w.src_is_input,
+            )
         };
         let src = match &w.src_resolved {
             Some(resolved) => registry.read_resolved(world, w.src_entity, resolved),
             None => read_src(w),
         };
         let Some(src) = src else {
-            continue; // source output absent — contributes nothing this tick
+            if !w.src_is_input
+                && world
+                    .get::<lunco_cosim_core::RequiredOutputSamples>(w.src_entity)
+                    .is_some_and(|required| required.0.iter().any(|name| name == &w.src_port))
+            {
+                if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+                    faults.raise(
+                        "cosim-required-sample-unavailable",
+                        Some(w.src_entity),
+                        "co-simulation exchange",
+                        format!("required output '{}' has no physical sample", w.src_port),
+                    );
+                }
+                return;
+            }
+            continue;
         };
         scratch.accumulator[w.dst_index] += src * w.scale + w.offset;
     }

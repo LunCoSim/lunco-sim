@@ -181,20 +181,17 @@ Manifest bindings are a separate active-Twin contract read and are joined with
 SysML identities by Rhai policy. See
 [`sysml-requirements`](../sysml-requirements/SKILL.md).
 
-### `.mo` — the branch-free policy is the point
+### `.mo` — parse and declaration validation
 
-Rumoca's solver path is branch-free. `ValidateAsset` parses once through the
-shared `lunco-modelica-ast` boundary, passes AST-derived declaration and
-conditional-construct facts to the reloadable `lint.modelica` Rhai policy, and
-returns its findings as errors. The policy covers conditional expressions,
-structural equation branches, and algorithm `if`/`when` constructs. An `if` in a
-binding or modifier is not an equation/algorithm construct and is not reported.
+`ValidateAsset` parses once through `lunco-modelica-ast` and supplies typed
+source facts to the reloadable `lint.modelica` Rhai policy. Parse failures and
+declaration conflicts remain visible. Conditional expressions and events are
+checked by compilation and the selected solver; preflight does not prove
+runtime behavior. Prediction's fixed RK4 backend requires event-free models.
 
-Fix a reported branch by rewriting the model with branch-free arithmetic such
-as `max()`/`min()`. Battery, network, and brownout equations belong in Modelica,
-not a tick script.
-
-`info` carries `{model, params, inputs, outputs:null}`. `outputs` is always
+`info` carries `{model, params, inputs, input_defaults, outputs:null}`. `inputs`
+lists declared names; `input_defaults` contains only literal numeric source
+bindings, not evaluated initialization values. `outputs` is always
 `null` — outputs are not knowable before a compile.
 
 > **Lint boundary:** parse failures remain visible as parser errors. Recovered
@@ -360,7 +357,7 @@ policy wording; unknown bindings are surfaced as
 edit .usda / .mo / .wgsl / .rhai
         ↓
 --validate            ← seconds, no GPU. Catches: syntax, broken refs, missing
-        ↓               wheel attrs, if/when in Modelica, unparsable rhai.
+        ↓               wheel attrs, invalid Modelica declarations, unparsable rhai.
 load the scene        ← test-via-api
         ↓
 drive it / assert     ← author-scenario, drivetrain_parity
@@ -382,8 +379,6 @@ run costs seconds; a luncosim launch that dies on a typo costs a compile.
 - ❌ Passing a `twin://` address — unresolvable; use the filesystem path.
 - ❌ Reading `ok` and ignoring `warnings` on a `.wgsl` — that file can never
   report `ok: false`, so the warnings ARE the result.
-- ❌ Adding an `if` to a `.mo` equation section to "handle a case" — rewrite it
-  branch-free; the lint is enforcing a real solver constraint, not a style rule.
 - ❌ Reading a `[usd/…]` lint error as "the file is broken syntax". It parsed and
   composed fine — it says the file would load and then behave wrongly. Fix the
   authoring, don't chase the parser.

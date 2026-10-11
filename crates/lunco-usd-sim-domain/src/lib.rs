@@ -1434,7 +1434,7 @@ fn commit_domain_projection(
         model_name: compiled_name.clone(),
         source_uri: doc_uri.clone(),
         parameters: interface.parameters,
-        inputs: interface.inputs,
+        inputs: HashMap::new(),
         communication_period_secs: synthesized.communication_period_secs,
         session_id,
         // The generated source is published below, then linked to its standard

@@ -614,28 +614,12 @@ The Run resource is the single source of truth for pause, reset, and rate
 changes. Toolbar, API, and scripts dispatch `TwinCommand`; they do not mutate
 per-entity pause markers or physics time directly.
 
-## Convention: Modelica `output` requirement
+## Modelica public ports
 
-Rumoca (our Modelica runtime) eliminates algebraic variables from the
-solver during DAE preparation unless they're declared as `output`. This is
-a rumoca limitation that has been worked around by convention:
-
-```modelica
-model Balloon
-  input Real height = 0;
-  input Real velocity = 0;
-  Real volume(start = 4.0);
-
-  // ALL observable derived values must be `output`
-  output Real netForce;
-  output Real buoyancy;
-  output Real drag;
-end Balloon;
-```
-
-See [`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crates/lunco-cosim/README.md)
-and [`20-domain-modelica.md`](20-domain-modelica.md) for the full story,
-including planned upstream fixes to the rumoca fork.
+External destinations and sources use Modelica `input` and `output` declarations
+and matching typed USD ports. See the
+[canonical public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
+for scoped initialization and terminal input/output rejection.
 
 ## USD-driven authoring (`lunco_usd_sim_cosim`)
 
@@ -875,3 +859,27 @@ metrics without constructing per-participant rows.
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec
+
+The `InitializationSampling` schedule in `lunco-cosim-core` reuses registered
+physical producers before participant initialization. It does not advance clocks,
+step models, propagate wires, or apply actuators. Environment and terrain producers
+publish their current samples here while the normal fixed clock is held; pending
+physical preparation remains at readiness, and invalid authored samples fault at
+the producer. Participant initialization consumes `lunco_cosim_core::initialization::initialization_inputs`.
+This reads the registered causal source backends in propagation order, applies
+SSP affine sums and authored hold priority, and admits only finite current samples.
+A declared scalar port can have no sample. Its stable slot accepts the first
+published value without changing port topology; registry reads return unavailable
+until then. Both direct USD programs and generated domain networks use this
+admission before worker dispatch. Generated compile intents retain their pinned
+document owner while waiting and reject a retired owner before dispatch.
+A producer preparing its first sample holds initialization at scene readiness;
+its missing sample never becomes an initial zero. USD source dispatch combines
+these samples with unconnected authored input values and passes the typed
+`ModelicaCommand::Compile.initial_inputs` to Rumoca lowering. Declaration defaults
+remain owned by the checked DAE. Reset captures current admitted inputs before
+rebuilding; source replacements and automatic initialization retain those values.
+Prepared graph identity includes exact initial-input bits.
+Checked Modelica initialization publishes its t=0 observation through this same
+schedule, allowing connected participants to initialize while the fixed clock is
+held. A compiled participant is Idle until its first simulation tick.

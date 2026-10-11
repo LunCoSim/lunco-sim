@@ -49,6 +49,7 @@ pub mod escape;
 pub mod force_ports;
 pub mod joint;
 pub mod joint_solver;
+pub mod occlusion;
 pub mod order;
 pub mod pose;
 pub mod raycast;

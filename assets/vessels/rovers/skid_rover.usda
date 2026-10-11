@@ -2,578 +2,113 @@
 (
     defaultPrim = "SkidRover"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# Base Skid-Steer Rover — reusable component definition.
-#
-# **Pixar/Omniverse-correct structure**: an `Xform` root holds the
-# vehicle/physics schemas (`PhysicsRigidBodyAPI`, `PhysicsMassAPI`,
-# `PhysxVehicleContextAPI`); a child
-# `Cube "Chassis"` carries `PhysicsCollisionAPI` + the visual mesh +
-# its own `xformOp:scale` for chassis dimensions; sibling
-# `Cylinder` wheels carry `PhysxVehicleWheelAPI`.
-#
-# Why this shape: `xformOp:scale` on the Xform root would propagate
-# to wheel children (Bevy's Transform inheritance), distorting
-# raycaster directions and panicking Avian's `Dir3` normalization.
-# Putting the chassis scale on the **child** `Chassis` keeps the
-# wheels at unit scale relative to the Xform root.
-#
-# **`drivetrain` variantSet (raycast | physical)** — the standard
-# OpenUSD way to ship two locomotion models in one asset:
-#   * `raycast`             — wheels are visual-only contact probes;
-#     the PhysX-style raycaster drives the body. No joints.
-#   * `physical`            — each wheel is mounted on an authored prismatic
-#     suspension carrier and bound to that carrier by a
-#     `PhysicsRevoluteJoint`; the root gains `PhysicsArticulationRootAPI`.
-#     Joint rel-targets are asset-local and translate through the reference arc
-#     when instanced in a scene.
-#
-# Instantiate in scenes via reference + variant selection + overrides:
-#   - variants = { string drivetrain = "physical" } → joint drivetrain
-#   - double3 xformOp:translate                     → set position
-#   - over "Chassis" { color3f[] primvars:displayColor = [(...)] } → livery
-#     (the hull shader consumes displayColor — one authored colour, one place)
 
 def Xform "SkidRover" (
-    doc = "Four-wheel skid-steer lunar rover with selectable raycast or joint-based drivetrain."
-    # An ASSEMBLY: a model built out of other models. Its wheels are component models
-    # that arrive by reference, and USD's rule is that a `component` may not contain
-    # them — the kind is what tells a browser (and the UI) whether a prim is a thing you
-    # open up or a thing you place.
+    documentation = "Four-wheel skid-steer lunar rover with selectable raycast or joint-based drivetrain."
     kind = "assembly"
-    prepend apiSchemas = [
-        "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
-        "PhysicsMassAPI",
-        "PhysxVehicleContextAPI",
-        "LunCoCatalogAPI", "CollectionAPI:components"
-    ]
-    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
-    # SURFACE. Its `inputs:` ports (`throttle`/`steer`/`brake`) ARE the set of
-    # commands this vessel accepts; the engine has no per-class list. It ships
-    # WITH the chassis because a complete vehicle comes with its computer: a scene
-    # author placing a rover should not have to know to bolt a brain on, and a
-    # rover without one has wheels, motors and power and sits there, unable to be
-    # driven by human, autopilot, script or API.
-    prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"]
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
     prepend variantSets = ["drivetrain", "power", "generation", "thermal"]
-    variants = {
-        string drivetrain = "raycast"
-        string power = "infinite"
-        string generation = "none"
-        string thermal = "none"
-    }
+    variants = { string "drivetrain" = "raycast"; string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
 )
 {
-    # The drive law is differential: heading recovery may pivot the chassis
-    # without requiring a rolling reverse arc.
     uniform token lunco:steeringGeometry = "differential"
-    def Camera "FrontCamera" (
-        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
-    )
-    {
-    }
-
     uniform bool lunco:spawnable = true
-    # Mass & damping live on the rigid body root.
     float physics:mass = 1000.0
-    # Principal inertia for that mass. Authoring `physics:mass` alone overrides
-    # ONLY the mass — Avian keeps the collider-derived tensor for a default-density
-    # body, so the chassis ends up with a rover's mass and a crate's resistance to
-    # spin. That matters most when this rover is WELDED under the descent lander:
-    # the weld's constraint impulses then act on a body far too easy to rotate and
-    # throw the whole stack. Sibling rovers (`six_wheel_rover`, `differential_rig`)
-    # already author this; the skid rover was simply missing it.
-    # Solid box of the `Chassis` collider (2.0 x 0.3 x 3.5):
-    #   I_x = m*(y^2 + z^2)/12 = 1000*(0.09 + 12.25)/12 = 1028
-    #   I_y = m*(x^2 + z^2)/12 = 1000*(4.00 + 12.25)/12 = 1354
-    #   I_z = m*(x^2 + y^2)/12 = 1000*(4.00 +  0.09)/12 =  341
     float3 physics:diagonalInertia = (1028.0, 1354.0, 341.0)
-    # The symmetric box chassis has its centre at the vehicle origin. Author it
-    # explicitly so the two drivetrain realizations start from the same body
-    # frame; Avian must not derive a shifted COM from the compound child tree.
     float3 physics:centerOfMass = (0.0, 0.0, 0.0)
-    # Lift the spawn point 1 m so the rover settles onto terrain (read by the
-    # spawn catalog — keeps spawn height as USD data, not Rust category logic).
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
     float outputs:brake = 0.0
-
-    # Ground speed as a retained channel — the avian `speed` port on this body
-    # (magnitude of its linear velocity). See `rocker_bogie.usda` for why speed is
-    # authored on the chassis rather than on a component.
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
-
-    # Intent->port control (stage 2): the shared rover profile's `Controls` scope
-    # (forward/back->throttle, left/right->steer, brake->brake). Delivered as a
-    # child `references` arc so it composes through a spawn/reference like a wheel.
-    # Override a single intent by redefining `Controls/<intent>` locally; the
-    # key->intent half is the shared leafwing UserIntent map.
-    def "Controls" (
-        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
-    )
-    {
-    }
-
-    # The reusable battery is an assembly child, not a variant-local arc. The
-    # infinite power realization deactivates this authored component, while the
-    # finite realization keeps it active. Its stable namespace preserves the
-    # component's authored relationships through both selections.
-    def Xform "Battery" (
-        prepend references = @lunco://components/power/battery.usda@</Battery>
-    )
-    {
-        # The nominal 1.2 x 0.2 x 2.0 m pack is centered inside the
-        # 2.0 x 0.3 x 3.5 m chassis, leaving the solar-panel plane clear.
-        double3 xformOp:translate = (0, 0.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
-    def Cube "Chassis" (
-        prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
-    )
-    {
-        # Silver-white — the baseline workhorse, and the brightest hull in the
-        # fleet so it reads first against regolith. Colour is
-        # `primvars:displayColor` and nothing else; the hull shader consumes it
-        # as the base paint.
-        color3f[] primvars:displayColor = [(0.88, 0.89, 0.9)]
-        # …with a deep-red accent stripe so it can't be mistaken for the
-        # white-grey rocker-bogie at a glance.
-        over "HullLook"
-        {
-            over "Shader"
-            {
-                color3f inputs:accent_color = (0.72, 0.16, 0.12)
-            }
-        }
-    }
-
-    # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)
-    def Xform "Headlight_L" (
-        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
-    )
-    {
-        double3 xformOp:translate = (-0.8, 0.2, -1.75)
-        double3 xformOp:rotateXYZ = (-15, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-    }
-
-    def Xform "Headlight_R" (
-        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
-    )
-    {
-        double3 xformOp:translate = (0.8, 0.2, -1.75)
-        double3 xformOp:rotateXYZ = (-15, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-    }
-
-    # --- Wheels (reference the reusable mobility component) ---
-    # WHERE A WHEEL SITS IS A PROPERTY OF THE VEHICLE, so it is authored HERE,
-    # once, and NOT in the `drivetrain` variant. The wheel prim is the axle frame
-    # in both realizations; the raycast strut top is derived from its suspension
-    # geometry rather than represented by a second mount.
-    #
-    # The suspension carrier is the authored axle mount in both realizations.
-    # y=-0.65 is the physical rover's authored drop (chassis half-height 0.15
-    # ⇒ bottom at y=-0.15; a Ø0.8 wheel centred at -0.65 tops out at -0.25
-    # and clears it by 0.10 m).
-    # The raycast realization derives its cast origin — the strut top, at
-    # `restLength − radius` above the axle — from the authored suspension
-    # geometry instead of from a baked-in translate.
-    def Xform "Suspension_FL" (
-        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
-    )
-    {
-        double3 xformOp:translate = (-1.0, -0.65, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    def Cylinder "Wheel_FL" (
-        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-        # No local `kind`: a wheel IS a component model, and the kind composes in from
-        # the reference along with everything else it brings.
-        prepend references = [
-            @lunco://components/mobility/wheel.usda@</Wheel>,
-            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
-        ]
-    )
-    {
-        double3 xformOp:translate = (0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        int physxVehicleWheelAttachment:index = 0
-        # Complete axle inertia for the authored motor, reduction, and tire assembly.
-        # The 6.8 kg.m2 value is the composed USD mechanical contract.
-        float physxVehicleWheel:moi = 6.8
-        float inputs:drive.connect = </SkidRover/Shaft_FL.outputs:torque>
-    }
-    }
-
-    def Xform "Suspension_FR" (
-        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
-    )
-    {
-        double3 xformOp:translate = (1.0, -0.65, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    def Cylinder "Wheel_FR" (
-        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-        # No local `kind`: a wheel IS a component model, and the kind composes in from
-        # the reference along with everything else it brings.
-        prepend references = [
-            @lunco://components/mobility/wheel.usda@</Wheel>,
-            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
-        ]
-    )
-    {
-        double3 xformOp:translate = (0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        int physxVehicleWheelAttachment:index = 1
-        # Complete axle inertia for the authored motor, reduction, and tire assembly.
-        # The 6.8 kg.m2 value is the composed USD mechanical contract.
-        float physxVehicleWheel:moi = 6.8
-        float inputs:drive.connect = </SkidRover/Shaft_FR.outputs:torque>
-    }
-    }
-
-    def Xform "Suspension_RL" (
-        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
-    )
-    {
-        double3 xformOp:translate = (-1.0, -0.65, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    def Cylinder "Wheel_RL" (
-        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-        # No local `kind`: a wheel IS a component model, and the kind composes in from
-        # the reference along with everything else it brings.
-        prepend references = [
-            @lunco://components/mobility/wheel.usda@</Wheel>,
-            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
-        ]
-    )
-    {
-        double3 xformOp:translate = (0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        int physxVehicleWheelAttachment:index = 2
-        # Complete axle inertia for the authored motor, reduction, and tire assembly.
-        # The 6.8 kg.m2 value is the composed USD mechanical contract.
-        float physxVehicleWheel:moi = 6.8
-        float inputs:drive.connect = </SkidRover/Shaft_RL.outputs:torque>
-    }
-    }
-
-    def Xform "Suspension_RR" (
-        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
-    )
-    {
-        double3 xformOp:translate = (1.0, -0.65, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    def Cylinder "Wheel_RR" (
-        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-        # No local `kind`: a wheel IS a component model, and the kind composes in from
-        # the reference along with everything else it brings.
-        prepend references = [
-            @lunco://components/mobility/wheel.usda@</Wheel>,
-            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
-        ]
-    )
-    {
-        double3 xformOp:translate = (0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        int physxVehicleWheelAttachment:index = 3
-        # Complete axle inertia for the authored motor, reduction, and tire assembly.
-        # The 6.8 kg.m2 value is the composed USD mechanical contract.
-        float physxVehicleWheel:moi = 6.8
-        float inputs:drive.connect = </SkidRover/Shaft_RR.outputs:torque>
-    }
-    }
-
-    # --- Motors + reductions -------------------------------------------
-    # One motor and one reduction PER DRIVEN WHEEL, each its own part with its own
-    # mass, torque curve, efficiency and waste heat. Torque and top speed are
-    # properties of the MOTOR, and what reaches the axle is
-    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
-    # noLoadSpeed/ratio = 2400/200 = 12 rad/s — the ONE top-speed number both the
-    # raycast and the physical wheel realization obey.
-    #
-    # `inputs:demand` wires to the SAME drive channel the wheel binds to: the
-    # Each wheel's authored connection selects `drive_left` or `drive_right`; those
-    # ports live on this rover ROOT.
-    #
-    # The wheel-to-shaft topology is expressed by the authored `inputs:drive` and
-    # shaft connections below. It remains identical for raycast and physical
-    # realizations without a motor-name relationship or runtime lookup.
-    #
-    # Placed INBOARD of the wheels, under the chassis: they are children of the
-    # chassis rigid body, so their housings join its compound collider and must not
-    # overlap the wheel colliders (which are their own bodies once jointed).
-    def Xform "Motor_FL" (
-        prepend references = @lunco://components/mobility/motor.usda@</Motor>
-    )
-    {
-        double3 xformOp:translate = (-0.3, -0.35, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </SkidRover.outputs:drive_left>
-        float inputs:speed.connect = </SkidRover/Gearbox_FL.outputs:speed_a>
-    }
-
-    def Xform "TorqueSource_FL" (
-        prepend references = @lunco://components/mobility/torque.usda@</Torque>
-    )
-    {
-        float inputs:tau_ref.connect = </SkidRover/Motor_FL.outputs:shaft_torque>
-        custom token connectors:flange.connect = </SkidRover/Gearbox_FL.connectors:flange_a>
-    }
-
-    def Xform "Gearbox_FL" (
-        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
-    )
-    {
-        double3 xformOp:translate = (-0.52, -0.35, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:ratio = 200.0
-        float inputs:eta = 0.85
-        float inputs:max_output_torque = 400.0
-        custom token connectors:flange_a.connect = </SkidRover/TorqueSource_FL.connectors:flange>
-        custom token connectors:flange_b.connect = </SkidRover/Shaft_FL.connectors:flange>
-    }
-
-    def Xform "Motor_FR" (
-        prepend references = @lunco://components/mobility/motor.usda@</Motor>
-    )
-    {
-        double3 xformOp:translate = (0.3, -0.35, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </SkidRover.outputs:drive_right>
-        float inputs:speed.connect = </SkidRover/Gearbox_FR.outputs:speed_a>
-    }
-
-
-    def Xform "TorqueSource_FR" (
-        prepend references = @lunco://components/mobility/torque.usda@</Torque>
-    )
-    {
-        float inputs:tau_ref.connect = </SkidRover/Motor_FR.outputs:shaft_torque>
-        custom token connectors:flange.connect = </SkidRover/Gearbox_FR.connectors:flange_a>
-    }
-
-    def Xform "Gearbox_FR" (
-        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
-    )
-    {
-        double3 xformOp:translate = (0.52, -0.35, -1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:ratio = 200.0
-        float inputs:eta = 0.85
-        float inputs:max_output_torque = 400.0
-        custom token connectors:flange_a.connect = </SkidRover/TorqueSource_FR.connectors:flange>
-        custom token connectors:flange_b.connect = </SkidRover/Shaft_FR.connectors:flange>
-    }
-
-    def Xform "Motor_RL" (
-        prepend references = @lunco://components/mobility/motor.usda@</Motor>
-    )
-    {
-        double3 xformOp:translate = (-0.3, -0.35, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </SkidRover.outputs:drive_left>
-        float inputs:speed.connect = </SkidRover/Gearbox_RL.outputs:speed_a>
-    }
-
-
-    def Xform "TorqueSource_RL" (
-        prepend references = @lunco://components/mobility/torque.usda@</Torque>
-    )
-    {
-        float inputs:tau_ref.connect = </SkidRover/Motor_RL.outputs:shaft_torque>
-        custom token connectors:flange.connect = </SkidRover/Gearbox_RL.connectors:flange_a>
-    }
-
-    def Xform "Gearbox_RL" (
-        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
-    )
-    {
-        double3 xformOp:translate = (-0.52, -0.35, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:ratio = 200.0
-        float inputs:eta = 0.85
-        float inputs:max_output_torque = 400.0
-        custom token connectors:flange_a.connect = </SkidRover/TorqueSource_RL.connectors:flange>
-        custom token connectors:flange_b.connect = </SkidRover/Shaft_RL.connectors:flange>
-    }
-
-    def Xform "Motor_RR" (
-        prepend references = @lunco://components/mobility/motor.usda@</Motor>
-    )
-    {
-        double3 xformOp:translate = (0.3, -0.35, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </SkidRover.outputs:drive_right>
-        float inputs:speed.connect = </SkidRover/Gearbox_RR.outputs:speed_a>
-    }
-
-
-    def Xform "TorqueSource_RR" (
-        prepend references = @lunco://components/mobility/torque.usda@</Torque>
-    )
-    {
-        float inputs:tau_ref.connect = </SkidRover/Motor_RR.outputs:shaft_torque>
-        custom token connectors:flange.connect = </SkidRover/Gearbox_RR.connectors:flange_a>
-    }
-
-    def Xform "Gearbox_RR" (
-        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
-    )
-    {
-        double3 xformOp:translate = (0.52, -0.35, 1.225)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:ratio = 200.0
-        float inputs:eta = 0.85
-        float inputs:max_output_torque = 400.0
-        custom token connectors:flange_a.connect = </SkidRover/TorqueSource_RR.connectors:flange>
-        custom token connectors:flange_b.connect = </SkidRover/Shaft_RR.connectors:flange>
-    }
-
-    def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
-    {
-        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FL>
-    }
-    def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
-    {
-        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FR>
-    }
-    def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
-    {
-        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RL>
-    }
-    def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
-    {
-        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RR>
-    }
-
-    # --- Comms ---------------------------------------------------------
-    # Shared communications antenna. The scene selects and activates a target;
-    # this rover asset keeps the component in its passive no-target default.
-    def Xform "Comms" (
-        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-    )
-    {
-        double3 xformOp:translate = (0, 0.15, -0.5)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        over "YawHead" {
-            over "DishGimbal" {
-                over "DishHead" {
-                    over "LinkAperture" {
-                        string lunco:link:class = "rover"
-                        over "LinkBeam" {
-                            over "Up" {
-                                over "Driver" {
-                                    custom float lunco:param:earthOnly = 1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    # Separate short-range radio device. The steerable dish remains the
-    # directional link endpoint; Wi-Fi is an independent chassis-mounted node.
-    def Xform "WifiRadio" (
-        prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
-    )
-    {
-        double3 xformOp:translate = (0.0, 0.65, 0.35)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    # --- Drivetrain variant set ---------------------------------------
-    # HOW a wheel is simulated, and NOTHING ELSE. Where the wheels sit, what they
-    # mass, how much grip they have and what torque reaches them are properties of
-    # the ROVER and are authored above, outside this variantSet.
-    #
-    # `raycast` is therefore EMPTY: a raycast wheel is the absence of a joint.
-    # Its strut geometry is derived from the authored suspension (`restLength`)
-    # instead of being baked into a second mount.
-    #
-    # `physical` brings what genuinely only exists in that realization: the
-    # articulation root and the per-wheel revolute joints.
     variantSet "drivetrain" = {
         "raycast" {
         }
-
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
-            # The physical realization turns each authored carrier into a
-            # rigid body. The standard wheel suspension remains on the wheel
-            # for the raycast realization; this variant supplies the same
-            # compliance through the authored prismatic joints.
-            over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_RR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            # The wheel is a separate rigid body and its full suspension travel can
-            # enter the chassis envelope.  Use the standard authored filtered-pair
-            # contract for this deliberate clearance; the revolute joint already
-            # filters wheel↔carrier, while this relation covers wheel↔chassis.
+            over "Suspension_FL" (
+                prepend apiSchemas = "PhysicsRigidBodyAPI"
+            )
+            {
+            }
+            over "Suspension_FR" (
+                prepend apiSchemas = "PhysicsRigidBodyAPI"
+            )
+            {
+            }
+            over "Suspension_RL" (
+                prepend apiSchemas = "PhysicsRigidBodyAPI"
+            )
+            {
+            }
+            over "Suspension_RR" (
+                prepend apiSchemas = "PhysicsRigidBodyAPI"
+            )
+            {
+            }
             over "Suspension_FL/Wheel_FL" (
                 prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
+            )
+            {
                 bool physics:rigidBodyEnabled = true
                 bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_FR/Wheel_FR" (
                 prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
+            )
+            {
                 bool physics:rigidBodyEnabled = true
                 bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_RL/Wheel_RL" (
                 prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
+            )
+            {
                 bool physics:rigidBodyEnabled = true
                 bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_RR/Wheel_RR" (
                 prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
+            )
+            {
                 bool physics:rigidBodyEnabled = true
                 bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
         }
     }
-
-    # --- Drive law -----------------------------------------------------------
-    # HOW throttle/steer become per-side drive is authored by the composed
-    # Modelica/Rhai controller. Its output connections below select the port pair
-    # consumed by the wheel network; no vehicle-type policy is implemented here.
-
-    # --- Power: does driving cost anything ----------------------------------
-    # ORTHOGONAL to the drive law (which decides how commands become drive) and
-    # `drivetrain` (how wheels are realized): `infinite` composes an ideal
-    # voltage source with the motors. It is still a real generated Modelica
-    # network, but it has no finite storage limit. `battery` replaces that
-    # source with the battery state model; its one generated DAE solves the
-    # battery and motor loads together.
     variantSet "power" = {
         "infinite" {
-            over "Battery" {
+            uniform token collection:components:expansionRule = "explicitOnly"
+            rel collection:components:includes
+            prepend rel collection:components:includes = [</SkidRover/PowerSource>, </SkidRover/Motor_FL>, </SkidRover/TorqueSource_FL>, </SkidRover/Motor_FR>, </SkidRover/TorqueSource_FR>, </SkidRover/Motor_RL>, </SkidRover/TorqueSource_RL>, </SkidRover/Motor_RR>, </SkidRover/TorqueSource_RR>, </SkidRover/Gearbox_FL>, </SkidRover/Gearbox_FR>, </SkidRover/Gearbox_RL>, </SkidRover/Gearbox_RR>, </SkidRover/Shaft_FL>, </SkidRover/Shaft_FR>, </SkidRover/Shaft_RL>, </SkidRover/Shaft_RR>]
+            float inputs:drive_left
+            float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
+            float inputs:drive_right
+            float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
+            float inputs:shaft_speed_FL
+            float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR
+            float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_RL
+            float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_RR
+            float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
+            float outputs:bus_voltage
+            float outputs:bus_voltage.connect = </SkidRover/PowerSource.outputs:terminal_voltage_v>
+            float outputs:bus_current
+            float outputs:bus_current.connect = </SkidRover/PowerSource.outputs:terminal_current_a>
+            float outputs:bus_power
+            float outputs:bus_power.connect = </SkidRover/PowerSource.outputs:terminal_power_w>
+            over "Battery"
+            {
                 bool active = false
             }
             def Xform "PowerSource" (
@@ -581,234 +116,198 @@ def Xform "SkidRover" (
             )
             {
             }
-            # The rover root owns the explicit component collection and its
-            # causal boundary. There is no extra domain-name prim in USD.
-                float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
-                float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
-                float outputs:bus_voltage.connect = </SkidRover/PowerSource.outputs:terminal_voltage_v>
-                float outputs:bus_current.connect = </SkidRover/PowerSource.outputs:terminal_current_a>
-                float outputs:bus_power.connect = </SkidRover/PowerSource.outputs:terminal_power_w>
-                uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </SkidRover/PowerSource>,
-                    </SkidRover/Motor_FL>,
-                        </SkidRover/TorqueSource_FL>,
-                    </SkidRover/Motor_FR>,
-                        </SkidRover/TorqueSource_FR>,
-                    </SkidRover/Motor_RL>,
-                        </SkidRover/TorqueSource_RL>,
-                    </SkidRover/Motor_RR>,
-                        </SkidRover/TorqueSource_RR>,
-                    </SkidRover/Gearbox_FL>,
-                    </SkidRover/Gearbox_FR>,
-                    </SkidRover/Gearbox_RL>,
-                    </SkidRover/Gearbox_RR>,
-                    </SkidRover/Shaft_FL>,
-                    </SkidRover/Shaft_FR>,
-                    </SkidRover/Shaft_RL>,
-                    </SkidRover/Shaft_RR>,
-                ]
-            over "Motor_FL" {
+            over "Motor_FL"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_left>
-                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
-            over "Motor_FR" {
+            over "Motor_FR"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_right>
-                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
-            over "Motor_RL" {
+            over "Motor_RL"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_left>
-                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
-            over "Motor_RR" {
+            over "Motor_RR"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_right>
-                custom token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/PowerSource.connectors:p>
             }
         }
-
         "battery" {
-            # The rover root owns the explicit component collection and its
-            # causal boundary. There is no extra domain-name prim in USD.
-                float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
-                float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
-                float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
-                float outputs:battery_drained.connect = </SkidRover/Battery.outputs:drained>
-                float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
-                float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
-                float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
-                # Typed rover-root boundary observables for generic consumers.
-                # The generated member aliases remain an implementation
-                # surface; authored readers use these USD connections.
-                float outputs:motor_electrical_power.connect = </SkidRover/Motor_FL.outputs:electrical_power>
-                float outputs:motor_terminal_current.connect = </SkidRover/Motor_FL.outputs:terminal_current_a>
-                uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </SkidRover/Battery>,
-                    </SkidRover/Motor_FL>,
-                        </SkidRover/TorqueSource_FL>,
-                    </SkidRover/Motor_FR>,
-                        </SkidRover/TorqueSource_FR>,
-                    </SkidRover/Motor_RL>,
-                        </SkidRover/TorqueSource_RL>,
-                    </SkidRover/Motor_RR>,
-                        </SkidRover/TorqueSource_RR>,
-                    </SkidRover/Gearbox_FL>,
-                    </SkidRover/Gearbox_FR>,
-                    </SkidRover/Gearbox_RL>,
-                    </SkidRover/Gearbox_RR>,
-                    </SkidRover/Shaft_FL>,
-                    </SkidRover/Shaft_FR>,
-                    </SkidRover/Shaft_RL>,
-                    </SkidRover/Shaft_RR>,
-                ]
-            over "Motor_FL" {
+            uniform token collection:components:expansionRule = "explicitOnly"
+            rel collection:components:includes
+            prepend rel collection:components:includes = [</SkidRover/Battery>, </SkidRover/Motor_FL>, </SkidRover/TorqueSource_FL>, </SkidRover/Motor_FR>, </SkidRover/TorqueSource_FR>, </SkidRover/Motor_RL>, </SkidRover/TorqueSource_RL>, </SkidRover/Motor_RR>, </SkidRover/TorqueSource_RR>, </SkidRover/Gearbox_FL>, </SkidRover/Gearbox_FR>, </SkidRover/Gearbox_RL>, </SkidRover/Gearbox_RR>, </SkidRover/Shaft_FL>, </SkidRover/Shaft_FR>, </SkidRover/Shaft_RL>, </SkidRover/Shaft_RR>]
+            float inputs:drive_left
+            float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
+            float inputs:drive_right
+            float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
+            float inputs:shaft_speed_FL
+            float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR
+            float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_RL
+            float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_RR
+            float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
+            float outputs:soc
+            float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
+            float outputs:battery_drained
+            float outputs:battery_drained.connect = </SkidRover/Battery.outputs:drained>
+            float outputs:battery_net_power
+            float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
+            float outputs:battery_charge_power
+            float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
+            float outputs:battery_discharge_power
+            float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
+            float outputs:motor_electrical_power
+            float outputs:motor_electrical_power.connect = </SkidRover/Motor_FL.outputs:electrical_power>
+            float outputs:motor_terminal_current
+            float outputs:motor_terminal_current.connect = </SkidRover/Motor_FL.outputs:terminal_current_a>
+            over "Motor_FL"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_left>
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
-            over "Motor_FR" {
+            over "Motor_FR"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_right>
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
-            over "Motor_RL" {
+            over "Motor_RL"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_left>
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
-            over "Motor_RR" {
+            over "Motor_RR"
+            {
+                float inputs:demand
                 float inputs:demand.connect = </SkidRover.inputs:drive_right>
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
-
-            def LunCoEvent "BatteryDrained" {
-                float inputs:trigger.connect = </SkidRover.outputs:battery_drained>
+            def LunCoEvent "BatteryDrained"
+            {
                 uniform token lunco:event:name = "battery_drained"
                 uniform token lunco:event:severity = "warning"
                 uniform bool lunco:event:latched = true
                 double lunco:event:qualificationTime = 0.0
+                float inputs:trigger
+                float inputs:trigger.connect = </SkidRover.outputs:battery_drained>
             }
-
         }
     }
-
-    # Generation is independent of storage: a panel owns one electrical source
-    # pin, while this assembly supplies the optional battery-bus connection.
-    # Selecting solar without `power=battery` leaves a physical panel with no
-    # generated DAE; selecting both composes one connected electrical island.
     variantSet "generation" = {
         "none" {
         }
-
         "solar" {
+            rel collection:components:includes
+            prepend rel collection:components:includes = </SkidRover/SolarPanel>
+            custom double inputs:irradiance
+            double inputs:irradiance.connect = </SkidRover/SolarPanel/Environment.outputs:sun_irradiance_w_m2>
+            custom double inputs:sun_visibility
+            double inputs:sun_visibility.connect = </SkidRover/SolarPanel/Environment.outputs:sun_visibility>
+            custom double inputs:target_mount_x
+            double inputs:target_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
+            custom double inputs:target_mount_y
+            double inputs:target_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
+            custom double inputs:target_mount_z
+            double inputs:target_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
+            custom double outputs:solar_power
+            double outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
+            custom double outputs:solar_incidence
+            double outputs:solar_incidence.connect = </SkidRover/SolarPanel.outputs:cos_incidence>
+            custom double outputs:solar_available_power
+            double outputs:solar_available_power.connect = </SkidRover/SolarPanel.outputs:available_power_w>
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
             {
-                double3 xformOp:translate = (0, 0.45, 0)
+                double3 xformOp:translate = (0.0, 0.45, 0.0)
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-                # The panel is declared and wired in one spec so its reusable
-                # geometry, collision, mass, and electrical facet compose
-                # together under this rover instance.
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
-                # Environment is runtime-provided, not a generated Modelica
-                # component. It crosses the electrical island once through its
-                # typed boundary, then the panel consumes that boundary input.
-                float inputs:sun_mount_x.connect = </SkidRover.inputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </SkidRover.inputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </SkidRover.inputs:sun_mount_z>
-
-                def Xform "Environment" (
-                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
-                )
-                {
-                }
+                custom token connectors:p
+                token connectors:p.connect = </SkidRover/Battery.connectors:p>
+                custom double inputs:irradiance
+                double inputs:irradiance.connect = </SkidRover.inputs:irradiance>
+                custom double inputs:sun_visibility
+                double inputs:sun_visibility.connect = </SkidRover.inputs:sun_visibility>
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </SkidRover.inputs:target_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </SkidRover.inputs:target_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </SkidRover.inputs:target_mount_z>
             }
-            # The network collection is contributed only by the battery power
-            # variant, a sibling variantSet whose composition arc does merge.
-            # This over therefore expresses a connection when both assembly
-            # layers are present, never a panel-side dependency.
-            float inputs:sun_mount_x.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_x>
-            float inputs:sun_mount_y.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_y>
-            float inputs:sun_mount_z.connect = </SkidRover/SolarPanel/Environment.outputs:sun_mount_z>
-            float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
-            float outputs:solar_available_power.connect = </SkidRover/SolarPanel.outputs:available_power_w>
-            float outputs:solar_incidence.connect = </SkidRover/SolarPanel.outputs:cos_incidence>
-            prepend rel collection:components:includes = [</SkidRover/SolarPanel>]
         }
     }
-
-    # --- Thermal: a SEPARATE domain layer, not a graft onto Electrical ------
-    # `basic` composes a self-contained `Scope "Thermal"` — its OWN
-    # `CollectionAPI:components`, compiled to its OWN generated DAE — coupled to
-    # the electrical island by CAUSAL cross-domain wires only: each motor's
-    # `outputs:heat` feeds a `MotorHeatLoad.inputs:heat_w` here as a runtime
-    # SimConnection. The acausal `connectors:port` edges stay INSIDE this
-    # collection, so thermal compiles independently of electrical. All four
-    # motors get a heat-load bridge; left and right banks are joined by an
-    # explicit chassis ThermalConductor.
     variantSet "thermal" = {
         "none" {
         }
-
         "basic" {
             def Scope "Thermal" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-                doc = "Rover thermal control network: motor dissipation → masses → radiators."
+                prepend apiSchemas = "CollectionAPI:components"
+                documentation = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
-                # Thermal consumes the solved motor outputs directly. The
-                # generated electrical wrapper resolves these member addresses;
-                # no rover-root heat alias is needed.
-                float inputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
-                float inputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
-                float inputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
-                float inputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
-
-                float outputs:motor_temp_left.connect  = </SkidRover/Thermal/MotorThermalLeft.outputs:temp_k>
-                float outputs:motor_temp_right.connect = </SkidRover/Thermal/MotorThermalRight.outputs:temp_k>
-
                 uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </SkidRover/Thermal/MotorHeat_FL>,
-                    </SkidRover/Thermal/MotorHeat_RL>,
-                    </SkidRover/Thermal/MotorHeat_FR>,
-                    </SkidRover/Thermal/MotorHeat_RR>,
-                    </SkidRover/Thermal/MotorThermalLeft>,
-                    </SkidRover/Thermal/MotorThermalRight>,
-                    </SkidRover/Thermal/MotorRadiatorLeft>,
-                    </SkidRover/Thermal/MotorRadiatorRight>,
-                    </SkidRover/Thermal/ThermalBridge>,
-                ]
-
+                rel collection:components:includes
+                prepend rel collection:components:includes = [</SkidRover/Thermal/MotorHeat_FL>, </SkidRover/Thermal/MotorHeat_RL>, </SkidRover/Thermal/MotorHeat_FR>, </SkidRover/Thermal/MotorHeat_RR>, </SkidRover/Thermal/MotorThermalLeft>, </SkidRover/Thermal/MotorThermalRight>, </SkidRover/Thermal/MotorRadiatorLeft>, </SkidRover/Thermal/MotorRadiatorRight>, </SkidRover/Thermal/ThermalBridge>]
+                float inputs:motor_heat_FL
+                float inputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
+                float inputs:motor_heat_FR
+                float inputs:motor_heat_FR.connect = </SkidRover/Motor_FR.outputs:heat>
+                float inputs:motor_heat_RL
+                float inputs:motor_heat_RL.connect = </SkidRover/Motor_RL.outputs:heat>
+                float inputs:motor_heat_RR
+                float inputs:motor_heat_RR.connect = </SkidRover/Motor_RR.outputs:heat>
+                float outputs:motor_temp_left
+                float outputs:motor_temp_left.connect = </SkidRover/Thermal/MotorThermalLeft.outputs:temp_k>
+                float outputs:motor_temp_right
+                float outputs:motor_temp_right.connect = </SkidRover/Thermal/MotorThermalRight.outputs:temp_k>
                 def Xform "ThermalBridge" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</ThermalConductor>
                 )
                 {
-                    custom token connectors:port_a.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
-                    custom token connectors:port_b.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    custom token connectors:port_a
+                    token connectors:port_a.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port_b
+                    token connectors:port_b.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
-
-                # ── Left bank: FL + RL into one mass/radiator node ──
                 def Xform "MotorHeat_FL" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    float inputs:heat_w
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FL>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
                 def Xform "MotorHeat_RL" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    float inputs:heat_w
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RL>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
                 def Xform "MotorThermalLeft" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
@@ -819,23 +318,26 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
                 )
                 {
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
-
-                # ── Right bank: FR + RR into one mass/radiator node ──
                 def Xform "MotorHeat_FR" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    float inputs:heat_w
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FR>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
                 def Xform "MotorHeat_RR" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
+                    float inputs:heat_w
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RR>
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
                 def Xform "MotorThermalRight" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
@@ -846,9 +348,333 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
                 )
                 {
-                    custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
+                    custom token connectors:port
+                    token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
             }
         }
+    }
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
+    {
+    }
+    def "Controls" (
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
+    )
+    {
+    }
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "Chassis" (
+        prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
+    )
+    {
+        color3f[] primvars:displayColor = [(0.8799999952316284, 0.8899999856948853, 0.8999999761581421)]
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:accent_color = (0.7200000286102295, 0.1599999964237213, 0.11999999731779099)
+            }
+        }
+    }
+    def Xform "Headlight_L" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
+    {
+        double3 xformOp:translate = (-0.8, 0.2, -1.75)
+        double3 xformOp:rotateXYZ = (-15.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+    def Xform "Headlight_R" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
+    {
+        double3 xformOp:translate = (0.8, 0.2, -1.75)
+        double3 xformOp:rotateXYZ = (-15.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+    def Xform "Suspension_FL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "Wheel_FL" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/standard.usda@</Suspension>]
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            int physxVehicleWheelAttachment:index = 0
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
+            float inputs:drive.connect = </SkidRover/Shaft_FL.outputs:torque>
+        }
+    }
+    def Xform "Suspension_FR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "Wheel_FR" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/standard.usda@</Suspension>]
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            int physxVehicleWheelAttachment:index = 1
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
+            float inputs:drive.connect = </SkidRover/Shaft_FR.outputs:torque>
+        }
+    }
+    def Xform "Suspension_RL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "Wheel_RL" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/standard.usda@</Suspension>]
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            int physxVehicleWheelAttachment:index = 2
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
+            float inputs:drive.connect = </SkidRover/Shaft_RL.outputs:torque>
+        }
+    }
+    def Xform "Suspension_RR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "Wheel_RR" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/standard.usda@</Suspension>]
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            int physxVehicleWheelAttachment:index = 3
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
+            float inputs:drive.connect = </SkidRover/Shaft_RR.outputs:torque>
+        }
+    }
+    def Xform "Motor_FL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand
+        float inputs:demand.connect = </SkidRover.outputs:drive_left>
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover/Gearbox_FL.outputs:speed_a>
+    }
+    def Xform "TorqueSource_FL" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref
+        float inputs:tau_ref.connect = </SkidRover/Motor_FL.outputs:shaft_torque>
+        custom token connectors:flange
+        token connectors:flange.connect = </SkidRover/Gearbox_FL.connectors:flange_a>
+    }
+    def Xform "Gearbox_FL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.8500000238418579
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a
+        token connectors:flange_a.connect = </SkidRover/TorqueSource_FL.connectors:flange>
+        custom token connectors:flange_b
+        token connectors:flange_b.connect = </SkidRover/Shaft_FL.connectors:flange>
+    }
+    def Xform "Motor_FR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand
+        float inputs:demand.connect = </SkidRover.outputs:drive_right>
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover/Gearbox_FR.outputs:speed_a>
+    }
+    def Xform "TorqueSource_FR" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref
+        float inputs:tau_ref.connect = </SkidRover/Motor_FR.outputs:shaft_torque>
+        custom token connectors:flange
+        token connectors:flange.connect = </SkidRover/Gearbox_FR.connectors:flange_a>
+    }
+    def Xform "Gearbox_FR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.8500000238418579
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a
+        token connectors:flange_a.connect = </SkidRover/TorqueSource_FR.connectors:flange>
+        custom token connectors:flange_b
+        token connectors:flange_b.connect = </SkidRover/Shaft_FR.connectors:flange>
+    }
+    def Xform "Motor_RL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand
+        float inputs:demand.connect = </SkidRover.outputs:drive_left>
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover/Gearbox_RL.outputs:speed_a>
+    }
+    def Xform "TorqueSource_RL" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref
+        float inputs:tau_ref.connect = </SkidRover/Motor_RL.outputs:shaft_torque>
+        custom token connectors:flange
+        token connectors:flange.connect = </SkidRover/Gearbox_RL.connectors:flange_a>
+    }
+    def Xform "Gearbox_RL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.8500000238418579
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a
+        token connectors:flange_a.connect = </SkidRover/TorqueSource_RL.connectors:flange>
+        custom token connectors:flange_b
+        token connectors:flange_b.connect = </SkidRover/Shaft_RL.connectors:flange>
+    }
+    def Xform "Motor_RR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand
+        float inputs:demand.connect = </SkidRover.outputs:drive_right>
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover/Gearbox_RR.outputs:speed_a>
+    }
+    def Xform "TorqueSource_RR" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref
+        float inputs:tau_ref.connect = </SkidRover/Motor_RR.outputs:shaft_torque>
+        custom token connectors:flange
+        token connectors:flange.connect = </SkidRover/Gearbox_RR.connectors:flange_a>
+    }
+    def Xform "Gearbox_RR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.8500000238418579
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a
+        token connectors:flange_a.connect = </SkidRover/TorqueSource_RR.connectors:flange>
+        custom token connectors:flange_b
+        token connectors:flange_b.connect = </SkidRover/Shaft_RR.connectors:flange>
+    }
+    def Xform "Shaft_FL" (
+        prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+    )
+    {
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FL>
+    }
+    def Xform "Shaft_FR" (
+        prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+    )
+    {
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_FR>
+    }
+    def Xform "Shaft_RL" (
+        prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+    )
+    {
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RL>
+    }
+    def Xform "Shaft_RR" (
+        prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+    )
+    {
+        float inputs:speed
+        float inputs:speed.connect = </SkidRover.inputs:shaft_speed_RR>
+    }
+    def Xform "Comms" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.15, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    over "LinkAperture"
+                    {
+                        string lunco:link:class = "rover"
+                        over "LinkBeam"
+                        {
+                            over "Up"
+                            {
+                                over "Driver"
+                                {
+                                    custom float lunco:param:earthOnly = 1.0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    def Xform "WifiRadio" (
+        prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.65, 0.35)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }

@@ -52,8 +52,6 @@ pub enum ModelicaSourceRootContentError {
         source_set_id: String,
         details: String,
     },
-    /// The compiler retained parsed definitions but not the original source text.
-    SourceTextUnavailable { source_set_id: String },
 }
 
 impl std::fmt::Display for ModelicaSourceRootContentError {
@@ -84,10 +82,6 @@ impl std::fmt::Display for ModelicaSourceRootContentError {
             } => write!(
                 formatter,
                 "Modelica source root `{source_set_id}` failed admission: {details}"
-            ),
-            Self::SourceTextUnavailable { source_set_id } => write!(
-                formatter,
-                "Modelica source root `{source_set_id}` has parsed definitions but no source text"
             ),
         }
     }
@@ -254,10 +248,11 @@ fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
 }
 
 fn source_roots_from_parsed_docs(
-    docs: &[(String, rumoca_compile::parsing::ast::StoredDefinition)],
+    docs: &[rumoca_compile::compile::ParsedSourceDocument],
 ) -> std::collections::HashSet<String> {
     docs.iter()
-        .flat_map(|(_, definition)| {
+        .flat_map(|document| {
+            let definition = document.definition();
             // An authored `within;` denotes the global namespace. Its empty
             // name does not prefix the top-level package's qualified identity.
             let within = definition
@@ -284,7 +279,7 @@ pub struct PreparedSourceRoot {
     id: String,
     label: String,
     files: Vec<(String, String)>,
-    parsed: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+    parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     parsed_roots: std::collections::HashSet<String>,
     diagnostics: Vec<String>,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
@@ -325,9 +320,9 @@ impl PreparedSourceRoot {
 
         let mut parsed = Vec::with_capacity(files.len());
         for (uri, text) in &files {
-            match lunco_modelica_ast::parse_to_ast(text, uri) {
+            match rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), text.clone()) {
                 Ok(ast) => {
-                    parsed.push((uri.clone(), ast));
+                    parsed.push(ast);
                 }
                 Err(error) => diagnostics.push(format!(
                     "source root `{id}`: could not parse {uri}: {error:?}"
@@ -469,7 +464,7 @@ impl ModelicaCompiler {
         if roots.is_empty() {
             return false;
         }
-        let inserted = self.session.replace_parsed_source_set(
+        let inserted = self.session.replace_in_memory_source_set(
             "source-bundle",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             docs,
@@ -479,11 +474,13 @@ impl ModelicaCompiler {
         self.rebuild_source_set_indexes();
         self.library_revisions
             .insert("source-bundle".to_string(), bundle_revision);
+        let files = parsed
+            .iter()
+            .map(|document| (document.uri().to_owned(), document.source().to_owned()))
+            .collect::<Vec<_>>();
         self.source_root_content_closures.insert(
             "source-bundle".to_string(),
-            Err(ModelicaSourceRootContentError::SourceTextUnavailable {
-                source_set_id: "source-bundle".to_string(),
-            }),
+            source_root_content_closure("source-bundle", "source-bundle", &files, &[]),
         );
         inserted > 0
     }
@@ -720,7 +717,7 @@ impl ModelicaCompiler {
     /// docs (plus the immutable source roots). This is what makes
     /// each compile hermetic against prior compiles — see
     /// [`Self::seated_user_uris`]. source library roots are installed via
-    /// `replace_parsed_source_set` (not tracked here), so they're untouched.
+    /// `replace_in_memory_source_set` (not tracked here), so they're untouched.
     fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
         let stale: Vec<String> = self
             .seated_user_uris
@@ -943,17 +940,9 @@ impl ModelicaCompiler {
             }
         };
 
-        let mut result = self
+        let result = self
             .session
             .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
-
-        if let Err(error) = &mut result {
-            if error.to_ascii_lowercase().contains("unbalanced model") {
-                if let Some(explanation) = self.structural_balance_explanation(model_name) {
-                    error.push_str(&explanation);
-                }
-            }
-        }
 
         log::info!(
             "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
@@ -962,59 +951,6 @@ impl ModelicaCompiler {
             if result.is_ok() { "OK" } else { "ERR" },
         );
         result
-    }
-
-    /// Explain an underdetermined Modelica compile with Rumoca's existing
-    /// structural-matching diagnosis. This runs only when strict compilation
-    /// has already rejected a model as unbalanced; the diagnostic DAE is never
-    /// returned to the simulation path.
-    fn structural_balance_explanation(&mut self, model_name: &str) -> Option<String> {
-        let compiled = self
-            .session
-            .compile_model_dae_allow_unbalanced_for_diagnostics(model_name)
-            .ok()?;
-        let diagnosis = rumoca_sim_diagnostics::diagnose_structural_singularity(
-            &compiled.dae,
-            &rumoca_sim_diagnostics::SimOptions::default(),
-        )
-        .ok()??;
-        if diagnosis.unknowns.is_empty() {
-            return None;
-        }
-        let mut unknowns = diagnosis.unknowns;
-        unknowns.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-
-        let mut explanation = format!(
-            "\n\nWhy simulation did not start: Modelica compilation found an underdetermined system: {} equations and {} unknowns, with {} unknowns left unmatched. These values cannot be uniquely calculated from the model's current equations:",
-            diagnosis.n_equations,
-            diagnosis.n_unknowns,
-            unknowns.len(),
-        );
-        for unknown in unknowns {
-            let mut referencing_rows = unknown.referencing_rows;
-            referencing_rows.sort_unstable();
-            referencing_rows.dedup();
-            let rows = if referencing_rows.is_empty() {
-                "no equation rows reference it".to_string()
-            } else {
-                format!(
-                    "referenced by {}",
-                    referencing_rows
-                        .iter()
-                        .map(|index| format!("f_x[{index}]"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            explanation.push_str(&format!(
-                "\n  • {} ({}) — {rows}",
-                unknown.name, unknown.category
-            ));
-        }
-        explanation.push_str(
-            "\nReview the listed variables and equation rows, then add or correct enough independent equations or constraints to determine them.",
-        );
-        Some(explanation)
     }
 
     /// Seat the source roots discoverable from the source text before the first
@@ -1122,7 +1058,7 @@ impl ModelicaCompiler {
         // diagnostic. Bulk installation also keeps Rumoca's source-set index
         // and invalidation work to one pass instead of one pass per file.
         let inserted = if diagnostics.is_empty() && !parsed.is_empty() {
-            let inserted = self.session.replace_parsed_source_set(
+            let inserted = self.session.replace_in_memory_source_set(
                 &id,
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
                 parsed,
@@ -1252,8 +1188,8 @@ impl ModelicaCompiler {
     }
 
     /// Return the current source-content state for one root. Failed latest
-    /// admissions and parsed-only source bundles return explicit errors rather
-    /// than exposing stale or unavailable source text as a closure.
+    /// admissions return explicit errors rather than exposing stale source text
+    /// as a closure.
     pub fn source_root_content_closure(
         &self,
         source_set_id: &str,
@@ -1654,23 +1590,37 @@ end Controls;"
             ("b.enabled", 0.0),
             ("d.enabled", 5.0),
         ] {
-            let var = &compiled.dae.variables.inputs[&rumoca_compile::compile::VarName::new(name)];
-            let Some(rumoca_compile::compile::core::Expression::Literal {
-                value: rumoca_compile::compile::core::Literal::Real(actual),
-                ..
-            }) = &var.start
-            else {
-                panic!("{name}: unexpected default {:?}", var.start);
-            };
-            assert_eq!(
-                *actual, value,
-                "{name} retains its declaring class's default"
-            );
+            compiled.dae.inspect(|view| {
+                let (_, variable) = view
+                    .variables()
+                    .find(|(_, variable)| variable.name().as_str() == name)
+                    .expect("qualified input retained");
+                assert_eq!(
+                    variable.role(),
+                    rumoca_compile::compile::VariableRole::Input
+                );
+                let expression = variable
+                    .binding()
+                    .or_else(|| variable.start())
+                    .expect("authored default retained");
+                let actual = view.expression(expression).expect("checked expression");
+                let rumoca_compile::compile::ExpressionOperation::Literal(
+                    rumoca_ir_dae::DaeLiteral::Real(actual),
+                ) = actual.operation()
+                else {
+                    panic!("{name}: authored literal default lost");
+                };
+                assert_eq!(*actual, value, "{name} retains its declaring class default");
+            });
         }
         let internal = compiler.compile_str("Internal",
             "model Internal Controls.On a; Controls.Off b; output Real y; equation y=a.y+b.y; end Internal;", "internal.mo")
             .expect("internal defaults retain their equations");
-        assert!(internal.dae.variables.inputs.is_empty());
+        assert!(internal.dae.inspect(|view| {
+            view.variables().all(|(_, variable)| {
+                variable.role() != rumoca_compile::compile::VariableRole::Input
+            })
+        }));
         assert!(compiler.compile_str("Invalid",
             "model Invalid input Real enabled=missing; output Real y; equation y=enabled; end Invalid;", "invalid.mo").is_err(),
             "invalid defaults produce a diagnostic rather than a fabricated value");
@@ -1804,7 +1754,7 @@ end Controls;"
             prepared
                 .parsed
                 .iter()
-                .map(|(uri, _)| uri.as_str())
+                .map(|document| document.uri())
                 .collect::<Vec<_>>(),
             ["a/Alpha.mo", "z/Zed.mo"]
         );
@@ -1962,7 +1912,7 @@ end Controls;"
                 "demo",
                 &[("a.mo".to_string(), "model A end A; changed".to_string())]
             ),
-            "a source edit must invalidate prepared solve IR"
+            "a source edit must invalidate prepared FMI components"
         );
 
         let mut compiler = ModelicaCompiler::new();
@@ -2000,7 +1950,7 @@ end Controls;"
         let source =
             "model IdentityProbe Real x(start=1,fixed=true); equation der(x)=0; end IdentityProbe;";
         let mut compiler = ModelicaCompiler::new();
-        let mut unused = PreparedSourceRoot::prepare(
+        let unused = PreparedSourceRoot::prepare(
             "unused-root",
             "unused-root",
             vec![(
@@ -2009,9 +1959,6 @@ end Controls;"
             )],
             Vec::new(),
         );
-        unused.content_closure = Err(ModelicaSourceRootContentError::SourceTextUnavailable {
-            source_set_id: "unused-root".into(),
-        });
         assert!(compiler.install_source_root(unused).diagnostics.is_empty());
         let first = compiler
             .compile_str_multi(
@@ -2043,7 +1990,7 @@ end Controls;"
         );
         let identity = compiler
             .compiled_source_content_identity(&first, str::to_owned)
-            .expect("unused parsed-only root is excluded");
+            .expect("unused source root is excluded");
         compiler.clear_user_documents();
         let second = compiler
             .compile_str("IdentityProbe", source, "/host-b/editor.mo")
@@ -2067,10 +2014,19 @@ end Controls;"
         let required = "model RequiredProbe Unused.Part part; end RequiredProbe;";
         let compiled = compiler
             .compile_str("RequiredProbe", required, "RequiredProbe.mo")
-            .expect("parsed-only dependency remains compilable");
-        let error = compiler
+            .expect("source-bearing dependency compiles");
+        let dependent_identity = compiler
             .compiled_source_content_identity(&compiled, str::to_owned)
-            .expect_err("participating parsed-only bytes are unavailable");
-        assert!(error.contains("parsed definitions but no source text"));
+            .expect("participating source bytes retain provenance");
+        assert_ne!(identity, dependent_identity);
+        assert_eq!(
+            compiled
+                .source_closure
+                .as_ref()
+                .expect("strict closure")
+                .files
+                .len(),
+            2
+        );
     }
 }

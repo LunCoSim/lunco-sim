@@ -77,6 +77,11 @@ pub const GRAVITY_X_SOURCE_CONNECTOR: &str = "gravity_x";
 pub const GRAVITY_Y_SOURCE_CONNECTOR: &str = "gravity_y";
 pub const GRAVITY_Z_SOURCE_CONNECTOR: &str = "gravity_z";
 
+/// Terrain visibility of the Sun centre at an environment probe.
+pub const SUN_VISIBILITY_SOURCE_CONNECTOR: &str = "sun_visibility";
+/// Physical direct-normal irradiance at an environment probe, W/m².
+pub const SUN_IRRADIANCE_SOURCE_CONNECTOR: &str = "sun_irradiance_w_m2";
+
 /// Static output contract of a `LunCoEnvironmentProbeAPI` source prim.
 ///
 /// These are schema-declared properties, so they are not necessarily present in
@@ -89,6 +94,8 @@ pub const ENVIRONMENT_PROBE_BASE_OUTPUTS: &[&str] = &[
     GRAVITY_X_SOURCE_CONNECTOR,
     GRAVITY_Y_SOURCE_CONNECTOR,
     GRAVITY_Z_SOURCE_CONNECTOR,
+    SUN_VISIBILITY_SOURCE_CONNECTOR,
+    SUN_IRRADIANCE_SOURCE_CONNECTOR,
 ];
 
 /// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
@@ -126,3 +133,8 @@ pub const ENVIRONMENT_PROBE_BASE_OUTPUTS: &[&str] = &[
 /// is the geometry verdict ALONE — a peer can be in plain sight and still too far to
 /// close the link budget; that verdict belongs to the model.
 pub const LINK_CONNECTOR_PREFIX: &str = "link_";
+
+/// Outputs whose absent sample must stop a causal exchange rather than
+/// contribute a fabricated zero. The producer owns readiness and diagnostics.
+#[derive(bevy::prelude::Component, Clone, Debug)]
+pub struct RequiredOutputSamples(pub Vec<String>);

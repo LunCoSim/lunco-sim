@@ -12,17 +12,34 @@ use crate::Earthshine;
 /// Semantic sun state produced by the selected physical/provider model.
 ///
 /// Direction belongs to [`crate::EnvironmentDirections`], shared with every
-/// other framed direction source. This resource holds only solar irradiance
-/// used by the render light.
+/// other framed direction source. This resource holds separate physical
+/// irradiance and rendering illuminance calibrations.
 #[derive(Resource, Debug, Clone, PartialEq, Default)]
 pub struct SunState {
     /// Optional calibrated direct-sun irradiance in lux.
     pub irradiance_lux: Option<f32>,
+    /// Physical direct-normal solar irradiance in W/m². Rendering illuminance
+    /// is a separate quantity; no lux-to-watt conversion enters cosimulation.
+    pub irradiance_w_m2: Option<f64>,
     /// Monotonic semantic revision for change-gated projections.
     pub revision: u64,
 }
 
 impl SunState {
+    /// Publish the physical source sample, independently of render calibration.
+    pub fn publish_physical(&mut self, sample: Option<f64>) -> Result<bool, &'static str> {
+        if sample.is_some_and(|value| !value.is_finite() || value < 0.0) {
+            self.irradiance_w_m2 = None;
+            self.revision = self.revision.wrapping_add(1);
+            return Err("physical solar irradiance must be finite and non-negative");
+        }
+        if self.irradiance_w_m2 != sample {
+            self.irradiance_w_m2 = sample;
+            self.revision = self.revision.wrapping_add(1);
+            return Ok(true);
+        }
+        Ok(false)
+    }
     /// Publish irradiance and advance the revision only when it changes.
     pub fn publish(&mut self, irradiance_lux: Option<f32>) -> bool {
         if irradiance_lux.is_some_and(|lux| !lux.is_finite() || lux < 0.0) {
@@ -37,6 +54,7 @@ impl SunState {
 
     /// Remove the current provider sample rather than retaining stale lighting.
     pub fn clear(&mut self) {
+        let _ = self.publish_physical(None);
         if self.irradiance_lux.take().is_some() {
             self.revision = self.revision.wrapping_add(1);
         }
@@ -53,6 +71,37 @@ impl SunState {
             self.revision = self.revision.wrapping_add(1);
         }
         true
+    }
+}
+
+/// Fixed directional sources use the physical calibration. Celestial sources
+/// are exclusively published by the ephemeris provider, including its 1/r² law.
+pub fn publish_fixed_solar_irradiance(
+    classification: Query<&crate::CelestialSourceClassification>,
+    directions: Res<crate::EnvironmentDirections>,
+    calibration: Res<crate::LunarSun>,
+    mut sun: ResMut<SunState>,
+) {
+    match classification.single() {
+        Ok(source) if source.has_source => {}
+        Ok(_) => {
+            let sample = directions
+                .get_named(crate::SUN_DIRECTION_SOURCE)
+                .map(|_| calibration.irradiance_w_m2);
+            match sun.bypass_change_detection().publish_physical(sample) {
+                Ok(true) => sun.set_changed(),
+                Ok(false) => {}
+                Err(error) => {
+                    warn!("[solar] {error}");
+                    sun.set_changed();
+                }
+            }
+        }
+        Err(_) => {
+            if sun.bypass_change_detection().publish_physical(None) == Ok(true) {
+                sun.set_changed();
+            }
+        }
     }
 }
 

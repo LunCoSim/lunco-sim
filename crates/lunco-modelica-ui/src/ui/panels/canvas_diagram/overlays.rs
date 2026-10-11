@@ -300,8 +300,8 @@ pub(super) fn empty_overlay_class_info(
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    use rumoca_compile::parsing::Causality;
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::Causality;
+    use lunco_modelica_ast::ClassType;
 
     // Painting is never allowed to start an engine inheritance walk. The
     // projection task owns that work off-thread and publishes its memoized
@@ -348,7 +348,7 @@ pub(super) fn empty_overlay_class_info(
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     for (name, comp) in class.components.iter() {
-        use rumoca_compile::parsing::Variability;
+        use lunco_modelica_ast::Variability;
         if matches!(comp.variability, Variability::Parameter(_)) {
             params.push(name.clone());
         }
@@ -381,7 +381,7 @@ pub(super) fn locate_class<'a>(
     if let Some(c) = lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, name) {
         return Some(c);
     }
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     ast.classes
         .iter()
         .find(|(_, c)| !matches!(c.class_type, ClassType::Package))

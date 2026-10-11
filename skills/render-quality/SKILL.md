@@ -48,14 +48,17 @@ view restoration can replace an early camera command.
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
    For measured shadow cost, use the diagnostics-enabled render owner's four
-   `lunco_shadow_*` GPU spans described in `performance-profiling`. Shared spans
-   cover point/spot views; camera spans cover directional cascades. Confirm
+   `lunco_shadow_*` GPU spans described in `performance-profiling`. Confirm
    timestamp coverage and keep profiler attribution separate from unprofiled
    visual acceptance before changing shadow preparation or rendering.
-   A committed heightfield cache disables streamed terrain CSM casting. The
-   render-input owner sets those tiles' `csm_far` to zero so cached visibility
-   covers every distance. Static terrain retains its native CSM range; object
-   shadows remain native CSM. Check both paths after shader edits.
+   Static and streamed terrain remain native CSM casters and receivers so
+   terrain shades objects and objects shade ground. The heightfield cache
+   supplies ground self-shadow; cached tiles use `csm_far = 0` to avoid a
+   fragment march at every distance. For panel power, read the wired probe's
+   `sun_visibility`, `sun_irradiance_w_m2` and panel `available_power_w`.
+   Physical samples use the f64 terrain oracle and selected optical proxies.
+   See `docs/architecture/terrain-layered-rendering.md` for the production
+   gates. Do not infer whole-body night occlusion from a finite DEM.
    The layered shader keeps measured landform normals and adds filtered
    sub-metre clump/grain normals; unresolved slopes contribute to roughness.
    Relief remaps have continuous slopes at their clipping thresholds. The

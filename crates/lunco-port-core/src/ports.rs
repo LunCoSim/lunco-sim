@@ -170,12 +170,30 @@ impl<T: Copy + PartialEq> PartialEq for PortMap<T> {
     fn eq(&self, other: &Self) -> bool {
         self.len() == other.len()
             && self
-                .iter()
-                .all(|(name, value)| other.get(name).is_some_and(|other| value == other))
+                .keys()
+                .all(|name| other.contains_key(name) && self.get(name) == other.get(name))
     }
 }
 
 impl<T: Copy> PortMap<T> {
+    /// Declare a port without inventing its first sample. A declaration retains
+    /// its slot through initial sample publication; reads remain unavailable.
+    pub fn declare(&mut self, name: String) -> bool {
+        if self.by_name.contains_key(name.as_str()) {
+            return false;
+        }
+        let name: Arc<str> = Arc::from(name);
+        self.names.insert(&name);
+        let index = self.slots.len();
+        self.slots.push(PortMapSlot {
+            name: Some(Arc::clone(&name)),
+            value: None,
+        });
+        self.by_name.insert(name, index);
+        self.topology_version = self.topology_version.wrapping_add(1);
+        true
+    }
+
     /// Insert or replace a named value. Name storage is shared between the
     /// lookup index and its slot, so each declared name has one string buffer.
     pub fn insert(&mut self, name: String, value: T) -> Option<T> {
@@ -225,8 +243,7 @@ impl<T: Copy> PortMap<T> {
     #[inline]
     pub fn resolve_slot(&self, name: &str) -> Option<u64> {
         let index = *self.by_name.get(name)?;
-        let slot = self.slots.get(index)?;
-        slot.value.as_ref()?;
+        self.slots.get(index)?.name.as_ref()?;
         encode_port_slot(self.layout_id, index)
     }
 
@@ -278,26 +295,26 @@ impl<T: Copy> PortMap<T> {
         let index = self.by_name.remove(name)?;
         let slot = self.slots.get_mut(index)?;
         let removed_name = slot.name.take()?;
-        let value = slot.value.take()?;
+        let value = slot.value.take();
         self.names.remove(&removed_name);
         self.retired_slots += 1;
         self.topology_version = self.topology_version.wrapping_add(1);
         if self.retired_slots >= 64 && self.retired_slots > self.by_name.len() {
             self.compact();
         }
-        Some(value)
+        value
     }
 
     fn compact(&mut self) {
         let mut slots = Vec::with_capacity(self.by_name.len());
         let mut by_name = HashMap::with_capacity(self.by_name.len());
         for slot in self.slots.drain(..) {
-            if let (Some(name), Some(value)) = (slot.name, slot.value) {
+            if let Some(name) = slot.name {
                 let index = slots.len();
                 by_name.insert(Arc::clone(&name), index);
                 slots.push(PortMapSlot {
                     name: Some(name),
-                    value: Some(value),
+                    value: slot.value,
                 });
             }
         }
@@ -586,22 +603,24 @@ impl ScalarPortMap {
     /// Update a declared scalar without adding a missing name.
     #[inline]
     pub fn set_existing(&mut self, name: &str, value: f64) -> Option<bool> {
-        let current = self.get_mut(name)?;
-        let changed = current.to_bits() != value.to_bits();
-        if changed {
-            *current = value;
-        }
-        Some(changed)
+        self.set_slot_existing(self.resolve_slot(name)?, value)
     }
 
-    /// Update a scalar by a previously resolved slot without adding a missing
-    /// name, returning `None` when the slot has been retired.
+    /// Update a declared scalar by its stable slot, including its first sample.
+    /// Retired names and replaced layouts cannot receive the write.
     #[inline]
     pub fn set_slot_existing(&mut self, slot: u64, value: f64) -> Option<bool> {
-        let current = self.get_slot_mut(slot)?;
-        let changed = current.to_bits() != value.to_bits();
+        let (layout_id, index) = decode_port_slot(slot)?;
+        if layout_id != self.map.layout_id {
+            return None;
+        }
+        let slot = self.map.slots.get_mut(index)?;
+        slot.name.as_ref()?;
+        let changed = slot
+            .value
+            .is_none_or(|current| current.to_bits() != value.to_bits());
         if changed {
-            *current = value;
+            slot.value = Some(value);
         }
         Some(changed)
     }
@@ -1963,7 +1982,8 @@ impl PortRegistry {
         value: f64,
     ) -> Result<(), PortWriteError> {
         let prepared = self.prepare_input_write(world, entity, name, value)?;
-        self.apply_prepared_input_writes(world, std::slice::from_ref(&prepared))
+        self.commit_validated_input_write(world, &prepared);
+        Ok(())
     }
 
     /// Validate a write without changing simulation state. Callers that need
@@ -2077,6 +2097,15 @@ impl PortRegistry {
             commit(world, write.entity, write.slot, write.value);
         }
         Ok(())
+    }
+
+    /// A single write is prepared and committed under one exclusive borrow;
+    /// unlike a retained batch, its world cannot change between these steps.
+    fn commit_validated_input_write(&self, world: &mut World, write: &PreparedPortWrite) {
+        let commit = self.backends[write.backend]
+            .write_slot
+            .expect("prepared input write has an admitted commit callback");
+        commit(world, write.entity, write.slot, write.value);
     }
 
     fn preflight_prepared_input_write(
@@ -2296,17 +2325,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        // Preparation and commit share this exclusive World boundary. Nothing
-        // can change the validated owner between them; batch revalidation is
-        // needed only when separately prepared writes are admitted together.
-        let commit = self.backends[prepared.backend]
-            .write_slot
-            .ok_or_else(|| PortWriteError {
-                port: prepared.name.to_string(),
-                owner: Some(prepared.metadata.source.to_string()),
-                kind: PortWriteErrorKind::UnsupportedWritePath,
-            })?;
-        commit(world, entity, prepared.slot, prepared.value);
+        self.commit_validated_input_write(world, &prepared);
         Ok(())
     }
 
@@ -2338,6 +2357,35 @@ mod tests {
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
         port_name_set_key,
     };
+
+    #[test]
+    fn declared_scalar_accepts_first_sample_without_changing_its_slot() {
+        let mut ports = ScalarPortMap::default();
+        assert!(ports.declare("drive".to_owned()));
+        assert!(!ports.declare("drive".to_owned()));
+        assert!(ports.contains_key("drive"));
+        assert_eq!(ports.get("drive"), None);
+        assert_eq!(ports.iter().count(), 0);
+        let slot = ports.resolve_slot("drive").unwrap();
+        let topology = ports.topology_key();
+        assert_eq!(ports.set_slot_existing(slot, 2.5), Some(true));
+        assert_eq!(ports.get("drive"), Some(&2.5));
+        assert_eq!(ports.topology_key(), topology);
+        assert_eq!(ports.set_existing("missing", 0.0), None);
+        assert_eq!(ports.set_slot_existing(slot, 2.5), Some(false));
+        assert!(ports.declare("pending".to_owned()));
+        let mut other = ScalarPortMap::default();
+        other.declare("different".to_owned());
+        assert_ne!(ports.map, other.map);
+        ports.map.compact();
+        assert_eq!(ports.set_slot_existing(slot, 4.0), None);
+        assert!(ports.contains_key("pending"));
+        assert_eq!(ports.get("pending"), None);
+        let pending_slot = ports.resolve_slot("pending").unwrap();
+        assert_eq!(ports.remove("pending"), None);
+        assert!(!ports.contains_key("pending"));
+        assert_eq!(ports.set_slot_existing(pending_slot, 4.0), None);
+    }
 
     #[test]
     fn cached_structural_observation_derives_only_admitted_or_changed_owners() {

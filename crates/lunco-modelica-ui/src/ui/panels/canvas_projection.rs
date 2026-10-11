@@ -62,7 +62,7 @@ fn resolved_engine_class_entry(
     // kind, inherited connector members, ports, and Diagram graphics. An
     // empty ClassEntry here is not a valid resolved state because it removes
     // standard `flow` metadata from every generated edge.
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
 
     let class_kind = match (&class_def.class_type, class_def.expandable) {
         (ClassType::Connector, true) => lunco_modelica_index::index::ClassKind::ExpandableConnector,
@@ -205,7 +205,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// package as a folder; drill-in into a class lands here with
 /// `target_class = Some(...)` and proceeds normally.
 fn ast_looks_like_package(ast: &rumoca_compile::parsing::ast::StoredDefinition) -> bool {
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     for class in ast.classes.values() {
         if matches!(class.class_type, ClassType::Package) {
             return true;
@@ -477,7 +477,7 @@ pub fn import_model_to_diagram_from_ast(
                     if sibling_name != target_leaf
                         && !matches!(
                             sibling_class.class_type,
-                            rumoca_compile::parsing::ClassType::Package
+                            lunco_modelica_ast::ClassType::Package
                         )
                     {
                         register_local_class(
@@ -1208,7 +1208,7 @@ fn register_local_class(
         let _ = class_def;
         return;
     }
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     // Walk the class's connector sub-components into `PortDef`s.
     // Without this, locally-defined classes (Tank, Engine, …) have an
     // empty ports list, so wires from `connect()` statements have
@@ -1263,7 +1263,7 @@ fn extract_local_class_ports(
     class_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> Vec<lunco_modelica_index::visual_diagram::PortDef> {
-    use rumoca_compile::parsing::Causality;
+    use lunco_modelica_ast::Causality;
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
         let sub_type = sub.type_name.to_string();
@@ -1357,8 +1357,8 @@ fn classify_connector(
     lunco_modelica_index::visual_diagram::PortKind,
     Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
 ) {
+    use lunco_modelica_ast::Causality;
     use lunco_modelica_index::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_compile::parsing::Causality;
     use rumoca_compile::parsing::ast::Connection;
 
     // Short-form type alias (`connector X = input Real`) — causality
@@ -1474,9 +1474,9 @@ fn eval_condition(
     expr: &rumoca_compile::parsing::ast::Expression,
     params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
-    use rumoca_compile::parsing::OpBinary;
+    use lunco_modelica_ast::OpBinary;
+    use lunco_modelica_ast::OpUnary;
     use rumoca_compile::parsing::ast::Expression;
-    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the

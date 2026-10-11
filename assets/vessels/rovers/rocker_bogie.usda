@@ -228,12 +228,22 @@ def Xform "RockerBogie" (
         "solar" {
             rel collection:components:includes
             prepend rel collection:components:includes = </RockerBogie/SolarPanel>
-            float outputs:solar_power
-            float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
-            float outputs:solar_available_power
-            float outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
-            float outputs:solar_incidence
-            float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
+            custom double inputs:irradiance
+            double inputs:irradiance.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_irradiance_w_m2>
+            custom double inputs:sun_visibility
+            double inputs:sun_visibility.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_visibility>
+            custom double inputs:target_mount_x
+            double inputs:target_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
+            custom double inputs:target_mount_y
+            double inputs:target_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
+            custom double inputs:target_mount_z
+            double inputs:target_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
+            custom double outputs:solar_power
+            double outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+            custom double outputs:solar_incidence
+            double outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
+            custom double outputs:solar_available_power
+            double outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
@@ -244,16 +254,15 @@ def Xform "RockerBogie" (
                 custom token connectors:p
                 token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 custom double inputs:target_mount_x
-                double inputs:target_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
+                double inputs:target_mount_x.connect = </RockerBogie.inputs:target_mount_x>
                 custom double inputs:target_mount_y
-                double inputs:target_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
+                double inputs:target_mount_y.connect = </RockerBogie.inputs:target_mount_y>
                 custom double inputs:target_mount_z
-                double inputs:target_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
-                def Xform "Environment" (
-                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
-                )
-                {
-                }
+                double inputs:target_mount_z.connect = </RockerBogie.inputs:target_mount_z>
+                custom double inputs:irradiance
+                double inputs:irradiance.connect = </RockerBogie.inputs:irradiance>
+                custom double inputs:sun_visibility
+                double inputs:sun_visibility.connect = </RockerBogie.inputs:sun_visibility>
             }
         }
     }

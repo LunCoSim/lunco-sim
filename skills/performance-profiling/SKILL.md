@@ -1077,3 +1077,7 @@ facts. Mark the exact idle/movement windows in Tracy messages, keep the initial
 avatar pose fixed, and seed a pointer in SceneView when reproducing native
 picking. Distinguish shader reload events from material/look changes. Verify
 invalid-stage diagnostics and hot-reload invalidation as well as frame time.
+
+Resolved port writes validate the live owner and metadata before committing.
+When profiling co-simulation exchange, preserve those checks and the all-or-none
+preflight for retained batches; single exclusive writes need one validation pass.

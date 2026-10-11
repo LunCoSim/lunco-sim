@@ -45,8 +45,8 @@ pub async fn load_library_class(
         lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
             bundle
                 .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, ast)| ast.clone())
+                .find(|document| document.uri() == key)
+                .map(|document| document.definition().clone())
         });
     let bundle_hit = bundled_ast.is_some();
 

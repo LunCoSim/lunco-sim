@@ -1,7 +1,7 @@
 //! In-memory and persistent prepared-solve cache for the Modelica worker.
 //!
 //! Prepared graphs use participating-source content identity, solver identity,
-//! and exact parameter bits. Compiler admission revisions fence compiled
+//! and exact parameter and admitted input bits. Compiler admission revisions fence compiled
 //! artifacts independently of immutable prepared-graph reuse.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,8 +126,7 @@ pub(super) enum PreparedSolveCacheReadError {
     Storage(StorageError),
     Decompression(std::io::Error),
     DecodedLimit { max_bytes: usize },
-    Codec(bincode::error::DecodeError),
-    TrailingBytes,
+    Codec(serde_json::Error),
     Identity,
 }
 
@@ -136,7 +135,8 @@ pub(super) enum PreparedSolveCacheReadError {
 pub(super) enum PreparedSolveCacheWriteError {
     InvalidLimits(String),
     InvalidPath,
-    Codec(bincode::error::EncodeError),
+    ConstructionWire(String),
+    Codec(serde_json::Error),
     Compression(std::io::Error),
     Storage(StorageError),
 }
@@ -146,8 +146,12 @@ impl std::fmt::Display for PreparedSolveCacheWriteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidLimits(error) => formatter.write_str(error),
+            Self::ConstructionWire(error) => write!(
+                formatter,
+                "checked component serialization rejected: {error}"
+            ),
             Self::InvalidPath => {
-                formatter.write_str("publication is outside the owned v5 cache namespace")
+                formatter.write_str("publication is outside the owned prepared cache namespace")
             }
             Self::Codec(error) => write!(formatter, "cache serialization rejected: {error}"),
             Self::Compression(error) => write!(formatter, "cache compression rejected: {error}"),
@@ -237,7 +241,6 @@ impl std::fmt::Display for PreparedSolveCacheReadError {
                 write!(formatter, "decoded cache exceeds {max_bytes} bytes")
             }
             Self::Codec(error) => write!(formatter, "cache record decode rejected: {error}"),
-            Self::TrailingBytes => formatter.write_str("cache record has trailing bytes"),
             Self::Identity => {
                 formatter.write_str("cache record identity does not match the admitted solve key")
             }
@@ -246,7 +249,7 @@ impl std::fmt::Display for PreparedSolveCacheReadError {
 }
 
 /// A prepared solve model is reusable for the exact structural source key,
-/// solver, and parameter override vector that produced it. This is the same
+/// solver, parameter overrides, and initial input vector that produced it. This is the same
 /// identity used by the persistent cache, so equivalent generated networks
 /// share pure solve IR within one session too.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -254,20 +257,34 @@ pub(super) struct PreparedSolveKey {
     pub(super) source_key: u64,
     pub(super) solver_id: String,
     pub(super) parameter_overrides: Vec<(String, u64)>,
+    pub(super) initial_inputs: Vec<(String, u64)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 struct PreparedSolveDiskRecord<M, S, P> {
     version: u32,
     source_key: u64,
     solver_id: S,
     parameter_overrides: P,
+    initial_inputs: P,
     model: M,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct DecodedPreparedSolveDiskRecord {
+    version: u32,
+    source_key: u64,
+    solver_id: String,
+    parameter_overrides: Vec<(String, u64)>,
+    initial_inputs: Vec<(String, u64)>,
+    #[serde(deserialize_with = "rumoca_sim::deserialize_fmi_component")]
+    model: rumoca_ir_solve::fmi::FmiComponent,
+}
+
 pub(super) struct PreparedSolveCache {
-    models: BoundedReuseCache<PreparedSolveKey, Arc<rumoca_ir_solve::SolveModel>>,
+    models: BoundedReuseCache<PreparedSolveKey, Arc<rumoca_ir_solve::fmi::FmiComponent>>,
 }
 
 impl PreparedSolveCache {
@@ -281,14 +298,17 @@ impl PreparedSolveCache {
         self.models.contains_key(key)
     }
 
-    pub(super) fn get(&self, key: &PreparedSolveKey) -> Option<&Arc<rumoca_ir_solve::SolveModel>> {
+    pub(super) fn get(
+        &self,
+        key: &PreparedSolveKey,
+    ) -> Option<&Arc<rumoca_ir_solve::fmi::FmiComponent>> {
         self.models.get(key)
     }
 
     pub(super) fn insert(
         &mut self,
         key: PreparedSolveKey,
-        model: Arc<rumoca_ir_solve::SolveModel>,
+        model: Arc<rumoca_ir_solve::fmi::FmiComponent>,
     ) {
         self.models.insert(key, model);
     }
@@ -297,6 +317,7 @@ impl PreparedSolveCache {
         source_key: u64,
         spec: &solver::SolverSpec,
         parameter_overrides: &[(String, f64)],
+        initial_inputs: &[(String, f64)],
     ) -> PreparedSolveKey {
         PreparedSolveKey {
             source_key,
@@ -305,9 +326,14 @@ impl PreparedSolveCache {
                 .iter()
                 .map(|(name, value)| (name.clone(), value.to_bits()))
                 .collect(),
+            initial_inputs: initial_inputs
+                .iter()
+                .map(|(name, value)| (name.clone(), value.to_bits()))
+                .collect(),
         }
     }
 
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub(super) fn clear(&mut self) {
         self.models.clear();
     }
@@ -321,6 +347,7 @@ impl PreparedSolveCache {
         key.source_key.hash(&mut hasher);
         key.solver_id.hash(&mut hasher);
         key.parameter_overrides.hash(&mut hasher);
+        key.initial_inputs.hash(&mut hasher);
         let hash = hasher.finish();
         format!("{:016x}-{hash:016x}.bin.zst", key.source_key)
     }
@@ -336,7 +363,7 @@ impl PreparedSolveCache {
     pub(super) fn load_disk(
         key: &PreparedSolveKey,
         limits: PreparedSolveDiskLimits,
-    ) -> Result<Option<rumoca_ir_solve::SolveModel>, PreparedSolveCacheReadError> {
+    ) -> Result<Option<rumoca_ir_solve::fmi::FmiComponent>, PreparedSolveCacheReadError> {
         let path = Self::disk_path(key);
         Self::load_disk_at(&FileStorage::new(), &StorageHandle::File(path), key, limits)
     }
@@ -347,7 +374,7 @@ impl PreparedSolveCache {
         handle: &StorageHandle,
         key: &PreparedSolveKey,
         limits: PreparedSolveDiskLimits,
-    ) -> Result<Option<rumoca_ir_solve::SolveModel>, PreparedSolveCacheReadError> {
+    ) -> Result<Option<rumoca_ir_solve::fmi::FmiComponent>, PreparedSolveCacheReadError> {
         use std::io::Read;
 
         limits
@@ -375,22 +402,13 @@ impl PreparedSolveCache {
                 max_bytes: limits.decoded_bytes,
             });
         }
-        let (record, consumed): (
-            PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>>,
-            usize,
-        ) = bincode::serde::decode_from_slice(
-            &bytes,
-            bincode::config::standard()
-                .with_limit::<{ PreparedSolveDiskLimits::CODEC_MAX_DECODED_BYTES }>(),
-        )
-        .map_err(PreparedSolveCacheReadError::Codec)?;
-        if consumed != bytes.len() {
-            return Err(PreparedSolveCacheReadError::TrailingBytes);
-        }
+        let record: DecodedPreparedSolveDiskRecord =
+            serde_json::from_slice(&bytes).map_err(PreparedSolveCacheReadError::Codec)?;
         if record.version != PREPARED_SOLVE_CACHE_VERSION
             || record.source_key != key.source_key
             || record.solver_id != key.solver_id
             || record.parameter_overrides != key.parameter_overrides
+            || record.initial_inputs != key.initial_inputs
         {
             return Err(PreparedSolveCacheReadError::Identity);
         }
@@ -405,7 +423,7 @@ impl PreparedSolveCache {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn save_disk(
         key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::SolveModel,
+        model: &rumoca_ir_solve::fmi::FmiComponent,
         limits: PreparedSolveDiskLimits,
     ) -> Result<(), PreparedSolveCacheWriteError> {
         let path = Self::disk_path(key);
@@ -418,7 +436,7 @@ impl PreparedSolveCache {
     #[cfg(not(target_arch = "wasm32"))]
     fn encode_disk(
         key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::SolveModel,
+        model: &rumoca_ir_solve::fmi::FmiComponent,
         limits: PreparedSolveDiskLimits,
     ) -> Result<Vec<u8>, PreparedSolveCacheWriteError> {
         limits
@@ -429,7 +447,10 @@ impl PreparedSolveCache {
             source_key: key.source_key,
             solver_id: key.solver_id.as_str(),
             parameter_overrides: key.parameter_overrides.as_slice(),
-            model,
+            initial_inputs: key.initial_inputs.as_slice(),
+            model: rumoca_sim::runtime_fmi_component_wire(model).map_err(|error| {
+                PreparedSolveCacheWriteError::ConstructionWire(error.to_string())
+            })?,
         };
         let compressed = BudgetWriter::new(
             CacheBuffer::default(),
@@ -442,7 +463,7 @@ impl PreparedSolveCache {
             .window_log(limits.zstd_window_log_max)
             .map_err(PreparedSolveCacheWriteError::Compression)?;
         let mut decoded = BudgetWriter::new(encoder, limits.decoded_bytes, "decoded");
-        bincode::serde::encode_into_std_write(record, &mut decoded, bincode::config::standard())
+        serde_json::to_writer(&mut decoded, &record)
             .map_err(PreparedSolveCacheWriteError::Codec)?;
         let compressed = decoded
             .inner
@@ -457,7 +478,7 @@ impl PreparedSolveCache {
         root: &std::path::Path,
         path: &std::path::Path,
         key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::SolveModel,
+        model: &rumoca_ir_solve::fmi::FmiComponent,
         limits: PreparedSolveDiskLimits,
     ) -> Result<(), PreparedSolveCacheWriteError> {
         if path.parent() != Some(root)
@@ -559,29 +580,48 @@ mod tests {
             source_key: 11,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.5_f64.to_bits())],
+            initial_inputs: Vec::new(),
         }
+    }
+
+    pub(super) fn component() -> rumoca_ir_solve::fmi::FmiComponent {
+        let mut session = rumoca_compile::Session::new(rumoca_compile::SessionConfig::default());
+        session.add_document("CacheProbe.mo", "model CacheProbe parameter Real gain = 3.5; Real x(start=42, fixed=true); equation der(x) = -gain*x; end CacheProbe;").unwrap();
+        let compiled = session.compile_model("CacheProbe").unwrap();
+        rumoca_sim::prepare_fmi_component(&compiled.dae, &rumoca_sim::SimOptions::default())
+            .unwrap()
     }
 
     fn record(
         key: &PreparedSolveKey,
-    ) -> PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>> {
+    ) -> PreparedSolveDiskRecord<rumoca_ir_solve::fmi::FmiComponent, String, Vec<(String, u64)>>
+    {
         PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
             solver_id: key.solver_id.clone(),
             parameter_overrides: key.parameter_overrides.clone(),
-            model: rumoca_ir_solve::SolveModel {
-                initial_y: vec![42.0],
-                parameters: vec![3.5],
-                ..Default::default()
-            },
+            initial_inputs: key.initial_inputs.clone(),
+            model: component(),
         }
     }
 
     fn encode(
-        record: &PreparedSolveDiskRecord<rumoca_ir_solve::SolveModel, String, Vec<(String, u64)>>,
+        record: &PreparedSolveDiskRecord<
+            rumoca_ir_solve::fmi::FmiComponent,
+            String,
+            Vec<(String, u64)>,
+        >,
     ) -> Vec<u8> {
-        bincode::serde::encode_to_vec(record, bincode::config::standard()).unwrap()
+        let wire = PreparedSolveDiskRecord {
+            version: record.version,
+            source_key: record.source_key,
+            solver_id: &record.solver_id,
+            parameter_overrides: &record.parameter_overrides,
+            initial_inputs: &record.initial_inputs,
+            model: rumoca_sim::runtime_fmi_component_wire(&record.model).unwrap(),
+        };
+        serde_json::to_vec(&wire).unwrap()
     }
 
     fn compress(bytes: &[u8]) -> Vec<u8> {
@@ -618,8 +658,14 @@ mod tests {
         let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, exact)
             .unwrap()
             .unwrap();
-        assert_eq!(model.initial_y, record.model.initial_y);
-        assert_eq!(model.parameters, record.model.parameters);
+        assert_eq!(
+            model.runtime_view().model().initial_y,
+            record.model.runtime_view().model().initial_y
+        );
+        assert_eq!(
+            model.runtime_view().model().parameters,
+            record.model.runtime_view().model().parameters
+        );
         let decoded_error = PreparedSolveCache::encode_disk(
             &key,
             &record.model,
@@ -660,7 +706,7 @@ mod tests {
         let storage = FileStorage::new();
         let limits = PreparedSolveDiskLimits {
             retained_entries: 2,
-            compressed_bytes: 512,
+            compressed_bytes: 64 * 1024,
             ..Default::default()
         };
         for source in 1..=8_u64 {
@@ -748,7 +794,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(loaded.initial_y, model.initial_y);
+        assert_eq!(
+            loaded.runtime_view().model().initial_y,
+            model.runtime_view().model().initial_y
+        );
     }
 
     #[test]
@@ -757,7 +806,7 @@ mod tests {
         let directory = root.path().join("shared cache");
         let limits = PreparedSolveDiskLimits {
             retained_entries: 3,
-            compressed_bytes: 1024,
+            compressed_bytes: 64 * 1024,
             ..Default::default()
         };
         std::thread::scope(|scope| {
@@ -818,7 +867,7 @@ mod tests {
                         )
                         .unwrap()
                         .unwrap();
-                        assert_eq!(loaded.initial_y, [42.0]);
+                        assert_eq!(loaded.runtime_view().model().initial_y, [42.0]);
                         matching_keys += 1;
                     }
                 }
@@ -922,8 +971,8 @@ mod tests {
         let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, limits)
             .unwrap()
             .unwrap();
-        assert_eq!(model.initial_y, [42.0]);
-        assert_eq!(model.parameters, [3.5]);
+        assert_eq!(model.runtime_view().model().initial_y, [42.0]);
+        assert_eq!(model.runtime_view().model().parameters, [3.5]);
         assert!(
             PreparedSolveCache::load_disk_at(
                 &storage,
@@ -1023,20 +1072,23 @@ mod tests {
                 &key,
                 PreparedSolveDiskLimits::default(),
             ),
-            Err(PreparedSolveCacheReadError::TrailingBytes)
+            Err(PreparedSolveCacheReadError::Codec(_))
         ));
     }
 
     #[test]
     fn prepared_solve_disk_cache_rejects_every_identity_mismatch() {
         let key = key();
-        for field in 0..4 {
+        for field in 0..5 {
             let mut record = record(&key);
             match field {
                 0 => record.version += 1,
                 1 => record.source_key += 1,
                 2 => record.solver_id.push('x'),
                 3 => record.parameter_overrides[0].1 = 7.0_f64.to_bits(),
+                4 => record
+                    .initial_inputs
+                    .push(("forcing".into(), 7.0_f64.to_bits())),
                 _ => unreachable!(),
             }
             let (storage, handle) = stored(&compress(&encode(&record)));
@@ -1179,13 +1231,19 @@ mod reuse_tests {
             source_key: 1,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.0_f64.to_bits())],
+            initial_inputs: Vec::new(),
         };
-        let graph = Arc::new(rumoca_ir_solve::SolveModel::default());
+        let graph = Arc::new(super::tests::component());
         cache.insert(key.clone(), Arc::clone(&graph));
         assert!(Arc::ptr_eq(cache.get(&key).unwrap(), &graph));
         let mut parameter_key = key.clone();
         parameter_key.parameter_overrides[0].1 = 4.0_f64.to_bits();
         assert!(!cache.contains_key(&parameter_key));
+        let mut input_key = key.clone();
+        input_key
+            .initial_inputs
+            .push(("drive".into(), 2.0_f64.to_bits()));
+        assert!(!cache.contains_key(&input_key));
         cache.insert(parameter_key.clone(), Arc::clone(&graph));
         let mut solver_key = key.clone();
         solver_key.solver_id.push('x');

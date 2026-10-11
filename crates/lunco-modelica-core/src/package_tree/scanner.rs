@@ -127,7 +127,8 @@ fn build_library_inmem_index()
         }
     }
 
-    for (_uri, def) in parsed.iter() {
+    for document in parsed.iter() {
+        let def = document.definition();
         let parent = def
             .within
             .as_ref()
@@ -302,7 +303,7 @@ fn class_def_to_node(
     short_name: &str,
     def: &rumoca_compile::parsing::ast::ClassDef,
 ) -> PackageNode {
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     let is_package = matches!(def.class_type, ClassType::Package);
     if is_package && !def.classes.is_empty() {
         let mut children: Vec<PackageNode> = def

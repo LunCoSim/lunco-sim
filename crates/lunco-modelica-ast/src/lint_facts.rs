@@ -5,18 +5,8 @@
 //! about them. This keeps policy changes reloadable and leaves this package with
 //! a small, reusable parse-time fact boundary.
 //!
-//! These are PARSE-phase facts — names, parameters, declared inputs, and the
-//! SHAPE of equation and algorithm sections. A model's variables and its solver do not
-//! exist until a compile, so no rule reached from `ValidateAsset` can ask about
-//! their values; but the equations themselves are in the AST at parse, and the
-//! worst defect this domain has is a shape, not a value:
-//!
-//! rumoca's solver path is BRANCH-FREE. An algebraic observable defined behind a
-//! conditional — `x = if cond then e else 0` — parses, compiles, and then reads
-//! literal **0** at runtime because the elimination reconstructor only
-//! substitutes continuous expressions. Nothing fails; the observable just lies.
-//! That is only lintable if a rule can see which variable a conditional
-//! equation defines, so the source facts below preserve exactly that evidence.
+//! These are parse-phase declarations and equation/algorithm shapes.
+//! Runtime support is validated by compilation and the selected solver.
 
 use lunco_hooks::HookValue as H;
 use rumoca_core::{Causality, Variability};
@@ -62,12 +52,19 @@ pub fn modelica_facts_from_interface(
         .map(|(name, value)| H::map([("name", H::Str(name.clone())), ("value", H::Float(*value))]))
         .collect();
 
-    let input_entries: Vec<H> = sorted_entries(&interface.inputs)
-        .into_iter()
-        .map(|(name, default)| {
+    let input_entries: Vec<H> = interface
+        .inputs
+        .iter()
+        .map(|name| {
             H::map([
                 ("name", H::Str(name.clone())),
-                ("default", H::Float(*default)),
+                (
+                    "default",
+                    interface
+                        .input_defaults
+                        .get(name)
+                        .map_or(H::Unit, |value| H::Float(*value)),
+                ),
             ])
         })
         .collect();
@@ -99,19 +96,15 @@ fn sorted_entries(values: &std::collections::HashMap<String, f64>) -> Vec<(&Stri
 // Equation-shape extraction
 // ---------------------------------------------------------------------------
 
-/// What the conditional is, syntactically. The three are NOT the same defect,
-/// and a rule that conflated them would either miss the silent zero or shout at
-/// every event-driven model — so the distinction is drawn here, where the AST
-/// still has it, and never left to the policy to guess from a name.
+/// The syntactic construct present in the authored AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CondForm {
     /// `x = if cond then e else 0` — a conditional EXPRESSION on the RHS. This
-    /// is the silent zero: it survives compilation and reads 0 at runtime.
     IfExpression,
     /// `if cond then x = a; else x = b; end if;` — a structural if-EQUATION.
     IfEquation,
     /// `when cond then x = a; end when;` — a discrete event, a different thing
-    /// entirely (and one rumoca's branch-free path also cannot take).
+    /// entirely from a conditional expression.
     WhenEquation,
     /// `if cond then ... end if;` in an algorithm section.
     IfStatement,
@@ -131,11 +124,7 @@ impl CondForm {
     }
 }
 
-/// What a construct defines, from the component's own declaration. Only
-/// `Algebraic` is the silent-zero case: a state is reconstructed by the
-/// integrator from its derivative, a parameter never enters the DAE, and a
-/// `discrete` is an event variable whose author already knows it is not
-/// continuous.
+/// Declaration role associated with a conditional construct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VarKind {
     Algebraic,
@@ -612,8 +601,7 @@ mod tests {
         assert_eq!(key(&raw[0], "section"), &H::Str("algorithm".to_string()));
     }
 
-    /// A branch-free model — the form every shipped `.mo` is expected to be in —
-    /// reports nothing at all.
+    /// Arithmetic-only equations contain no conditional constructs.
     #[test]
     fn a_branch_free_model_reports_no_conditionals() {
         let facts = facts_of_source(

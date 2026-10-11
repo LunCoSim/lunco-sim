@@ -33,9 +33,9 @@ Dymola and OMEdit treat results as `.mat` files keyed by model name; comparison 
 ### Why backend-agnostic
 Today the only execution backend is rumoca + diffsol. The crate boundary should not assume that. FMU import, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
 
-### Why DAE-level overrides
-The runner applies scalar parameter and input values to the compiled DAE after
-one clean compile. A sweep therefore reuses the same compiled artifact without
+### Immutable compilation and run values
+The runner admits scalar parameters and inputs through Rumoca simulation options
+after one clean compile. A sweep therefore reuses the same compiled artifact without
 mutating authored source or reflattening every point. Unsupported bindings are
 reported as run errors at the runner boundary.
 
@@ -64,7 +64,7 @@ lunco-modelica-core/
 
 lunco-modelica-runner/
   ModelicaRunner: ExperimentRunner
-  owner-scoped compile-once DAE cache and DAE-level value bindings
+  owner-scoped compile-once DAE cache and typed simulation-option overrides
   shared batch/interactive run paths and run-bound resolution
 
 lunco-modelica-worker/
@@ -358,9 +358,9 @@ new manifest only after Storage reports success.
 and bounded serializer. Neither raw Workspace Twin IDs nor filesystem roots are
 persisted. A compiler-owned CID describes the actual successful strict target
 and participating source contributions before user overlays are cleared.
-Host paths and mount IDs do not contribute. A participating parsed-only library
-without source bytes is explicitly nonpersistable; the valid simulation result
-remains available. Unused libraries do not affect the CID.
+Host paths and mount IDs do not contribute. Parsed library records retain their
+exact source text, so participating library bytes contribute to the CID. Unused
+libraries do not affect it.
 
 Native codec and Storage work run through bounded background admission. Browser
 JSON encoding and decoding run in the existing execution Web Worker. A bounded,
@@ -413,7 +413,8 @@ most of the win, and both already exist — do not rebuild them.
 
 **Compile once, sweep many.** `lunco-modelica-runner` caches the compiled `Dae`
 keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
-overrides at the DAE level (`apply_value_bindings_to_dae`) rather than reflattening
+overrides through `SimOptions::param_overrides` and inputs through
+`initial_inputs` (`apply_run_values`) without mutating the DAE or reflattening
 per run. A sweep that varies only top-level scalar parameters recompiles
 **zero** times after the first point.
 

@@ -99,6 +99,70 @@ impl Crater {
         self.delta_at_limited(x, z, 0.0)
     }
 
+    /// Conservative enclosure of the continuous crater delta over a rectangle.
+    pub fn delta_bounds(&self, rect: [f64; 4], min_wavelength: f64) -> Option<[f64; 2]> {
+        if rect
+            .iter()
+            .chain(self.center.iter())
+            .copied()
+            .chain([
+                self.radius,
+                self.depth,
+                self.rim_height,
+                self.softness,
+                min_wavelength,
+            ])
+            .any(|v| !v.is_finite())
+            || rect[0] > rect[2]
+            || rect[1] > rect[3]
+        {
+            return None;
+        }
+        if self.radius <= 0.0 {
+            return Some([0.0; 2]);
+        }
+        if self.bowl_power < 1.0 || !self.bowl_power.is_finite() {
+            return None;
+        }
+        let nearest = (self.center[0].clamp(rect[0], rect[2]) - self.center[0])
+            .hypot(self.center[1].clamp(rect[1], rect[3]) - self.center[1]);
+        if nearest >= self.reach() {
+            return Some([0.0; 2]);
+        }
+        let d = radial_bounds(rect, self.center, self.radius);
+        let sample_sigma = 0.5 * min_wavelength / self.radius;
+        let sigma_n = (sample_sigma * sample_sigma + self.softness * self.softness).sqrt();
+        let rim_sigma = (RIM_SIGMA * RIM_SIGMA + sigma_n * sigma_n).sqrt();
+        let apron_sigma = (APRON_SIGMA * APRON_SIGMA + sigma_n * sigma_n).sqrt();
+        let rim = [self.rim_height * (RIM_SIGMA / rim_sigma).powi(2), rim_sigma];
+        let apron = [
+            self.rim_height * APRON_FRAC * (APRON_SIGMA / apron_sigma).powi(2),
+            apron_sigma,
+        ];
+        let bounds = profile_bounds(
+            [d[0], d[1].min(CRATER_REACH)],
+            self.depth,
+            self.bowl_power,
+            rim,
+            apron,
+        );
+        let tail = crater_profile_limited(
+            CRATER_REACH,
+            self.depth,
+            self.rim_height,
+            self.bowl_power,
+            sigma_n,
+        );
+        let fade = nyquist_fade(2.0 * self.radius, min_wavelength);
+        let mut bounds = [(bounds[0] - tail) * fade, (bounds[1] - tail) * fade];
+        if d[1] >= CRATER_REACH {
+            bounds[0] = bounds[0].min(0.0);
+            bounds[1] = bounds[1].max(0.0);
+        }
+        let pad = 64.0 * f64::EPSILON * bounds[0].abs().max(bounds[1].abs()).max(1.0);
+        Some([bounds[0] - pad, bounds[1] + pad])
+    }
+
     /// Band-limited height delta for a consumer sampling every `min_wavelength`
     /// metres (`0` = exact profile). Two gates keep coarse sampling honest:
     ///
@@ -170,6 +234,67 @@ const APRON_FRAC: f64 = 0.25;
 #[inline]
 fn gauss(d: f64, center: f64, sigma: f64) -> f64 {
     (-((d - center) / sigma).powi(2)).exp()
+}
+
+/// Exact radial range of an axis-aligned rectangle.
+pub(crate) fn radial_bounds(rect: [f64; 4], center: [f64; 2], radius: f64) -> [f64; 2] {
+    let near = (center[0] - center[0].clamp(rect[0], rect[2]))
+        .hypot(center[1] - center[1].clamp(rect[1], rect[3]));
+    let far = (center[0] - rect[0])
+        .abs()
+        .max((center[0] - rect[2]).abs())
+        .hypot((center[1] - rect[1]).abs().max((center[1] - rect[3]).abs()));
+    [near / radius, far / radius]
+}
+/// Enclose the monotone bowl and each Gaussian separately. Gaussian amplitude
+/// and width are supplied by the owning profile's sampling convention.
+pub(crate) fn profile_bounds(
+    d: [f64; 2],
+    depth: f64,
+    power: f64,
+    rim: [f64; 2],
+    apron: [f64; 2],
+) -> [f64; 2] {
+    let bowl = |r: f64| {
+        if r < 1.0 {
+            -depth * (1.0 - r.powf(power))
+        } else {
+            0.0
+        }
+    };
+    let a = bowl(d[0]);
+    let b = bowl(d[1]);
+    let mut result = [a.min(b), a.max(b)];
+    for (center, [amplitude, sigma]) in [(RIM_CENTER, rim), (APRON_CENTER, apron)] {
+        let near = center.clamp(d[0], d[1]);
+        let far = if (d[0] - center).abs() > (d[1] - center).abs() {
+            d[0]
+        } else {
+            d[1]
+        };
+        let a = amplitude * gauss(near, center, sigma);
+        let b = amplitude * gauss(far, center, sigma);
+        result[0] += a.min(b);
+        result[1] += a.max(b);
+    }
+    result
+}
+
+/// Enclosure for the full-height, widened-rim profile.
+pub(crate) fn rim_limited_profile_bounds(
+    d: [f64; 2],
+    depth: f64,
+    rim_height: f64,
+    power: f64,
+    sigma: f64,
+) -> [f64; 2] {
+    profile_bounds(
+        d,
+        depth,
+        power,
+        [rim_height, sigma.clamp(RIM_SIGMA, 0.35)],
+        [rim_height * APRON_FRAC, APRON_SIGMA],
+    )
 }
 
 /// Crater cross-section (metres) at normalised radial distance `d` (0 = centre,
@@ -860,6 +985,36 @@ impl Craters {
 }
 
 impl crate::modifier::HeightModifier for Craters {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        let mut result = input;
+        for g in &self.index.grids {
+            let Some((x0, z0, x1, z1)) = g.cell_span([rect[0], rect[1]], [rect[2], rect[3]]) else {
+                continue;
+            };
+            let (mut deep, mut tall) = ([0.0_f64; 2], [0.0_f64; 2]);
+            for iz in z0..=z1 {
+                for ix in x0..=x1 {
+                    let cell = iz * g.nx + ix;
+                    for e in g.starts[cell] as usize..g.starts[cell + 1] as usize {
+                        let c = &self.index.craters[g.idx[e] as usize];
+                        let nx = c.center[0].clamp(rect[0], rect[2]);
+                        let nz = c.center[1].clamp(rect[1], rect[3]);
+                        if (nx - c.center[0]).hypot(nz - c.center[1]) >= c.reach() {
+                            continue;
+                        }
+                        let b = c.delta_bounds(rect, self.min_wavelength)?;
+                        deep[0] = deep[0].min(b[0]);
+                        deep[1] = deep[1].min(b[1]);
+                        tall[0] = tall[0].max(b[0]);
+                        tall[1] = tall[1].max(b[1]);
+                    }
+                }
+            }
+            result[0] += deep[0] + tall[0];
+            result[1] += deep[1] + tall[1];
+        }
+        Some(result)
+    }
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         h_in + self.delta_at(x, z)
     }
@@ -1685,6 +1840,43 @@ mod tests {
             let x = k as f64 * 0.5;
             let d = (f.height_at(x + eps, 1.0) - f.height_at(x - eps, 1.0)).abs();
             assert!(d < 0.5, "discontinuity {d} at x={x}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod enclosure_tests {
+    use super::*;
+    #[test]
+    fn crater_enclosure_covers_rim_and_reach_at_each_sampling_gate() {
+        let crater = Crater {
+            center: [0.0, 0.0],
+            radius: 1.0,
+            depth: 0.4,
+            rim_height: 0.12,
+            softness: 0.06,
+            bowl_power: 2.2,
+        };
+        assert!(
+            crater
+                .delta_bounds([0.0, 0.0, f64::NAN, 1.0], 0.0)
+                .is_none()
+        );
+        assert!(
+            crater
+                .delta_bounds([0.0, 0.0, 1.0, 1.0], f64::NAN)
+                .is_none()
+        );
+        for gate in [0.0, 0.1, 1.0] {
+            for i in 0..40 {
+                let x = i as f64 * 0.05;
+                let rect = [x, -0.03, x + 0.08, 0.05];
+                let bounds = crater.delta_bounds(rect, gate).unwrap();
+                for sample in 0..=40 {
+                    let h = crater.delta_at_limited(x + sample as f64 * 0.002, 0.0, gate);
+                    assert!(bounds[0] <= h && h <= bounds[1]);
+                }
+            }
         }
     }
 }

@@ -1,19 +1,19 @@
 //! One construction boundary for rumoca simulation sessions.
 
 use rumoca_compile::compile::Dae;
-use rumoca_ir_solve::SolveModel;
+use rumoca_ir_solve::fmi::FmiComponent;
 use rumoca_sim::{SimOptions, SimulationDiagnosticError, SimulationSession};
 
 use crate::fixed_step::FixedStepSession;
-use lunco_experiments::solver::{SolverId, SolverSpec};
+use lunco_experiments::solver::SolverSpec;
 
 /// Live Modelica stepper selected by the authoritative solver capability.
 pub enum LiveStepper {
-    Adaptive(Box<rumoca_solver_rk45::SimulationSession>),
+    Adaptive(Box<rumoca_sim::rk45::SimulationSession>),
     Fixed(Box<FixedStepSession>),
 }
 
-fn adaptive_error(error: rumoca_solver_rk45::SimError) -> SimulationDiagnosticError {
+fn adaptive_error(error: rumoca_sim::SimError) -> SimulationDiagnosticError {
     SimulationDiagnosticError::Solver(error.to_string())
 }
 
@@ -83,34 +83,38 @@ pub fn live(
     spec: &SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
-    let solve_model = lower_for_live(dae, &options)?;
-    live_from_solve_model(&solve_model, spec, options)
+    let component = lower_for_live(dae, &options)?;
+    live_from_fmi_component(&component, spec, options)
 }
 
 /// Lower a compiled DAE once at the live-session boundary. Callers that own a
 /// worker-local prepared-model cache use this function directly and then pass
-/// the cached result to [`live_from_solve_model`].
+/// the cached result to [`live_from_fmi_component`].
 pub fn lower_for_live(
     dae: &Dae,
     options: &SimOptions,
-) -> Result<SolveModel, SimulationDiagnosticError> {
-    rumoca_sim::lower_for_simulation_with_overrides(dae, options)
+) -> Result<FmiComponent, SimulationDiagnosticError> {
+    rumoca_sim::prepare_fmi_component(dae, options)
 }
 
-/// Build a live session from prepared solve IR. This keeps solver construction
+/// Build a live session from a checked FMI component. This keeps solver construction
 /// separate from DAE lowering, which is the expensive and reusable part.
-pub fn live_from_solve_model(
-    solve_model: &SolveModel,
+pub fn live_from_fmi_component(
+    component: &FmiComponent,
     spec: &SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
-    if spec.id == SolverId::from("fixedrk4") {
-        FixedStepSession::from_solve_model(solve_model, options, None)
-            .map(|session| LiveStepper::Fixed(Box::new(session)))
-    } else {
-        rumoca_solver_rk45::SimulationSession::new(solve_model, options)
-            .map(|session| LiveStepper::Adaptive(Box::new(session)))
-            .map_err(adaptive_error)
+    match spec.id.as_str() {
+        "fixedrk4" => {
+            FixedStepSession::from_continuous_model(component.runtime_view().model(), options, None)
+                .map(|session| LiveStepper::Fixed(Box::new(session)))
+        }
+        "rk45" => rumoca_sim::rk45::SimulationSession::from_fmi_component(component, options)
+            .map(|session| LiveStepper::Adaptive(Box::new(session))),
+        _ => Err(SimulationDiagnosticError::Solver(format!(
+            "solver '{}' has no admitted live session constructor",
+            spec.id.as_str()
+        ))),
     }
 }
 

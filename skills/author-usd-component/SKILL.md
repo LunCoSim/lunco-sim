@@ -657,3 +657,8 @@ Choose the angle in the owning component recipe/requirements. Geometry,
 collision and topology remain unchanged, and profile rims above the threshold
 keep sharp normals. The command expands to ordinary USD mesh normals; do not
 substitute extra geometry to hide flat shading.
+
+When editing variant-owned connection plans, select the variant in the temporary
+`@view@` layer first. Source paths use the composed namespace; operation owners
+use variant-qualified Sdf paths. Keep the compound plan atomic and verify its
+composed source types.

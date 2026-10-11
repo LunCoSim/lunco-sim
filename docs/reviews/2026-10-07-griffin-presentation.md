@@ -10,14 +10,9 @@ its initial descent interval; this is mission acceptance, not an FPS benchmark.
 
 ## Modelica ownership
 
-All workspace Rumoca dependencies resolve to fork commit
-`c3ef5b308054778b2cfd90b4408ce4c856aadfc6`, pushed to the LunCoSim fork's main
-and `fix/stream-connection-semantics` branches. Local vendored copies and their
-Cargo patches are removed. Source provenance, scoped input initialization,
-cooperative cancellation, output budgets, and output producers share that pin.
-The structural phase retains equations producing outputs also used as state
-derivatives. Prepared solver cache version 7 excludes prior eliminated graphs.
-Ten focused fork mechanism tests passed before the production integration.
+The Modelica runtime ownership and verification contracts are maintained in
+[the Rumoca runtime contract](../architecture/29-rumoca-runtime-contracts.md).
+This dated mission result does not validate later dependency revisions.
 
 The source-root compiler publishes parsed namespace identities through the
 existing operation-fenced worker acknowledgement. Compile admission resolves

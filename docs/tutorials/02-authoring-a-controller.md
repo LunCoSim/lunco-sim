@@ -34,17 +34,17 @@ equation
   // GNC law: feed-forward hover + PD to the set-point. DIRECT (no spool).
   gnc = min(max((g + 1.5*(target_alt - altitude) - 2.0*climb_rate) * vehicle_mass
                / max_thrust, 0.0), 1.0);
-  der(filt) = (external_throttle - filt) / 0.3;      // spool the pilot stick (keeps it live)
+  der(filt) = (external_throttle - filt) / 0.3;      // pilot stick spool dynamics
   cmd = piloted*filt + (1.0 - piloted)*gnc;          // yield-to-pilot gate, branch-free
   force_local_y = cmd * max_thrust;
   throttle = cmd;
 end Hover;
 ```
 
-Why it's shaped this way: `min`/`max` (not `if`) for rumoca-safe clamps; the GNC path
-is direct so its braking isn't laggy; the pilot stick feeds a `der` so it stays a live
-input; `piloted` selects between them. (See the skill for the *input-folding* rule —
-the #1 gotcha.)
+The clamps express the controller's limits. The GNC path acts directly; the
+pilot's stick filter supplies deliberate actuator dynamics. `piloted` selects
+the command source. External inputs retain writable runtime slots and their
+declaration defaults.
 
 ## Step 2 — the supervisor (rhai, events only)
 
@@ -126,8 +126,9 @@ release → the GNC resumes.**
 ## Step 5 — run & tune
 
 Load the scene, watch it hover. Click it to possess it, then throttle — you fly it.
-Release — it holds again. Open the Inspector during the run and drag `target_alt` (make
-it a der-fed live input if you want it editable at sim-rate — see the skill).
+Release — it holds again. Open the Inspector during the run and change
+`target_alt`; declare it as an input for a live command, or as a parameter when
+a change should rebuild initialization.
 
 ## What you learned
 

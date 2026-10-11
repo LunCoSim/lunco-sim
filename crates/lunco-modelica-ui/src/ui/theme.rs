@@ -15,8 +15,8 @@
 //! and a typed accessor here (domain translation in one place).
 
 use bevy_egui::egui::Color32;
+use lunco_modelica_ast::ClassType;
 use lunco_theme::Theme;
-use rumoca_compile::parsing::ClassType;
 
 /// Modelica-domain typed accessors over [`lunco_theme::Theme`].
 ///

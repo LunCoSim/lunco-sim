@@ -122,8 +122,7 @@ mod tests {
         assert_eq!(source.interface.model_name.as_deref(), Some("Rover"));
         assert_eq!(source.interface.within.as_deref(), Some("Demo"));
         assert_eq!(source.interface.parameters.get("mass"), Some(&12.0));
-        assert!(source.interface.inputs.contains_key("drive"));
-        assert_eq!(source.interface.inputs.get("drive"), Some(&0.0));
+        assert!(source.interface.inputs.contains("drive"));
         assert_eq!(source.interface.input_defaults.get("gain"), Some(&2.5));
         assert!(!source.interface.input_defaults.contains_key("drive"));
         assert!(source.interface.outputs.contains("speed"));
