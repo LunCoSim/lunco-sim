@@ -37,6 +37,7 @@ zstd = { workspace = true }
 rayon = { workspace = true }
 regex = "1.10"
 rumoca-compile = { workspace = true }
+rumoca-core = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 rumoca-ir-ast = { workspace = true }
 bincode = { workspace = true }

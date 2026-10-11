@@ -1224,7 +1224,7 @@ impl ApiQueryProvider for GetShareLinkProvider {
 // class_kind, extends, components (subinstances), connections (wiring),
 // plus typed inputs / parameters / outputs with units, bounds and
 // defaults. The agent picks which class via the `class` parameter; the
-// default is the drilled-in class or the first non-package class.
+// omitted value uses the selected class or an unambiguous simulation root.
 // Equations and full annotations are intentionally not surfaced here
 // — those are best read via `get_document_source` when the agent
 // genuinely needs them.
@@ -1249,17 +1249,9 @@ impl ApiQueryProvider for DescribeModelProvider {
                     "DescribeModel: `class` must be a string",
                 );
             }
-        }
-        .filter(|value| !value.is_empty());
+        };
 
-        // Resolve drilled-in class as the fallback target before we
-        // borrow the modelica registry — `DrilledInClassNames` is a
-        // separate resource and we need both. Reading them in
-        // sequence keeps the borrow checker simple.
-        // of going through the `DrilledInClassNames` cache. The
-        // helper falls back to first-tab-for-doc when no
-        // `TabRenderContext` is in scope (which is the case here —
-        // API queries run off-render).
+        // An omitted class uses the document's selected class.
         let drilled_in = lunco_modelica_core::sim_default::drilled_class_for_doc(world, doc_id);
 
         let registry = world.resource::<ModelicaDocuments>();
@@ -1277,40 +1269,46 @@ impl ApiQueryProvider for DescribeModelProvider {
             );
         };
 
-        // Class resolution: explicit `class` param > drilled-in pin >
-        // first non-package class. Match by short name (the same
-        // convention `compile_model.class` uses) so the caller can pass
-        // either short or qualified.
+        let index = document.index();
+        let candidates = index.classes.keys().cloned().collect::<Vec<_>>();
         let target_class_name = class_param.or(drilled_in).or_else(|| {
-            // First non-package class via the per-doc Index — same
-            // pattern used across the inspector / palette / canvas
-            // drill-in code paths (see the Modelica UI panels).
-            host.document()
-                .index()
-                .classes
-                .values()
-                .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
-                .map(|c| c.name.clone())
+            let roots = index.simulation_candidates();
+            (roots.len() == 1 || index.simulation_preferred_count() == 1)
+                .then(|| roots.first().cloned())
+                .flatten()
         });
-        let Some(target_name) = target_class_name else {
-            return query_error(
-                ApiErrorCode::EntityNotFound,
-                format!("doc {} has no non-package class to describe", doc_id.raw()),
-            );
-        };
-        // The caller may pass `Foo.Bar` — try the short tail first.
-        let short = target_name.rsplit('.').next().unwrap_or(&target_name);
-        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short)
-        else {
-            let candidates =
-                lunco_modelica_ast::ast_extract::collect_non_package_classes_qualified(&ast);
+        let Some(requested) = target_class_name else {
             return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!(
-                    "class `{}` not found in doc {}. Candidates: [{}]",
-                    target_name,
+                    "DescribeModel requires a class selection in doc {}. Candidates: [{}]",
                     doc_id.raw(),
                     candidates.join(", ")
+                ),
+            );
+        };
+        let target_name = match lunco_modelica_core::sim_target::resolve_requested_class(
+            &requested,
+            &candidates,
+            index.within_path.as_deref(),
+        ) {
+            Ok(name) => name,
+            Err(error) => {
+                return query_error(
+                    ApiErrorCode::EntityNotFound,
+                    format!(
+                        "class `{requested}` {error}. Candidates: [{}]",
+                        candidates.join(", ")
+                    ),
+                );
+            }
+        };
+        let Some(class) = ast.get_class_by_qualified_name(&target_name) else {
+            return query_error(
+                ApiErrorCode::InternalError,
+                format!(
+                    "indexed class `{target_name}` has no declaration in doc {}",
+                    doc_id.raw()
                 ),
             );
         };
@@ -1330,7 +1328,15 @@ impl ApiQueryProvider for DescribeModelProvider {
             .get_resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
             .and_then(lunco_modelica_core::engine_resource::ModelicaEngineHandle::try_lock)
         {
-            Some(mut engine) => engine.inherited_members_typed(short),
+            Some(mut engine) => match engine.inherited_members_typed(&target_name) {
+                Some(members) => members,
+                None => {
+                    return query_error(
+                        ApiErrorCode::CommandRejected,
+                        format!("{target_name} has unresolved or cyclic inherited declarations"),
+                    );
+                }
+            },
             None => {
                 return query_error(
                     ApiErrorCode::InternalError,
@@ -1341,7 +1347,7 @@ impl ApiQueryProvider for DescribeModelProvider {
 
         query_ok(api_value!({
             "doc_id": doc_id.raw(),
-            "class_name": short,
+            "class_name": target_name,
             "class_kind": lunco_modelica_ast::ast_extract::class_kind_label(class),
             "extends": extends,
             "components": components.iter().map(component_info_api_value).collect::<Vec<_>>(),

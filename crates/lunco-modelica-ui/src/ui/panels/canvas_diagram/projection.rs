@@ -35,9 +35,8 @@ pub(super) fn target_unit_instance(
     target: Option<&str>,
 ) -> Option<String> {
     let target = target.filter(|target| !target.is_empty() && *target != root_model_name)?;
-    let root =
-        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, root_model_name)?;
-    let target_leaf = target.rsplit('.').next().unwrap_or(target);
+    let root = ast.get_class_by_qualified_name(root_model_name)?;
+    let target_leaf = rumoca_core::top_level_last_segment(target);
     let candidates: Vec<String> = root
         .components
         .iter()

@@ -90,9 +90,9 @@ fn selected_class_source(
     full_source: &str,
     qualified: &str,
 ) -> Result<String, String> {
-    let class_def =
-        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
-            .ok_or_else(|| format!("class `{qualified}` not found"))?;
+    let class_def = ast
+        .get_class_by_qualified_name(qualified)
+        .ok_or_else(|| format!("class `{qualified}` not found"))?;
     let (full_start, full_end) =
         lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
     if full_start > full_end
@@ -107,7 +107,7 @@ fn selected_class_source(
     }
 
     let class_slice = &full_source[full_start..full_end];
-    let parent_pkg = lunco_modelica_ast::ast_extract::parent_qualified(qualified);
+    let parent_pkg = rumoca_core::parent_scope(qualified).unwrap_or("");
     Ok(if parent_pkg.is_empty() {
         class_slice.to_string()
     } else {

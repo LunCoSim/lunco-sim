@@ -217,7 +217,9 @@ fn category_of(qualified_path: &str) -> &'static str {
     // The first segment is the source-root identity. Category labels are
     // derived from the next segment for every source root; no library name
     // is treated as the canonical one.
-    let first = qualified_path.split('.').nth(1).unwrap_or("Other");
+    let first = rumoca_core::qualified_name_segments(qualified_path)
+        .nth(1)
+        .unwrap_or("Other");
     for &c in CATEGORIES {
         if c == first {
             return c;

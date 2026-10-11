@@ -64,7 +64,9 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
     let Some(handle) = crate::engine_resource::global_engine_handle() else {
         return ClassAvailability::Loading;
     };
-    let root = qualified.split('.').next().unwrap_or(qualified);
+    let root = rumoca_core::qualified_name_segments(qualified)
+        .next()
+        .unwrap_or(qualified);
     let is_bundled_root = lunco_assets_runtime::models::package_roots_live()
         .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root));
     let (has_class, has_root, root_failed) = {
@@ -85,7 +87,9 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
     if has_class {
         return ClassAvailability::Ready;
     }
-    let root = qualified.split('.').next().unwrap_or(qualified);
+    let root = rumoca_core::qualified_name_segments(qualified)
+        .next()
+        .unwrap_or(qualified);
     if is_bundled_root {
         // A qualified reference is itself a normal Modelica search-path
         // request. If the bundled root is not resident yet, start the shared
@@ -112,7 +116,9 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
 /// making UI code reach into the engine's private loading state.
 pub fn class_resolution_message(qualified: &str) -> Option<String> {
     let handle = crate::engine_resource::global_engine_handle()?;
-    let root = qualified.split('.').next().unwrap_or(qualified);
+    let root = rumoca_core::qualified_name_segments(qualified)
+        .next()
+        .unwrap_or(qualified);
     let engine = handle.try_lock()?;
     engine
         .source_root_failure(root)
@@ -166,7 +172,7 @@ pub fn peek_or_load_class_blocking(
     // Bundled libraries are small source roots and use the engine's
     // source-aware package loader. They are installed as one root so
     // cross-file `within` and `extends` resolution remains canonical.
-    if let Some(root) = qualified.split('.').next() {
+    if let Some(root) = rumoca_core::qualified_name_segments(qualified).next() {
         if lunco_assets_runtime::models::package_roots_live()
             .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
         {

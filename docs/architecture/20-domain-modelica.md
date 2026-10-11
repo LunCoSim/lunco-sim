@@ -117,20 +117,38 @@ can publish runtime values or a presentation stream. See the
 [checked Rumoca runtime contract](29-rumoca-runtime-contracts.md) for ownership
 and its production negative gate.
 
-Qualified source names share the AST owner's `strip_within_prefix` rule: an
-authored `within` package is removed only at a complete dotted segment boundary.
-Similar package prefixes remain distinct in class lookup and source editing.
-The same AST owner supplies borrowed qualified-name segments. Quoted dots and
-escaped quotes remain inside identifiers in library path resolution, exact class
-selection, duplicate names and enclosing `within` clauses. Source syntax and
-compiler name resolution retain their own validation boundaries.
+Rumoca owns source class identity. `rumoca_core::qualified_name_segments`
+borrows quoted and bracketed path segments without splitting identifier dots.
+`StoredDefinition::relative_class_name` removes only the document's actual
+`within` package at a segment boundary; its read and mutable class queries walk
+that exact path. `Session::class_definition_query` selects the current indexed
+document and borrows its declaration, including pre-parsed library source sets.
+The application keeps no second class-to-document index or negative lookup cache.
+
+`DescribeModel` returns the canonical authored class name. Explicit names select
+an exact qualified or document-relative declaration; a bare name is admitted
+only when unique in the owning document. Inherited member facts come from
+Rumoca's complete typed declaration query. Unresolved or cyclic bases are a
+terminal query diagnostic. UI inputs, parameters, icons, source editing, and
+metadata retain the selected class identity; missing metadata cannot select a
+similarly named class.
+
+The source identity production gate covers duplicate leaves, quoted identifiers,
+`within` qualification, empty/unknown requests, and incomplete inheritance
+(`modelica_class_identity.rhai`). `modelica_class_compile.rhai` separately proves
+qualified and quoted class compilation, exact retained trajectories and units,
+and terminal wrong-package admission. The integrated native production build
+passed both gates (13 and 3 assertions) plus retained run metadata (20); the
+browser worker compile check passed. Summer Space School's six authored startup
+assertions passed with all three participants running in the integrated native
+session.
 
 Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
 at the parsed class-kind token, includes its declaration qualifiers, and ends
 after the closing semicolon. Enclosing declarations on the same line remain
 outside that span; library documents and duplicate preparation use this owner.
 Read-only library document loading selects the exact qualified class through
-the shared index lookup; a missing sibling cannot resolve another class with
+Rumoca's stored-definition lookup; a missing sibling cannot resolve another class with
 the same leaf name.
 Deferred edit parsing wakes at its recorded debounce deadline even when the
 document-registry and worker-capacity revisions are unchanged. The source
@@ -680,7 +698,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v10`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v11`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through

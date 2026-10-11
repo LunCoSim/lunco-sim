@@ -657,7 +657,7 @@ impl ModelicaCompiler {
             let root = within.split('.').next().unwrap_or(&within).to_string();
             let qualified = lunco_modelica_ast::ast_extract::qualify(
                 &within,
-                lunco_modelica_ast::ast_extract::short_name(model_name),
+                rumoca_core::top_level_last_segment(model_name),
             );
             if !self.installed_roots.contains(&root)
                 && (require_admitted_roots || !self.ensure_source_root_installed(&root))
@@ -839,7 +839,7 @@ impl ModelicaCompiler {
             }
             let qualified = lunco_modelica_ast::ast_extract::qualify(
                 &within,
-                lunco_modelica_ast::ast_extract::short_name(model_name),
+                rumoca_core::top_level_last_segment(model_name),
             );
             self.class_is_owned_by_installed_root(&qualified)
                 .then_some(qualified)

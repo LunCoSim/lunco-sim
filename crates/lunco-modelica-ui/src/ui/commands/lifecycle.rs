@@ -604,7 +604,7 @@ pub fn on_duplicate_model_from_read_only(
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
             .or_else(|| {
                 fqn.as_ref().and_then(|q| {
-                    lunco_modelica_ast::qualified_name_segments(q)
+                    rumoca_core::qualified_name_segments(q)
                         .next()
                         .map(String::from)
                 })
@@ -618,7 +618,7 @@ pub fn on_duplicate_model_from_read_only(
             Some(package) if !package.is_empty() => format!("{package}.{top_short}"),
             _ => top_short.clone(),
         });
-        let origin_short = lunco_modelica_ast::qualified_name_segments(&origin_fqn)
+        let origin_short = rumoca_core::qualified_name_segments(&origin_fqn)
             .last()
             .map(String::from)
             .unwrap_or(top_short);
@@ -766,7 +766,7 @@ fn spawn_duplicate_class_task(
         });
         return;
     }
-    let origin_short = lunco_modelica_ast::qualified_name_segments(&qualified)
+    let origin_short = rumoca_core::qualified_name_segments(&qualified)
         .last()
         .map(str::to_string)
         .unwrap_or_else(|| qualified.clone());

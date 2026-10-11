@@ -1052,7 +1052,7 @@ fn flatten_class_parameters(
             if cur.is_empty() {
                 break;
             }
-            cur = lunco_modelica_ast::ast_extract::parent_qualified(cur);
+            cur = rumoca_core::parent_scope(cur).unwrap_or("");
         }
         if let Some(w) = index.within_path.as_ref() {
             let q = format!("{w}.{type_name}");

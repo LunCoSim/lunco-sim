@@ -566,7 +566,7 @@ pub fn drive_drill_in_loads(
             // instantiated components → Icon view; otherwise Canvas
             // (the user drilled FROM a canvas, expects a canvas).
             let has_components = doc.strict_ast().and_then(|ast| {
-                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, &qualified)
+                ast.get_class_by_qualified_name(&qualified)
                     .map(|c| !c.components.is_empty())
             });
             (path, has_components)
@@ -694,7 +694,7 @@ pub fn drill_into_class(
     // docs, AND bundled demos — through one command instead of the Welcome
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
-    let stem = lunco_modelica_ast::qualified_name_segments(qualified)
+    let stem = rumoca_core::qualified_name_segments(qualified)
         .next()
         .unwrap_or(qualified);
     if crate::models::bundled_models().is_ok_and(|models| {

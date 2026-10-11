@@ -7,7 +7,6 @@
 //! the serialized index without depending on the document runtime.
 
 pub mod annotation_source;
-pub mod class_lookup;
 pub mod doc_extract;
 pub mod index;
 pub mod package_tree;

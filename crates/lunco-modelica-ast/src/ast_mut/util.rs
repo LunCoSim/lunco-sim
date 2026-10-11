@@ -7,39 +7,13 @@ use rumoca_core::Token;
 use rumoca_ir_ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
 use std::sync::Arc;
 
-/// Resolve a dotted-qualified class path against a parsed `StoredDefinition`.
-///
-/// Strips the file's `within` clause prefix at segment boundary
-/// before walking — same rule as the read-path
-/// the shared [`crate::strip_within_prefix`] rule so source editing and
-/// Modelica projections agree on package-qualified names.
+/// Borrow the exact declaration through Rumoca's authored-package traversal.
 pub fn lookup_class_mut<'a>(
     sd: &'a mut StoredDefinition,
     qualified: &str,
 ) -> Result<&'a mut ClassDef, AstMutError> {
-    if qualified.is_empty() {
-        return Err(AstMutError::ClassNotFound(qualified.into()));
-    }
-    // Resolve the within-stripped path *before* taking the mutable
-    // borrow on `sd.classes`. The strip only needs an immutable
-    // borrow of `sd.within`; if we did it inside the walk Rust would
-    // complain about overlapping borrows of `sd`.
-    let local_path: String = crate::strip_within_prefix(qualified, sd.within.as_ref()).to_string();
-    let mut parts = local_path.split('.');
-    let head = parts
-        .next()
-        .expect("split always yields at least one piece");
-    let mut current = sd
-        .classes
-        .get_mut(head)
-        .ok_or_else(|| AstMutError::ClassNotFound(qualified.to_string()))?;
-    for part in parts {
-        current = current
-            .classes
-            .get_mut(part)
-            .ok_or_else(|| AstMutError::ClassNotFound(qualified.to_string()))?;
-    }
-    Ok(current)
+    sd.get_class_by_qualified_name_mut(qualified)
+        .ok_or_else(|| AstMutError::ClassNotFound(qualified.to_string()))
 }
 
 /// Match a parsed `ComponentReference` against a `pretty::PortRef`.

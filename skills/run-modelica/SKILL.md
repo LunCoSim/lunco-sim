@@ -373,12 +373,22 @@ use `Duplicate to edit`, then perform the same placement check. A drag that
 appears to work but disappears on reload is a product bug, not an acceptable
 generated-model editing mode.
 
-Use the shared AST `strip_within_prefix` for qualified lookup and editing;
-similarly spelled package prefixes must not match an authored `within` package.
-Reuse the AST's `qualified_name_segments` and `parent_qualified` for class paths;
-quoted identifiers containing dots remain one segment. Extraction checks do not
-prove the compiler accepts that qualified name: validate compilation separately
-through its actual command/error boundary.
+Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
+query for exact source selection and editing. `relative_class_name` strips only
+the actual authored `within` package. Use `rumoca_core::qualified_name_segments`
+and its parent/leaf helpers for path boundaries; quoted dots remain inside
+identifiers. The engine uses `Session::class_definition_query` for the current
+source revision and `class_component_declarations_query` for complete inherited
+facts. Do not add a second class index, miss cache, first-leaf search, or guessed
+member classification.
+
+`DescribeModel.class_name` is the canonical authored name. Verify duplicate
+leaves, quoted identifiers, document-relative requests under `within`, and
+terminal ambiguity/unresolved-inheritance diagnostics through
+`assets/scenarios/tests/modelica_class_identity.rhai`. Qualified and quoted
+compile acceptance plus wrong-package rejection are covered by
+`assets/scenarios/tests/modelica_class_compile.rhai`. Source query and compile
+acceptance remain distinct boundaries.
 
 For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
 from the same parsed bytes. Its inline seam test covers same-line enclosing

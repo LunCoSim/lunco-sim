@@ -293,9 +293,8 @@ pub(super) fn empty_overlay_class_info(
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    // Locate the class. Prefer an exact name match; fall back to the
-    // first non-package class for an authoring preview.
-    let class_def = locate_class(&ast_arc, class_name);
+    // Preserve the selected declaration identity in the authoring preview.
+    let class_def = ast_arc.get_class_by_qualified_name(class_name);
     let Some(class) = class_def else {
         return (None, None, None, vec![], vec![], vec![]);
     };
@@ -307,21 +306,10 @@ pub(super) fn empty_overlay_class_info(
     // projection task owns that work off-thread and publishes its memoized
     // result; this overlay only reads a completed cache entry and otherwise
     // uses the class's own authored Icon while the projection is pending.
-    let class_context = match ast_arc.within.as_ref() {
-        Some(within) => {
-            let pkg = within
-                .name
-                .iter()
-                .map(|t| t.text.as_ref())
-                .collect::<Vec<_>>()
-                .join(".");
-            if pkg.is_empty() {
-                class_name.to_string()
-            } else {
-                format!("{pkg}.{class_name}")
-            }
-        }
-        None => class_name.to_string(),
+    let relative = ast_arc.relative_class_name(class_name);
+    let class_context = match ast_arc.within.as_ref().map(ToString::to_string) {
+        Some(package) if !package.is_empty() => format!("{package}.{relative}"),
+        _ => relative.to_owned(),
     };
     let icon = ctx
         .resource::<crate::engine_resource::ModelicaEngineHandle>()
@@ -356,26 +344,6 @@ pub(super) fn empty_overlay_class_info(
     }
 
     (icon, class_type, description, params, inputs, outputs)
-}
-
-/// Resolve `name` (short or fully-qualified) to a class in `ast`,
-/// falling back to the first non-package class when nothing matches.
-///
-/// Lookup is delegated to `lunco_modelica_index::class_lookup::find_class_by_qualified_name`,
-/// which handles both short names (`"PID"`) and qualified names with
-/// within-clause tolerance (`"Modelica.Blocks.PID"`).
-pub(super) fn locate_class<'a>(
-    ast: &'a rumoca_compile::parsing::ast::StoredDefinition,
-    name: &str,
-) -> Option<&'a rumoca_compile::parsing::ast::ClassDef> {
-    if let Some(c) = lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, name) {
-        return Some(c);
-    }
-    use lunco_modelica_ast::ClassType;
-    ast.classes
-        .iter()
-        .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
-        .map(|(_, c)| c)
 }
 
 /// Render a row showing a symbol band (e.g. "Parameters: tau, J, c
