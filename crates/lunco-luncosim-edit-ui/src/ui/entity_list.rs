@@ -700,6 +700,19 @@ pub(crate) fn mark_entity_tree_view_dirty(mut build: ResMut<EntityTreeBuildState
     build.invalidate();
 }
 
+type EntityTreeNamedCandidate = (
+    Entity,
+    &'static Name,
+    Option<&'static lunco_core::markers::Callsign>,
+    Option<&'static lunco_core::CatalogEntryId>,
+    Option<&'static lunco_usd_bevy_scene::UsdPrimPath>,
+    Option<&'static ChildOf>,
+    Option<&'static lunco_core::SystemManaged>,
+    Has<Mesh3d>,
+    Has<lunco_core::SelectableRoot>,
+    Has<SceneCamera>,
+);
+
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
@@ -708,18 +721,7 @@ pub(crate) fn scene_topology_changed(
     mut parent_insertions: MessageReader<EntityTreeParentInserted>,
     mut inserted_parents: Local<HashSet<Entity>>,
     changed: Query<
-        (
-            Entity,
-            &Name,
-            Option<&lunco_core::markers::Callsign>,
-            Option<&lunco_core::CatalogEntryId>,
-            Option<&lunco_usd_bevy_scene::UsdPrimPath>,
-            Option<&ChildOf>,
-            Option<&lunco_core::SystemManaged>,
-            Has<Mesh3d>,
-            Has<lunco_core::SelectableRoot>,
-            Has<SceneCamera>,
-        ),
+        Entity,
         (
             With<Name>,
             Or<(
@@ -734,10 +736,12 @@ pub(crate) fn scene_topology_changed(
             )>,
         ),
     >,
+    named_candidates: Query<EntityTreeNamedCandidate>,
     mut removals: EntityTreeRemovals,
 ) -> bool {
     let (active_scene_root, scene_error) =
         active_scene_root_state(scene.mount.as_deref(), &scene.roots);
+    let removals_span = bevy::log::info_span!("entity_tree_gate_removals").entered();
     let active_scene_changed =
         view.active_scene_root != active_scene_root || view.scene_error != scene_error;
     let removed_scene_boundary =
@@ -782,6 +786,8 @@ pub(crate) fn scene_topology_changed(
         | removals.cameras.read().fold(false, |acc, entity| {
             acc | view.camera_entities.contains(&entity)
         });
+    drop(removals_span);
+    let named_span = bevy::log::info_span!("entity_tree_gate_named_changes").entered();
     // The raw ECS graph contains many named but visibility-pruned implementation
     // entities (telemetry channel holders, transform wrappers, etc.). A change
     // outside the active scene is ignored unless it moves a candidate into that
@@ -804,7 +810,10 @@ pub(crate) fn scene_topology_changed(
                 .is_none_or(|cached| stable_key(name, path) != *cached)
             || view.parents.get(&entity).copied() != parent.map(|p| p.parent())
     };
-    let named_changed = changed.iter().any(
+    // Filter change ticks using only entity identity. Fetch label/visibility
+    // data only for admitted entities, rather than preparing optional data for
+    // every unchanged archetype. Both queries require Name in the same World.
+    let named_changed = named_candidates.iter_many(changed.iter()).any(
         |(
             entity,
             name,
@@ -842,9 +851,11 @@ pub(crate) fn scene_topology_changed(
                 || value_changed((entity, name, callsign, catalog_id, path, parent))
         },
     );
+    drop(named_span);
     // ChildOf is immutable: native insert events cover both initial edges and
     // reparenting. Drain coalesced identities, then compare their current edge
     // with the snapshot; identical parent insertions do not rebuild the tree.
+    let parents_span = bevy::log::info_span!("entity_tree_gate_parent_changes").entered();
     inserted_parents.extend(parent_insertions.read().map(|insertion| insertion.0));
     let scene_hierarchy_changed = inserted_parents.drain().any(|entity| {
         if Some(entity) == active_scene_root {
@@ -869,6 +880,7 @@ pub(crate) fn scene_topology_changed(
             }
         }
     });
+    drop(parents_span);
     let scene_boundary_changed = scene
         .boundary_changes
         .iter()
@@ -1233,6 +1245,166 @@ mod tests {
 
     fn count_gate_run(mut runs: ResMut<GateRuns>) {
         runs.0 += 1;
+    }
+
+    /// Measures a quiet change gate over synthetic named runtime holders.
+    #[test]
+    #[ignore = "manual entity-tree change-query performance measurement"]
+    fn settled_entity_tree_change_gate_benchmark() {
+        #[derive(Component)]
+        struct LayoutMarker<const BIT: usize>;
+        for rich in [false, true] {
+            let mut app = App::new();
+            install_entity_tree_hierarchy_tracking(&mut app);
+            app.init_resource::<EntityListSettings>()
+                .init_resource::<EntityTreeView>()
+                .init_resource::<lunco_core::SceneMountState>()
+                .init_resource::<GateRuns>()
+                .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            let active_root = app
+                .world_mut()
+                .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+                .id();
+            app.world_mut()
+                .resource_mut::<lunco_core::SceneMountState>()
+                .register_root(active_root, true);
+            app.world_mut()
+                .resource_mut::<EntityTreeView>()
+                .active_scene_root = Some(active_root);
+            for index in 0..20_000 {
+                let entity = app
+                    .world_mut()
+                    .spawn(Name::new(format!("RuntimeHolder{index}")))
+                    .id();
+                if rich {
+                    if index & 1 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<0>);
+                    }
+                    if index & 2 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<1>);
+                    }
+                    if index & 4 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<2>);
+                    }
+                    if index & 8 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<3>);
+                    }
+                    if index & 16 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<4>);
+                    }
+                    if index & 32 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<5>);
+                    }
+                    if index & 64 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<6>);
+                    }
+                    if index & 128 != 0 {
+                        app.world_mut().entity_mut(entity).insert(LayoutMarker::<7>);
+                    }
+                }
+                if rich && index % 10 < 7 {
+                    app.world_mut().entity_mut(entity).insert((
+                        lunco_usd_bevy_scene::UsdPrimPath {
+                            stage_handle: Handle::default(),
+                            path: format!("/Holder{index}"),
+                        },
+                        lunco_core::markers::Callsign(format!("Holder {index}")),
+                        lunco_core::SelectableRoot,
+                    ));
+                }
+            }
+            app.update();
+            let began = std::time::Instant::now();
+            for _ in 0..600 {
+                app.update();
+            }
+            let elapsed = began.elapsed();
+            assert_eq!(app.world().resource::<GateRuns>().0, 1);
+            println!(
+                "ENTITY_TREE_GATE_BENCH elapsed_ns={} frames=600 named_entities=20000 rich_entities={} archetypes={} gate_runs=1",
+                elapsed.as_nanos(),
+                if rich { 14000 } else { 0 },
+                app.world().archetypes().len()
+            );
+        }
+    }
+
+    #[test]
+    fn topology_gate_observes_direct_name_and_detail_edits() {
+        let mut app = App::new();
+        install_entity_tree_hierarchy_tracking(&mut app);
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<EntityTreeView>()
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+        let root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        let rover = app
+            .world_mut()
+            .spawn((
+                Name::new("Rover"),
+                lunco_core::SelectableRoot,
+                ChildOf(root),
+                lunco_core::markers::Callsign("First".into()),
+            ))
+            .id();
+        let holder = app
+            .world_mut()
+            .spawn((Name::new("Holder"), ChildOf(root)))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+        {
+            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
+            view.active_scene_root = Some(root);
+            view.labels.insert(rover, "First".into());
+            view.base_labels.insert(rover, "First".into());
+            view.stable_keys.insert(rover, "Rover".into());
+            view.parents.insert(rover, root);
+            view.candidate_hierarchy_entities = HashSet::from([root, rover, holder]);
+            view.candidate_hierarchy_parents = HashMap::from([(rover, root), (holder, root)]);
+        }
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        // A direct mutation emits no insertion event. Name changes still alter
+        // the stable key even when Callsign retains the displayed label.
+        app.world_mut()
+            .get_mut::<Name>(rover)
+            .unwrap()
+            .set("Renamed");
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .stable_keys
+            .insert(rover, "Renamed".into());
+        app.world_mut()
+            .get_mut::<lunco_core::markers::Callsign>(rover)
+            .unwrap()
+            .0 = "Second".into();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 3);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .base_labels
+            .insert(rover, "Second".into());
+        app.world_mut()
+            .get_mut::<Name>(holder)
+            .unwrap()
+            .set("Hidden holder");
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 3);
+        app.world_mut()
+            .entity_mut(holder)
+            .insert(lunco_core::SelectableRoot);
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 4);
     }
 
     #[test]

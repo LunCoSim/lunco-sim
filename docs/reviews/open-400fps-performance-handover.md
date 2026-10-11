@@ -1,5 +1,65 @@
 # High-quality realtime performance handover
 
+## Admit entity-tree changes before fetching candidate data — 2026-10-11
+
+`lunco-luncosim-edit-ui::ui::entity_list::scene_topology_changed` now filters
+native change ticks into entity identities, then uses indexed candidate reads
+for those identities. Quiet archetypes no longer prepare the optional label,
+hierarchy and visibility data. The original eight-case change-filter union,
+candidate predicate, removal handling, parent messages, scene boundaries and
+Twin retirement remain authoritative. The existing dirty worker consumes the
+same boolean. This is a read-only query change; there is no new policy,
+revision owner, simulation action, clock admission or ordering.
+
+Three spans expose named changes, removals and parent changes separately:
+`entity_tree_gate_named_changes`, `entity_tree_gate_removals` and
+`entity_tree_gate_parent_changes`. Both artifacts in the final comparison have
+these spans. They run High quality without vsync/throttling, with the same
+explicit `SetCameraLookAt` command, exactly equal camera poses and
+50 bodies/33 colliders/20 joints. Main PID 84260 remains active and untouched.
+Settled six-second View/Build/View windows admit native CPU events by start
+time, rather than aligning their edges to frames.
+
+Complete gate means fall from 0.1564/0.1806/0.1634 ms to
+0.1256/0.1500/0.1323 ms, reductions of 19.7/16.9/19.0 percent. Named-change
+means fall from 0.1171/0.1341/0.1216 ms to 0.0888/0.1079/0.0937 ms. These
+are contended owner diagnostics, not clean application FPS acceptance. Before
+Tracy artifact `beb2fab8bb06e6e52c57e6832a931251c587a6480bda45700d0da0131e07821f`
+and after artifact
+`3eabc391d9f195e2b3670de4c57fe89045ffb7f317b18438f3138deb46fe87ed`
+produce valid 328,573,969/334,675,120-byte captures with matching collector
+sizes and successful native message/CPU exports. Owned apps and collectors
+exit zero and release API 4202/Tracy 8086.
+
+The focused native entity-list run passes nine functional checks plus the
+ignored benchmark. Direct Name and Callsign mutations, hidden-holder edits,
+role insertion, hierarchy changes and Twin cleanup remain covered. One
+600-frame benchmark pair over 20,000 named entities takes 61.813/57.446 ms
+with 17 archetypes. With 14,000 richer candidates and 528 archetypes it takes
+105.168/100.105 ms. Each fixture admits only its initial gate run. These
+synthetic private-query seams do not establish product throughput.
+
+Normal artifact
+`2522c668a039d0711e5d0200a276776de9c5900790a16c82437022bee327b5cf`
+passes all ten existing current-contract determinism profiles, 360 checks,
+with the unchanged reference below and expected compute-pool widths 1/24.
+The final owned windowed run passes sandbox 7, telemetry history 17, mass and
+island checks 10, and replacement sandbox 7. It verifies one mass verdict,
+invalid-reset rejection, valid Modelica reset, readiness, physics progress and
+the three existing invalid-assembly pause guards. View shadows and replacement
+entity rows are inspected. Warm readiness is 3.649 s and frame p50 values are
+17.250/17.002/17.105 ms; contention prevents clean loading/FPS claims.
+The normal executable is restored and all owned sessions are closed.
+
+Receipts, logs, captures and native exports remain under
+`target/entity-tree-perf/`, prefixes `tree-change-fixed-camera-` and
+`tree-change-admission-`. External libraries, f64 simulation values, solver
+math, physics cadence and rendering quality are preserved. Loading
+admission and clean loading, visual FPS and physics-throughput acceptance
+remain open. Disk recovery removes the failed task linker output and cleans
+only `lunco-luncosim`; source and shared caches are preserved, and the validated
+normal executable is retained separately.
+
 ## Full current-contract determinism matrix and frame ranking — 2026-10-11
 
 The ten authored production profiles now have a refreshed canonical reference
@@ -67,8 +127,8 @@ Full-matrix receipts, logs, the preserved baseline and ranking remain under
 `target/entity-tree-perf/`, prefixes `full-matrix-` and `landing-publication-`.
 The normal executable remains restored and all owned sessions are closed.
 No external library, solver math, ordering, precision, cadence or quality
-changes are made in this step. Next investigations are the entity-tree change
-gate and loading admission. Clean loading, visual FPS and physics-throughput
+changes are made in this step. The entity-tree admission follow-up is recorded
+above. Loading admission and clean loading, visual FPS and physics-throughput
 acceptance remain open.
 
 ## Publish successful wiring diagnostics once per fabric — 2026-10-11

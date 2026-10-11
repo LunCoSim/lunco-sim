@@ -120,9 +120,17 @@ active dismissal clears retired properties without requesting a download.
 For the derived scene entity tree, immutable parent insertions use native
 lifecycle messages coalesced by entity at the Update gate. Compare current
 edge values with the cached ancestry; identical replacements must not rebuild.
+Separate change admission from rich candidate reads: the native changed query
+returns only entity identities; indexed candidate reads fetch label/visibility
+data for those identities. Keep the original change-filter union and candidate
+predicate. Direct mutable component edits must still invalidate the cached
+tree; insertion observers alone cannot detect them.
 Retain mutable-label and scene-boundary checks, removal handling, unnamed
 ancestor invalidation and active-Twin queue retirement. Measure the complete
 gate and insertion observers separately from tree derivation and panel paint.
+The gate exposes `entity_tree_gate_named_changes`,
+`entity_tree_gate_removals` and `entity_tree_gate_parent_changes`; compare the
+complete gate as well as these phases, with equal instrumentation and cameras.
 For frame-contract gate costs, distinguish the full connectivity validator from
 its admission/fixed run conditions. The bridge observes native physical and
 hierarchy lifecycle events through one change-ticked resource; each consumer
