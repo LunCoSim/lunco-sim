@@ -84,10 +84,6 @@ fn on_run_modelica_solve(
         )
     })?;
     let source = document.source().to_owned();
-    let model_name = lunco_modelica_ast::ast_extract::within_package_of_source(&source)
-        .filter(|package| !model_name.starts_with(&format!("{package}.")))
-        .map(|package| format!("{package}.{model_name}"))
-        .unwrap_or(model_name);
     let filename = document.origin().session_uri();
     let attribution = PinnedDocumentRuntimeOwner::for_document(
         request.doc_id,
