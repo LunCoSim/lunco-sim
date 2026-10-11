@@ -148,11 +148,6 @@ impl FixedStepSession {
         self.time_origin + self.step_index as f64 * self.fixed_dt
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
-        let values = self.visible_values()?;
-        Ok(values.get(name).copied())
-    }
-
     pub fn state(&self) -> Result<SessionState, SimulationDiagnosticError> {
         Ok(SessionState {
             time: self.time(),

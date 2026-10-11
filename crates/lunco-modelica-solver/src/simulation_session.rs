@@ -65,13 +65,6 @@ impl LiveStepper {
         }
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
-        match self {
-            Self::Adaptive(session) => session.get(name).map_err(adaptive_error),
-            Self::Fixed(session) => session.get(name),
-        }
-    }
-
     pub fn input_names(&self) -> &[String] {
         match self {
             Self::Adaptive(session) => session.input_names(),

@@ -329,11 +329,8 @@ mod tests {
         let id = admitted_run(&mut registry, &mut origins, None, 1);
         registry.set_status(id, RunStatus::Cancelled);
         let (tx, rx) = crossbeam_channel::unbounded();
-        tx.send(RunUpdate::Progress {
-            t_current: 2.0,
-            delta: None,
-        })
-        .expect("buffered progress");
+        tx.send(RunUpdate::Progress { t_current: 2.0 })
+            .expect("buffered progress");
         let flag = Arc::new(AtomicBool::new(false));
         let cancel = flag.clone();
         let pending = PendingRun {

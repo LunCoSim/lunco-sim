@@ -2,13 +2,7 @@
 //! show a message over empty-ish content (empty Diagram, missing
 //! Icon, future: missing Documentation).
 //!
-//! # Why a shared helper
-//!
-//! Multiple views used to each do their own `Rect::from_center_size` and
-//! `new_child` layout. Small diffs between them meant the Icon fallback
-//! looked noticeably off-centre compared to the Diagram empty-state card.
-//! Consolidating here keeps visual parity and stops the centering from
-//! drifting apart as features get added.
+//! One shared layout keeps empty-view cards centered consistently.
 //!
 //! # Contract
 //!

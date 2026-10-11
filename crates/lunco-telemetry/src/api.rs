@@ -311,8 +311,7 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
 ///
 /// Channels sample at *different rates* (that is the point of Phase 1), so they do not
 /// share a time axis. The export builds the sorted union of every sample time and fills a
-/// channel's missing slots with `null` — the same NaN-padding `RunResult::merge_delta`
-/// does when a run discovers a new variable mid-flight. **Do not interpolate here**: a
+/// channel's missing slots with `null`. **Do not interpolate here**: a
 /// hole is data the channel genuinely never reported, and inventing a value would launder
 /// a 1 Hz channel into looking like a 60 Hz one.
 pub(crate) struct ExportTelemetryRecordingProvider;

@@ -57,9 +57,14 @@ document ID or preview may survive; repeat `OpenTwin` on B to verify fresh
 admission. A rejected Twin path must preserve the current documents. Twin
 replacement closes loose/library editor documents as well as Twin-owned files;
 `RestartScene` preserves editable documents and tests a different lifecycle.
+On restart, require fresh stage readiness before inspecting terrain or Modelica
+participants: the reused root waits for the prepared reload, and the document's
+serialized generation joins that loaded revision before later edits project.
 Pending editor and workspace-restore work must not recreate old tabs after
 replacement. Modelica `CloseDocument` is owned by the headless core, so exercise
 scratch-document closure in both headless and windowed hosts.
+`modelica_compiled_metadata.rhai` also verifies that closing an API scratch
+document retires its live Modelica participant through the shared close owner.
 
 The maintained document-close scene gate is
 `scenes/tests/twin_session_retirement/twin_session_retirement.usda` with verdict

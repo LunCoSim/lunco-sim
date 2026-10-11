@@ -12,17 +12,8 @@
 //!     and (via [`ModelicaWorkbenchPlugin`]) wires the JS clipboard
 //!     bridge, localStorage autosave, and the off-thread compile worker.
 //!
-//! ## Why this used to be two files
-//!
-//! Desktop and web lived in separate sources (`lunica.rs` + `lunica_web.rs`)
-//! and **drifted**: the web build silently lacked the `WinitSettings`
-//! frame-pacing fix that cured the "UI vanishes on zoom" bug on native,
-//! and the legacy sandbox copy lacked clipboard + autosave. They are
-//! now one `fn main()` with `#[cfg(target_arch = "wasm32")]` branches —
-//! the same unification `crates/lunco-luncosim/src/bin/luncosim.rs` already
-//! uses for its desktop+web entry. wasm-bindgen (`--target web`) runs
-//! `main` automatically when the module loads, so there is no separate
-//! `#[wasm_bindgen(start)]` entry point.
+//! Desktop and browser hosts share one entry point. wasm-bindgen with
+//! `--target web` invokes `main` when the module loads.
 //!
 //! Everything the workbench *is* (panels, clipboard, autosave, worker,
 //! source library) lives in [`ModelicaWorkbenchPlugin`]; this file is just the thin

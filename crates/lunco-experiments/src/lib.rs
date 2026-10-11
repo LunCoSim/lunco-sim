@@ -10,7 +10,7 @@
 //!
 //! The simulation backend is plugged in via the [`ExperimentRunner`]
 //! trait. This crate has no rumoca / modelica dependency; the binding
-//! lives in `lunco-modelica-core`. Future backends (FMU, codegen, remote)
+//! lives in `lunco-modelica-runner`. Future backends (FMU, codegen, remote)
 //! plug in the same way.
 
 #[cfg(feature = "bevy")]
@@ -141,45 +141,13 @@ pub enum ParamValue {
 // participating. Callers do not name a solver; they state [`RuntimeProfile`] —
 // where the model runs — and call `solver::resolve`.
 
-// ---------- Runtime ----------
-
-/// How a run drives the solver to `t_end`.
-///
-/// The two modes share the same DAE, solver family and tolerances; they
-/// differ only in *who* owns the time loop:
-///
-///  * [`Batch`](RuntimeMode::Batch) — the non-interactive dense-output
-///    path (`rumoca_sim::simulate`). The solver free-steps with its own
-///    adaptive step size and the output samples are produced by dense
-///    interpolation, so the solver step is fully decoupled from the
-///    output spacing. This is the robust default: stiff long-horizon
-///    models (e.g. the lunar rover thermal system across multiple
-///    day/night cycles) complete here regardless of the output `dt`.
-///  * [`Interactive`](RuntimeMode::Interactive) — the live `SimulationSession`
-///    loop (`run_stepping_loop`). The solver is advanced one output
-///    `dt` at a time so the run can stream/pause/scrub in real time, but
-///    that couples the solver step to the output spacing: too coarse a
-///    `dt` makes a stiff solve collapse. Use for the live, playable sim.
-///
-/// Default is [`Batch`](RuntimeMode::Batch): correctness first; opt into
-/// `Interactive` when a run must be streamed/steered live.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeMode {
-    /// Non-interactive dense-output batch solve. Robust default.
-    #[default]
-    Batch,
-    /// Live stepper loop — streamable/steerable, but solver step is
-    /// bounded by the output `dt`.
-    Interactive,
-}
-
 // ---------- Bounds ----------
 
 /// Run window + solver hints. Fields default from the model's
 /// `experiment(...)` annotation when available; otherwise the runner
 /// supplies sane defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunBounds {
     pub t_start: f64,
     pub t_end: f64,
@@ -204,10 +172,6 @@ pub struct RunBounds {
     /// (currently `span / 5_000_000`). Useful for long-horizon runs
     /// where the span-based default over-shoots a stiff transient.
     pub h0: Option<f64>,
-    /// Time-loop ownership for the run. Default is the non-interactive
-    /// [`Batch`](RuntimeMode::Batch) dense-output solve; see [`RuntimeMode`].
-    #[serde(default)]
-    pub runtime: RuntimeMode,
 }
 
 impl Default for RunBounds {
@@ -220,7 +184,6 @@ impl Default for RunBounds {
             tolerance: None,
             solver: None,
             h0: None,
-            runtime: RuntimeMode::Batch,
         }
     }
 }
@@ -228,6 +191,7 @@ impl Default for RunBounds {
 // ---------- Status ----------
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum RunStatus {
     Pending,
     /// Accepted by the runner but waiting for a concurrency slot (the
@@ -242,11 +206,8 @@ pub enum RunStatus {
     Done {
         wall_time_ms: u64,
     },
-    /// `partial` is true when a partial trajectory was salvaged before
-    /// the failure (kept in `result`).
     Failed {
         error: String,
-        partial: bool,
     },
     Cancelled,
 }
@@ -271,45 +232,17 @@ pub struct RunResult {
     pub meta: RunMeta,
 }
 
-impl RunResult {
-    /// Append another result's samples to this one. Assumes the delta's
-    /// `times` continue from our last time point.
-    ///
-    /// Robustly handles mid-run discovery: if `delta` contains a
-    /// variable we haven't seen yet, it's inserted and padded with
-    /// `NaN` for our existing `times` span.
-    pub fn merge_delta(&mut self, mut delta: RunResult) {
-        let base_len = self.times.len();
-
-        for (k, mut dv) in delta.series {
-            if let Some(v) = self.series.get_mut(&k) {
-                v.append(&mut dv);
-            } else {
-                // New variable discovered mid-run. Pad with NaN for
-                // the time we've already covered.
-                let mut new_v = vec![f64::NAN; base_len];
-                new_v.append(&mut dv);
-                self.series.insert(k, new_v);
-            }
-        }
-
-        // Handle variables we HAVE but the delta MISSED (solver
-        // stopped reporting them). Pad the delta's span with NaN.
-        let delta_len = delta.times.len();
-        for v in self.series.values_mut() {
-            if v.len() == base_len {
-                v.resize(base_len + delta_len, f64::NAN);
-            }
-        }
-
-        self.times.append(&mut delta.times);
-        self.meta.sample_count = self.times.len();
-        self.meta.wall_time_ms = delta.meta.wall_time_ms; // Update to latest wall time
-    }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SeriesMetadata {
+    pub unit: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunMeta {
+    /// Backend-owned facts captured for this run, keyed by exact series identity.
+    /// An absent entry means the backend supplied no descriptive facts.
+    pub variable_metadata: std::sync::Arc<BTreeMap<String, SeriesMetadata>>,
     #[serde(default)]
     pub source_content: Option<SourceContentIdentity>,
     #[serde(default)]
@@ -338,7 +271,7 @@ pub struct Experiment {
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds: RunBounds,
     pub status: RunStatus,
-    /// Shared immutable trajectory snapshot; streaming merges use copy-on-write.
+    /// Shared immutable completed trajectory snapshot.
     pub result: Option<Arc<RunResult>>,
     pub created_at: SystemTime,
     /// Plot-color hint stable across the run's lifetime. Index into a
@@ -568,16 +501,6 @@ impl ExperimentRegistry {
         std::mem::take(&mut self.removed)
     }
 
-    /// Store a failed run's explicit partial trajectory, which may contain holes.
-    pub fn set_partial_result(&mut self, id: ExperimentId, result: RunResult) -> bool {
-        if let Some(e) = self.get_mut(id) {
-            e.result = Some(Arc::new(result));
-            true
-        } else {
-            false
-        }
-    }
-
     /// Admit a complete trajectory before it can become retained result data.
     pub fn set_complete_result(
         &mut self,
@@ -586,21 +509,11 @@ impl ExperimentRegistry {
         limits: RunResultLimits,
     ) -> Result<bool, RunResultError> {
         result.validate_complete(limits)?;
-        Ok(self.set_partial_result(id, result))
-    }
-
-    /// Merge a partial result into the experiment's existing result
-    /// store. Creates the result if it doesn't exist yet.
-    pub fn merge_result(&mut self, id: ExperimentId, delta: RunResult) -> bool {
-        if let Some(e) = self.get_mut(id) {
-            if let Some(res) = &mut e.result {
-                Arc::make_mut(res).merge_delta(delta);
-            } else {
-                e.result = Some(Arc::new(delta));
-            }
-            true
+        if let Some(experiment) = self.get_mut(id) {
+            experiment.result = Some(Arc::new(result));
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -613,7 +526,7 @@ impl ExperimentRegistry {
     // exactly these methods, and cross-peer replay applies the same op the same
     // way. Direct `get_mut(...).field = ...` poking bypasses journaling, so
     // definition edits should go through here. (Run *outputs* — `set_status` /
-    // `set_complete_result` / `set_partial_result` — are intentionally NOT definition edits: they ride the
+    // `set_complete_result` — are intentionally NOT definition edits: they ride the
     // content/presence planes, not the journal.)
 
     /// Rename an experiment. Returns `false` if the id is unknown.
@@ -680,18 +593,15 @@ impl ExperimentRegistry {
 
 /// Lifecycle update streamed from a runner back to the host.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum RunUpdate {
-    /// Incremental progress. `delta` may carry the newest trajectory
-    /// samples since the last update; the host should append them to
-    /// the registry's result store to enable live-updating plots.
+    /// Lifecycle progress without trajectory storage.
     Progress {
         t_current: f64,
-        delta: Option<RunResult>,
     },
     Completed(RunResult),
     Failed {
         error: String,
-        partial: Option<RunResult>,
     },
     Cancelled,
 }
@@ -851,7 +761,6 @@ mod tests {
             RunStatus::Done { wall_time_ms: 1 },
             RunStatus::Failed {
                 error: "solver refused".into(),
-                partial: false,
             },
             RunStatus::Cancelled,
         ] {
@@ -887,17 +796,20 @@ mod tests {
             Default::default(),
             RunBounds::default(),
         );
-        registry.set_partial_result(
-            with_result,
-            RunResult {
-                times: vec![0.0],
-                series: Default::default(),
-                meta: RunMeta {
-                    sample_count: 1,
-                    ..Default::default()
+        registry
+            .set_complete_result(
+                with_result,
+                RunResult {
+                    times: vec![0.0],
+                    series: Default::default(),
+                    meta: RunMeta {
+                        sample_count: 1,
+                        ..Default::default()
+                    },
                 },
-            },
-        );
+                crate::RunResultLimits::default(),
+            )
+            .expect("valid completed fixture");
         assert!(registry.set_bounds(with_result, bounds).is_err());
         assert!(registry.set_params(with_result, overrides, inputs).is_err());
         assert_eq!(registry.rename_model_ref(&twin, &model, &renamed), 0);
@@ -1038,33 +950,6 @@ mod tests {
         reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });
         assert!(reg.delete(id));
     }
-
-    #[test]
-    fn merge_deltas() {
-        let mut base = RunResult {
-            times: vec![0.0, 0.1],
-            series: [("v".into(), vec![1.0, 1.1])].into(),
-            meta: RunMeta {
-                wall_time_ms: 10,
-                sample_count: 2,
-                ..Default::default()
-            },
-        };
-        let delta = RunResult {
-            times: vec![0.2, 0.3],
-            series: [("v".into(), vec![1.2, 1.3])].into(),
-            meta: RunMeta {
-                wall_time_ms: 20,
-                sample_count: 2,
-                ..Default::default()
-            },
-        };
-        base.merge_delta(delta);
-        assert_eq!(base.times, vec![0.0, 0.1, 0.2, 0.3]);
-        assert_eq!(base.series["v"], vec![1.0, 1.1, 1.2, 1.3]);
-        assert_eq!(base.meta.sample_count, 4);
-        assert_eq!(base.meta.wall_time_ms, 20);
-    }
 }
 
 #[cfg(test)]
@@ -1072,7 +957,7 @@ mod result_snapshot_tests {
     use super::*;
 
     #[test]
-    fn retained_result_snapshot_stays_immutable_during_stream_merge() {
+    fn retained_result_snapshots_share_storage_and_survive_registry_removal() {
         let mut registry = ExperimentRegistry::new();
         let id = registry.insert_new(
             TwinId("scope".into()),
@@ -1081,17 +966,20 @@ mod result_snapshot_tests {
             Default::default(),
             RunBounds::default(),
         );
-        registry.set_partial_result(
-            id,
-            RunResult {
-                times: vec![0.0],
-                series: BTreeMap::from([("x".into(), vec![1.0])]),
-                meta: RunMeta {
-                    sample_count: 1,
-                    ..Default::default()
+        registry
+            .set_complete_result(
+                id,
+                RunResult {
+                    times: vec![0.0],
+                    series: BTreeMap::from([("x".into(), vec![1.0])]),
+                    meta: RunMeta {
+                        sample_count: 1,
+                        ..Default::default()
+                    },
                 },
-            },
-        );
+                crate::RunResultLimits::default(),
+            )
+            .expect("valid completed fixture");
         let snapshot = registry
             .get(id)
             .and_then(|run| run.result.clone())
@@ -1101,28 +989,9 @@ mod result_snapshot_tests {
             .and_then(|run| run.result.clone())
             .expect("shared snapshot");
         assert!(Arc::ptr_eq(&snapshot, &copy));
-        registry.merge_result(
-            id,
-            RunResult {
-                times: vec![1.0],
-                series: BTreeMap::from([("x".into(), vec![2.0])]),
-                meta: RunMeta {
-                    sample_count: 1,
-                    ..Default::default()
-                },
-            },
-        );
+        assert_eq!(registry.delete_for_twin(&TwinId("scope".into())), 1);
         assert_eq!(snapshot.times, [0.0]);
         assert_eq!(snapshot.series["x"], [1.0]);
-        assert_eq!(
-            registry
-                .get(id)
-                .expect("retained run")
-                .result
-                .as_ref()
-                .expect("merged result")
-                .times,
-            [0.0, 1.0]
-        );
+        assert!(registry.get(id).is_none());
     }
 }

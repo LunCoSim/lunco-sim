@@ -865,7 +865,10 @@ physical producers before participant initialization. It does not advance clocks
 step models, propagate wires, or apply actuators. Environment and terrain producers
 publish their current samples here while the normal fixed clock is held; pending
 physical preparation remains at readiness, and invalid authored samples fault at
-the producer. Participant initialization consumes `lunco_cosim_core::initialization::initialization_inputs`.
+the producer. The celestial link owner refreshes its authored class catalog here
+so nodes created during source projection declare their class ports before
+input admission in the same frame. Participant initialization consumes
+`lunco_cosim_core::initialization::initialization_inputs`.
 This reads the registered causal source backends in propagation order, applies
 SSP affine sums and authored hold priority, and admits only finite current samples.
 Availability belongs to the selected port backend. Native pose and control ports

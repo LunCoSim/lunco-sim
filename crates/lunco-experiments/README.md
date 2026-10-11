@@ -15,13 +15,14 @@ See `docs/architecture/25-experiments.md` for the design rationale.
 |------|------|
 | `Experiment` / `ExperimentId` | one batch run + its stable id (`live()` = the interactive realtime cosim) |
 | `ExperimentRegistry` | per-`TwinId` store of runs (capped at 20, LRU-evicts finished) |
-| `RunBounds` / `RunStatus` / `RunResult` / `RunMeta` | the run window, lifecycle state, results (`merge_delta` for streaming), metadata |
+| `RunBounds` / `RunStatus` / `RunResult` / `RunMeta` | the run window, lifecycle state, retained trajectory, and exact backend metadata |
+| `SeriesMetadata` | retained units and descriptions keyed by exact series identity |
 | `RunResultLimits` / `RunResultError` | complete-trajectory structure and result-size admission |
+| `RunUpdate` | lifecycle progress, one completed trajectory, or terminal failure/cancellation |
 | `ExperimentSettings` (Bevy) | shared persisted execution/persistence settings |
 | `ParamPath` / `ParamValue` | typed parameter overrides |
 | `SolverId` / `SolverSpec` / `SolverCaps` | a registered solver, what it can do, and its id |
 | `RuntimeProfile` / `SolverRequest` | where the model runs (`live`, `predicted`) and `resolve()`'s input |
-| `RuntimeMode` | realtime vs. as-fast-as-possible |
 | `ModelRef` / `TwinId` | model + twin references |
 | `ExperimentRunner` | trait — the pluggable simulation backend seam |
 
@@ -36,6 +37,8 @@ Completed Twin history uses a versioned `RunArtifact` with an immutable
 execution definition and compiler-provided source-content identity. The shared
 codec admits byte and scalar budgets before trajectory allocation. Restored
 rows retain an archived runtime origin and never emit a live run completion.
+Result storage admits only validated complete trajectories; failed and
+cancelled runs retain their status without publishing trajectory fragments.
 The application service owns asynchronous storage and discovery; this crate
 does not choose a filesystem root or execute I/O.
 

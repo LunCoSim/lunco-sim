@@ -834,9 +834,8 @@ fn run_summary(exp: &lunco_experiments::Experiment, doc_id: Option<u64>) -> ApiV
         RunStatus::Done { wall_time_ms } => {
             obj.push(("wall_time_ms".into(), api_value!(*wall_time_ms)));
         }
-        RunStatus::Failed { error, partial } => {
+        RunStatus::Failed { error } => {
             obj.push(("error".into(), ApiValue::Str(error.clone())));
-            obj.push(("partial".into(), ApiValue::Bool(*partial)));
         }
         RunStatus::Pending | RunStatus::Queued | RunStatus::Cancelled => {}
     }
@@ -1009,7 +1008,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             );
         };
         let Some(result) = &exp.result else {
-            // Run dispatched but not done (pending/running/failed-no-partial).
+            // This run has not published a completed trajectory.
             return query_error(
                 ApiErrorCode::DeserializationError,
                 format!(
@@ -1061,6 +1060,23 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             }
         }
 
+        let metadata = ApiValue::Map(
+            series
+                .iter()
+                .filter_map(|(name, _)| {
+                    result.meta.variable_metadata.get(name).map(|fact| {
+                        (
+                            name.clone(),
+                            api_value!({
+                                "unit": fact.unit.clone(),
+                                "description": fact.description.clone(),
+                            }),
+                        )
+                    })
+                })
+                .collect(),
+        );
+
         query_ok(api_value!({
             "experiment_id": exp.id.0.to_string(),
             "name": exp.name.clone(),
@@ -1074,6 +1090,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             "missing_variables": missing,
             "times": times,
             "series": ApiValue::Map(series),
+            "metadata": metadata,
         }))
     }
 }

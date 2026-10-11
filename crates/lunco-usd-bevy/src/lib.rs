@@ -1914,7 +1914,7 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
     q: Query<
-        &UsdPrimPath,
+        (&UsdPrimPath, Has<UsdSceneAwaitingStage>),
         (
             Without<UsdSceneProjected>,
             Without<UsdSceneProjectionFailed>,
@@ -1924,10 +1924,13 @@ fn on_usd_prim_added(
     stages: Res<Assets<UsdStageAsset>>,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = q.get(entity) else {
+    let Ok((prim_path, awaiting_stage)) = q.get(entity) else {
         return;
     };
 
+    if awaiting_stage {
+        return;
+    }
     if stages.get(&prim_path.stage_handle).is_none() {
         commands.entity(entity).try_insert(UsdSceneAwaitingStage);
         return;

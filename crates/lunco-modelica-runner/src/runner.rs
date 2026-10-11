@@ -169,7 +169,6 @@ fn lock_runner_state(
                 job.cancel.store(true, Ordering::SeqCst);
                 let _ = job.tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
             Err(())
@@ -286,7 +285,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = source.result_limits.validate() {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -298,7 +296,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = lunco_modelica_core::sim_target::validate_run_bounds(&exp.bounds) {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -324,7 +321,6 @@ impl ExperimentRunner for ModelicaRunner {
             Err(()) => {
                 let _ = tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
         }
@@ -470,14 +466,12 @@ fn start_native_job(
                     .unwrap_or("non-string panic payload");
                 let _ = tx.send(RunUpdate::Failed {
                     error: format!("experiment worker panicked: {detail}"),
-                    partial: None,
                 });
             }
         });
     if let Err(error) = spawned {
         let _ = failure_tx.send(RunUpdate::Failed {
             error: format!("experiment worker could not start: {error}"),
-            partial: None,
         });
         // The scheduler pump that admitted this job continues after return.
         release_run_slot(&state, run_id);
@@ -512,7 +506,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     // finished. `drain_pending_handles` maps this `Progress` to `Running`.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
     let src = source;
     // Forward worker updates into the handle's tx; the forwarder frees the
@@ -520,7 +513,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     let Some(transport) = crate::worker_run_transport() else {
         let _ = tx.send(RunUpdate::Failed {
             error: "Modelica worker run transport is not installed".to_string(),
-            partial: None,
         });
         finish_run(&state, run_id);
         return;
@@ -684,12 +676,9 @@ fn run_inner(
     // flip straight to `Done` — making a long-grinding run look stuck in a
     // queue. `drain_pending_handles` maps any `Progress` to
     // `RunStatus::Running`, so this single emit flips the label to "Running"
-    // the moment the worker thread picks the job up (covering compile time
-    // too, not just the solve). Interactive runs additionally stream their
-    // own per-step `Progress` with the real `t_current`.
+    // the moment the worker thread picks the job up, including compile time.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
 
     // Persistent runner compiler: clone the handle out of `state` (brief
@@ -705,7 +694,6 @@ fn run_inner(
         Err(_) => {
             let _ = tx.send(RunUpdate::Failed {
                 error: "runner state poisoned".to_string(),
-                partial: None,
             });
             return;
         }
@@ -731,7 +719,6 @@ fn run_inner(
                         let _ = tx.send(RunUpdate::Failed {
                             error: "experiment compiler is poisoned after an earlier panic"
                                 .to_owned(),
-                            partial: None,
                         });
                         return;
                     }
@@ -778,7 +765,6 @@ fn run_inner(
                 Err(e) => {
                     let _ = tx.send(RunUpdate::Failed {
                         error: format!("compile failed: {e}"),
-                        partial: None,
                     });
                     return;
                 }
@@ -812,10 +798,8 @@ fn run_inner(
     );
 }
 
-/// Shared native and Web Worker simulation entry point. Batch runs use the
-/// admitted dense output grid; interactive runs advance the selected live
-/// session and stream observations. Both paths apply the same run values,
-/// cancellation, and retained-output budget.
+/// Shared native and Web Worker simulation entry point over Rumoca's checked
+/// batch solver, admitted output grid, run values, and retained-output budget.
 pub fn drive_run(
     dae: &Dae,
     bounds: &RunBounds,
@@ -838,10 +822,7 @@ pub fn drive_run(
         }) {
         Ok(budget) => budget,
         Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error,
-                partial: None,
-            });
+            sink.emit(RunUpdate::Failed { error });
             return;
         }
     };
@@ -851,7 +832,6 @@ pub fn drive_run(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
@@ -864,66 +844,52 @@ pub fn drive_run(
         Err(err) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("run configuration failed: {err}"),
-                partial: None,
             });
             return;
         }
     };
     if let Err(error) = apply_run_values(&mut stepper_opts, inputs, overrides) {
-        sink.emit(RunUpdate::Failed {
-            error,
-            partial: None,
-        });
+        sink.emit(RunUpdate::Failed { error });
         return;
     }
-    match bounds.runtime {
-        lunco_experiments::RuntimeMode::Batch => {
-            // The batch solver reads its output grid from `opts.dt` (one column
-            // per `dt` step). `stepper_options_from_bounds` leaves `opts.dt` as
-            // the *initial step* (`h0`) for the interactive path; for batch we
-            // instead resolve the requested output spacing — from either the
-            // `Interval` (`dt`) or the `NumberOfIntervals` (`n_intervals`) knob
-            // — so the run honours whichever the user chose. The solver
-            // free-steps regardless, so a coarse output grid doesn't constrain
-            // it (and `run_batch_sim` decimates the event-flooded result back
-            // to that grid).
-            let mut batch_opts = stepper_opts;
-            batch_opts.dt = Some(output_dt);
-            bevy::log::info!(
-                "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
-                bounds.t_start,
-                bounds.t_end,
-                output_dt,
-                bounds.dt,
-                bounds.n_intervals
-            );
-            run_batch_sim(dae, &batch_opts, output_budget, started, sink);
-        }
-        lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper = match rumoca_sim::SimulationSession::new(dae, stepper_opts) {
-                Ok(s) => s,
-                Err(e) => {
-                    sink.emit(RunUpdate::Failed {
-                        error: format!("stepper init failed: {e:?}"),
-                        partial: None,
-                    });
-                    return;
-                }
-            };
-            bevy::log::info!(
-                "[runner] simulate begin (interactive): t={}..{} dt={:?}",
-                bounds.t_start,
-                bounds.t_end,
-                bounds.dt
-            );
-            run_stepping_loop(&mut stepper, bounds, limits, started, sink);
-        }
-    }
+    // The requested output grid is independent of the solver's internal step.
+    let mut batch_opts = stepper_opts;
+    batch_opts.dt = Some(output_dt);
+    bevy::log::info!(
+        "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
+        bounds.t_start,
+        bounds.t_end,
+        output_dt,
+        bounds.dt,
+        bounds.n_intervals
+    );
+    run_batch_sim(dae, &batch_opts, output_budget, started, sink);
+}
+
+/// Retain Rumoca's checked output facts under the experiment's series identity.
+fn series_metadata(
+    metadata: Vec<rumoca_solver::SimVariableMeta>,
+) -> std::sync::Arc<BTreeMap<String, lunco_experiments::SeriesMetadata>> {
+    std::sync::Arc::new(
+        metadata
+            .into_iter()
+            .filter(|fact| fact.name != "time")
+            .map(|fact| {
+                (
+                    fact.name,
+                    lunco_experiments::SeriesMetadata {
+                        unit: fact.unit,
+                        description: fact.description,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
 /// solver ([`rumoca_sim::simulate_fmi_component`]) and emit the trajectory
-/// as a single [`RunUpdate::Completed`]. Unlike [`run_stepping_loop`], the
+/// as a single [`RunUpdate::Completed`]. The
 /// solver owns its own adaptive time loop and the output samples are taken by
 /// dense interpolation, so the solver step size is independent of the output
 /// spacing — the robust path for stiff long-horizon runs.
@@ -958,7 +924,6 @@ fn run_batch_sim(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
@@ -968,7 +933,6 @@ fn run_batch_sim(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("solve lowering failed: {error}"),
-                partial: None,
             });
             return;
         }
@@ -986,7 +950,6 @@ fn run_batch_sim(
     if let Err(error) = admission {
         sink.emit(RunUpdate::Failed {
             error: error.to_string(),
-            partial: None,
         });
         return;
     }
@@ -999,7 +962,6 @@ fn run_batch_sim(
             }
             sink.emit(RunUpdate::Failed {
                 error: format!("simulate failed: {e}"),
-                partial: None,
             });
             return;
         }
@@ -1010,70 +972,52 @@ fn run_batch_sim(
         return;
     }
 
-    // The batch solver records the requested grid plus root/event crossings.
-    // Every sample has already passed the recorder budget. Select the nearest
-    // available sample per requested grid point before storing or sending the
-    // trajectory; smooth exact-grid results retain all their samples.
-    let keep = match batch_keep_indices(&result.times, opts.t_start, opts.t_end, output_dt) {
-        Ok(keep) => keep,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error: error.to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
-    let raw_samples = result.times.len();
-    let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
-        Some(idx) => (
-            idx.iter().map(|&i| result.times[i]).collect(),
-            Some(idx.clone()),
-        ),
-        None => (result.times.clone(), None),
-    };
-
+    if result.data.len() != result.names.len()
+        || result
+            .data
+            .iter()
+            .any(|column| column.len() != result.times.len())
+    {
+        sink.emit(RunUpdate::Failed {
+            error: "solver trajectory columns do not match their names and time vector".into(),
+        });
+        return;
+    }
+    let variable_metadata = series_metadata(result.variable_meta);
+    if result
+        .names
+        .iter()
+        .filter(|name| name.as_str() != "time")
+        .any(|name| !variable_metadata.contains_key(name))
+    {
+        sink.emit(RunUpdate::Failed {
+            error: "solver trajectory has a series without checked metadata".into(),
+        });
+        return;
+    }
     // SimResult stores one column per visible variable (`data[var][t]`),
     // mirroring the `RunResult` series map keyed by variable name. Drop the
     // synthetic `time` column — `times` carries it.
     let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for (i, name) in result.names.iter().enumerate() {
+    for (name, column) in result.names.into_iter().zip(result.data) {
         if name == "time" {
             continue;
         }
-        let full = result.data.get(i);
-        let column: Vec<f64> = match (&gather, full) {
-            (Some(idx), Some(col)) => idx
-                .iter()
-                .map(|&j| col.get(j).copied().unwrap_or(f64::NAN))
-                .collect(),
-            (None, Some(col)) => col.clone(),
-            (_, None) => Vec::new(),
-        };
-        series.insert(name.clone(), column);
+        series.insert(name, column);
     }
 
-    let n_samples = kept_times.len();
-    if keep.is_some() {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples (decimated from {} solver/event samples), {} vars, {:.2}s wall",
-            n_samples,
-            raw_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    } else {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
-            n_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    }
+    let n_samples = result.times.len();
+    bevy::log::info!(
+        "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
+        n_samples,
+        series.len(),
+        started.elapsed().as_secs_f64(),
+    );
     sink.emit(RunUpdate::Completed(RunResult {
-        times: kept_times,
+        times: result.times,
         series,
         meta: RunMeta {
+            variable_metadata,
             wall_time_ms: started.elapsed().as_millis() as u64,
             sample_count: n_samples,
             notes: None,
@@ -1082,76 +1026,10 @@ fn run_batch_sim(
     }));
 }
 
-/// Pick the sample indices to keep so a batch trajectory matches the requested
-/// output grid. rumoca emits the `opts.dt` grid PLUS an extra sample at every
-/// event/root crossing; for chattering models that's millions of points. For
-/// each grid time `t_start + k·dt` we keep the trajectory sample whose time is
-/// nearest (advancing a single monotonic cursor — O(n)), always keeping the
-/// first and last sample. Invalid grids are rejected before integer conversion
-/// or allocation. Returns `None` when the trajectory is at/under the grid size (the
-/// well-behaved smooth-model case — leave it byte-for-byte untouched).
-fn batch_keep_indices(
-    times: &[f64],
-    t_start: f64,
-    t_end: f64,
-    dt: f64,
-) -> Result<Option<Vec<usize>>, lunco_modelica_core::sim_target::RunBoundsError> {
-    let dt = lunco_modelica_core::sim_target::resolve_step_dt(t_start, t_end, Some(dt), None)?;
-    if times.len() < 2 {
-        return Ok(None);
-    }
-    let span = t_end - t_start;
-    // +1 for the inclusive endpoint; small slack so we never over-decimate a
-    // result that already sits on (or just above) the grid.
-    let grid_n = (span / dt).round() as usize + 1;
-    if times.len() <= grid_n.saturating_mul(2) {
-        return Ok(None);
-    }
-    let mut keep: Vec<usize> = Vec::with_capacity(grid_n + 1);
-    let mut cursor = 0usize;
-    let n = times.len();
-    for k in 0..=grid_n {
-        let target = t_start + (k as f64) * dt;
-        // Advance while the next sample is closer to `target` than the current.
-        while cursor + 1 < n && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
-        {
-            cursor += 1;
-        }
-        if keep.last() != Some(&cursor) {
-            keep.push(cursor);
-        }
-    }
-    // Guarantee the true final sample is present (events can land past the last
-    // grid node).
-    if keep.last() != Some(&(n - 1)) {
-        keep.push(n - 1);
-    }
-    Ok(Some(keep))
-}
-
-/// Cancellation + update sink for a stepping run. This is the ONE seam
-/// between the native runner and the wasm worker: both share
-/// [`run_stepping_loop`] and differ only in these two methods (native =
-/// crossbeam channel + `AtomicBool`; worker = `postMessage` + cancel
-/// registry). Keeping the loop itself platform-agnostic is what stops the
-/// two from drifting — the divergence that let a stale `unwrap_or(0.01)`
-/// OOM-trap the browser while native was already fixed.
+/// Native and browser adapters for cancellation and typed experiment updates.
 pub trait RunSink {
-    /// True if the run was cancelled; the loop emits `Cancelled` and stops.
     fn is_cancelled(&mut self) -> bool;
-    /// Deliver a run update (`Progress` / `Completed` / `Failed` / `Cancelled`).
     fn emit(&mut self, update: RunUpdate);
-    /// Optional wall-clock backstop. When `Some(d)`, a run still stepping
-    /// after `d` of wall time is aborted with a graceful `Failed` instead of
-    /// being allowed to run unbounded. Returns `None` by default (native
-    /// runs are unbounded); the wasm worker overrides it so a pathological
-    /// in-browser run can't hog its (off-thread) worker forever. Note this
-    /// fires only *between* solver steps — it can't interrupt a single
-    /// runaway `step()`; that case is contained by worker-crash recovery on
-    /// the main thread (`worker_transport`).
-    fn wall_budget(&self) -> Option<core::time::Duration> {
-        None
-    }
 }
 
 /// Native [`RunSink`]: crossbeam channel + shared atomic cancel flag.
@@ -1225,332 +1103,6 @@ pub fn stepper_options_from_bounds(
     let spec = solver::resolve(&request).map_err(RunConfigurationError::Solver)?;
     lunco_modelica_solver::solver_backends::rumoca_options(&spec, &params)
         .map_err(RunConfigurationError::Solver)
-}
-
-/// Emit a `Failed` update carrying everything sampled so far as a partial
-/// result. The three ways a run dies mid-loop (wall-clock budget, a solver
-/// step error, an unreadable session state) all report the same shape.
-fn emit_partial_failure(
-    sink: &mut impl RunSink,
-    names: &[String],
-    all_times: &[f64],
-    all_series: &[Vec<f64>],
-    started: web_time::Instant,
-    error: String,
-    notes: String,
-) {
-    let series: BTreeMap<String, Vec<f64>> = names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| (name.clone(), all_series[i].clone()))
-        .collect();
-    sink.emit(RunUpdate::Failed {
-        error,
-        partial: Some(RunResult {
-            times: all_times.to_vec(),
-            series,
-            meta: RunMeta {
-                wall_time_ms: started.elapsed().as_millis() as u64,
-                sample_count: all_times.len(),
-                notes: Some(notes),
-                ..Default::default()
-            },
-        }),
-    });
-}
-
-/// Drive a built [`SimulationSession`](rumoca_sim::SimulationSession) to `bounds.t_end`,
-/// accumulating output samples at the spacing
-/// [`lunco_modelica_core::sim_target::resolve_step_dt`]
-/// derives, streaming throttled `Progress` deltas, and emitting the terminal
-/// `Completed` / `Failed` / `Cancelled` through `sink`.
-///
-/// This is the SINGLE stepping loop shared by every platform — native and the
-/// wasm worker each implement only [`RunSink`], never the loop. `started` is
-/// the run's wall-clock origin (used for `RunMeta::wall_time_ms`).
-pub fn run_stepping_loop(
-    stepper: &mut rumoca_sim::SimulationSession,
-    bounds: &RunBounds,
-    limits: lunco_experiments::RunResultLimits,
-    started: web_time::Instant,
-    sink: &mut impl RunSink,
-) {
-    let t_end = bounds.t_end;
-    let step_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
-        Ok(dt) => dt,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error: error.to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
-
-    bevy::log::info!(
-        "[sim] simulate begin: t={}..{} step_dt={}",
-        bounds.t_start,
-        t_end,
-        step_dt
-    );
-
-    // Variable names from the initial state.
-    let names: Vec<String> = match stepper.state() {
-        Ok(state) => state
-            .values
-            .keys()
-            .filter(|n| *n != "time")
-            .cloned()
-            .collect(),
-        Err(e) => {
-            bevy::log::warn!("[sim] initial state read failed: {e:?}");
-            sink.emit(RunUpdate::Failed {
-                error: format!("simulate failed before the first sample: {e:?}"),
-                partial: None,
-            });
-            return;
-        }
-    };
-
-    // Interactive storage grows per retained sample rather than preallocating
-    // the batch grid; its first sample is after a step, not at t_start.
-    if let Err(error) = limits.validate_dimensions(names.len(), 1) {
-        sink.emit(RunUpdate::Failed {
-            error: error.to_string(),
-            partial: None,
-        });
-        return;
-    }
-    let mut all_times: Vec<f64> = Vec::new();
-    let mut all_series: Vec<Vec<f64>> = Vec::new();
-    if let Err(error) = all_series.try_reserve_exact(names.len()) {
-        sink.emit(RunUpdate::Failed {
-            error: format!("output column allocation failed: {error}"),
-            partial: None,
-        });
-        return;
-    }
-    all_series.resize_with(names.len(), Vec::new);
-    let mut last_emit_idx = 0;
-    let mut last_progress_emit = web_time::Instant::now();
-
-    // Output grid spacing the user asked for (`Interval` / `numberOfIntervals`
-    // via `resolve_step_dt`). RECORDED identically on native and web, so the
-    // emitted sample count honours the request on both — no more wasm-only
-    // fixed ~`SAMPLE_CAP` point count.
-    let output_dt = step_dt;
-    // Solver advance per loop iteration. On wasm we bound it to a memory-safe
-    // cadence (the worker's linear memory climbs between *output* samples and
-    // only stays bounded when the solver is sampled frequently — see obs:
-    // step≈25s completes, 50s OOM-traps), but that cadence drives the SOLVER,
-    // not what we keep: output is decimated to `output_dt` below. Native steps
-    // straight to the next output point. This is the one place the two targets
-    // differ, and it no longer leaks into the user-visible sample count.
-    #[cfg(target_arch = "wasm32")]
-    let internal_dt = {
-        let span = (t_end - bounds.t_start).max(0.0);
-        output_dt
-            .min(25.0)
-            .max(span / lunco_modelica_core::sim_target::SAMPLE_CAP)
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let internal_dt = output_dt;
-    if let Err(error) = lunco_modelica_core::sim_target::resolve_step_dt(
-        bounds.t_start,
-        t_end,
-        Some(internal_dt),
-        None,
-    ) {
-        sink.emit(RunUpdate::Failed {
-            error: format!("internal solver cadence: {error}"),
-            partial: None,
-        });
-        return;
-    }
-    // Next output-grid time we still owe a sample for.
-    let mut next_output = bounds.t_start + output_dt;
-
-    while stepper.time() < t_end {
-        if sink.is_cancelled() {
-            sink.emit(RunUpdate::Cancelled);
-            return;
-        }
-
-        // Wall-clock backstop (worker-only by default). Fail gracefully
-        // rather than letting a too-heavy run monopolise its worker.
-        if let Some(budget) = sink.wall_budget() {
-            if started.elapsed() > budget {
-                bevy::log::warn!(
-                    "[sim] wall-time budget {:.0}s exceeded at t={:.3}/{} — aborting run",
-                    budget.as_secs_f64(),
-                    stepper.time(),
-                    t_end
-                );
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    format!(
-                        "run exceeded the {:.0}s wall-time budget at sim t={:.1}/{:.1} \
-                         — model too heavy for this environment; try a shorter StopTime \
-                         or a looser Tolerance",
-                        budget.as_secs_f64(),
-                        stepper.time(),
-                        t_end
-                    ),
-                    "aborted: wall-time budget exceeded".to_string(),
-                );
-                return;
-            }
-        }
-
-        if let Err(e) = stepper.step(internal_dt) {
-            bevy::log::warn!("[sim] simulate err: {e:?}");
-            emit_partial_failure(
-                sink,
-                &names,
-                &all_times,
-                &all_series,
-                started,
-                format!("simulate failed: {e:?}"),
-                format!("failed during step: {e:?}"),
-            );
-            return;
-        }
-
-        let t = stepper.time();
-        // Record on the requested output grid only. Internal sub-steps (the
-        // wasm memory cadence) between grid points are dropped, so the stored
-        // sample count equals span/output_dt on every target — the user's
-        // `dt`/`numberOfIntervals` is honoured identically native and web.
-        // Always keep the final sample once we reach `t_end`.
-        let at_end = t >= t_end;
-        if !(t + 0.5 * internal_dt >= next_output || at_end) {
-            continue;
-        }
-        let current_values = match stepper.state() {
-            Ok(state) => state.values,
-            Err(e) => {
-                bevy::log::warn!("[sim] state read err: {e:?}");
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    format!("simulate failed: {e:?}"),
-                    format!("failed reading state at t={t}: {e:?}"),
-                );
-                return;
-            }
-        };
-        let samples = match all_times.len().checked_add(1) {
-            Some(samples) => samples,
-            None => {
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    "interactive output sample count overflow".into(),
-                    "output storage exhausted".into(),
-                );
-                return;
-            }
-        };
-        let admission = limits
-            .validate_dimensions(names.len(), samples)
-            .map_err(|error| error.to_string())
-            .and_then(|()| {
-                all_times
-                    .try_reserve(1)
-                    .map_err(|error| format!("output time allocation failed: {error}"))
-            })
-            .and_then(|()| {
-                for series in &mut all_series {
-                    series
-                        .try_reserve(1)
-                        .map_err(|error| format!("output series allocation failed: {error}"))?;
-                }
-                Ok(())
-            });
-        if let Err(error) = admission {
-            emit_partial_failure(
-                sink,
-                &names,
-                &all_times,
-                &all_series,
-                started,
-                error,
-                "output storage exhausted".into(),
-            );
-            return;
-        }
-        all_times.push(t);
-        for (i, name) in names.iter().enumerate() {
-            // CQ-522: a missing variable is an honest gap, not 0.0 — match
-            // the batch path (`f64::NAN`) so plots don't show a fabricated
-            // zero where the stepper had no value.
-            let val = current_values.get(name).copied().unwrap_or(f64::NAN);
-            all_series[i].push(val);
-        }
-        // Advance the grid cursor past the sample we just stored so the next
-        // grid point is in the future (skips any we overshot in one step).
-        while next_output <= t {
-            next_output += output_dt;
-        }
-
-        // Throttle progress to ~10 Hz to avoid flooding the consumer and
-        // incurring excessive serialization overhead.
-        if last_progress_emit.elapsed().as_millis() > 100 {
-            let delta_times = all_times[last_emit_idx..].to_vec();
-            let mut delta_series = BTreeMap::new();
-            for (i, name) in names.iter().enumerate() {
-                delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
-            }
-            sink.emit(RunUpdate::Progress {
-                t_current: t,
-                delta: Some(RunResult {
-                    times: delta_times,
-                    series: delta_series,
-                    meta: RunMeta {
-                        wall_time_ms: started.elapsed().as_millis() as u64,
-                        sample_count: all_times.len() - last_emit_idx,
-                        notes: None,
-                        ..Default::default()
-                    },
-                }),
-            });
-            last_progress_emit = web_time::Instant::now();
-            last_emit_idx = all_times.len();
-        }
-    }
-
-    bevy::log::info!(
-        "[sim] simulate ok: {} samples, {} vars, {:.2}s wall",
-        all_times.len(),
-        names.len(),
-        started.elapsed().as_secs_f64(),
-    );
-
-    let mut final_series = BTreeMap::new();
-    for (i, name) in names.iter().enumerate() {
-        final_series.insert(name.clone(), all_series[i].clone());
-    }
-    let n_samples = all_times.len();
-    sink.emit(RunUpdate::Completed(RunResult {
-        times: all_times,
-        series: final_series,
-        meta: RunMeta {
-            wall_time_ms: started.elapsed().as_millis() as u64,
-            sample_count: n_samples,
-            notes: None,
-            ..Default::default()
-        },
-    }));
 }
 
 /// One detected top-level `parameter` declaration. Used by the
@@ -1772,15 +1324,11 @@ pub fn drain_pending_handles(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => RunUpdate::Failed {
                     error: "experiment worker disconnected without a terminal outcome".to_owned(),
-                    partial: None,
                 },
             };
             match update {
-                RunUpdate::Progress { t_current, delta } => {
+                RunUpdate::Progress { t_current } => {
                     registry.set_status(handle.run_id, RunStatus::Running { t_current });
-                    if let Some(d) = delta {
-                        registry.merge_result(handle.run_id, d);
-                    }
                     ev_progress.write(RunProgress {
                         experiment_id: handle.run_id,
                         origin: handle.origin.clone(),
@@ -1808,14 +1356,10 @@ pub fn drain_pending_handles(
                     {
                         let error = format!("complete result rejected: {error}");
                         bevy::log::warn!("[experiments] run {:?} {error}", handle.run_id);
-                        let partial = registry
-                            .get(handle.run_id)
-                            .is_some_and(|run| run.result.is_some());
                         registry.set_status(
                             handle.run_id,
                             RunStatus::Failed {
                                 error: error.clone(),
-                                partial,
                             },
                         );
                         ev_failed.write(RunFailed {
@@ -1834,17 +1378,12 @@ pub fn drain_pending_handles(
                     });
                     terminal = true;
                 }
-                RunUpdate::Failed { error, partial } => {
+                RunUpdate::Failed { error } => {
                     bevy::log::warn!("[experiments] run {:?} failed: {error}", handle.run_id);
-                    let had_partial = partial.is_some();
-                    if let Some(p) = partial {
-                        registry.set_partial_result(handle.run_id, p);
-                    }
                     registry.set_status(
                         handle.run_id,
                         RunStatus::Failed {
                             error: error.clone(),
-                            partial: had_partial,
                         },
                     );
                     ev_failed.write(RunFailed {
@@ -1937,7 +1476,7 @@ mod tests {
         let rejected_handle = runner.run_fast(&rejected, test_source(&rejected.model_ref.0));
         for handle in [&queued_handle, &rejected_handle] {
             assert!(
-                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error, partial: None }) if error == POISONED_RUNNER_STATE)
+                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error }) if error == POISONED_RUNNER_STATE)
             );
             assert!(matches!(
                 handle.progress_rx.try_recv(),
@@ -2133,10 +1672,7 @@ mod tests {
             .try_recv()
             .expect("terminal admission failure")
         {
-            RunUpdate::Failed {
-                error,
-                partial: None,
-            } => error,
+            RunUpdate::Failed { error } => error,
             update => panic!("unexpected admission update: {update:?}"),
         };
         assert!(error.contains("output grid"));
@@ -2167,7 +1703,7 @@ mod tests {
             &mut sink,
         );
         assert!(
-            matches!(&sink.0[..], [RunUpdate::Failed { error, partial: None }] if error.contains("output grid"))
+            matches!(&sink.0[..], [RunUpdate::Failed { error }] if error.contains("output grid"))
         );
         assert!(matches!(
             stepper_options_from_bounds(&exp.bounds),
@@ -2277,7 +1813,7 @@ mod tests {
         let timeout = Duration::from_secs(5);
         assert!(matches!(
             panic_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
+            Ok(RunUpdate::Failed { error })
                 if error.contains("injected experiment compiler panic")
         ));
         assert!(matches!(
@@ -2290,7 +1826,7 @@ mod tests {
         ));
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
+            Ok(RunUpdate::Failed { error })
                 if error.contains("compiler is poisoned")
         ));
         assert!(matches!(
@@ -2372,7 +1908,7 @@ mod tests {
         assert!(matches!(
             &app.world().resource::<ExperimentRegistry>().get(disconnected.id)
                 .expect("disconnected experiment").status,
-            RunStatus::Failed { error, partial: false }
+            RunStatus::Failed { error }
                 if error.contains("disconnected without a terminal outcome")
         ));
 

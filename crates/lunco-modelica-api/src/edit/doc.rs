@@ -60,10 +60,9 @@ pub fn on_create_scratch_modelica_document(
     ))
 }
 
-/// Close only an untitled Modelica scratch document through the shared
-/// document registry. This is intended for generated, non-tab documents used
-/// by headless tools; saved documents continue through the normal Editor close
-/// flow.
+/// Cancel owned experiments and close an untitled API scratch document through
+/// the shared document lifecycle, including its linked execution entities.
+/// Saved documents continue through the ordinary document close flow.
 #[Command(default)]
 pub struct CloseScratchModelicaDocument {
     pub doc_id: DocumentId,
@@ -72,11 +71,12 @@ pub struct CloseScratchModelicaDocument {
 #[on_command(CloseScratchModelicaDocument)]
 pub fn on_close_scratch_modelica_document(
     trigger: On<CloseScratchModelicaDocument>,
-    mut registry: ResMut<ModelicaDocuments>,
+    registry: Res<ModelicaDocuments>,
     mut scratch_documents: ResMut<ToolScratchDocuments>,
     mut experiments: Option<ResMut<ExperimentRegistry>>,
     sources: Option<Res<ExperimentOrigins>>,
     mut pending: Option<ResMut<PendingHandles>>,
+    mut commands: Commands,
 ) -> Result<Ack, String> {
     let doc = trigger.event().doc_id;
     if !scratch_documents.0.contains(&doc) {
@@ -142,7 +142,7 @@ pub fn on_close_scratch_modelica_document(
             experiments.delete(*id);
         }
     }
-    registry.remove_document(doc);
+    commands.trigger(lunco_doc_bevy::CloseDocument { doc_id: doc });
     scratch_documents.0.remove(&doc);
     Ok(Ack::with_data(
         OpId::new(),
@@ -318,17 +318,7 @@ mod tests {
         let doc = DocumentId(2);
         assert!(live_runs(doc, doc, RunStatus::Done { wall_time_ms: 5 }).is_empty());
         assert!(live_runs(doc, doc, RunStatus::Cancelled).is_empty());
-        assert!(
-            live_runs(
-                doc,
-                doc,
-                RunStatus::Failed {
-                    error: "x".into(),
-                    partial: false
-                }
-            )
-            .is_empty()
-        );
+        assert!(live_runs(doc, doc, RunStatus::Failed { error: "x".into() }).is_empty());
     }
 
     #[test]

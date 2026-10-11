@@ -58,7 +58,9 @@ resolve to a registered capability; unsupported selections are terminal errors.
 
 Live sessions have no stop time. Their finite options span supplies the
 root-scan scale. Batch runs use the admitted `RunBounds` and canonical output
-grid. Fixed RK4 applies exactly the configured step lattice and rejects models
+grid through Rumoca's checked batch solver in both native and browser hosts.
+Live co-simulation uses the separately admitted persistent participant session.
+Fixed RK4 applies exactly the configured step lattice and rejects models
 with unsupported event, discrete, clock, or external-table constructs.
 
 A scoped cancellation guard is observed by the evaluator and ME session loop.
@@ -91,6 +93,7 @@ Parsed AST fields must be serialized completely for positional readers.
 | Checked DAE, initialization, parameter and input binding | Rumoca compiler and `SimOptions` preparation | Supply the complete authored source closure and admitted causal inputs. |
 | FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
 | Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
+| Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
 | Visible values and algebraic refresh policy | `SolveRuntime::visible_values_for_names` and `rumoca-eval-solve::projection_policy` | Fixed prediction integration uses the same input slots, visible-value reader, tolerance, and iteration budget. |
 | Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps and reject unsupported event/discrete/clock/table models. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
@@ -154,9 +157,14 @@ schedules. The production metadata scenario observes decoded authoring facts thr
 `DescribeModel`; controller and scoped-input scenarios exercise live
 initialization/reset through the worker. `modelica_compiled_metadata.rhai`
 checks repeated leaf names, inherited array units, scalar bounds, undocumented
-connector-shaped names, reset, unchanged compiled facts during draft edits, and replacement after
-recompilation. Browser compilation is a separate
+connector-shaped names, reset, unchanged compiled facts during draft edits,
+replacement after recompilation, and live participant retirement on scratch
+closure. Browser compilation is a separate
 check from browser runtime acceptance.
+`modelica_run_metadata.rhai` checks distinct repeated leaf names, inherited
+array units, absent units, query filtering, and immutable facts through draft
+changes and a successor run. The artifact codec check retains those facts
+through bounded persistence admission.
 The production `modelica_observation_failure.usda` gate declares the expected
 terminal fault when a zero-state model's output becomes non-finite. A low-level
 worker test checks unknown and non-finite input packets before integration;
