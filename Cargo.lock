@@ -656,8 +656,6 @@ dependencies = [
 [[package]]
 name = "avian3d"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a30cb730c72527ffaca7f8806881c7e4acc70a4a74c54eb1ffb56c27f64235"
 dependencies = [
  "approx 0.5.1",
  "avian_derive",
@@ -9596,6 +9594,7 @@ dependencies = [
  "lunco-tools",
  "lunco-tools-rhai",
  "lunco-twin-journal",
+ "lunco-usd-avian-contracts",
  "lunco-workspace",
  "rhai",
  "serde",

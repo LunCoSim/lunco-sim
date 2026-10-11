@@ -22,14 +22,16 @@ For a physical landing member, apply `PhysicsDriveAPI:linear` to a
 and explicit force type; `targetPosition` and `targetVelocity` retain the
 standard USD defaults unless the asset needs to state them explicitly. The
 native Avian joint is the sole axial mechanism in the existing substep
-schedule. Do not duplicate standard fields under `lunco:*`. Missing or invalid
-fields fail projection; they are never replaced by a target, force cap, or
-solver-resolution workaround.
+schedule. Do not duplicate standard fields under `lunco:*`. Omitted standard
+fields retain their USD defaults, including zero drive gains and an unbounded
+force cap. Invalid fields fail projection.
 
 Native joint `angle` and `displacement` commands preserve the configured drive
 model and force/torque limit. They enable the motor and change its position
 target with zero target velocity; author drive gains and limits through the
 standard USD drive owner rather than through command-side tuning.
+Revolute angle reads use the native motor's signed `atan2` coordinate in f64.
+Do not derive a second coordinate or narrow physics rotations for telemetry.
 
 Omitted joint limits retain standard unbounded travel. The native port adapter
 maps lower negative infinity and upper positive infinity to absent bounds;
@@ -37,6 +39,8 @@ malformed nonfinite limits remain invalid. Do not add artificial finite travel
 limits to make a valid unbounded joint accept a command.
 
 Startup joint topology is prepared while the shared fixed clock is held. The
+shared USD reader excludes disabled and lint-only joints from both runtime
+projection and admission topology; authored lint facts still include them.
 BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
 projection and before the generic `JointAdmission` owner. This phase must not
@@ -735,10 +739,88 @@ then derive proxies from that settled revision. Put moving members below their
 rigid body and fixed mounting hardware below the parent body; joint-pair
 self-collision suppression must not suppress contact with a separate rover.
 
-The shared simulation installs `lunco-physics::ArticulatedCcdPlugin` with Avian's
-body-only CCD plugin disabled. CCD sweeps the solved COM trajectory and advances
-all dynamic bodies joined through active `PhysicsJointLink`s by the earliest
-contact fraction. It preserves compound/child collider frames, sensors,
-collision filtering, sweep mode, and velocity thresholds. An unsupported sweep
-faults the runtime; do not treat it as a missed contact. CCD does not add motor
-integration, joint tuning, or a render-pose correction.
+The shared simulation installs `lunco-physics::ContinuousCollisionPlugin` with
+Avian's body-only CCD disabled. Prepared native contact points supply continuous
+inequalities and receive the applied normal impulse through their native cache.
+Compound leaves are swept independently, so existing contact by one leaf cannot
+hide a different leaf's crossing. Mesh parts use Parry's BVH and conservative
+whole-arc bounds; touching one triangle cannot hide another's later impact.
+Swept normals consume the same native internal-edge and oriented-backface
+constraints as contact manifolds. Continuous contacts share the native substep's
+position solve and its existing position-only joint schedule. Sweeps use solved
+COM motion and bounds covering the entire rotational arc; corrected trajectories
+are re-evaluated until contacts and joint corrections converge. Motor integration
+runs once per substep. Native contact relaxation and friction follow joint and
+continuous velocity projection. Unsupported kernels or a convergence failure fault and
+block pose writeback in that same tick. See the continuous-contact contract in
+`docs/architecture/terrain-substrate.md`.
+
+Generated primitive proxies carry `LunCoDerivedGeometryAPI` and exactly one
+`lunco:derived:source` targeting their sibling Cube or Cylinder. The shared
+collider reader rejects dimension, axis or transform drift before admission.
+Geometry edits inside a rigid body request physics reprojection. Regenerate from
+a settled composed revision before running physics. The planner preserves
+unrelated applied schemas and rejects a target with its own rigid body.
+
+Verify actual admission through `QueryPhysicsState.collider_source_paths` on
+the intended owner; authored collision geometry alone does not prove admission.
+Use `contact_debug(leg, rover)` for narrow-phase evidence restricted to the rover
+hierarchy, including independently simulated wheels. Sample every physics tick,
+assert penetration against the authored numerical tolerance, require a real
+collision impulse on the exact pair, and require all supporting legs to contact
+terrain after settling.
+
+## Native drive integration and contact ownership
+
+Force and acceleration coefficients retain dimensional native motor models.
+The pinned Avian owner integrates them implicitly using the actual coordinate
+inverse effective inertia and anchor velocities. Omitted stiffness/damping have
+standard USD zero defaults; author gains for a commanded actuator. A zero
+force/torque limit admits no motor impulse. Closed-form motor updates do not
+reuse a previous tick's motor impulse as warm start.
+
+The prismatic `force` port is the signed axial reaction from the completed native
+solver tick on body2 along the slider axis, including the drive and travel stops. It does not infer newtons from
+a body mass, frequency, or an unsolved gain formula. Continuous impact closure
+repeats only hard geometric channels in the affected native joint topology.
+Compliant channels and motors are integrated exclusively by the ordinary pass.
+Prepared native contact anchors and separation offsets bound further penetration
+without using zero-time cast witnesses. Their applied normal correction updates
+the native impulse accumulator used by friction, restitution and warm starting.
+Material inequalities and hard joints close before a full geometry refresh;
+the refreshed sweep must be clear before the tick can commit.
+
+New impact witnesses stay admitted until the next native contact preparation.
+Native closest-contact axes and whole-arc support bounds certify separation
+of finite features without a directional cast. The same bound can certify an initially
+intersecting convex leaf only when its native contact depth matches its support
+depth and that depth cannot increase. An infinite face-plane overlap or another
+compound leaf's contact does not establish initial contact.
+Initial native geometry is cached only within one substep and per composite
+leaf. Every changed endpoint trajectory still recomputes its whole-arc bound.
+For a particular compound member, consume `parts[].source1`/`source2` and
+`normal_impulse`; these resolve native contact part identities through admitted
+collider provenance. The containing body's impulse alone does not identify the
+member that actually struck the rover.
+Read `total_normal_impulse + continuous_normal_impulse` for actual normal response:
+the latter records applied new-impact corrections before native preparation has
+a discrete manifold. Both facts use exact collider pair filtering.
+Native velocity projection, sweeps and convergence share the native `atan2` SO(3)
+logarithm without a small-angle dead zone or norm-drift floor. Completed
+joint force averages use the actual native substep and physics-step clocks.
+`clock_snapshot().physics_substep_dt_s` exposes that native duration for analytic
+scene gates; do not infer it from the substep count after clock rounding.
+
+Joint damping uses effective inverse inertia, conserves momentum, preserves
+kinematic velocities, and runs in the same stable joint order. Joint endpoints
+must resolve to distinct bodies: the shared reader and generic admission owner
+reject aliases to the same body before installing a native constraint; the
+solver also guards this invariant before acquiring mutable endpoint references.
+
+Sleeping joint islands retain their last completed native reaction. Disabling
+a joint or endpoint clears that reaction; waking resumes native writeback.
+Use the production `prismatic_spring` gate for both boundaries.
+
+USD drives retain their standard unlimited force default when `maxForce` is
+omitted. Explicit positive infinity also denotes no limit; negative or NaN
+limits and non-finite targets/gains fail at the drive owner.

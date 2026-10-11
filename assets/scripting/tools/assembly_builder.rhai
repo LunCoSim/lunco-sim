@@ -1050,14 +1050,23 @@ fn collision_proxy_plan(doc, edit_target, source_path, proxy_path) {
         cube_shape_plan(edit_target,parent,name,a.size,scale,true)
     };
     if !shape.ok {return shape;}
-    let existing=composed_query(doc,#{path:proxy_path,children:false});
+    let existing=composed_query(doc,#{path:proxy_path,children:false,schemas:true});
     if query_ok(existing) && existing.type_name != source.type_name {
         return plan_error(proxy_path + ": proxy type differs from its geometry source");
     }
+    if query_ok(existing) && existing.api_schemas.contains("PhysicsRigidBodyAPI") {
+        return plan_error(proxy_path+": a generated collider cannot replace a rigid body");
+    }
+    let schemas=if query_ok(existing) {existing.api_schemas} else {[]};
+    for schema in ["PhysicsCollisionAPI","LunCoDerivedGeometryAPI"] {
+        if !schemas.contains(schema) {schemas.push(schema);}
+    }
     let ops=[];
     for op in shape.ops {
+        if op.contains("SetApiSchemas") {continue;}
         if !query_ok(existing) || !op.contains("AddPrim") {ops.push(op);}
     }
+    ops.push(#{SetApiSchemas:#{edit_target:edit_target,path:proxy_path,schemas:schemas}});
     if source.type_name == "Cube" && order.len()>0 {
         let pose=place_plan(edit_target,proxy_path,translation,rotation,scale);
         if !pose.ok {return pose;}
@@ -1071,7 +1080,7 @@ fn collision_proxy_plan(doc, edit_target, source_path, proxy_path) {
             name:item.name,type_name:"token",value:"\""+item.value+"\""}});
     }
     ops.push(#{SetRelationship:#{edit_target:edit_target,path:proxy_path,
-        name:"lunco:collider:geometrySource",targets:[source_path]}});
+        name:"lunco:derived:source",targets:[source_path]}});
     #{ok:true,path:proxy_path,source_path:source_path,ops:ops}
 }
 

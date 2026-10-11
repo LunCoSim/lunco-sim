@@ -364,6 +364,8 @@ pub trait LayerAttrSource {
 /// are `None` headless (server builds colliders only; visuals are client-side).
 pub struct LayerScatterCx<'a, 'w, 's> {
     pub terrain: Entity,
+    /// Terrain and current layer identity used for stable generated-body admission.
+    pub physics_identity: String,
     /// Authoritative Graphics quality for generated visual geometry.
     pub quality: lunco_render::RenderQualityProfile,
     /// The composed surface (rocks resolve ground height off this).
@@ -627,7 +629,12 @@ pub(crate) fn scatter_terrain_layers(
     mut pending_rock_admission: ResMut<PendingTerrainRockAdmission>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     q: Query<
-        (Entity, &DemHeightField, &TerrainLayerStack),
+        (
+            Entity,
+            &DemHeightField,
+            &TerrainLayerStack,
+            &lunco_physics::PhysicsOrderKey,
+        ),
         Or<(
             (Without<TerrainLayersApplied>, Without<TerrainLayersPending>),
             With<TerrainScatterRefresh>,
@@ -649,7 +656,7 @@ pub(crate) fn scatter_terrain_layers(
         }
     };
     let mut meshes = meshes;
-    for (entity, dem, stack) in &q {
+    for (entity, dem, stack, order_key) in &q {
         // A scatter refresh deliberately keeps the height products alive. Generated
         // Procedural rocks are recycled in-place; authored scene children remain
         // untouched because they do not carry the runtime scatter marker. Authored
@@ -678,6 +685,7 @@ pub(crate) fn scatter_terrain_layers(
         // Scatter layers spawn their entities after the terrain oracle is ready.
         let mut cx = LayerScatterCx {
             terrain: entity,
+            physics_identity: order_key.0.clone(),
             quality,
             oracle: &dem.0,
             commands: &mut commands,
@@ -689,6 +697,7 @@ pub(crate) fn scatter_terrain_layers(
             pending_rock_admission: &mut pending_rock_admission,
         };
         for entry in &stack.0 {
+            cx.physics_identity = format!("{}|{}", order_key.0, entry.id.as_str());
             entry.layer.scatter(&mut cx);
         }
         let fingerprint = stack.scatter_fingerprint();

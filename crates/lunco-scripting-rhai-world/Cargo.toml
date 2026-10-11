@@ -29,6 +29,7 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-physics = { path = "../lunco-physics" }
+lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-scripting-bridge-spatial = { path = "../lunco-scripting-bridge-spatial" }

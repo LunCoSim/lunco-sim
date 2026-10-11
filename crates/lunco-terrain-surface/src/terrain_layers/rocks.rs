@@ -43,6 +43,7 @@ struct ProceduralRockBundle {
     visibility: Visibility,
     rigid_body: RigidBody,
     collider: Collider,
+    order_key: lunco_physics::PhysicsOrderKey,
 }
 
 #[derive(Bundle)]
@@ -586,7 +587,7 @@ impl TerrainLayer for RockScatterLayer {
         let mut spawned = 0usize;
         let has_visuals = bucket_handles.is_some();
         let mut body_admissions = Vec::with_capacity(placements.len());
-        for p in placements.iter() {
+        for (index, p) in placements.iter().enumerate() {
             let y =
                 lunco_terrain_core::HeightSource::height_at(oracle, p.pos.x as f64, p.pos.y as f64)
                     as f32;
@@ -625,6 +626,10 @@ impl TerrainLayer for RockScatterLayer {
                 },
                 rigid_body: RigidBody::Static,
                 collider: Collider::sphere((r_vis * 0.6) as f64),
+                order_key: lunco_physics::PhysicsOrderKey(format!(
+                    "{}|rock/{index}",
+                    cx.physics_identity
+                )),
             };
             let visuals = bucket_handles.as_ref().map(|handles| {
                 ProceduralRockVisuals {
@@ -750,6 +755,7 @@ impl TerrainLayer for RockInstanceLayer {
                 Visibility::Inherited,
                 RigidBody::Static,
                 Collider::sphere((r * 0.6) as f64),
+                lunco_physics::PhysicsOrderKey(format!("{}|rock/0", cx.physics_identity)),
             ));
             if let Some(mesh) = mesh {
                 rock.try_insert((Mesh3d(mesh), look));

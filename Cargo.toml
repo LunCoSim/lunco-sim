@@ -247,6 +247,8 @@ default-members = [
 resolver = "2"
 
 [patch.crates-io]
+# Native dimensional motor integration; see third_party/avian3d/LUNCOSIM-PROVENANCE.md.
+avian3d = { path = "third_party/avian3d" }
 # scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
 # parol_runtime 4.2 which resolve correctly without overrides.
 

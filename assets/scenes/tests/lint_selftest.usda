@@ -24,9 +24,9 @@
 #                DELIBERATE. Every other rig in this folder has been converted to
 #                an Xform frame + shape child; this one keeps the old shape because
 #                it is the fixture that proves the rule fires. Do not "fix" it.
-#   Leg/Strut_Spring  a force drive with no authored generalized inertia → runtime-derived inertia
-#                Avian computes the coordinate inertia from the attached body geometry; this is
-#                valid USD authoring and follows the same implicit SpringDamper path.
+#   Leg/Strut_Spring  valid dimensional force drive; native coordinate inertia
+#                is computed from both attached bodies and their anchor geometry.
+#   Leg/Strut_NegativeForceLimit and Strut_InvalidTarget → joint-drive-invalid-parameters
 #   MissingEpoch a celestial-time opt-in with no explicit epoch → epoch-api-missing-time
 #   Leg/Strut_NegativeStiffness  a negative spring coefficient → joint-drive-negative-stiffness
 #                Authored mass/inertia cannot make a negative stiffness physically valid.
@@ -246,7 +246,7 @@ def Xform "LintSelftest" (
     # deliberate. `/LintSelftest/NotABody` above stays a finding because it hangs
     # under no body at all, which is the real form of that mistake.
     def Xform "MountHost" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
     )
     {
         double3 xformOp:translate = (8.5, 0.25, 0)
@@ -368,10 +368,8 @@ def Xform "LintSelftest" (
             prepend apiSchemas = ["PhysicsDriveAPI:linear"]
         )
         {
-            # This force drive is intentionally incomplete so the linter can
-            # prove its derived-inertia policy. It is not a live mechanism in
-            # this fixture: lintOnly keeps malformed authoring out of Avian
-            # while the linter still reads it through the raw composed stage.
+            # Valid omitted-mass force drive. Native collision geometry owns
+            # the attached body inertia; lintOnly isolates the authored lint fixture.
             bool lunco:lintOnly = true
             rel physics:body0 = </LintSelftest/Leg>
             rel physics:body1 = </LintSelftest/Leg/Strut>
@@ -390,6 +388,32 @@ def Xform "LintSelftest" (
             uniform token physics:axis = "Y"
             uniform token drive:linear:physics:type = "force"
             float drive:linear:physics:stiffness = -1.0
+        }
+
+        def PhysicsPrismaticJoint "Strut_NegativeForceLimit" (
+            prepend apiSchemas = "PhysicsDriveAPI:linear"
+        )
+        {
+            custom bool lunco:lintOnly = true
+            custom rel physics:body0 = </LintSelftest/Vehicle>
+            custom rel physics:body1 = </LintSelftest/Vehicle/Wheel>
+            uniform token physics:axis = "Y"
+            token drive:linear:physics:type = "force"
+            float drive:linear:physics:stiffness = 0.0
+            float drive:linear:physics:maxForce = -1.0
+        }
+
+        def PhysicsPrismaticJoint "Strut_InvalidTarget" (
+            prepend apiSchemas = "PhysicsDriveAPI:linear"
+        )
+        {
+            custom bool lunco:lintOnly = true
+            custom rel physics:body0 = </LintSelftest/Vehicle>
+            custom rel physics:body1 = </LintSelftest/Vehicle/Wheel>
+            uniform token physics:axis = "Y"
+            token drive:linear:physics:type = "force"
+            float drive:linear:physics:stiffness = 0.0
+            float drive:linear:physics:targetPosition = inf
         }
 
         def PhysicsSphericalJoint "Foot_Gimbal"

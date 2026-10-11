@@ -32,11 +32,11 @@
 //! Holds are keyed by a `&'static str` reason, so several subsystems can hold
 //! concurrently and each releases only its own; physics runs when the set is empty.
 
-pub use avian3d::prelude::Physics;
 use avian3d::prelude::{
     AngularVelocity, ContactGraph, CustomPositionIntegration, LinearVelocity, Position, RigidBody,
     Rotation, Sensor,
 };
+pub use avian3d::prelude::{Physics, Substeps};
 pub use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
@@ -45,7 +45,9 @@ use std::time::Duration;
 
 pub mod assembly;
 pub mod ccd;
-pub use ccd::ArticulatedCcdPlugin;
+pub use ccd::{
+    ContinuousCollisionDiagnostics, ContinuousCollisionPlugin, ContinuousCollisionSettings,
+};
 pub mod avian_backend;
 pub mod escape;
 pub mod force_ports;
@@ -305,14 +307,19 @@ pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDamp
 /// reports the effective manifold coefficient and the impulses Avian retained
 /// for the next warm start; it does not infer a force or mutate the solver.
 /// `pair_count` includes overlapping AABBs, while `touching_pair_count` and the
-/// impulse fields include only actual touching contacts.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// native impulse fields include only actual touching contacts. Continuous
+/// response also includes impacts within the completed step before discrete preparation.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContactDebugSnapshot {
+    /// Actual participating native compound parts, including continuous impacts.
+    pub parts: Vec<ContactPartDebugSnapshot>,
     pub pair_count: u32,
     pub touching_pair_count: u32,
     pub manifold_count: u32,
     pub max_friction: f64,
     pub total_normal_impulse: f64,
+    /// Continuous impact response before native discrete contact preparation.
+    pub continuous_normal_impulse: f64,
     pub normal_impulse_vector: [f64; 3],
     pub max_normal_speed: f64,
     pub max_tangent_speed: f64,
@@ -322,18 +329,72 @@ pub struct ContactDebugSnapshot {
     pub contact_point: [f64; 3],
 }
 
+/// Native composite identities and applied response for one contact manifold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContactPartDebugSnapshot {
+    pub collider1: Entity,
+    pub collider2: Entity,
+    pub part1: usize,
+    pub part2: usize,
+    pub normal_impulse: f64,
+    pub continuous: bool,
+}
+
 pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDebugSnapshot> {
+    contact_debug_snapshot_filtered(world, entity, None)
+}
+
+/// Narrow-phase evidence restricted to the other body's hierarchy, including
+/// independently simulated wheels. Attachment joints do not widen this scope.
+pub fn contact_debug_between(
+    world: &World,
+    entity: Entity,
+    other: Entity,
+) -> Option<ContactDebugSnapshot> {
+    contact_debug_snapshot_filtered(world, entity, Some(other))
+}
+fn contact_debug_snapshot_filtered(
+    world: &World,
+    entity: Entity,
+    other: Option<Entity>,
+) -> Option<ContactDebugSnapshot> {
     use avian3d::prelude::{AngularVelocity, ContactGraph, LinearVelocity};
+    let belongs = |mut child: Entity, root: Entity| {
+        loop {
+            if child == root {
+                return true;
+            }
+            let Some(parent) = world.get::<ChildOf>(child) else {
+                return false;
+            };
+            child = parent.parent();
+        }
+    };
 
     let graph = world.get_resource::<ContactGraph>()?;
     let mut snapshot = ContactDebugSnapshot::default();
     for pair in graph.contact_pairs_with(entity) {
+        if other.is_some_and(|root| {
+            ![pair.collider1, pair.collider2]
+                .into_iter()
+                .any(|candidate| belongs(candidate, root))
+        }) {
+            continue;
+        }
         snapshot.pair_count += 1;
         if !pair.is_touching() {
             continue;
         }
         snapshot.touching_pair_count += 1;
         for manifold in &pair.manifolds {
+            snapshot.parts.push(ContactPartDebugSnapshot {
+                collider1: pair.collider1,
+                collider2: pair.collider2,
+                part1: manifold.subshape1 as usize,
+                part2: manifold.subshape2 as usize,
+                normal_impulse: manifold.total_normal_impulse(),
+                continuous: false,
+            });
             snapshot.manifold_count += 1;
             snapshot.max_friction = snapshot.max_friction.max(manifold.friction);
             snapshot.contact_normal = [manifold.normal.x, manifold.normal.y, manifold.normal.z];
@@ -367,6 +428,29 @@ pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDe
             }
         }
     }
+    if let Some(impulses) = ccd::continuous_contact_impulses(world) {
+        for applied in impulses {
+            if applied.collider1 != entity && applied.collider2 != entity {
+                continue;
+            }
+            if other.is_some_and(|root| {
+                ![applied.collider1, applied.collider2]
+                    .into_iter()
+                    .any(|candidate| belongs(candidate, root))
+            }) {
+                continue;
+            }
+            snapshot.continuous_normal_impulse += applied.impulse;
+            snapshot.parts.push(ContactPartDebugSnapshot {
+                collider1: applied.collider1,
+                collider2: applied.collider2,
+                part1: applied.part1,
+                part2: applied.part2,
+                normal_impulse: applied.impulse,
+                continuous: true,
+            });
+        }
+    }
     Some(snapshot)
 }
 
@@ -384,70 +468,30 @@ pub struct PrismaticDriveParameters {
 /// Why a dimensional force drive cannot be lowered to Avian's implicit model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ForceDriveMotorError {
-    /// A positive spring coefficient needs a positive generalized inertia to
-    /// preserve the authored force law in `SpringDamper` form.
-    MissingGeneralizedInertia,
-    /// A drive coefficient is not a finite, non-negative physical quantity.
-    InvalidCoefficients,
+    /// Targets/gains are invalid, or the force limit is negative or NaN.
+    InvalidParameters,
 }
 
-/// Convert a dimensional force spring into Avian's stable spring-damper model.
-///
-/// USD's `physics:type = "force"` coefficients remain the public physical
-/// contract. Avian receives the equivalent implicit representation when a
-/// generalized inertia is available, preserving the authored force law while
-/// avoiding an explicit stiff-force update at the fixed-step boundary. For a
-/// linear drive this is a mass; for an angular drive it is a moment of inertia
-/// about the driven coordinate.
+/// Preserve dimensional coefficients in the native motor owner.
+/// Avian integrates them implicitly using its live coordinate effective inertia.
 pub fn force_drive_motor_model(
     stiffness: f64,
     damping: f64,
-    generalized_inertia: f64,
 ) -> Result<avian3d::prelude::MotorModel, ForceDriveMotorError> {
     if !stiffness.is_finite() || !damping.is_finite() || stiffness < 0.0 || damping < 0.0 {
-        return Err(ForceDriveMotorError::InvalidCoefficients);
+        return Err(ForceDriveMotorError::InvalidParameters);
     }
-    if stiffness > 0.0 {
-        if !generalized_inertia.is_finite() || generalized_inertia <= 0.0 {
-            return Err(ForceDriveMotorError::MissingGeneralizedInertia);
-        }
-        let omega = (stiffness / generalized_inertia).sqrt();
-        Ok(avian3d::prelude::MotorModel::SpringDamper {
-            frequency: omega / std::f64::consts::TAU,
-            damping_ratio: damping / (2.0 * (stiffness * generalized_inertia).sqrt()),
-        })
-    } else {
-        // Avian has no implicit zero-stiffness damping-only motor. This is the
-        // exact USD force law for a pure damper, not a spring-drive fallback.
-        Ok(avian3d::prelude::MotorModel::ForceBased { stiffness, damping })
-    }
+    Ok(avian3d::prelude::MotorModel::ForceBased { stiffness, damping })
 }
 
-/// Recover force-equivalent coefficients from an Avian motor model.
-///
-/// Acceleration-based motors intentionally return `None`: their coefficients
-/// are accelerations and the effective mass depends on the live joint geometry,
-/// so presenting them as newtons would be dimensionally false.
-pub fn motor_model_force_coefficients(
-    model: avian3d::prelude::MotorModel,
-    generalized_inertia: f64,
-) -> Option<(f64, f64)> {
+/// Read dimensional force coefficients. Frequency and acceleration models do
+/// not carry newton coefficients and must not be converted using a body's mass.
+pub fn motor_model_force_coefficients(model: avian3d::prelude::MotorModel) -> Option<(f64, f64)> {
     match model {
         avian3d::prelude::MotorModel::ForceBased { stiffness, damping } => {
             Some((stiffness, damping))
         }
-        avian3d::prelude::MotorModel::SpringDamper {
-            frequency,
-            damping_ratio,
-        } if generalized_inertia > 0.0 => {
-            let omega = std::f64::consts::TAU * frequency;
-            Some((
-                generalized_inertia * omega * omega,
-                generalized_inertia * 2.0 * damping_ratio * omega,
-            ))
-        }
-        avian3d::prelude::MotorModel::AccelerationBased { .. }
-        | avian3d::prelude::MotorModel::SpringDamper { .. } => None,
+        _ => None,
     }
 }
 
@@ -455,8 +499,7 @@ pub fn motor_model_force_coefficients(
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrismaticDriveSnapshot {
     pub enabled: bool,
-    /// `"force"` for a force-equivalent drive, `"acceleration"` when the
-    /// authored motor coefficients are acceleration-based rather than N/m.
+    /// `"force"`; this readout exists only for dimensional force drives.
     pub model: &'static str,
     pub target_position: f64,
     pub target_velocity: f64,
@@ -476,32 +519,20 @@ pub fn set_prismatic_drive(
     entity: Entity,
     drive: PrismaticDriveParameters,
 ) -> Result<(), String> {
-    use avian3d::prelude::{ComputedMass, Mass, PrismaticJoint};
+    use avian3d::prelude::PrismaticJoint;
 
     if !drive.stiffness.is_finite()
         || !drive.damping.is_finite()
-        || !drive.max_force.is_finite()
+        || drive.max_force.is_nan()
         || drive.stiffness < 0.0
         || drive.damping < 0.0
-        || drive.max_force <= 0.0
+        || drive.max_force < 0.0
     {
         return Err(format!(
-            "invalid prismatic drive: stiffness/damping must be non-negative and max_force positive, got {drive:?}"
+            "invalid prismatic drive: stiffness/damping must be non-negative and max_force non-negative, got {drive:?}"
         ));
     }
-    let joint = world
-        .get::<PrismaticJoint>(entity)
-        .ok_or_else(|| format!("entity {entity:?} has no PrismaticJoint"))?;
-    let body_mass = world
-        .get::<Mass>(joint.body2)
-        .map(|mass| mass.0 as f64)
-        .or_else(|| {
-            world
-                .get::<ComputedMass>(joint.body2)
-                .map(|mass| mass.value())
-        })
-        .ok_or_else(|| format!("prismatic joint {entity:?} has no driven-body mass"))?;
-    let model = force_drive_motor_model(drive.stiffness, drive.damping, body_mass)
+    let model = force_drive_motor_model(drive.stiffness, drive.damping)
         .map_err(|error| format!("cannot lower prismatic force drive: {error:?}"))?;
     let Some(mut joint) = world.get_mut::<PrismaticJoint>(entity) else {
         return Err(format!("entity {entity:?} has no PrismaticJoint"));
@@ -512,29 +543,16 @@ pub fn set_prismatic_drive(
     Ok(())
 }
 
-/// Read a prismatic drive as dimensional stiffness/damping, regardless of
-/// whether Avian stores its equivalent implicit spring-damper representation.
+/// Read a force-based prismatic drive's native dimensional coefficients.
+/// Frequency and acceleration models do not expose force coefficients.
 pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<PrismaticDriveSnapshot> {
-    use avian3d::prelude::{ComputedMass, Mass, MotorModel, PrismaticJoint};
+    use avian3d::prelude::PrismaticJoint;
 
     let joint = world.get::<PrismaticJoint>(entity)?;
-    let mass = world
-        .get::<Mass>(joint.body2)
-        .map(|mass| mass.0 as f64)
-        .or_else(|| {
-            world
-                .get::<ComputedMass>(joint.body2)
-                .map(|mass| mass.value())
-        })
-        .unwrap_or(0.0);
-    let model = match joint.motor.motor_model {
-        MotorModel::AccelerationBased { .. } => "acceleration",
-        _ => "force",
-    };
-    let (stiffness, damping) = motor_model_force_coefficients(joint.motor.motor_model, mass)?;
+    let (stiffness, damping) = motor_model_force_coefficients(joint.motor.motor_model)?;
     Some(PrismaticDriveSnapshot {
         enabled: joint.motor.enabled,
-        model,
+        model: "force",
         target_position: joint.motor.target_position,
         target_velocity: joint.motor.target_velocity,
         stiffness,
@@ -1349,25 +1367,20 @@ mod tests {
     }
 
     #[test]
-    fn force_drive_conversion_preserves_the_authored_units() {
-        let motor = force_drive_motor_model(4000.0, 1600.0, 40.0).expect("valid force drive");
-        match motor {
-            avian3d::prelude::MotorModel::SpringDamper {
-                frequency,
-                damping_ratio,
-            } => {
-                assert!((frequency - 10.0 / std::f64::consts::TAU).abs() < 1e-12);
-                assert!((damping_ratio - 2.0).abs() < 1e-12);
-            }
-            other => panic!("expected implicit force-equivalent drive, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn force_drive_with_stiffness_requires_generalized_inertia() {
+    fn force_drive_coefficients_remain_dimensional() {
+        let motor = force_drive_motor_model(4000.0, 1600.0).expect("valid force drive");
         assert_eq!(
-            force_drive_motor_model(4000.0, 1600.0, 0.0),
-            Err(ForceDriveMotorError::MissingGeneralizedInertia)
+            motor_model_force_coefficients(motor),
+            Some((4000.0, 1600.0))
+        );
+        assert!(force_drive_motor_model(f64::NAN, 1.0).is_err());
+        assert!(force_drive_motor_model(1.0, -1.0).is_err());
+        assert_eq!(
+            motor_model_force_coefficients(avian3d::prelude::MotorModel::SpringDamper {
+                frequency: 3.0,
+                damping_ratio: 2.0
+            }),
+            None
         );
     }
 

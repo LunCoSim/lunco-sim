@@ -2220,74 +2220,23 @@ fn build_world_engine_base(
         bridge_core::with_world(|world| {
             let entity = bridge_core::resolve_entity(world, id as u64)?;
             let snapshot = lunco_physics::contact_debug_snapshot(world, entity)?;
-            let mut map = Map::new();
-            map.insert(
-                "pair_count".into(),
-                Dynamic::from_int(snapshot.pair_count as i64),
-            );
-            map.insert(
-                "touching_pair_count".into(),
-                Dynamic::from_int(snapshot.touching_pair_count as i64),
-            );
-            map.insert(
-                "manifold_count".into(),
-                Dynamic::from_int(snapshot.manifold_count as i64),
-            );
-            map.insert(
-                "max_friction".into(),
-                Dynamic::from_float(snapshot.max_friction),
-            );
-            map.insert(
-                "total_normal_impulse".into(),
-                Dynamic::from_float(snapshot.total_normal_impulse),
-            );
-            map.insert(
-                "normal_impulse_vector".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .normal_impulse_vector
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            map.insert(
-                "max_normal_speed".into(),
-                Dynamic::from_float(snapshot.max_normal_speed),
-            );
-            map.insert(
-                "max_tangent_speed".into(),
-                Dynamic::from_float(snapshot.max_tangent_speed),
-            );
-            map.insert(
-                "max_penetration".into(),
-                Dynamic::from_float(snapshot.max_penetration),
-            );
-            map.insert(
-                "total_warm_start_tangent_impulse".into(),
-                Dynamic::from_float(snapshot.total_warm_start_tangent_impulse),
-            );
-            map.insert(
-                "contact_normal".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .contact_normal
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            map.insert(
-                "contact_point".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .contact_point
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            Some(Dynamic::from_map(map))
+            Some(contact_debug_value(world, snapshot))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+
+    engine.register_fn("contact_debug", |id: i64, other: i64| -> Dynamic {
+        if id < 0 || other < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let other = bridge_core::resolve_entity(world, other as u64)?;
+            Some(contact_debug_value(
+                world,
+                lunco_physics::contact_debug_between(world, entity, other)?,
+            ))
         })
         .flatten()
         .unwrap_or(Dynamic::UNIT)
@@ -7493,4 +7442,103 @@ mod tests {
             .expect("wide unsigned value");
         assert_eq!(wide.clone().try_cast::<u64>(), Some(u64::MAX));
     }
+}
+
+fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnapshot) -> Dynamic {
+    let source = |collider: Entity, part: usize| {
+        lunco_usd_avian_contracts::collider_part_source(world, collider, part)
+            .map_or(Dynamic::UNIT, |path| Dynamic::from(path.to_owned()))
+    };
+    let mut map = Map::new();
+    map.insert(
+        "parts".into(),
+        Dynamic::from_array(
+            snapshot
+                .parts
+                .into_iter()
+                .map(|part| {
+                    let mut item = Map::new();
+                    item.insert("source1".into(), source(part.collider1, part.part1));
+                    item.insert("source2".into(), source(part.collider2, part.part2));
+                    item.insert(
+                        "normal_impulse".into(),
+                        Dynamic::from_float(part.normal_impulse),
+                    );
+                    item.insert("continuous".into(), Dynamic::from_bool(part.continuous));
+                    Dynamic::from_map(item)
+                })
+                .collect(),
+        ),
+    );
+    map.insert(
+        "pair_count".into(),
+        Dynamic::from_int(snapshot.pair_count as i64),
+    );
+    map.insert(
+        "touching_pair_count".into(),
+        Dynamic::from_int(snapshot.touching_pair_count as i64),
+    );
+    map.insert(
+        "manifold_count".into(),
+        Dynamic::from_int(snapshot.manifold_count as i64),
+    );
+    map.insert(
+        "max_friction".into(),
+        Dynamic::from_float(snapshot.max_friction),
+    );
+    map.insert(
+        "total_normal_impulse".into(),
+        Dynamic::from_float(snapshot.total_normal_impulse),
+    );
+    map.insert(
+        "continuous_normal_impulse".into(),
+        Dynamic::from_float(snapshot.continuous_normal_impulse),
+    );
+    map.insert(
+        "normal_impulse_vector".into(),
+        Dynamic::from_array(
+            snapshot
+                .normal_impulse_vector
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    map.insert(
+        "max_normal_speed".into(),
+        Dynamic::from_float(snapshot.max_normal_speed),
+    );
+    map.insert(
+        "max_tangent_speed".into(),
+        Dynamic::from_float(snapshot.max_tangent_speed),
+    );
+    map.insert(
+        "max_penetration".into(),
+        Dynamic::from_float(snapshot.max_penetration),
+    );
+    map.insert(
+        "total_warm_start_tangent_impulse".into(),
+        Dynamic::from_float(snapshot.total_warm_start_tangent_impulse),
+    );
+    map.insert(
+        "contact_normal".into(),
+        Dynamic::from_array(
+            snapshot
+                .contact_normal
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    map.insert(
+        "contact_point".into(),
+        Dynamic::from_array(
+            snapshot
+                .contact_point
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(map)
 }

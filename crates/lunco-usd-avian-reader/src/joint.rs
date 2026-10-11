@@ -181,6 +181,16 @@ pub fn read_joint_spec_for_lint(
     read_joint_spec_with_policy(reader, path, false)
 }
 
+/// Whether a standard joint is executable rather than disabled or lint-only.
+/// Projection and topology admission consume the same participation contract.
+pub fn is_runtime_joint_enabled(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+) -> bool {
+    reader.boolean(path, "lunco:lintOnly") != Some(true)
+        && reader.boolean(path, ptok::A_JOINT_ENABLED) != Some(false)
+}
+
 fn read_joint_spec_with_policy(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
@@ -190,7 +200,7 @@ fn read_joint_spec_with_policy(
     // `lintOnly` is a narrow authoring contract for deliberately malformed
     // fixtures. It is checked only by the runtime reader; the linter calls the
     // companion entry point above so it still sees and evaluates the fixture.
-    if skip_lint_only && view.boolean(path, "lunco:lintOnly") == Some(true) {
+    if skip_lint_only && !is_runtime_joint_enabled(reader, path) {
         return None;
     }
     // `physics:jointEnabled` (schema default true) is the spec's own way to say a
@@ -301,6 +311,9 @@ fn read_joint_spec_with_policy(
             (None, Some(t1)) => (String::new(), resolve(t1)?),
             (None, None) => return None,
         };
+        if b0 == b1 {
+            return None;
+        }
         let lp0_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_0)
             .ok()?
             .map(|value| conv.point_d(value));
@@ -334,81 +347,7 @@ fn read_joint_spec_with_policy(
             local_rot1,
         })
     };
-    let read_generalized_inertia = |body_path: &str,
-                                    axis_in_body: DVec3,
-                                    joint_anchor_in_body: DVec3|
-     -> Result<Option<f64>, ()> {
-        if body_path.is_empty() {
-            // A world anchor has infinite generalized inertia; its inverse
-            // contribution is zero. The other body supplies the coordinate's
-            // finite inertia.
-            return Ok(None);
-        }
-        let body = SdfPath::new(body_path).map_err(|_| ())?;
-        let Some(diagonal) = read_authored_vec3(view, &body, ptok::A_DIAGONAL_INERTIA)? else {
-            return Ok(None);
-        };
-        if diagonal == DVec3::ZERO {
-            // MassAPI's zero tensor is its unauthored sentinel.
-            return Ok(None);
-        }
-        if !diagonal.is_finite() || diagonal.x <= 0.0 || diagonal.y <= 0.0 || diagonal.z <= 0.0 {
-            return Err(());
-        }
-        let principal_axes = read_authored_quat(view, &body, ptok::A_PRINCIPAL_AXES)?
-            .map(|q| conv.rotation_d(q))
-            .unwrap_or(DQuat::IDENTITY);
-        let mpu = conv.length(1.0);
-        let principal = conv.dir_d(diagonal).abs() * (mpu * mpu);
-        let axis = axis_in_body.normalize_or_zero();
-        if !axis.is_finite() || axis.length_squared() <= f64::EPSILON {
-            return Err(());
-        }
-        let principal_axis = principal_axes.inverse() * axis;
-        let rotational = principal_axis.x * principal_axis.x * principal.x
-            + principal_axis.y * principal_axis.y * principal.y
-            + principal_axis.z * principal_axis.z * principal.z;
-        if !rotational.is_finite() || rotational <= f64::EPSILON {
-            return Err(());
-        }
-        // USD's diagonal inertia is about the body's center of mass. A joint
-        // hinge is generally offset from that point, so the scalar inertia of
-        // the generalized coordinate also contains m * r_perp^2. This is the
-        // standard rigid-body parallel-axis term and is essential for steering
-        // knuckles mounted below a rover chassis.
-        let mass = match read_authored_real(view, &body, ptok::A_MASS)? {
-            // A missing/zero mass is valid USD authoring: Avian derives it from
-            // the collider tree. Do not treat that as a zero-mass body while
-            // lowering the drive; leave the coordinate unresolved so the live
-            // Avian properties can supply the correct value.
-            None | Some(0.0) => return Ok(None),
-            Some(value) if value.is_finite() && value > 0.0 => value,
-            Some(_) => return Err(()),
-        };
-        let center_of_mass = read_authored_vec3(view, &body, ptok::A_CENTER_OF_MASS)?
-            .map(|value| conv.point_d(value))
-            .unwrap_or(DVec3::ZERO);
-        let offset = joint_anchor_in_body - center_of_mass;
-        if !center_of_mass.is_finite() || !offset.is_finite() {
-            return Err(());
-        }
-        let perpendicular_offset_squared =
-            (offset.length_squared() - offset.dot(axis) * offset.dot(axis)).max(0.0);
-        let scalar = rotational + mass * perpendicular_offset_squared;
-        if !scalar.is_finite() || scalar <= f64::EPSILON {
-            return Err(());
-        }
-        Ok(Some(scalar))
-    };
-    let read_drive = |ns: &str,
-                      body0: &str,
-                      body1: &str,
-                      axis: DVec3,
-                      local_pos0: DVec3,
-                      local_pos1: DVec3,
-                      local_rot0: DQuat,
-                      local_rot1: DQuat|
-     -> Result<Option<JointDrive>, ()> {
+    let read_drive = |ns: &str| -> Result<Option<JointDrive>, ()> {
         let api_name = format!("PhysicsDriveAPI:{ns}");
         if !view.has_api_schema(path, &api_name) {
             return Ok(None);
@@ -461,41 +400,6 @@ fn read_joint_spec_with_policy(
             None if !view.has_authored_attribute(path, &type_name) => None,
             None => return Err(()),
         };
-        // The force-spring → SpringDamper conversion uses the generalized inertia
-        // of the coordinate. When USD authors complete mass properties, the fact
-        // is recorded here. When it omits them (the schema-valid computed path),
-        // the runtime resolver obtains the effective mass/moment from Avian after
-        // collider and density processing.
-        let generalized_inertia = if ns == ptok::DOF_LINEAR {
-            // A world endpoint has infinite mass. A non-world endpoint with no
-            // authored mass is still valid USD and will be resolved from
-            // Avian's computed body mass during joint construction.
-            if body1.is_empty() {
-                None
-            } else {
-                let b1 = SdfPath::new(body1).map_err(|_| ())?;
-                match read_authored_real(view, &b1, ptok::A_MASS)? {
-                    None | Some(0.0) => None,
-                    Some(value) if value.is_finite() && value > 0.0 => Some(value),
-                    Some(_) => return Err(()),
-                }
-            }
-        } else {
-            let i0 = read_generalized_inertia(body0, local_rot0 * axis, local_pos0)?;
-            let i1 = read_generalized_inertia(body1, local_rot1 * axis, local_pos1)?;
-            // `None` means either a world endpoint or an endpoint whose
-            // properties are computed by Avian. Only combine authored values
-            // when every non-world endpoint supplied a complete tensor.
-            let authored0 = body0.is_empty() || i0.is_some();
-            let authored1 = body1.is_empty() || i1.is_some();
-            if !authored0 || !authored1 {
-                None
-            } else {
-                let inverse =
-                    i0.map(|i| 1.0 / i).unwrap_or(0.0) + i1.map(|i| 1.0 / i).unwrap_or(0.0);
-                (inverse > f64::EPSILON && inverse.is_finite()).then_some(1.0 / inverse)
-            }
-        };
         Ok(
             (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
                 JointDrive {
@@ -505,7 +409,6 @@ fn read_joint_spec_with_policy(
                     stiffness: k,
                     damping: c,
                     drive_type: ty,
-                    generalized_inertia,
                 },
             ),
         )
@@ -550,17 +453,7 @@ fn read_joint_spec_with_policy(
             let axis = read_axis()?;
             let lo = read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
             let hi = read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
-            let drive = read_drive(
-                ptok::DOF_ANGULAR,
-                &b.body0,
-                &b.body1,
-                axis,
-                b.local_pos0,
-                b.local_pos1,
-                b.local_rot0,
-                b.local_rot1,
-            )
-            .ok()?;
+            let drive = read_drive(ptok::DOF_ANGULAR).ok()?;
             pending_from(b, axis, lo, hi, ptok::T_PHYSICS_REVOLUTE_JOINT, None, drive)
         }
         ptok::T_PHYSICS_PRISMATIC_JOINT => {
@@ -569,17 +462,7 @@ fn read_joint_spec_with_policy(
             // Linear limits are authored in scene units, like the anchors.
             let lo = conv.length(read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?);
             let hi = conv.length(read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?);
-            let drive = read_drive(
-                ptok::DOF_LINEAR,
-                &b.body0,
-                &b.body1,
-                axis,
-                b.local_pos0,
-                b.local_pos1,
-                b.local_rot0,
-                b.local_rot1,
-            )
-            .ok()?;
+            let drive = read_drive(ptok::DOF_LINEAR).ok()?;
             pending_from(
                 b,
                 axis,

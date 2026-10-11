@@ -260,8 +260,9 @@ enum UsdOp {
     SetRotate       { edit_target, path, value },
     SetAttribute    { edit_target, path, name, type_name, value },
     RemoveAttribute { edit_target, path, name },
-    RestoreAttribute{ edit_target, path, name, snapshot_usda, sibling_order },
+    RestoreProperty{ edit_target, path, name, snapshot_usda, sibling_order },
     SetRelationship { edit_target, path, name, targets },
+    RemoveRelationship { edit_target, path, name },
     SetConnection   { edit_target, path, name, type_name, sources }, // dataflow edges (W1)
     SetTimeSample   { edit_target, path, name, time, value },
     RemoveTimeSample{ edit_target, path, name, time },
@@ -1247,3 +1248,24 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md) — time spine + USD animation sampler/transport
 - [`00-overview.md`](00-overview.md) — three-tier architecture
 - `specs/030-usd-scene-integration` — detailed spec
+
+Primitive collision derivation uses `LunCoDerivedGeometryAPI` with the registered
+`lunco:derived:source` relationship. Cube and Cylinder proxies must be siblings
+with identical positive double dimensions, axes and active transform stacks.
+`lunco-usd-avian-reader` rejects stale derivations at the same cook boundary used
+by runtime and authoring queries. The runtime publishes `UsdColliderSources` with
+the admitted collider; `QueryPhysicsState.collider_source_paths` reports those
+facts. Native contact manifolds preserve composite part identities; the same
+admitted provenance maps `contact_debug(...).parts` to actual `source1` and
+`source2` paths with each manifold's applied normal impulse. Internal mesh
+triangles share their owning non-compound source. Composed source geometry is not substituted silently. NURBS mesh derivation
+uses the same API with its source cook fingerprint and refinement settings.
+
+`RemoveRelationship` removes only the selected authored layer's opinion, restores
+it exactly through the local `RestoreProperty` inverse, and reprojects its live consumers.
+Attribute and relationship removal share one property-subtree snapshot owner;
+undo retains target list operations, property order and unrelated subsequent edits.
+For attribute and relationship removal, the canonical root patches the resolved
+property from the authoritative document because it combines document layers.
+A removed runtime override reveals the base opinion without resetting unrelated
+simulated objects; native reference/sublayer composition remains intact.

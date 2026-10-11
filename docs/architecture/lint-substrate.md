@@ -86,7 +86,7 @@ diagnostic: it does not prevent the scene from loading.
 ```
 facts.bodies[]  #{ path, type, kinematic, simulated, collider, subtree_collider,
                    host_body, jointed }
-facts.joints[]  #{ path, type, bodies[], missing[] }
+facts.joints[]  #{ path, type, bodies[], resolved_bodies[], missing[] }
 facts.vehicle_parts[] #{ path, type, vehicle, body, purpose, collision_api,
                          collision_state, wheel_projector, physical_wheel,
                          rigid_body_api, collision_attribute_authored,
@@ -94,9 +94,8 @@ facts.vehicle_parts[] #{ path, type, vehicle, body, purpose, collision_api,
                          contract }
 facts.stage     #{ meters_per_unit_authored, fixed_hz, physics_substeps,
                    substep_dt }
-facts.drives[]  #{ path, joint_type, body0, body1, realization,
-                   stiffness, damping, max_force, generalized_inertia,
-                   frequency, damping_ratio }
+facts.drives[]  #{ path, joint_type, body0, body1, valid, realization,
+                   stiffness, damping, max_force }
 facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
                        target_velocity, stiffness, damping, max_force }
 facts.prims[]   #{ path, type, parent, schemas[], attributes[],
@@ -123,22 +122,16 @@ must read it rather than hardcoding a substep count. The engine-wide contract is
 Avian's eight substeps per 60 Hz fixed tick. Prismatic drives use Avian's native
 constraint solve; there is no target-specific second joint solve in the
 production path.
-`drives` is semantic output
-from the same typed USD→Avian reader used by runtime projection, so the policy
-does not duplicate USD unit conversion or motor-model selection. A
-`spring_damper` realization is Avian's implicit, unconditionally stable model;
-stiffness-bearing `force_based` and all `acceleration_based` spring realizations
-are conditional models and are rejected by the shipped policy. The USD→Avian
-reader lowers a force-based drive to `spring_damper` when authored mass or
-angular inertia facts certify the generalized inertia, or when Avian can derive
-those properties from the attached collider tree and density. The latter is
-reported as `realization = derived` in facts and is still the implicit
-`SpringDamper` runtime path. A positive pure ForceBased damper remains the exact
-USD force law because Avian has no implicit damping-only motor model. `gear_drives` is semantic output from the
-`lunco-usd-sim-authoring` reader for `PhysxPhysicsGearJoint`; its force and acceleration
-realizations are implicit per substep, so positive coefficients have no guessed
-asset-specific stiffness cap. Invalid values are retained and rejected by
-policy before a run.
+`drives` contains composed dimensional coefficients from the same typed USD
+reader used by runtime projection. Native force and acceleration laws are
+integrated implicitly at the owning Avian substep, so authored/computed mass
+omission is not a stability lint error. The reader's `valid` fact uses the same
+parameter validation as runtime admission. Rhai reports negative gains,
+non-finite targets or gains, and negative or NaN force limits. Omitted limits
+and explicit positive infinity retain the USD unlimited-force default.
+`gear_drives` similarly comes from the canonical
+`lunco-usd-sim-authoring` reader; its owner integrates valid coefficients
+implicitly, without guessed asset-specific gain caps.
 `prims` is the escape hatch that makes the rhai half real: a rule about a schema
 nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
@@ -366,6 +359,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 |---|---|---|
 | `nested-body-no-joint` | error | a body inside a body that no joint names — it will fall out of the vehicle. **The motor bug.** Exempt: disabled bodies, and `PhysxVehicleWheelAPI` wheels, which the drivetrain realizes (jointed in `physical`, raycast-driven in `raycast`) |
 | `joint-target-not-a-body` | error | `physics:body0/1` names a prim that resolves to **no body at all** — the joint is dropped at load and the mechanism is silently rigid. Naming a non-body that sits *under* a body is fine and is how every mounted mechanism attaches (below) |
+| `joint-same-body` | error | Both endpoints resolve to one rigid body, including aliases under that body; native admission is refused |
 | `collision-enabled-without-api` | error | ordinary non-terrain, non-wheel geometry authors `physics:collisionEnabled=true` without `PhysicsCollisionAPI`, so the USD-to-Avian reader ignores the intended solid shape |
 | `raycast-wheel-collision-contract` | error | a raycast `PhysxVehicleWheelAPI` prim also authors a rigid body, collision API, or collision setting even though this realization is query-only |
 | `physical-wheel-collision-contract` | error | a standard revolute joint selects a `PhysxVehicleWheelAPI` prim as a physical wheel, but its authored rigid-body/collision contract is missing, disabled, malformed, or unsupported |
@@ -373,9 +367,9 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `connector-requires-network-root` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |
-| `conditionally-stable-joint-drive` | error | a USD spring drive resolves to Avian `AccelerationBased` at the authoritative fixed step; use the implicit `SpringDamper` realization instead |
-| `joint-drive-negative-stiffness` | error | a drive has a negative stiffness coefficient that injects energy and cannot be converted to the implicit `SpringDamper` realization |
-| `joint-drive-negative-damping` | error | a drive has negative damping (or an implicit drive would receive a negative damping ratio) and injects energy |
+| `joint-drive-invalid-parameters` | error | drive targets or gains are non-finite, or the force limit is negative or NaN |
+| `joint-drive-negative-stiffness` | error | a drive has negative stiffness and injects energy |
+| `joint-drive-negative-damping` | error | a drive has negative damping and injects energy |
 | `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |
 | `invalid-network-synthesizer` | error | the composed `CollectionAPI:components` members have incompatible domain roles and runtime cannot select an owner |
 | `port-owner-collision` | error, live `RunLint` | one composed entity exposes the same public port name through multiple runtime owners; routing follows registry precedence, so the owners need distinct names |

@@ -15,11 +15,6 @@ use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use crate::read_authored_bool_or_default;
 
-/// Checks if a USD prim has a specific API schema applied.
-/// Collects collider shapes from all descendant prims of a compound body root,
-/// reading directly from the USD stage.
-///
-/// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
 #[derive(Debug)]
 pub enum ColliderProjectionError {
     Transform(TransformReadError),
@@ -330,11 +325,20 @@ fn collider_geometry_parts(
     })
 }
 
+/// Geometry and provenance admitted together by the compound collider reader.
+pub struct AuthoredCompoundCollider {
+    pub shapes: Vec<(Position, Rotation, Collider)>,
+    pub source_paths: Vec<String>,
+}
+
+/// Collect descendant collision shapes and their admitted source paths from
+/// the composed stage, stopping at independently owned rigid bodies.
 pub fn collect_child_colliders_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     parent_path: &SdfPath,
-) -> Result<Vec<(Position, Rotation, Collider)>, ColliderProjectionError> {
+) -> Result<AuthoredCompoundCollider, ColliderProjectionError> {
     let mut shapes = Vec::new();
+    let mut source_paths = Vec::new();
     let convention = lunco_usd_bevy_stage::stage_convention(reader).map_err(|_| {
         ColliderProjectionError::Transform(TransformReadError {
             prim: parent_path.as_str().to_owned(),
@@ -514,9 +518,13 @@ pub fn collect_child_colliders_from_usd(
             });
         }
         shapes.push((pos, rot, collider));
+        source_paths.push(child_path.to_string());
     }
 
-    Ok(shapes)
+    Ok(AuthoredCompoundCollider {
+        shapes,
+        source_paths,
+    })
 }
 
 /// Walks every descendant of a compound body root, composing each prim's local
@@ -627,6 +635,12 @@ pub fn build_collider_from_usd_at_scale(
     let Some(ty) = reader.type_name(sdf_path) else {
         return Ok(ColliderBuildOutcome::UnsupportedGeometry { type_name: None });
     };
+
+    if reader.has_api_schema(sdf_path, "LunCoDerivedGeometryAPI")
+        && matches!(ty.as_str(), "Cube" | "Cylinder")
+    {
+        validate_derived_primitive_proxy(reader, sdf_path, &ty)?;
+    }
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
     // SAME `points`/`faceVertexIndices` `lunco-usd-bevy` renders (one geometry
@@ -795,9 +809,94 @@ fn dynamic_rigid_body_ancestor(
     Ok(None)
 }
 
+/// Exact primitive derivation is checked in native USD precision before the
+/// transform reader reaches the rendering adapter.
+fn validate_derived_primitive_proxy(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    proxy: &SdfPath,
+    ty: &str,
+) -> Result<(), ColliderProjectionError> {
+    let fail = |detail: String| ColliderProjectionError::Backend {
+        prim: proxy.to_string(),
+        detail,
+    };
+    let sources = reader.rel_targets(proxy, "lunco:derived:source");
+    let [source] = sources.as_slice() else {
+        return Err(fail(
+            "primitive derivation requires exactly one lunco:derived:source".into(),
+        ));
+    };
+    if source == proxy
+        || source.parent() != proxy.parent()
+        || reader.type_name(source).as_deref() != Some(ty)
+        || reader.has_api_schema(proxy, ptok::API_RIGID_BODY)
+    {
+        return Err(fail(
+            "derived primitive must be a matching non-body sibling of its source".into(),
+        ));
+    }
+    let dimensions = if ty == "Cube" {
+        &["size"][..]
+    } else {
+        &["radius", "height"][..]
+    };
+    for name in dimensions {
+        match (
+            reader.attr_value(source, name),
+            reader.attr_value(proxy, name),
+        ) {
+            (Some(SdfValue::Double(a)), Some(SdfValue::Double(b)))
+                if a.is_finite() && a > 0.0 && a == b => {}
+            _ => {
+                return Err(fail(format!(
+                    "derived primitive `{proxy}` is stale or malformed: {source}.{name} must match its positive double dimension; regenerate the proxy"
+                )));
+            }
+        }
+    }
+    if ty == "Cylinder"
+        && read_primitive_axis(reader, source, ty) != read_primitive_axis(reader, proxy, ty)
+    {
+        return Err(fail("derived cylinder axis differs from its source".into()));
+    }
+    // An omitted xformOpOrder is the standard USD identity stack.
+    let read_order = |path: &SdfPath| match reader.attr_value(path, "xformOpOrder") {
+        None => Ok(Vec::new()),
+        Some(SdfValue::TokenVec(names)) => Ok(names),
+        _ => Err(fail(format!("{path}: malformed xformOpOrder"))),
+    };
+    let order = read_order(source)?;
+    if order != read_order(proxy)? {
+        return Err(fail(
+            "derived primitive transform order differs from its source".into(),
+        ));
+    }
+    for name in ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"] {
+        if order.iter().any(|token| token.as_str() == name)
+            && reader.vec3_f64(source, name) != reader.vec3_f64(proxy, name)
+        {
+            return Err(fail(format!(
+                "derived primitive `{proxy}` is stale: {name} differs from {source}; regenerate the proxy"
+            )));
+        }
+    }
+    // A matching matrix stack is insufficient: the primitive generator owns
+    // only this explicit operation set, and cannot preserve inverse/reset ops.
+    let expected = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        .into_iter()
+        .filter(|name| order.iter().any(|n| n == name))
+        .collect::<Vec<_>>();
+    let allowed = order.iter().map(|name| name.as_str()).eq(expected);
+    if !allowed {
+        return Err(fail(
+            "derived primitive has an unsupported transform stack".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Re-cook a derived NURBS mesh from its composed source and compare both the
-/// stored fingerprint and authored proxy geometry. A proxy that was edited or
-/// whose source changed is rejected before physics can consume stale data.
+/// stored fingerprint and authored proxy geometry before physics admission.
 fn validate_derived_nurbs_proxy(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     proxy: &SdfPath,

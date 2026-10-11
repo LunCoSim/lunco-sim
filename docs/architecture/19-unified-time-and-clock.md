@@ -282,8 +282,8 @@ the observed Bevy Compute pool width. `clock_snapshot()` exposes
 absent profile or unavailable pool raises a runtime fault. A one-thread Compute
 profile controls one source of scheduling variation. It is not a verdict that
 physics or the whole simulation is deterministic, and it does not constrain IO
-or AsyncCompute. The snapshot also reports fixed and physics clock deltas and
-elapsed time, pause state, and the active `PhysicsHolds` reasons so an authored
+or AsyncCompute. The snapshot also reports fixed and physics clock deltas, the native
+`physics_substep_dt_s` (unit when unavailable), and elapsed time, pause state, and the active `PhysicsHolds` reasons so an authored
 test can check whether physics advanced at the expected fixed boundary. A
 scenario's `FixedUpdate` callback runs before that tick's Avian
 `FixedPostUpdate` step, so `physics_elapsed_s` must equal

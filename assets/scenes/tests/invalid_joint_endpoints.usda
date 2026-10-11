@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1000.0
+    }
+    def Cube "Host" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 1.0
+        def Scope "Alias"
+        {
+        }
+    }
+    def Cube "Bob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 1.0
+    }
+    def PhysicsFixedJoint "Joint"
+    {
+        custom rel physics:body0 = </World/Host>
+        custom rel physics:body1 = </World/Bob>
+        bool physics:collisionEnabled = false
+    }
+    def Scope "Observer" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/invalid_joint_endpoints.rhai@
+    }
+    def PhysicsFixedJoint "LintOnlySelf"
+    {
+        custom bool lunco:lintOnly = true
+        custom rel physics:body0 = </World/Host>
+        custom rel physics:body1 = </World/Host/Alias>
+    }
+}

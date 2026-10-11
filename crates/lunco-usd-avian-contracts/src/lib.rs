@@ -7,10 +7,28 @@
 //! readiness, and co-simulation packages observe the same components without
 //! depending on the full USD-to-Avian runtime.
 
-use avian3d::prelude::{JointDamping, MotorModel};
+use avian3d::prelude::{Collider, JointDamping, MotorModel};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use openusd::schemas::physics::CollisionApprox;
+
+/// Source prims actually cooked into this body's current collider. This is
+/// emitted with the collider admission, not reconstructed from authored USD.
+#[derive(Component, Clone, Debug)]
+pub struct UsdColliderSources(pub Vec<String>);
+
+/// Resolve a native contact part through the provenance admitted with its
+/// collider. A non-compound collider's internal mesh triangles share one source.
+pub fn collider_part_source(world: &World, collider: Entity, part: usize) -> Option<&str> {
+    let sources = world.get::<UsdColliderSources>(collider)?;
+    let shape = world.get::<Collider>(collider)?;
+    let index = if shape.shape_scaled().as_compound().is_some() {
+        part
+    } else {
+        0
+    };
+    sources.0.get(index).map(String::as_str)
+}
 
 /// Mesh approximation modes that the Avian adapter can cook from standard
 /// `UsdPhysicsMeshCollisionAPI` input.
@@ -241,20 +259,25 @@ pub struct JointDrive {
     pub damping: Option<f64>,
     /// Authored USD drive type.
     pub drive_type: Option<openusd::schemas::physics::DriveType>,
-    /// Authored generalized inertia, when complete mass properties certify it.
-    pub generalized_inertia: Option<f64>,
 }
 
 impl JointDrive {
     /// Convert the normalized USD drive law into Avian's stable motor model.
     pub fn motor_model(&self) -> Result<MotorModel, lunco_physics::ForceDriveMotorError> {
-        if self.stiffness.is_none() && self.damping.is_none() {
-            return Ok(DEFAULT_JOINT_DRIVE_MOTOR_MODEL);
+        if [self.target_position, self.target_velocity]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+            || self
+                .max_force
+                .is_some_and(|value| value.is_nan() || value < 0.0)
+        {
+            return Err(lunco_physics::ForceDriveMotorError::InvalidParameters);
         }
         let stiffness = self.stiffness.unwrap_or(0.0);
         let damping = self.damping.unwrap_or(0.0);
-        if stiffness == 0.0 && damping == 0.0 {
-            return Ok(DEFAULT_JOINT_DRIVE_MOTOR_MODEL);
+        if !stiffness.is_finite() || !damping.is_finite() || stiffness < 0.0 || damping < 0.0 {
+            return Err(lunco_physics::ForceDriveMotorError::InvalidParameters);
         }
         match self
             .drive_type
@@ -263,11 +286,9 @@ impl JointDrive {
             openusd::schemas::physics::DriveType::Acceleration => {
                 Ok(MotorModel::AccelerationBased { stiffness, damping })
             }
-            openusd::schemas::physics::DriveType::Force => lunco_physics::force_drive_motor_model(
-                stiffness,
-                damping,
-                self.generalized_inertia.unwrap_or(0.0),
-            ),
+            openusd::schemas::physics::DriveType::Force => {
+                lunco_physics::force_drive_motor_model(stiffness, damping)
+            }
         }
     }
 
@@ -279,12 +300,6 @@ impl JointDrive {
             || self.damping.is_some()
     }
 }
-
-/// Stable default for an authored drive with no explicit spring coefficients.
-const DEFAULT_JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
-    frequency: 3.0,
-    damping_ratio: 2.0,
-};
 
 /// Marker for a body held Kinematic until its USD joint constraints are ready.
 #[derive(Component, Reflect, Default)]

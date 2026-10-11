@@ -21,7 +21,7 @@ pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
 /// The port name a prismatic joint exposes for its slide rate (m/s).
 pub const JOINT_VELOCITY_PORT: &str = "velocity";
 
-/// The port name a prismatic joint exposes for its axial reaction force (N).
+/// The port name a prismatic joint exposes for its completed net force on body2 along the slider axis (N).
 pub const JOINT_FORCE_PORT: &str = "force";
 
 /// A solved scalar torque applied across a revolute joint.

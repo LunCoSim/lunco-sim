@@ -51,9 +51,11 @@ fn simulation_dependencies(me, ctx) {
            find_path("/PrismaticSpringTest/StrutExt"),
            find_path("/PrismaticSpringTest/StrutComp"),
            find_path("/PrismaticSpringTest/StrutLegLike"),
+           find_path("/PrismaticSpringTest/BobExt"),
+           find_path("/PrismaticSpringTest/BobComp"),
        ],
-       entity_writes: [],
-       query_reads: [], required_inputs: [] }
+       entity_writes: [find_path("/PrismaticSpringTest/StrutExt")],
+       query_reads: ["QueryPhysicsState"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -62,6 +64,7 @@ fn on_start(me, ctx) {
     this.sample_s = 0.5;
     this.next_sample = 0.0;
     this.phase = "settle";
+    this.previous_velocity=();this.sleep_forces=();this.maximum_force_error=0.0;
 
     this.ext = find_path("/PrismaticSpringTest/StrutExt");
     this.comp = find_path("/PrismaticSpringTest/StrutComp");
@@ -85,6 +88,12 @@ fn on_start(me, ctx) {
 
 fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
+    if this.phase == "disabled" {
+        this.phase="done";
+        this.final_sample.disabled_force=get(this.ext,"force");
+        verdict(this.final_sample);
+        return;
+    }
 
     if this.ext == () || this.ext < 0 || this.comp == () || this.comp < 0 {
         fail_fast("strut prims not found (ext=" + this.ext + " comp=" + this.comp +
@@ -102,6 +111,21 @@ fn on_tick(me, ctx) {
     let pl = world_pos(this.bob_leglike);
     if this.leglike_x0 == () && pl != () { this.leglike_x0 = pl[0]; }
 
+    let state_e=query("QueryPhysicsState",#{id:this.bob_ext});
+    let state_c=query("QueryPhysicsState",#{id:this.bob_comp});
+    let velocity=[get(this.ext,"velocity"),get(this.comp,"velocity")];
+    if !state_e.sleeping && !state_c.sleeping {
+        if this.previous_velocity!=() {
+            let h=clock_snapshot().physics_dt_s;
+            this.maximum_force_error=max(this.maximum_force_error,(fe-(500.0*(velocity[0]-this.previous_velocity[0])/h-EXPECTED_FORCE)).abs());
+            this.maximum_force_error=max(this.maximum_force_error,(fc-(500.0*(velocity[1]-this.previous_velocity[1])/h+EXPECTED_FORCE)).abs());
+        }
+    } else if state_e.sleeping && state_c.sleeping && this.sleep_forces==() {
+        // The sleep-transition tick includes the final completed physics solve.
+        this.sleep_forces=[fe,fc];
+    }
+    this.previous_velocity=velocity;
+
     if this.t >= this.next_sample {
         print("[strut] t=" + r2(this.t) + "s  ext=" + r4(xe) + "m/" + r2(fe) +
               "N   comp=" + r4(xc) + "m/" + r2(fc) + "N   leglike=" + r4(xl) + "m");
@@ -109,8 +133,7 @@ fn on_tick(me, ctx) {
     }
 
     if this.t >= this.settle_s {
-        this.phase = "done";
-        verdict(#{
+        this.final_sample=#{
             ext_stroke: xe, ext_force: fe,
             comp_stroke: xc, comp_force: fc,
             ext_pos: world_pos(this.bob_ext),
@@ -119,7 +142,11 @@ fn on_tick(me, ctx) {
             leglike_dx: if pl == () || this.leglike_x0 == () { () } else { pl[0] - this.leglike_x0 },
             scene_root_id: this.scene_root_id,
             scene_root_path: this.scene_root_path,
-        });
+            sleeping:state_e.sleeping && state_c.sleeping,
+            sleep_forces:this.sleep_forces,maximum_force_error:this.maximum_force_error,
+        };
+        if !add(this.ext,"JointDisabled") {throw("joint-disable stimulus was rejected");}
+        this.phase="disabled";
     }
 }
 
@@ -148,6 +175,10 @@ fn verdict(s) {
     f.push(t_present(s.ext_force, "extension strut force port"));
     f.push(t_present(s.comp_stroke, "compression strut displacement port"));
     f.push(t_present(s.comp_force, "compression strut force port"));
+    f.push(t_true(s.maximum_force_error<0.1,"completed native spring forces obey momentum balance under gravity"));
+    f.push(t_true(s.sleeping==true,"loaded spring assemblies actually reached native sleep"));
+    f.push(t_present(s.disabled_force,"disabled extension force port"));
+    if s.disabled_force!=() {f.push(t_true(s.disabled_force.abs()<1e-9,"disabled joints clear their completed reaction"));}
 
     if s.ext_stroke != () {
         f.push(t_true(s.ext_stroke.abs() > 0.001,
@@ -169,10 +200,10 @@ fn verdict(s) {
         f.push(t_rel(s.comp_stroke, -EXPECTED_TRAVEL, 5.0, "compression travel (m)"));
     }
     if s.ext_force != () {
-        f.push(t_rel(s.ext_force.abs(), EXPECTED_FORCE, 5.0, "extension reaction (N)"));
+        f.push(t_true(s.sleep_forces!=() && s.ext_force.abs()>1.0 && (s.ext_force-s.sleep_forces[0]).abs()<1e-9,"sleep retains the completed extension reaction"));
     }
     if s.comp_force != () {
-        f.push(t_rel(s.comp_force.abs(), EXPECTED_FORCE, 5.0, "compression reaction (N)"));
+        f.push(t_true(s.sleep_forces!=() && s.comp_force.abs()>1.0 && (s.comp_force-s.sleep_forces[1]).abs()<1e-9,"sleep retains the completed compression reaction"));
     }
 
     f.push(t_bounded(s.ext_pos, 100.0, "extension bob"));

@@ -552,6 +552,9 @@ pub struct SpawnDemTerrain {
 #[on_command(SpawnDemTerrain)]
 fn on_spawn_dem_terrain(
     trigger: On<SpawnDemTerrain>,
+    mut admitted: Local<u64>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut holds: ResMut<lunco_physics::PhysicsHolds>,
     grids: Query<Entity, With<WorldGrid>>,
     mut commands: Commands,
 ) {
@@ -614,8 +617,20 @@ fn on_spawn_dem_terrain(
         .vertex_shader
         .as_deref()
         .map(lunco_assets_core::engine_asset_uri);
+    let Some(ordinal) = admitted.checked_add(1) else {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        faults.raise(
+            "terrain-command-identity-exhausted",
+            None,
+            ev.uri.clone(),
+            "terrain command admission exhausted its stable identity sequence",
+        );
+        return;
+    };
+    *admitted = ordinal;
     let mut e = commands.spawn((
         DemTerrainSurface,
+        lunco_physics::PhysicsOrderKey(format!("terrain-command:{ordinal:020}:{}", ev.uri)),
         Name::new("DemTerrain"),
         material,
         DemTerrainRequest {

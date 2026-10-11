@@ -240,14 +240,20 @@ fn on_tick(me, ctx) {
         f.push(t_true(negative_stiffness[0].severity == "error",
             "joint-drive-negative-stiffness is severity " + negative_stiffness[0].severity +
             ", expected error"));
-        f.push(t_true(negative_stiffness[0].message.contains("cannot be converted"),
-            "joint-drive-negative-stiffness did not explain why adding mass cannot fix it"));
+        f.push(t_true(negative_stiffness[0].message.contains("injects energy"),
+            "joint-drive-negative-stiffness did not explain its invalid physical law"));
     }
 
-    let derived_drive = by_code(findings, "conditionally-stable-joint-drive");
-    f.push(t_true(!mentions(derived_drive, "/LintSelftest/Leg/Strut_Spring"),
-        "a force drive with Avian-derived inertia was reported as conditionally stable; " +
-        "the composed USD path lowers it to the implicit SpringDamper realization"));
+    let invalid_parameters = by_code(findings, "joint-drive-invalid-parameters");
+    f.push(t_true(invalid_parameters.len() == 2,
+        "joint-drive-invalid-parameters must identify exactly the negative force limit and infinite target"));
+    for subject in ["/LintSelftest/Leg/Strut_NegativeForceLimit", "/LintSelftest/Leg/Strut_InvalidTarget"] {
+        let found = false;
+        for finding in invalid_parameters {
+            if finding.subject == subject && finding.severity == "error" { found = true; }
+        }
+        f.push(t_true(found, "invalid drive parameters must fail visibly: " + subject));
+    }
 
     let invalid_gear = by_code(findings, "invalid-gear-drive");
     f.push(t_true(invalid_gear.len() == 1,

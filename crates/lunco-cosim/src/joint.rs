@@ -15,7 +15,7 @@
 //!
 //! A revolute joint additionally exposes `angular_velocity` (rad/s); a prismatic
 //! joint exposes `velocity` (m/s) and `force` (N), the rate it is sliding at and
-//! the axial reaction reported by the authored drive. A physical part reads the
+//! the axial reaction from the completed native joint solve. A physical part reads the
 //! latter to know its load — a landing-leg strut's load is that number, and a
 //! shader takes its glow straight off it.
 //!
@@ -48,15 +48,12 @@
 //! is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::prelude::{
-    AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, Position, PrismaticJoint,
+    AngularVelocity, ComputedCenterOfMass, JointForces, LinearVelocity, Position, PrismaticJoint,
     RevoluteJoint, RigidBody, Rotation, Sleeping,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use std::{
-    collections::HashSet,
-    hash::{Hash, Hasher},
-};
+use std::hash::{Hash, Hasher};
 
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_physics::joint::{
@@ -151,21 +148,15 @@ fn check_revolute_joint_structure(
 }
 
 /// Measured angle (`Out`): the twist between the two joint frames about the
-/// authored hinge axis. Applying both local bases is essential for mirrored or
-/// otherwise offset joints; comparing body rotations alone reports a false
-/// angle whenever the second joint frame has a static rotation. Reads avian's
+/// authored hinge axis. The native f64 coordinate owner applies both local
+/// bases and shares its measurement with the motor. Reads Avian's
 /// authoritative [`Rotation`] (populated by `Writeback`), so during the next
 /// tick's propagation it reflects the physics step that just completed.
 fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<RevoluteJoint>(entity)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    let basis1 = j.local_basis1()?;
-    let basis2 = j.local_basis2()?;
-    let joint_frame1 = dquat_to_quat(r1.0 * basis1);
-    let joint_frame2 = dquat_to_quat(r2.0 * basis2);
-    let axis = j.hinge_axis.as_vec3();
-    Some(twist_angle(joint_frame1, joint_frame2, axis) as f64)
+    j.angle_and_axis(r1.0, r2.0).map(|(angle, _)| angle)
 }
 
 /// Measured revolute-coordinate rate (rad/s), projected onto the joint's
@@ -288,10 +279,13 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_prismatic_joint_topology(app: &mut App) {
+    // The measured force port consumes native force writeback, which is opt-in
+    // in Avian. Admit its producer with the joint before publishing this port.
+    app.register_required_components::<PrismaticJoint, JointForces>();
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PrismaticJoint>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<PrismaticJoint>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Mass>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Mass>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<JointForces>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<JointForces>)
         .add_systems(PostUpdate, check_prismatic_joint_structure);
 }
 
@@ -304,64 +298,32 @@ fn prismatic_joint_topology_key(world: &World, entity: Entity) -> u64 {
         && world.get::<Rotation>(joint.body1).is_some()
         && world.get::<Rotation>(joint.body2).is_some();
     let velocity = world.get::<Rotation>(joint.body1).is_some();
-    let force = joint.motor.enabled
-        && displacement
-        && world.get::<Mass>(joint.body2).is_some_and(|mass| {
-            lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
-                .is_some()
-        });
+    let force = displacement && world.get::<JointForces>(entity).is_some();
     prismatic_joint_identity_key(joint, displacement, velocity, force)
 }
 
 fn check_prismatic_joint_structure(
-    changed_joints: Query<(Entity, &PrismaticJoint), Changed<PrismaticJoint>>,
-    changed_masses: Query<Entity, Changed<Mass>>,
-    joints: Query<(Entity, &PrismaticJoint)>,
+    joints: Query<(Entity, &PrismaticJoint), Or<(Changed<PrismaticJoint>, Added<JointForces>)>>,
     rotations: Query<(), With<Rotation>>,
     positions: Query<(), With<Position>>,
-    masses: Query<&Mass>,
+    forces: Query<(), With<JointForces>>,
     mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
     mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
-    let changed_mass_entities: HashSet<_> = changed_masses.iter().collect();
-    for (entity, joint) in changed_joints.iter() {
-        let key = prismatic_joint_topology_key_from_queries(joint, &rotations, &positions, &masses);
-        if state.changed::<PrismaticJoint>(entity, key) {
-            revision.bump();
-        }
-    }
-    if changed_mass_entities.is_empty() {
-        return;
-    }
     for (entity, joint) in &joints {
-        if !changed_mass_entities.contains(&joint.body2) {
-            continue;
-        }
-        let key = prismatic_joint_topology_key_from_queries(joint, &rotations, &positions, &masses);
-        if state.changed::<PrismaticJoint>(entity, key) {
+        let displacement = positions.contains(joint.body1)
+            && positions.contains(joint.body2)
+            && rotations.contains(joint.body1)
+            && rotations.contains(joint.body2);
+        let velocity = rotations.contains(joint.body1);
+        let force = displacement && forces.contains(entity);
+        if state.changed::<PrismaticJoint>(
+            entity,
+            prismatic_joint_identity_key(joint, displacement, velocity, force),
+        ) {
             revision.bump();
         }
     }
-}
-
-fn prismatic_joint_topology_key_from_queries(
-    joint: &PrismaticJoint,
-    rotations: &Query<(), With<Rotation>>,
-    positions: &Query<(), With<Position>>,
-    masses: &Query<&Mass>,
-) -> u64 {
-    let displacement = positions.get(joint.body1).is_ok()
-        && positions.get(joint.body2).is_ok()
-        && rotations.get(joint.body1).is_ok()
-        && rotations.get(joint.body2).is_ok();
-    let velocity = rotations.get(joint.body1).is_ok();
-    let force = joint.motor.enabled
-        && displacement
-        && masses.get(joint.body2).is_ok_and(|mass| {
-            lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
-                .is_some()
-        });
-    prismatic_joint_identity_key(joint, displacement, velocity, force)
 }
 
 fn prismatic_joint_identity_key(
@@ -468,55 +430,17 @@ fn relative_anchor_velocity_along_axis(axis: DVec3, body1: DVec3, body2: DVec3) 
     (body2 - body1).dot(axis.normalize_or_zero())
 }
 
-/// Axial reaction force (N) developed by the prismatic joint's authored drive.
-///
-/// This is a physical result, not a driving term pressed onto the joint from
-/// elsewhere. The coefficient-based cases below are the standard Avian motor
-/// realizations of a USD drive:
-///
-/// - [`MotorModel::ForceBased`] — the law IS `stiffness * (targetPosition -
-///   position) + damping * (targetVelocity - velocity)`, in newtons, on the
-///   solver's own state. Exact.
-/// - [`MotorModel::SpringDamper`] — the stable realisation a `physics:type =
-///   "force"` spring is loaded as (avian's `ForceBased` is unstable for a stiff,
-///   damped, heavy drive; see the shared `JointDrive::motor_model` conversion). It
-///   carries the SAME force law, expressed as `frequency`/`damping_ratio` scaled
-///   by the driven body's mass: `stiffness = m*(2*pi*f)^2`, `damping =
-///   m*2*zeta*(2*pi*f)`. Recovering `m` from the driven body ([`Mass`]) yields
-///   exactly `k*x + c*v` again. `None` if that mass is unreadable.
-/// - [`MotorModel::AccelerationBased`] — the solver scales this by the EFFECTIVE
-///   mass at the joint, which depends on both bodies' inverse masses and on the
-///   anchor geometry. That is not any one body's mass, so there is no honest
-///   conversion to newtons here — returns `None`.
-///
-/// A coefficient that is not in newtons yields no newton reading: a
-/// plausible-looking wrong number on a wire is worse than an absent one.
-/// Authoring `physics:type = "force"` is what makes a drive readable.
-///
-/// One computation, both consumers: the `force` port and anything else that wants
-/// the strut's load call this, so they cannot drift apart.
+/// Signed axial reaction in newtons from the native solver's completed tick.
+/// Includes the drive and travel-stop response; frequency/acceleration drives
+/// also produce a physical reaction. The coordinate sign is force on body2 along the slider axis.
+/// The published native impulse accumulation
+/// is authoritative, rather than a reconstructed unsolved spring force.
 pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
-    let j = world.get::<PrismaticJoint>(entity)?;
-    if !j.motor.enabled {
-        return None;
-    }
-    // Recover the dimensional force law from the same owner that converts USD
-    // force drives to Avian's implicit representation. Acceleration-based
-    // motors deliberately produce no newton reading.
-    let mass = world.get::<Mass>(j.body2)?.0 as f64;
-    let (stiffness, damping) =
-        lunco_physics::motor_model_force_coefficients(j.motor.motor_model, mass)?;
-    let x = read_measured_displacement(world, entity)?;
-    let v = read_measured_slide_rate(world, entity)?;
-    let f = stiffness * (j.motor.target_position - x) + damping * (j.motor.target_velocity - v);
-    // The motor cannot pull harder than its saturation, so neither may the number
-    // the strut reports about itself.
-    let max = j.motor.max_force;
-    Some(if max.is_finite() && max > 0.0 {
-        f.clamp(-max, max)
-    } else {
-        f
-    })
+    let joint = world.get::<PrismaticJoint>(entity)?;
+    let rotation = world.get::<Rotation>(joint.body1)?;
+    let axis = rotation.0 * joint.local_basis1()? * joint.slider_axis;
+    let force = world.get::<JointForces>(entity)?.force().dot(axis) * -1.0;
+    force.is_finite().then_some(force)
 }
 
 /// Commit a metadata-validated displacement without changing the configured drive law or limit.
@@ -555,45 +479,6 @@ fn displacement_along_axis(
     let a1 = p1 + r1 * anchor1;
     let a2 = p2 + r2 * anchor2;
     (a2 - a1).dot(axis)
-}
-
-/// Avian's `Rotation` wraps a `DQuat` (f64 build); narrow to a glam `Quat`
-/// component-wise for the twist computation. Field-wise conversion avoids
-/// depending on a specific glam helper name across versions.
-#[inline]
-fn dquat_to_quat(q: bevy::math::DQuat) -> Quat {
-    Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32)
-}
-
-/// Signed twist angle (rad, normalized to `(-π, π]`) of `q2` relative to `q1`
-/// about `axis` (swing-twist decomposition).
-fn twist_angle(q1: Quat, q2: Quat, axis: Vec3) -> f32 {
-    let axis = axis.normalize_or_zero();
-    if axis == Vec3::ZERO {
-        return 0.0;
-    }
-    // body2 orientation expressed in body1's frame.
-    let q_rel = q1.inverse() * q2;
-    let r = Vec3::new(q_rel.x, q_rel.y, q_rel.z);
-    let proj = axis * r.dot(axis);
-    let twist = Quat::from_xyzw(proj.x, proj.y, proj.z, q_rel.w);
-    let twist = if twist.length_squared() < 1e-12 {
-        Quat::IDENTITY
-    } else {
-        twist.normalize()
-    };
-    let mut angle = 2.0 * twist.w.clamp(-1.0, 1.0).acos();
-    if r.dot(axis) < 0.0 {
-        angle = -angle;
-    }
-    // Normalize to (-π, π].
-    while angle > std::f32::consts::PI {
-        angle -= std::f32::consts::TAU;
-    }
-    while angle <= -std::f32::consts::PI {
-        angle += std::f32::consts::TAU;
-    }
-    angle
 }
 
 #[cfg(test)]

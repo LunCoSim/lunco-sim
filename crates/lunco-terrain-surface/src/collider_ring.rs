@@ -990,6 +990,7 @@ pub(crate) fn update_collider_ring(
         &mut ColliderTiles,
         &mut PendingColliderBakes,
         Option<&TerrainSurfaceChange>,
+        &lunco_physics::PhysicsOrderKey,
     )>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
@@ -1018,7 +1019,7 @@ pub(crate) fn update_collider_ring(
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
 
-    for (terrain, hf, ring, mut tiles, mut pending, surface_change) in &mut terrains {
+    for (terrain, hf, ring, mut tiles, mut pending, surface_change, order_key) in &mut terrains {
         let Some((grid_entity, grid)) =
             lunco_spatial::coords::ancestor_grid(terrain, &parents, &grids)
         else {
@@ -1233,6 +1234,10 @@ pub(crate) fn update_collider_ring(
                     Position(world_center),
                     Rotation(terrain_rotation.0),
                     ColliderTileOf(terrain),
+                    lunco_physics::PhysicsOrderKey(format!(
+                        "{}|collider/{}/{}/{}",
+                        order_key.0, coord.depth, coord.x, coord.z
+                    )),
                     Name::new(format!("ColliderTile {},{}", coord.x, coord.z)),
                     // A collider tile is streamed runtime implementation detail,
                     // just like its visual LOD counterpart.  Marking it closes
