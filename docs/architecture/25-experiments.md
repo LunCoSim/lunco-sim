@@ -134,7 +134,7 @@ pub enum RunStatus {
     Queued,
     Running { t_current: f64 },
     Done { wall_time_ms: u64 },
-    Failed { error: String, partial: bool },
+    Failed { error: String },
     Cancelled,
 }
 
@@ -157,8 +157,8 @@ pub enum ParamValue {
 ```
 
 The registry retains each trajectory through one immutable `Arc<RunResult>`.
-Readers clone the Arc to capture the exact result without copying its series;
-streaming merges use copy-on-write, so an admitted snapshot stays unchanged.
+Readers clone the Arc to capture the exact completed result without copying
+its series. Result storage admits only validated complete trajectories.
 `RunMeta.variable_metadata` retains backend-owned units and descriptions under
 exact series names in an immutable Arc. The Modelica adapter supplies Rumoca's
 checked output metadata with each completed batch result.
@@ -169,8 +169,7 @@ the source document changes. They never infer a run's units from the current dra
 Complete trajectories enter the registry through `set_complete_result`, which
 validates finite, nondecreasing times, matching series/metadata lengths, finite
 series values, and the configured scalar-value budget. Equal event timestamps
-remain valid. Failed partial trajectories use `set_partial_result`; streaming
-hole padding remains explicit and is not mistaken for a complete result.
+remain valid. Failed runs publish their diagnostic without a trajectory.
 
 `lunco-experiments` owns the persisted Bevy `ExperimentSettings` section
 (`experiments`). Its `result_limits` defaults to 8,000,000 scalar values and
@@ -189,7 +188,10 @@ visible-sample append, including additional event samples, and reserves storage
 fallibly before changing column lengths. The recorded time vector shares the
 same boundary. Budget failure is a terminal Failed update and
 releases the scheduler slot; nested solves restore the caller's budget.
-
+Completed trajectories retain Rumoca's requested output grid and additional
+event samples, including distinct pre/post values at equal timestamps. The
+adapter moves those columns into the retained result without copying or
+resampling them. Plot presentation may decimate its own view.
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 
@@ -231,9 +233,9 @@ pub struct RunHandle {
 }
 
 pub enum RunUpdate {
-    Progress { t_current: f64, delta: Option<RunResult> },
+    Progress { t_current: f64 },
     Completed(RunResult),
-    Failed { error: String, partial: Option<RunResult> },
+    Failed { error: String },
     Cancelled,
 }
 ```
@@ -248,8 +250,7 @@ The horizon must be finite and strictly increasing, and explicit `dt`,
 `tolerance`, and `h0` must be finite and positive. Explicit interval counts
 must be positive and at most the existing `SAMPLE_CAP` of 200,000 intervals
 (200,001 inclusive points). An interval must advance time at the requested
-endpoints. The browser's derived internal solver cadence passes the same
-advancement guard before stepping. Invalid or over-limit requests return the owning diagnostic; the
+endpoints. Invalid or over-limit requests return the owning diagnostic; the
 runner never substitutes or enlarges an explicit interval.
 
 The current AST annotation reader is fallible. `Interval=0` means omitted

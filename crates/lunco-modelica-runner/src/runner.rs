@@ -169,7 +169,6 @@ fn lock_runner_state(
                 job.cancel.store(true, Ordering::SeqCst);
                 let _ = job.tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
             Err(())
@@ -286,7 +285,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = source.result_limits.validate() {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -298,7 +296,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = lunco_modelica_core::sim_target::validate_run_bounds(&exp.bounds) {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -324,7 +321,6 @@ impl ExperimentRunner for ModelicaRunner {
             Err(()) => {
                 let _ = tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
         }
@@ -470,14 +466,12 @@ fn start_native_job(
                     .unwrap_or("non-string panic payload");
                 let _ = tx.send(RunUpdate::Failed {
                     error: format!("experiment worker panicked: {detail}"),
-                    partial: None,
                 });
             }
         });
     if let Err(error) = spawned {
         let _ = failure_tx.send(RunUpdate::Failed {
             error: format!("experiment worker could not start: {error}"),
-            partial: None,
         });
         // The scheduler pump that admitted this job continues after return.
         release_run_slot(&state, run_id);
@@ -512,7 +506,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     // finished. `drain_pending_handles` maps this `Progress` to `Running`.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
     let src = source;
     // Forward worker updates into the handle's tx; the forwarder frees the
@@ -520,7 +513,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     let Some(transport) = crate::worker_run_transport() else {
         let _ = tx.send(RunUpdate::Failed {
             error: "Modelica worker run transport is not installed".to_string(),
-            partial: None,
         });
         finish_run(&state, run_id);
         return;
@@ -687,7 +679,6 @@ fn run_inner(
     // the moment the worker thread picks the job up, including compile time.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
 
     // Persistent runner compiler: clone the handle out of `state` (brief
@@ -703,7 +694,6 @@ fn run_inner(
         Err(_) => {
             let _ = tx.send(RunUpdate::Failed {
                 error: "runner state poisoned".to_string(),
-                partial: None,
             });
             return;
         }
@@ -729,7 +719,6 @@ fn run_inner(
                         let _ = tx.send(RunUpdate::Failed {
                             error: "experiment compiler is poisoned after an earlier panic"
                                 .to_owned(),
-                            partial: None,
                         });
                         return;
                     }
@@ -776,7 +765,6 @@ fn run_inner(
                 Err(e) => {
                     let _ = tx.send(RunUpdate::Failed {
                         error: format!("compile failed: {e}"),
-                        partial: None,
                     });
                     return;
                 }
@@ -834,10 +822,7 @@ pub fn drive_run(
         }) {
         Ok(budget) => budget,
         Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error,
-                partial: None,
-            });
+            sink.emit(RunUpdate::Failed { error });
             return;
         }
     };
@@ -847,7 +832,6 @@ pub fn drive_run(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
@@ -860,16 +844,12 @@ pub fn drive_run(
         Err(err) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("run configuration failed: {err}"),
-                partial: None,
             });
             return;
         }
     };
     if let Err(error) = apply_run_values(&mut stepper_opts, inputs, overrides) {
-        sink.emit(RunUpdate::Failed {
-            error,
-            partial: None,
-        });
+        sink.emit(RunUpdate::Failed { error });
         return;
     }
     // The requested output grid is independent of the solver's internal step.
@@ -944,7 +924,6 @@ fn run_batch_sim(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
@@ -954,7 +933,6 @@ fn run_batch_sim(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("solve lowering failed: {error}"),
-                partial: None,
             });
             return;
         }
@@ -972,7 +950,6 @@ fn run_batch_sim(
     if let Err(error) = admission {
         sink.emit(RunUpdate::Failed {
             error: error.to_string(),
-            partial: None,
         });
         return;
     }
@@ -985,7 +962,6 @@ fn run_batch_sim(
             }
             sink.emit(RunUpdate::Failed {
                 error: format!("simulate failed: {e}"),
-                partial: None,
             });
             return;
         }
@@ -996,20 +972,6 @@ fn run_batch_sim(
         return;
     }
 
-    // The batch solver records the requested grid plus root/event crossings.
-    // Every sample has already passed the recorder budget. Select the nearest
-    // available sample per requested grid point before storing or sending the
-    // trajectory; smooth exact-grid results retain all their samples.
-    let keep = match batch_keep_indices(&result.times, opts.t_start, opts.t_end, output_dt) {
-        Ok(keep) => keep,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error: error.to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
     if result.data.len() != result.names.len()
         || result
             .data
@@ -1018,7 +980,6 @@ fn run_batch_sim(
     {
         sink.emit(RunUpdate::Failed {
             error: "solver trajectory columns do not match their names and time vector".into(),
-            partial: None,
         });
         return;
     }
@@ -1031,54 +992,29 @@ fn run_batch_sim(
     {
         sink.emit(RunUpdate::Failed {
             error: "solver trajectory has a series without checked metadata".into(),
-            partial: None,
         });
         return;
     }
-    let raw_samples = result.times.len();
-    let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
-        Some(idx) => (
-            idx.iter().map(|&i| result.times[i]).collect(),
-            Some(idx.clone()),
-        ),
-        None => (result.times.clone(), None),
-    };
-
     // SimResult stores one column per visible variable (`data[var][t]`),
     // mirroring the `RunResult` series map keyed by variable name. Drop the
     // synthetic `time` column — `times` carries it.
     let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for (i, name) in result.names.iter().enumerate() {
+    for (name, column) in result.names.into_iter().zip(result.data) {
         if name == "time" {
             continue;
         }
-        let full = &result.data[i];
-        let column: Vec<f64> = match &gather {
-            Some(idx) => idx.iter().map(|&j| full[j]).collect(),
-            None => full.clone(),
-        };
-        series.insert(name.clone(), column);
+        series.insert(name, column);
     }
 
-    let n_samples = kept_times.len();
-    if keep.is_some() {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples (decimated from {} solver/event samples), {} vars, {:.2}s wall",
-            n_samples,
-            raw_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    } else {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
-            n_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    }
+    let n_samples = result.times.len();
+    bevy::log::info!(
+        "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
+        n_samples,
+        series.len(),
+        started.elapsed().as_secs_f64(),
+    );
     sink.emit(RunUpdate::Completed(RunResult {
-        times: kept_times,
+        times: result.times,
         series,
         meta: RunMeta {
             variable_metadata,
@@ -1088,53 +1024,6 @@ fn run_batch_sim(
             ..Default::default()
         },
     }));
-}
-
-/// Pick the sample indices to keep so a batch trajectory matches the requested
-/// output grid. rumoca emits the `opts.dt` grid PLUS an extra sample at every
-/// event/root crossing; for chattering models that's millions of points. For
-/// each grid time `t_start + k·dt` we keep the trajectory sample whose time is
-/// nearest (advancing a single monotonic cursor — O(n)), always keeping the
-/// first and last sample. Invalid grids are rejected before integer conversion
-/// or allocation. Returns `None` when the trajectory is at/under the grid size (the
-/// well-behaved smooth-model case — leave it byte-for-byte untouched).
-fn batch_keep_indices(
-    times: &[f64],
-    t_start: f64,
-    t_end: f64,
-    dt: f64,
-) -> Result<Option<Vec<usize>>, lunco_modelica_core::sim_target::RunBoundsError> {
-    let dt = lunco_modelica_core::sim_target::resolve_step_dt(t_start, t_end, Some(dt), None)?;
-    if times.len() < 2 {
-        return Ok(None);
-    }
-    let span = t_end - t_start;
-    // +1 for the inclusive endpoint; small slack so we never over-decimate a
-    // result that already sits on (or just above) the grid.
-    let grid_n = (span / dt).round() as usize + 1;
-    if times.len() <= grid_n.saturating_mul(2) {
-        return Ok(None);
-    }
-    let mut keep: Vec<usize> = Vec::with_capacity(grid_n + 1);
-    let mut cursor = 0usize;
-    let n = times.len();
-    for k in 0..=grid_n {
-        let target = t_start + (k as f64) * dt;
-        // Advance while the next sample is closer to `target` than the current.
-        while cursor + 1 < n && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
-        {
-            cursor += 1;
-        }
-        if keep.last() != Some(&cursor) {
-            keep.push(cursor);
-        }
-    }
-    // Guarantee the true final sample is present (events can land past the last
-    // grid node).
-    if keep.last() != Some(&(n - 1)) {
-        keep.push(n - 1);
-    }
-    Ok(Some(keep))
 }
 
 /// Native and browser adapters for cancellation and typed experiment updates.
@@ -1435,15 +1324,11 @@ pub fn drain_pending_handles(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => RunUpdate::Failed {
                     error: "experiment worker disconnected without a terminal outcome".to_owned(),
-                    partial: None,
                 },
             };
             match update {
-                RunUpdate::Progress { t_current, delta } => {
+                RunUpdate::Progress { t_current } => {
                     registry.set_status(handle.run_id, RunStatus::Running { t_current });
-                    if let Some(d) = delta {
-                        registry.merge_result(handle.run_id, d);
-                    }
                     ev_progress.write(RunProgress {
                         experiment_id: handle.run_id,
                         origin: handle.origin.clone(),
@@ -1471,14 +1356,10 @@ pub fn drain_pending_handles(
                     {
                         let error = format!("complete result rejected: {error}");
                         bevy::log::warn!("[experiments] run {:?} {error}", handle.run_id);
-                        let partial = registry
-                            .get(handle.run_id)
-                            .is_some_and(|run| run.result.is_some());
                         registry.set_status(
                             handle.run_id,
                             RunStatus::Failed {
                                 error: error.clone(),
-                                partial,
                             },
                         );
                         ev_failed.write(RunFailed {
@@ -1497,17 +1378,12 @@ pub fn drain_pending_handles(
                     });
                     terminal = true;
                 }
-                RunUpdate::Failed { error, partial } => {
+                RunUpdate::Failed { error } => {
                     bevy::log::warn!("[experiments] run {:?} failed: {error}", handle.run_id);
-                    let had_partial = partial.is_some();
-                    if let Some(p) = partial {
-                        registry.set_partial_result(handle.run_id, p);
-                    }
                     registry.set_status(
                         handle.run_id,
                         RunStatus::Failed {
                             error: error.clone(),
-                            partial: had_partial,
                         },
                     );
                     ev_failed.write(RunFailed {
@@ -1600,7 +1476,7 @@ mod tests {
         let rejected_handle = runner.run_fast(&rejected, test_source(&rejected.model_ref.0));
         for handle in [&queued_handle, &rejected_handle] {
             assert!(
-                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error, partial: None }) if error == POISONED_RUNNER_STATE)
+                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error }) if error == POISONED_RUNNER_STATE)
             );
             assert!(matches!(
                 handle.progress_rx.try_recv(),
@@ -1796,10 +1672,7 @@ mod tests {
             .try_recv()
             .expect("terminal admission failure")
         {
-            RunUpdate::Failed {
-                error,
-                partial: None,
-            } => error,
+            RunUpdate::Failed { error } => error,
             update => panic!("unexpected admission update: {update:?}"),
         };
         assert!(error.contains("output grid"));
@@ -1830,7 +1703,7 @@ mod tests {
             &mut sink,
         );
         assert!(
-            matches!(&sink.0[..], [RunUpdate::Failed { error, partial: None }] if error.contains("output grid"))
+            matches!(&sink.0[..], [RunUpdate::Failed { error }] if error.contains("output grid"))
         );
         assert!(matches!(
             stepper_options_from_bounds(&exp.bounds),
@@ -1940,7 +1813,7 @@ mod tests {
         let timeout = Duration::from_secs(5);
         assert!(matches!(
             panic_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
+            Ok(RunUpdate::Failed { error })
                 if error.contains("injected experiment compiler panic")
         ));
         assert!(matches!(
@@ -1953,7 +1826,7 @@ mod tests {
         ));
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
+            Ok(RunUpdate::Failed { error })
                 if error.contains("compiler is poisoned")
         ));
         assert!(matches!(
@@ -2035,7 +1908,7 @@ mod tests {
         assert!(matches!(
             &app.world().resource::<ExperimentRegistry>().get(disconnected.id)
                 .expect("disconnected experiment").status,
-            RunStatus::Failed { error, partial: false }
+            RunStatus::Failed { error }
                 if error.contains("disconnected without a terminal outcome")
         ));
 

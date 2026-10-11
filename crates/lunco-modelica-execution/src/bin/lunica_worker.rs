@@ -342,7 +342,6 @@ mod wasm {
                     run_id,
                     lunco_experiments::RunUpdate::Failed {
                         error: format!("compile: {e}"),
-                        partial: None,
                     },
                 );
                 return;
@@ -358,7 +357,6 @@ mod wasm {
                     run_id,
                     lunco_experiments::RunUpdate::Failed {
                         error: format!("compile panic: {msg}"),
-                        partial: None,
                     },
                 );
                 return;

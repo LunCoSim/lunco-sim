@@ -956,7 +956,6 @@ fn handle_worker_error(idx: usize) {
                         abort. The model is too heavy for the browser; try a shorter \
                         StopTime or a looser Tolerance."
                     .to_string(),
-                partial: None,
             },
         );
     }
@@ -1404,7 +1403,6 @@ fn send_run_failure(run_id: lunco_experiments::ExperimentId, error: impl Into<St
         run_id,
         lunco_experiments::RunUpdate::Failed {
             error: error.into(),
-            partial: None,
         },
     );
 }

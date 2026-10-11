@@ -318,17 +318,7 @@ mod tests {
         let doc = DocumentId(2);
         assert!(live_runs(doc, doc, RunStatus::Done { wall_time_ms: 5 }).is_empty());
         assert!(live_runs(doc, doc, RunStatus::Cancelled).is_empty());
-        assert!(
-            live_runs(
-                doc,
-                doc,
-                RunStatus::Failed {
-                    error: "x".into(),
-                    partial: false
-                }
-            )
-            .is_empty()
-        );
+        assert!(live_runs(doc, doc, RunStatus::Failed { error: "x".into() }).is_empty());
     }
 
     #[test]

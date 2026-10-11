@@ -540,7 +540,7 @@ reuses one checked mutable destination-slot borrow for Modelica and
 scripted snapshots; the source maps and publication schedule remain unchanged.
 
 **`lunco-experiments`**
-Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory), decoupled from any one solver via the `ExperimentRunner` trait that another crate plugs in. `RunStatus` is `Pending → Queued → Running { t_current } → Done { wall_time_ms } | Failed { error, partial } | Cancelled`; `RunBounds` carries start/stop/interval; parallel runs schedule across a worker pool.
+Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory), decoupled from any one solver via the `ExperimentRunner` trait that another crate plugs in. `RunStatus` is `Pending → Queued → Running { t_current } → Done { wall_time_ms } | Failed { error } | Cancelled`; `RunBounds` carries start/stop/interval; parallel runs schedule across a worker pool. Only validated complete trajectories enter retained result storage.
 
 ### Vessel Control & Hardware
 

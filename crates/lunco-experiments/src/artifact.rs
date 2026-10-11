@@ -349,17 +349,8 @@ pub fn decode_run_artifact(bytes: &[u8], limits: RunResultLimits) -> Result<RunA
 
 /// Stamp only the actual compiled closure returned by the compiler owner.
 pub fn stamp_source_identity(update: &mut crate::RunUpdate, identity: &SourceContentIdentity) {
-    match update {
-        crate::RunUpdate::Completed(result) => result.meta.source_content = Some(identity.clone()),
-        crate::RunUpdate::Progress {
-            delta: Some(result),
-            ..
-        }
-        | crate::RunUpdate::Failed {
-            partial: Some(result),
-            ..
-        } => result.meta.source_content = Some(identity.clone()),
-        _ => {}
+    if let crate::RunUpdate::Completed(result) = update {
+        result.meta.source_content = Some(identity.clone());
     }
 }
 

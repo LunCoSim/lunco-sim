@@ -883,7 +883,6 @@ fn apply_run_status(
             },
             4 => lunco_experiments::RunStatus::Failed {
                 error: message.error,
-                partial: false,
             },
             5 => lunco_experiments::RunStatus::Cancelled,
             _ => {

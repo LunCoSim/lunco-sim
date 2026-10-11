@@ -632,8 +632,8 @@ post '{"type":"ExecuteCommand","command":"GetExperimentResult","params":{
   "variables":["altitude","velocity"], "max_points":500
 }}'
 # max_points = strided downsample, final sample always kept. Omit = uncapped.
-# Returns {state:"Done", times:[...], series:{"altitude":[...], ...}} or an
-# error if the run is not Done (Pending/Running/Failed-without-partial).
+# Returns {state:"done", times:[...], series:{"altitude":[...], ...}} or an
+# error if the run has no completed result.
 ```
 
 `RunStatus` is the query provider for one run's progress and terminal state:
@@ -645,6 +645,11 @@ post '{"type":"ExecuteCommand","command":"RunStatus","params":{"experiment_id":"
 Poll until `done`, `failed`, or `cancelled`; only request the trajectory after
 `done`. `ListRuns` is useful for discovery and UI review, not as a substitute
 for retaining the id returned by the dispatch you just made.
+
+Batch progress reports lifecycle state only. A successful run publishes one
+validated complete trajectory; a failed or cancelled run publishes no new
+trajectory. `modelica_output_budget.rhai` verifies visible failure without
+result publication and completion of the valid successor.
 
 A native worker panic, thread-admission failure, or disconnect without a
 terminal result produces `failed` with its cause and retires the handle.
@@ -768,8 +773,8 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   modal). Call `ListCompileCandidates` first, pass the short or qualified name.
 - **Fire before parse** → `no compilable top-level class`. Poll `CompileStatus`
   until `ast_parsed:true` before compiling/running a just-opened doc.
-- **`GetExperimentResult` errors** unless the run is `Done` (or `Failed` with a
-  partial). Check `ListRuns` state first; a big sweep runs async.
+- **`GetExperimentResult` errors** unless the run has a completed result.
+  Check `ListRuns` state first; a big sweep runs async.
 - **Unified opening**: prefer `Open{uri}`. `OpenClass` resolves a Modelica
   class through the source-aware document/library path; `OpenFile` resolves a
   filesystem URI.
@@ -797,12 +802,15 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 - **Complete result admission**: finite ordered times, matching series/metadata
   lengths, and finite values are required before a trajectory is marked Done.
   `experiments.result_limits` supplies the shared budgets; defaults are 8,000,000
-  scalar values and 256 MiB artifact bytes. Failed partial streams may retain
-  explicit missing-value holes. A malformed optional artifact warns without
+  scalar values and 256 MiB artifact bytes. Failed runs retain their diagnostic
+  without publishing a trajectory. A malformed optional artifact warns without
   replacing a valid runtime result.
   Native and browser Fast Runs capture the same limits at admission. Actual
   lowered output dimensions and the requested grid are checked before batch
   trajectory allocation; event samples also consume the scoped recorder budget.
+  Stored and queried results retain all checked event samples, including both
+  sides of a discontinuity. Exercise `modelica_batch_events.rhai` to verify
+  off-grid reinitializations independently of plot decimation.
   Exercise `modelica_output_budget.rhai` with the documented default value cap
   and `max_parallel=1` to prove visible rejection and valid successor completion.
 - **Durable batch history**: completed Twin-owned results persist asynchronously
