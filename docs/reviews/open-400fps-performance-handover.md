@@ -1,5 +1,76 @@
 # High-quality realtime performance handover
 
+## Native entity-tree marker admission — 2026-10-11
+
+The scene-edit UI admits `Mesh3d`, `SelectableRoot` and `SceneCamera` additions
+through its existing native source queue. The metadata query retains five
+mutable change filters and admits new names through `Changed<Name>`, then
+fetches typed candidate facts only for changed/admitted identities. It avoids
+three per-entity added-marker checks while preserving direct label edits and
+changes to unpublished worker members. A newly named tracked ancestor now
+introduces its container row without requiring a parent change. Parent-edge
+comparison, removals, active-scene boundaries and active-Twin queue retirement
+remain owned by the existing projection. No new policy hook, simulation action,
+precision conversion or external-library change is introduced.
+
+The focused private resource-seam suite passes all 11 cases, including new
+ancestor names, edits to unpublished worker members and hidden non-candidates.
+The 20,000-name settled benchmark takes 74.99/138.50 microseconds per complete
+update for sparse/rich archetype layouts, compared with 94.74/242.54 microseconds
+in the baseline. These are synthetic update costs, not application FPS.
+
+The integrated normal artifact is
+`d8ea8c552841cfc02674965dd00a95877ccc5c76880556efbc330004426b675d`,
+built on main `99f675e80` with the native admission change. Its stable API schema,
+18-check telemetry-history gate and restart pass. Ten replay profiles pass 360
+checks at compute widths 1/24 against the unchanged reference
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+A bounded live Build run confirms rejected unknown catalog admission preserves
+entity count, `ball_static` admission succeeds, and authoritative selection
+resolves without stale entities or Modelica compile errors. Normal app PIDs
+257631/315024 and every replay process exit zero and release API 4202.
+
+The separate Ackermann catalog-spawn check admits and selects its root but
+Modelica initialization rejects input `shaft_speed_FL`: source port
+`shaft_speed` is undeclared. This diagnostic does not establish working catalog
+rover simulation; the causal port-surface failure remains open at
+`lunco-cosim-core::initialization`. The normal pre-spawn frame windows preserve
+50 bodies, 33 colliders and 20 joints. They observe sibling workloads and the
+sandbox's three reported initial-pose pauses, so whole-app loading/FPS and
+complete catalog-rover acceptance remain open.
+
+The native View/Build/View capture measures the complete tree gate at
+135.51/123.71/158.77 microseconds mean, compared with 100.80/103.35/88.83 in the
+older baseline. Concurrent workloads and different frame cadence prevent a
+causal elapsed-time comparison; no native timing or whole-app FPS gain is
+claimed. The 355,010,913-byte capture passes native CPU/message exports and its
+compressed payload matches the reported 338.50 MiB after container headers.
+Owned app/collector PIDs 354467/354466 exit zero and release API 4202/Tracy 8087.
+The validated normal artifact is restored. Runtime evidence above is on
+`99f675e80`; newer main metadata contracts require separate integrated evidence.
+
+Main's checked FMI metadata change `2de62f2f2` is preserved in the final
+integration. A fresh normal build produces artifact
+`13cbf82a99877751266d96ce1f5ccbec9e03e7ad54ba3b12120d31b14f0392e5`.
+Its 18-check history gate, schema stability and restart pass; PID 400069 exits
+zero and releases API 4202. View/Build/View frame medians are
+11.076/10.959/11.010 ms with no monitored foreign simulator/build workloads.
+All ten latest replay profiles also pass 360 checks at widths 1/24 against the
+unchanged exact reference; every process exits zero and releases API 4202.
+These are absolute observations on the newer metadata owner, not a causal
+comparison of the UI change. Latest evidence uses `entity-tree-admission-latest-`.
+The earlier catalog-spawn fault and native capture remain observations on
+`99f675e80`; they have not been reclassified as newer-main results.
+
+Full `cargo clean` removes 21,581 files / 23.0 GiB after owned sessions close.
+Task evidence and validated artifact archives formerly under
+`target/entity-tree-perf/` are preserved under
+`.lunco/performance-evidence/entity-tree-perf/`; older receipts retain their
+original paths. Source, sibling worktrees, Cargo registry and shared sccache
+remain intact. Integrated final evidence uses the
+`entity-tree-admission-integrated-` prefixes, with the simple consumer under
+`entity-tree-admission-simple-consumer-`.
+
 ## Exact-epoch ephemeris cache admission — 2026-10-11
 
 The analytic provider's existing single-epoch cache admits 47 of 143 requests
@@ -639,11 +710,11 @@ external libraries, sibling sessions and shared caches are preserved.
 
 `lunco-luncosim-edit-ui::ui::entity_list::scene_topology_changed` now filters
 native change ticks into entity identities, then uses indexed candidate reads
-for those identities. Quiet archetypes no longer prepare the optional label,
-hierarchy and visibility data. The original eight-case change-filter union,
-candidate predicate, removal handling, parent messages, scene boundaries and
-Twin retirement remain authoritative. The existing dirty worker consumes the
-same boolean. This is a read-only query change; there is no new policy,
+for those identities. Quiet archetypes do not prepare optional label, hierarchy
+and visibility data. Native source admissions cover additions while the five
+mutable metadata filters protect current and pending snapshots. Removals,
+parent edges, scene boundaries and Twin retirement keep their owning checks. The existing dirty worker consumes the same boolean.
+This projection change introduces no new policy,
 revision owner, simulation action, clock admission or ordering.
 
 Three spans expose named changes, removals and parent changes separately:

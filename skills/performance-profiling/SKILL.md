@@ -148,12 +148,18 @@ lifecycle messages coalesced by entity at the Update gate. Compare current
 edge values with the cached ancestry; identical replacements must not rebuild.
 Separate change admission from rich candidate reads: the native changed query
 returns only entity identities; indexed candidate reads fetch label/visibility
-data for those identities. Keep the original change-filter union and candidate
-predicate. Direct mutable component edits must still invalidate the cached
-tree; insertion observers alone cannot detect them.
+data for those identities. Preserve the candidate predicate and mutable metadata
+coverage. Direct mutable component edits must still invalidate the cached tree;
+insertion observers alone cannot detect them.
 Retain mutable-label and scene-boundary checks, removal handling, unnamed
-ancestor invalidation and active-Twin queue retirement. Measure the complete
-gate and insertion observers separately from tree derivation and panel paint.
+ancestor invalidation and active-Twin queue retirement. Native renderable
+additions cover marker admission; the metadata query also admits new names.
+Retain the native mutable metadata change query, including edits to unpublished
+worker members. Cover a new name on an already tracked unnamed ancestor.
+Compare indexed membership scans with native
+change filtering in the live owner before changing the scan strategy. Measure
+the complete gate and source observers separately from tree derivation and
+panel paint.
 The gate exposes `entity_tree_gate_named_changes`,
 `entity_tree_gate_removals` and `entity_tree_gate_parent_changes`; compare the
 complete gate as well as these phases, with equal instrumentation and cameras.

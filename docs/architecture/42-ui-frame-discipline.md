@@ -305,12 +305,18 @@ package — none of these belong on the UI thread every frame. Patterns:
   for names, hierarchy, visibility, and camera labels once per invalidation;
   hierarchy construction and sorting run on one bounded worker task. Repeated
   topology changes mark the resource dirty through a small invalidation system;
-  immutable `ChildOf` insertions arrive through native lifecycle messages,
-  coalesced by entity at the Update gate. The gate directly reads those entities'
-  current parents instead of scanning every hierarchy component's change tick.
-  Identical edge replacements remain no-ops; unnamed candidate ancestors,
-  membership changes, removals, mutable labels and scene boundaries still
-  invalidate the derived view. Active Twin closure clears queued insertions.
+  native `ChildOf` insertions and additions of `Mesh3d`, `SelectableRoot` and
+  `SceneCamera` arrive through one typed source queue.
+  The Update gate coalesces parent edges and candidate admissions separately.
+  The metadata query retains the five mutable change filters; native additions
+  cover marker admission without three per-entity added-marker checks; the
+  existing `Changed<Name>` filter admits new names.
+  Indexed candidate reads fetch current facts only for changed or admitted
+  identities. A new name on a tracked unnamed ancestor can introduce a container
+  row. The same metadata query protects pending worker members from stale edits.
+  Identical parent replacements remain no-ops; removals and scene boundaries
+  retain their current checks.
+  Active Twin closure clears every queued source admission.
   The query-heavy snapshot producer runs only when no worker is active. A
   revision fence rejects stale results, and Twin close clears the published
   view. Panels continue reading the last completed view while a current build
