@@ -99,7 +99,7 @@ impl ModelicaThemeExt for Theme {
     }
 
     fn wire_color(&self, connector_type: &str) -> Color32 {
-        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
+        let leaf = rumoca_core::top_level_last_segment(connector_type);
         let s = &self.schematic;
         match leaf {
             "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {

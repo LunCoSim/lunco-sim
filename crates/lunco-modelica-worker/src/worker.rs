@@ -29,7 +29,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 10;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 11;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]

@@ -26,7 +26,6 @@ use lunco_modelica_ast::diagram_model::{
 };
 use lunco_modelica_ast::scope_chain_candidates;
 use lunco_modelica_ast::{Causality, ClassType, Variability};
-use lunco_modelica_index::class_lookup::find_class_by_qualified_name;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
 use std::collections::HashMap;
 
@@ -409,8 +408,7 @@ impl ModelicaComponentBuilder {
 
         // Create nodes
         for (qualified_name, class_type) in &all_classes {
-            let short_name = lunco_modelica_ast::ast_extract::short_name(qualified_name);
-            let _parent = qualified_name.rsplit_once('.').map(|(p, _)| p.to_string());
+            let short_name = rumoca_core::top_level_last_segment(qualified_name);
 
             let kind = match class_type {
                 ClassType::Package | ClassType::Class => NodeKind::Subsystem,
@@ -427,7 +425,7 @@ impl ModelicaComponentBuilder {
 
         // Add containment edges
         for (qualified_name, _) in &all_classes {
-            if let Some((parent_name, _child)) = qualified_name.rsplit_once('.') {
+            if let Some((parent_name, _child)) = rumoca_core::split_last_top_level(qualified_name) {
                 if let Some(&parent_id) = name_to_id.get(parent_name) {
                     if let Some(&child_id) = name_to_id.get(qualified_name) {
                         // Find port indices (create if needed)
@@ -487,7 +485,7 @@ impl ModelicaComponentBuilder {
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        find_class_by_qualified_name(&self.ast, name)
+        self.ast.get_class_by_qualified_name(name)
     }
 }
 
@@ -634,7 +632,7 @@ pub fn collect_inherited_components_with(
         let mut found_local: Option<(&ClassDef, String)> = None;
         let mut found_library: Option<(std::sync::Arc<ClassDef>, String)> = None;
         for cand in &candidates {
-            if let Some(base) = find_class_by_qualified_name(ast, cand) {
+            if let Some(base) = ast.get_class_by_qualified_name(cand) {
                 found_local = Some((base, cand.clone()));
                 break;
             }
@@ -715,7 +713,7 @@ fn ports_for_component(
     let mut found_library: Option<std::sync::Arc<ClassDef>> = None;
     let mut hit_qpath: Option<String> = None;
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             found_local = Some(c);
             hit_qpath = Some(cand.clone());
             break;
@@ -812,7 +810,7 @@ pub fn resolve_class_by_scope_pub(
 ) -> Option<std::sync::Arc<ClassDef>> {
     let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             return Some(std::sync::Arc::new(c.clone()));
         }
         if let Some(arc) = lookup_mode.lookup(cand) {
@@ -847,7 +845,7 @@ fn is_connector_type(
     }
     let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             return matches!(c.class_type, ClassType::Connector);
         }
         if let Some(arc) = lookup_mode.lookup(cand) {

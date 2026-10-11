@@ -75,11 +75,11 @@ pub(crate) fn on_fast_run_setup_requested(
                 .get_resource::<ModelicaDocuments>()
                 .and_then(|r| r.host(doc))
                 .and_then(|h| {
-                    lunco_modelica_ast::ast_extract::find_class_by_short_name(
-                        h.document().syntax().ast(),
-                        lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
-                    )
-                    .map(lunco_modelica_runner::detect_top_level_inputs)
+                    h.document()
+                        .syntax()
+                        .ast()
+                        .get_class_by_qualified_name(&model_ref.0)
+                        .map(lunco_modelica_runner::detect_top_level_inputs)
                 })
                 .unwrap_or_default();
             let prefilled = world
@@ -841,33 +841,20 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some(ast) = document.strict_ast() else {
             return;
         };
-        let display = document.origin().display_name();
-        let from_path = display.strip_prefix("library://").map(|s| s.to_string());
-        let short =
-            lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
-        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, &short)
-        else {
+        let Some(requested) = crate::ui::context::default_simulation_class(ctx, doc) else {
             return;
         };
-        let qualified = from_path.unwrap_or_else(|| short.clone());
-
-        let mut qpath = qualified.clone();
-        if !qpath.contains('.') {
-            let pkg = ast
-                .within
-                .as_ref()
-                .map(|w| {
-                    w.name
-                        .iter()
-                        .map(|t| t.text.as_ref())
-                        .collect::<Vec<_>>()
-                        .join(".")
-                })
-                .unwrap_or_default();
-            if !pkg.is_empty() {
-                qpath = format!("{pkg}.{qpath}");
-            }
-        }
+        let candidates = document.index().classes.keys().cloned().collect::<Vec<_>>();
+        let Ok(qualified) = lunco_modelica_core::sim_target::resolve_requested_class(
+            &requested,
+            &candidates,
+            document.index().within_path.as_deref(),
+        ) else {
+            return;
+        };
+        let Some(class) = ast.get_class_by_qualified_name(&qualified) else {
+            return;
+        };
 
         // Icon view is a paint path. It may use a completed background merge,
         // but it must not synchronously walk Modelica inheritance or wait for
@@ -876,7 +863,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // repaint the view when the merged standard icon is ready.
         let icon = ctx
             .resource::<crate::engine_resource::ModelicaEngineHandle>()
-            .and_then(|handle| handle.try_cached_icon_for(&qpath))
+            .and_then(|handle| handle.try_cached_icon_for(&qualified))
             .or_else(|| lunco_modelica_ast::annotations::extract_icon(&class.annotation));
         let parameters: Vec<(String, String)> = class
             .components

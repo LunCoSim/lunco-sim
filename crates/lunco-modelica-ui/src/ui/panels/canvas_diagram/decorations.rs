@@ -226,7 +226,7 @@ pub(super) fn diagram_annotation_for_target(
     // The canonical class lookup respects qualified segment boundaries.
     // With no selected target, preview the first non-package declaration.
     let class = if let Some(qualified) = target {
-        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
+        ast.get_class_by_qualified_name(qualified)
     } else {
         use lunco_modelica_ast::ClassType;
         ast.classes
@@ -249,9 +249,3 @@ pub(super) fn diagram_annotation_for_target(
         .unwrap_or_default();
     Some((coordinate_system, graphics, plot_nodes))
 }
-
-// `walk_qualified` deleted: was a near-duplicate of
-// `lunco_modelica_index::class_lookup::find_class_by_qualified_name` and silently
-// disagreed with it on the within-clause strip. Two sources of
-// truth for the same lookup is how the duplicate-renders-nothing
-// bug shipped. Use the canonical helper.

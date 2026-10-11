@@ -71,15 +71,18 @@ fn on_run_modelica_solve(
         return Err("RunModelicaSolve requires a current parsed Modelica source snapshot".into());
     }
     let candidates = document.index().simulation_candidates();
-    let model_name =
-        lunco_modelica_core::sim_target::resolve_requested_class(&request.class, &candidates)
-            .map_err(|error| {
-                format!(
-                    "RunModelicaSolve class `{}` {error}; candidates: [{}]",
-                    request.class,
-                    candidates.join(", ")
-                )
-            })?;
+    let model_name = lunco_modelica_core::sim_target::resolve_requested_class(
+        &request.class,
+        &candidates,
+        document.index().within_path.as_deref(),
+    )
+    .map_err(|error| {
+        format!(
+            "RunModelicaSolve class `{}` {error}; candidates: [{}]",
+            request.class,
+            candidates.join(", ")
+        )
+    })?;
     let source = document.source().to_owned();
     let model_name = lunco_modelica_ast::ast_extract::within_package_of_source(&source)
         .filter(|package| !model_name.starts_with(&format!("{package}.")))

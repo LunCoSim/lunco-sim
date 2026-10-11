@@ -168,8 +168,12 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
 
     let candidates = document.index().simulation_candidates();
     let model_name = match request.class.as_deref() {
-        Some(class) => lunco_modelica_core::sim_target::resolve_requested_class(class, &candidates)
-            .map_err(|error| format!("class `{class}` {error}")),
+        Some(class) => lunco_modelica_core::sim_target::resolve_requested_class(
+            class,
+            &candidates,
+            document.index().within_path.as_deref(),
+        )
+        .map_err(|error| format!("class `{class}` {error}")),
         None if candidates.len() == 1 || document.index().simulation_preferred_count() == 1 => {
             candidates
                 .first()

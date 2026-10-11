@@ -153,6 +153,7 @@ lunco-experiments = { path = "../lunco-experiments" }
 lunco-experiments-ui = { path = "../lunco-experiments-ui", optional = true }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
+rumoca-core = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.

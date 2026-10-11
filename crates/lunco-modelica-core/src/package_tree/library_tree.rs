@@ -82,8 +82,10 @@ impl LibraryTree for FsLibraryTree {
 /// scan produces no fabricated children.
 #[cfg(not(target_arch = "wasm32"))]
 fn fs_root_for(package_path: &str) -> std::path::PathBuf {
-    let top = package_path.split('.').next().unwrap_or(package_path);
-    let rel: std::path::PathBuf = package_path.split('.').collect();
+    let top = rumoca_core::qualified_name_segments(package_path)
+        .next()
+        .unwrap_or(package_path);
+    let rel: std::path::PathBuf = rumoca_core::qualified_name_segments(package_path).collect();
     for source in lunco_assets_runtime::library::global_library_sources() {
         let candidate = source.base().join(top);
         if candidate.is_dir() {

@@ -228,14 +228,16 @@ pub enum ClassResolutionState {
 impl ClassEntry {
     /// Short name (leaf segment of the qualified name).
     pub fn short_name(&self) -> &str {
-        lunco_modelica_ast::ast_extract::short_name(&self.name)
+        rumoca_core::top_level_last_segment(&self.name)
     }
 
     /// Second-level segment of the qualified name — e.g.
     /// `"Modelica.Electrical.Analog.Examples.X"` → `"Electrical"`.
     /// Empty when the name has fewer than two dotted segments.
     pub fn domain(&self) -> &str {
-        self.name.split('.').nth(1).unwrap_or("")
+        rumoca_core::qualified_name_segments(&self.name)
+            .nth(1)
+            .unwrap_or("")
     }
 
     /// `true` when the qualified name sits under any `Examples.`
@@ -780,7 +782,7 @@ impl ModelicaIndex {
 }
 
 fn is_subcomponent(qualified: &str, used: &std::collections::HashSet<&str>) -> bool {
-    let short = qualified.rsplit('.').next().unwrap_or(qualified);
+    let short = rumoca_core::top_level_last_segment(qualified);
     used.contains(qualified) || used.contains(short)
 }
 

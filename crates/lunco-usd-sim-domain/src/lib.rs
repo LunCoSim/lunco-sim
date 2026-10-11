@@ -4594,11 +4594,9 @@ def Scope "Rig"
         assert!(source.contains("Force allocation | 1 actuator(s)"));
         let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
-        let class = lunco_modelica_index::class_lookup::find_class_by_qualified_name(
-            &ast,
-            "AttitudeActuation",
-        )
-        .expect("generated actuator model");
+        let class = ast
+            .get_class_by_qualified_name("AttitudeActuation")
+            .expect("generated actuator model");
         assert!(lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some());
         assert!(lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some());
     }

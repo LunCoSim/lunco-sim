@@ -45,7 +45,7 @@ pub fn unit_display_name(unit: &GeneratedModelicaUnit) -> String {
 
 /// Short member label with the exact class leaf retained for disambiguation.
 pub fn member_display_name(member: &str, class: &str) -> String {
-    let class_leaf = class.rsplit('.').next().unwrap_or(class);
+    let class_leaf = rumoca_core::top_level_last_segment(class);
     format!("{} · {class_leaf}", path_leaf(member))
 }
 

@@ -100,40 +100,8 @@ pub struct ModelicaEngine {
     /// `DocumentId` → URI used inside the session. Stable for the
     /// document's lifetime; freed on `Self::close_document`.
     uri_for_doc: HashMap<DocumentId, String>,
-    /// Qualified class name → candidate file URIs. Populated whenever an AST is
-    /// installed into the session (via `upsert_document_with_ast`,
-    /// `install_parsed_ast`, `install_lenient`, or `load_library_files`).
-    ///
-    /// `class_lookup_query` returns the qualified class name (not a file
-    /// URI), so `parsed_file_query` (which is keyed by file path) cannot
-    /// be called directly with its result. This map bridges the two:
-    /// `class_def` resolves the file URI here before calling
-    /// `parsed_file_query`.
-    /// Multiple candidates are retained while documents are being edited. A
-    /// single first-writer mapping can otherwise leave a closed document as
-    /// the only route after another open document declares the same class.
-    class_to_uris: HashMap<String, Vec<String>>,
-    /// Qualified class names we've already failed to bridge to a file
-    /// URI. The empty-diagram overlay calls `class_def` (via `icon_for`)
-    /// EVERY FRAME for the active class; without this negative cache an
-    /// unresolvable class re-ran the full source library-bundle scan in `class_def`
-    /// each frame (~90 ms on a 2670-doc bundle) and spammed a warn per
-    /// frame. Cleared whenever any AST is installed (a previously-missing
-    /// class may become resolvable once its file lands) — see
-    /// `index_ast_classes` / `load_library_files` / `install_lenient`.
-    class_uri_misses: HashSet<String>,
-    /// Resolved-Icon cache, keyed by qualified class name. The
-    /// empty-diagram overlay calls `icon_for` EVERY FRAME for the active
-    /// class; the engine adapter walks the full inheritance chain
-    /// and `class_def`-CLONES the class + every `extends` base on each
-    /// call. Measured at ~80 ms/frame for a class with a deep source library chain
-    /// (a static model card recomputed from scratch 60×/s). rumoca's
-    /// internal annotation memoisation does NOT eliminate these repeated
-    /// ClassDef clones, so we cache the merged result here. Invalidated on
-    /// any AST install (icon graphics can change with the source) — via
-    /// [`lunco_modelica_ast::source_memo::invalidate_source_memos`], which reaches the
-    /// paint-side bitmap-texture memo too. This field must NOT be cleared
-    /// directly: clearing it alone is what left those textures stale.
+    /// Merged icon projection keyed by exact class identity. Source memo
+    /// invalidation retires this projection and its paint-side texture together.
     icon_cache: lunco_modelica_ast::source_memo::SourceMemo<lunco_modelica_ast::annotations::Icon>,
     /// Documents whose async parse is currently in flight. Prevents
     /// double-spawning the same parse while a worker is mid-flight.
@@ -168,8 +136,6 @@ impl ModelicaEngine {
         Self {
             session: Session::default(),
             uri_for_doc: HashMap::new(),
-            class_to_uris: HashMap::new(),
-            class_uri_misses: HashSet::new(),
             icon_cache: lunco_modelica_ast::source_memo::SourceMemo::default(),
             pending: HashSet::new(),
             completed: Vec::new(),
@@ -178,52 +144,6 @@ impl ModelicaEngine {
             failed_source_roots: HashMap::new(),
             installed_source_sets: HashSet::new(),
         }
-    }
-
-    /// Populate `class_to_uri` from an AST that was just installed at
-    /// `file_uri`. Handles the source library `within X.Y; model Z end Z;` shape:
-    /// each top-level class key `k` in `ast.classes` maps to the full
-    /// qualified name `<within>.<k>` (or just `k` when `within` is absent).
-    fn index_ast_classes(
-        &mut self,
-        file_uri: &str,
-        ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    ) {
-        self.remove_class_uri_mappings(file_uri);
-        // A newly-installed AST can make a previously-unresolvable class
-        // resolvable — drop the negative cache so `class_def` retries.
-        self.class_uri_misses.clear();
-        // Icon graphics — and the bitmap files they reference — can change with the
-        // source. ONE signal invalidates every derived memo, here and on the paint
-        // side; see `lunco_modelica_ast::source_memo`.
-        lunco_modelica_ast::source_memo::invalidate_source_memos();
-        let prefix = ast
-            .within
-            .as_ref()
-            .map(|w| w.to_string())
-            .unwrap_or_default();
-        for class_key in ast.classes.keys() {
-            let qualified = if prefix.is_empty() {
-                class_key.clone()
-            } else {
-                format!("{}.{}", prefix, class_key)
-            };
-            let uris = self.class_to_uris.entry(qualified).or_default();
-            if !uris.iter().any(|uri| uri == file_uri) {
-                uris.push(file_uri.to_string());
-            }
-        }
-    }
-
-    /// Remove every class mapping owned by one parsed document.
-    ///
-    /// Rumoca owns the actual document lifetime, but this engine-side index is
-    /// an acceleration structure and must follow the same removal boundary.
-    fn remove_class_uri_mappings(&mut self, file_uri: &str) {
-        self.class_to_uris.retain(|_, uris| {
-            uris.retain(|uri| uri != file_uri);
-            !uris.is_empty()
-        });
     }
 
     /// URI we'd use for `doc_id` — same value `uri()` would produce, but
@@ -317,7 +237,7 @@ impl ModelicaEngine {
         self.uri_for_doc
             .entry(doc_id)
             .or_insert_with(|| uri.clone());
-        self.index_ast_classes(&uri, &ast);
+        lunco_modelica_ast::source_memo::invalidate_source_memos();
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
 
@@ -329,15 +249,8 @@ impl ModelicaEngine {
         self.uri_for_doc
             .entry(doc_id)
             .or_insert_with(|| uri.clone());
-        self.remove_class_uri_mappings(&uri);
-        self.class_uri_misses.clear();
         lunco_modelica_ast::source_memo::invalidate_source_memos();
-        if self.session.add_document(&uri, source).is_ok() {
-            if let Some(ast) = self.session.parsed_file_query(&uri) {
-                let ast = ast.clone();
-                self.index_ast_classes(&uri, &ast);
-            }
-        }
+        let _ = self.session.add_document(&uri, source);
     }
 
     /// URI we use for `doc_id` inside the session. Untitled / on-disk
@@ -360,7 +273,7 @@ impl ModelicaEngine {
         self.uri_for_doc
             .entry(doc_id)
             .or_insert_with(|| uri.clone());
-        self.index_ast_classes(&uri, &ast);
+        lunco_modelica_ast::source_memo::invalidate_source_memos();
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
 
@@ -386,9 +299,7 @@ impl ModelicaEngine {
     /// invalidated. Reopening the same `DocumentId` starts fresh.
     pub fn close_document(&mut self, doc_id: DocumentId) {
         if let Some(uri) = self.uri_for_doc.remove(&doc_id) {
-            self.remove_class_uri_mappings(&uri);
             self.session.remove_document(&uri);
-            self.class_uri_misses.clear();
             lunco_modelica_ast::source_memo::invalidate_source_memos();
         }
     }
@@ -397,17 +308,12 @@ impl ModelicaEngine {
     ///
     /// **Single AST-aware entry point for icon resolution.** Panels
     /// must use this — never start a second inheritance walk from a panel.
-    /// rumoca's `class_lookup_query` resolves bare names by suffix-match
-    /// across session docs (MLS § 5). Result-cached via `icon_cache`:
-    /// the engine adapter walks the whole inheritance chain and
-    /// `class_def`-clones every class along it, which measured ~80 ms per
-    /// call for a deep source library chain — far too costly to repeat every frame
-    /// for the static empty-diagram model card (the original "no
-    /// secondary cache" assumption that rumoca's annotation memoisation
-    /// covered this was wrong; it doesn't eliminate our per-call clones).
-    /// The cache is dropped on any AST install so edits still reflect.
+    /// Rumoca supplies exact source declarations and scope-resolved member
+    /// facts. The application caches its merged icon projection; every AST
+    /// install invalidates that projection.
     ///
-    /// Off-thread-safe: never reads from disk, never spawns a parse.
+    /// The background projection reads resident session source; Rumoca owns
+    /// any declaration materialization. No library filesystem discovery runs here.
     /// If `qualified` isn't in the session yet, returns `None` and
     /// the caller preserves an explicit unresolved/loading state. A
     /// subsequent projection after the class lands picks up the resolved
@@ -424,7 +330,7 @@ impl ModelicaEngine {
             return hit;
         }
         let falsy_params: HashSet<String> = self
-            .inherited_members_typed(qualified)
+            .inherited_members_typed(qualified)?
             .into_iter()
             .filter(|member| matches!(member.variability, InheritedVariability::Parameter))
             .filter(|member| member.default_value.as_deref() == Some("false"))
@@ -530,7 +436,6 @@ impl ModelicaEngine {
             .replace_in_memory_source_set(set_id, kind, files, None);
         if count > 0 {
             self.installed_source_sets.insert(set_id.to_string());
-            self.class_uri_misses.clear();
             lunco_modelica_ast::source_memo::invalidate_source_memos();
         }
         count
@@ -632,11 +537,7 @@ impl ModelicaEngine {
         files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     ) -> usize {
         let count = files.len();
-        for document in &files {
-            self.index_ast_classes(document.uri(), document.definition());
-        }
         self.session.add_in_memory_parsed_batch(files);
-        self.class_uri_misses.clear();
         lunco_modelica_ast::source_memo::invalidate_source_memos();
         count
     }
@@ -657,94 +558,33 @@ impl ModelicaEngine {
         self.session.class_component_members_query(qualified)
     }
 
-    /// Inheritance-merged component members with variability +
-    /// causality preserved. Same `extends` walk as
-    /// `Self::inherited_components` but consumers don't have to
-    /// re-walk the AST to bucket parameters / inputs / outputs.
-    ///
-    /// The typed query is not part of the maintained rumoca API, so we take
-    /// the authoritative (scope-resolved) membership list from
-    /// `class_component_members_query` and enrich each member with the
-    /// variability / causality / binding we read directly off the
-    /// `ClassDef` of the class (and its `extends` bases). Extraction
-    /// mirrors `index::insert_class_recursive`, the canonical path the
-    /// inspector already trusts.
-    pub fn inherited_members_typed(&mut self, qualified: &str) -> Vec<InheritedMember> {
-        // Authoritative, scope-resolved membership (name, type) — handles
-        // the full `extends` walk including source library bases.
-        let members = self.session.class_component_members_query(qualified);
-
-        // For each member resolve the class that actually *declares* it
-        // (`class_component_member_info_query` returns
-        // `(declaring_class, member_type)`), so we can read the typed
-        // `ast::Component` from that class's own declarations. We avoid
-        // `class_def`/`class_lookup_query` here: in rumoca main those
-        // return the bare class name, not a `parsed_file_query` URI, so
-        // the AST never comes back. `class_components_in_class_query`
-        // routes through the working `lookup_query_class_target`.
-        let resolved: Vec<(String, String, String)> = members
-            .into_iter()
-            .map(|(name, type_name)| {
-                let declaring = self
-                    .session
-                    .class_component_member_info_query(qualified, &name)
-                    .map(|(declaring, _ty)| declaring)
-                    .unwrap_or_else(|| qualified.to_string());
-                (name, type_name, declaring)
-            })
-            .collect();
-
-        // Pre-fetch typed components per unique declaring class (one
-        // query each), then build — keeps the `&mut self.session`
-        // borrows out of the build closure.
-        let mut comps_cache: HashMap<String, Vec<rumoca_compile::parsing::ast::Component>> =
-            HashMap::new();
-        let unique: HashSet<String> = resolved.iter().map(|(_, _, d)| d.clone()).collect();
-        for declaring in unique {
-            let comps = self
-                .session
-                .class_components_in_class_query(&declaring)
-                .unwrap_or_default();
-            comps_cache.insert(declaring, comps);
-        }
-
-        resolved
-            .into_iter()
-            .map(|(name, type_name, declaring)| {
-                let comp = comps_cache
-                    .get(&declaring)
-                    .and_then(|cs| cs.iter().find(|c| c.name == name));
-                let (variability, causality, default_value) = match comp {
-                    Some(c) => (
-                        map_variability_inherited(&c.variability),
-                        map_causality_inherited(&c.causality),
-                        // `parameter Real R = 100;` — the `= 100` lands in
-                        // `binding`; `start` holds the type's default
-                        // (0.0) unless a `start=` modifier set it. Prefer
-                        // the binding, fall back to a start *modification*.
-                        c.binding.as_ref().map(|e| format!("{e}")).or_else(|| {
-                            if c.start_is_modification {
-                                Some(format!("{}", c.start))
-                            } else {
-                                None
-                            }
-                        }),
-                    ),
-                    None => (
-                        InheritedVariability::Continuous,
-                        InheritedCausality::Internal,
-                        None,
-                    ),
-                };
-                InheritedMember {
-                    name,
-                    type_name,
-                    variability,
-                    causality,
-                    default_value,
-                }
-            })
-            .collect()
+    /// Project Rumoca's complete inherited declarations into the application
+    /// member ABI. Unresolved source facts have no complete member result.
+    pub fn inherited_members_typed(&mut self, qualified: &str) -> Option<Vec<InheritedMember>> {
+        let members = self.session.class_component_declarations_query(qualified)?;
+        Some(
+            members
+                .into_iter()
+                .map(|(_declaring, type_name, component)| {
+                    let default_value = component
+                        .binding
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .or_else(|| {
+                            component
+                                .start_is_modification
+                                .then(|| component.start.to_string())
+                        });
+                    InheritedMember {
+                        name: component.name,
+                        type_name,
+                        variability: map_variability_inherited(&component.variability),
+                        causality: map_causality_inherited(&component.causality),
+                        default_value,
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Read-only access to the underlying session for advanced queries
@@ -754,215 +594,10 @@ impl ModelicaEngine {
         &mut self.session
     }
 
-    /// Resolve `qualified` to its `ClassDef` inside the session's
-    /// already-parsed sources. Walks the dotted path through nested
-    /// classes the same way rumoca's internal lookup does.
-    ///
-    /// Returns `None` if no document containing the class has been
-    /// upserted (or loaded via `load_library_files`). Callers that
-    /// need filesystem-backed lazy loading should check `has_class`
-    /// first, push the file via `session_mut().add_document`, then
-    /// call `class_def`.
-    ///
-    /// ## URI vs qualified-name distinction
-    ///
-    /// `class_lookup_query` returns the **qualified class name** (e.g.
-    /// `"Modelica.Thermal.HeatTransfer.Sources.FixedTemperature"`),
-    /// **not** a file URI. `parsed_file_query` is keyed by file path
-    /// URI (e.g. `/…/FixedTemperature.mo`). We bridge these via the
-    /// `class_to_uris` map that is populated whenever an AST is
-    /// installed, and fall back to a linear search over the source library bundle
-    /// for classes that arrived via `replace_in_memory_source_set` (which
-    /// bypasses `add_document` and therefore skips `index_ast_classes`).
+    /// Retrieve a class declaration through Rumoca's current session index.
+    /// The caller owns the returned definition independently of the engine lock.
     pub fn class_def(&mut self, qualified: &str) -> Option<rumoca_compile::parsing::ast::ClassDef> {
-        // Negative cache: skip the whole resolution (incl. the O(bundle)
-        // source library scan below) for a class we've already failed to bridge. The
-        // empty-diagram overlay calls this every frame for the active
-        // class; re-running the scan + warn per frame was the ~90 ms/frame
-        // stall. Cleared on any AST install (see `index_ast_classes`).
-        if self.class_uri_misses.contains(qualified) {
-            return None;
-        }
-
-        // Confirm the class is known to rumoca's session at all.
-        let resolved_key = self.session.class_lookup_query(qualified);
-        if resolved_key.is_none() {
-            self.class_uri_misses.insert(qualified.to_string());
-            // `debug!`, not `warn!`: this fires for every standard-library
-            // class during the pre-source library projection (expected — resolution
-            // retries once source library installs), spamming the wasm console. The
-            // `class_uri_misses` guard already dedupes per class.
-            bevy::log::debug!(
-                "[engine] class_def: class_lookup_query failed for {}",
-                qualified
-            );
-            return None;
-        }
-
-        // Fast path: class_to_uris was populated when this AST was
-        // installed via upsert_document_with_ast / install_parsed_ast /
-        // load_library_files.
-        let mapped_uris: Vec<String> = self
-            .class_to_uris
-            .get(qualified)
-            .cloned()
-            .unwrap_or_default();
-
-        // Prefix path: `index_ast_classes` records only a file's TOP-LEVEL
-        // class key (e.g. `SatelliteDatacenter` for a user file that also
-        // holds the nested `SatelliteDatacenter.PowerSubsystem`). A nested
-        // class misses the exact lookup, but its containing file is already
-        // known under a dotted PREFIX. Match the LONGEST prefix already in
-        // `class_to_uris` (segment-boundary) so the most specific file wins.
-        // This resolves user-model nested classes in O(map) WITHOUT falling
-        // through to the source library-bundle scan — the path that caused the storm.
-        let mapped_uris = if mapped_uris.is_empty() {
-            let mut best_len = 0usize;
-            let mut best = Vec::new();
-            for (q, uris) in self.class_to_uris.iter() {
-                let is_container =
-                    qualified == q.as_str() || qualified.starts_with(&format!("{}.", q));
-                if !is_container {
-                    continue;
-                }
-                if q.len() > best_len {
-                    best_len = q.len();
-                    best.clear();
-                }
-                if q.len() == best_len {
-                    best.extend(uris.iter().cloned());
-                }
-            }
-            best
-        } else {
-            mapped_uris
-        };
-
-        // A URI prefix is only a candidate. source library packages commonly split
-        // children into sibling files (`Blocks/package.mo` contains the
-        // package and examples, while `Continuous.mo` contains Continuous),
-        // so a package URI must not shadow the indexed file that actually
-        // contains the requested nested class.
-        for uri in &mapped_uris {
-            if let Some(parsed) = self.session.parsed_file_query(uri) {
-                if let Some(found) =
-                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(
-                        parsed, qualified,
-                    )
-                    .cloned()
-                {
-                    return Some(found);
-                }
-            }
-            bevy::log::debug!(
-                "[engine] class_def: mapped URI `{}` does not contain {}; resolving by source index",
-                uri,
-                qualified
-            );
-        }
-
-        // Slow fallback: the class arrived via replace_in_memory_source_set
-        // (e.g. the bulk source library install), which bypasses add_document and
-        // therefore doesn't call index_ast_classes. Search the source library bundle
-        // directly and remember the result for next time.
-        //
-        // TODO(CQ-211): this is an O(files × classes) linear scan of the
-        // process-wide source library `Vec` bundle (~2700 classes). It's amortized —
-        // `class_to_uris` (above) + the `class_uri_misses` negative cache mean
-        // each class scans the bundle at most once — but a `HashMap<qualified,
-        // uri-list>` (+ a longest-prefix index) built ONCE at source library install would
-        // make the cold lookup O(1)/O(prefix) and let the startup count walk
-        // (`lunco-modelica-library`) drop its synchronous full tree traversal. Deferred:
-        // multi-file (engine/class_cache/source-library) and source library resolution is
-        // regression-prone (nested-URI / within-prefix). See
-        // docs/architecture/engineering-backlog-and-standards.md.
-        let file_uri =
-            lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
-                // A `.mo` that declares top-level qualified class `q` (= within +
-                // top-level key) ALSO contains every class nested under it (source library
-                // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
-                // holds `within Modelica.Blocks; package Examples … model
-                // PID_Controller …`). So the containing file for `qualified` is the
-                // one whose `q` is `qualified` itself or a dotted *prefix* of it.
-                // Match exact-or-prefix and keep the LONGEST `q` so the most
-                // specific file wins (`Modelica.Blocks.Examples` over the broader
-                // `Modelica.Blocks` package stub). The old exact-only match missed
-                // every nested class → `None` → callers (drill-in projection,
-                // icon resolution) retried every frame and rendered nothing.
-                let mut best: Option<(usize, String)> = None;
-                for document in bundle.iter() {
-                    let uri = document.uri();
-                    let ast = document.definition();
-                    let prefix = ast
-                        .within
-                        .as_ref()
-                        .map(|w| w.to_string())
-                        .unwrap_or_default();
-                    for class_key in ast.classes.keys() {
-                        let q = if prefix.is_empty() {
-                            class_key.clone()
-                        } else {
-                            format!("{}.{}", prefix, class_key)
-                        };
-                        let is_container =
-                            qualified == q || qualified.starts_with(&format!("{}.", q));
-                        if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
-                            best = Some((q.len(), uri.to_owned()));
-                        }
-                    }
-                }
-                // Caching of the resolved URI is unified below the chain.
-                best.map(|(_, uri)| uri)
-            });
-
-        let Some(file_uri) = file_uri else {
-            // Record the miss so the per-frame overlay caller stops
-            // re-running the bundle scan + this log every frame. It fires
-            // once per class (until an install clears it). `debug!`, not
-            // `warn!`: every standard-library class misses here during the
-            // pre-source library projection — expected, and it spammed the wasm console.
-            self.class_uri_misses.insert(qualified.to_string());
-            bevy::log::debug!(
-                "[engine] class_def: no file URI found for class {} \
-                 (class_to_uris miss + source library bundle miss)",
-                qualified
-            );
-            return None;
-        };
-        let Some(parsed) = self.session.parsed_file_query(&file_uri) else {
-            bevy::log::warn!(
-                "[engine] class_def: parsed_file_query failed for uri {} (class {})",
-                file_uri,
-                qualified
-            );
-            return None;
-        };
-
-        // Route through the canonical within-aware lookup so this
-        // path can't silently disagree with the read path when the
-        // file carries a `within Foo;` clause and the caller asks
-        // for `Foo.Bar` (the segment walk would look for "Foo" in
-        // `parsed.classes`, which is keyed under "Bar"). Same bug
-        // class as `walk_qualified` and `lookup_class_mut` had.
-        let Some(found) =
-            lunco_modelica_index::class_lookup::find_class_by_qualified_name(parsed, qualified)
-                .cloned()
-        else {
-            self.class_uri_misses.insert(qualified.to_string());
-            bevy::log::debug!(
-                "[engine] class_def: indexed URI `{}` does not contain {}",
-                file_uri,
-                qualified
-            );
-            return None;
-        };
-
-        // Cache only a URI that was proven to contain the requested class.
-        let uris = self.class_to_uris.entry(qualified.to_string()).or_default();
-        if !uris.iter().any(|uri| uri == &file_uri) {
-            uris.push(file_uri.clone());
-        }
-        Some(found)
+        self.session.class_definition_query(qualified).cloned()
     }
 
     /// Whether `qualified` resolves to a class currently in the
@@ -977,24 +612,11 @@ impl ModelicaEngine {
     }
 }
 
-// No Bevy adapter here yet. When the auto-sync system lands (it
-// needs `ResMut<...>` to mirror document changes into the engine),
-// the right home is a sibling crate `lunco-modelica-core-bevy` — same
-// pattern as the existing `lunco-doc` / `lunco-doc-bevy` split.
-// Until then this file stays plain Rust and headless-friendly.
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Test convenience: parse `src` and install the resulting AST into
-    /// `engine` under `id`. The engine surface only accepts pre-parsed
-    /// ASTs (Step 4 of the AST-canonical roadmap); tests opt in to the
-    /// parse cost explicitly via this helper rather than via a
-    /// source-taking method on the engine. Production code does the
-    /// same parse-then-upsert dance directly at its call sites — see
-    /// `document::ModelicaDocument::refresh_ast_now` for the canonical
-    /// pattern.
+    /// Install an explicitly parsed inline source at the engine boundary.
     fn upsert_test(engine: &mut ModelicaEngine, id: DocumentId, src: &str) {
         let ast = lunco_modelica_ast::parse_to_ast(src, "test.mo").expect("test source must parse");
         engine.upsert_document_with_ast(id, ast);
@@ -1245,7 +867,9 @@ mod tests {
         let src = "model Base\n  parameter Real k = 1;\n  input Real u;\n  output Real y;\nend Base;\n\nmodel Derived\n  extends Base;\n  Real x;\nend Derived;\n";
         upsert_test(&mut engine, DocumentId::new(1), src);
 
-        let members = engine.inherited_members_typed("Derived");
+        let members = engine
+            .inherited_members_typed("Derived")
+            .expect("complete declarations");
         let by_name: HashMap<&str, &InheritedMember> =
             members.iter().map(|m| (m.name.as_str(), m)).collect();
 
@@ -1278,7 +902,9 @@ mod tests {
         let src = "model Base\n  parameter Real R = 100;\n  parameter Real C = 0.001;\n  Real free;\nend Base;\n\nmodel Derived\n  extends Base;\n  parameter Real extra = 42;\nend Derived;\n";
         upsert_test(&mut engine, DocumentId::new(1), src);
 
-        let members = engine.inherited_members_typed("Derived");
+        let members = engine
+            .inherited_members_typed("Derived")
+            .expect("complete declarations");
         let by_name: HashMap<&str, &InheritedMember> =
             members.iter().map(|m| (m.name.as_str(), m)).collect();
 

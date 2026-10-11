@@ -41,7 +41,7 @@ pub(crate) fn spans_from_ast(
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
-    let class = lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, class_name)?;
+    let class = ast.get_class_by_qualified_name(class_name)?;
     let end_tok = class.end_name_token.as_ref()?;
     // rumoca's `ClassDef.location` spans only NAME → `end <Name>`, omitting
     // the prefix keyword and the trailing `;`. `class_full_text_span` widens
@@ -280,7 +280,7 @@ pub(crate) fn build_duplicate_source(
     // leaf fails `model not found` in Instantiate.
     let source = match origin_fqn {
         Some(fqn) => {
-            let origin_pkg = lunco_modelica_ast::ast_extract::parent_qualified(fqn);
+            let origin_pkg = rumoca_core::parent_scope(fqn).unwrap_or("");
             if origin_pkg.is_empty() {
                 renamed
             } else {

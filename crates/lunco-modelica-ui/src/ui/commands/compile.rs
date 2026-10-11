@@ -676,7 +676,11 @@ pub fn on_compile_model(
     let detected_first_class = candidates.first().cloned();
     let drilled_in_class = model_tabs.drilled_class_for_doc(doc);
     let chosen_via_explicit = if let Some(class) = request.class.as_ref() {
-        match crate::sim_target::resolve_requested_class(class, &candidates) {
+        match crate::sim_target::resolve_requested_class(
+            class,
+            &candidates,
+            document.index().within_path.as_deref(),
+        ) {
             Ok(class) => Some(class),
             Err(error) => {
                 let message = format!(
@@ -1080,7 +1084,7 @@ fn dispatch_experiment(
         // > sole non-package class. Without this, package-wrapped
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
-        let (source, filename, candidates) = {
+        let (source, filename, candidates, within) = {
             let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = match registry.host(doc) {
                 Some(h) => h,
@@ -1110,7 +1114,7 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            (source, filename, candidates)
+            (source, filename, candidates, index.within_path.clone())
         };
         // Class resolution precedence:
         //   1. explicit_class on the command — API/agent caller knows exactly.
@@ -1128,7 +1132,11 @@ fn dispatch_experiment(
             // `RunExperiment{class:"RoverThermalSystem"}` reaches
             // `LunarRover.RoverThermalSystem` instead of failing deep in the
             // compiler with "model not found". Shared with `CompileModel`.
-            Some(req) => match crate::sim_target::resolve_requested_class(&req, &candidates) {
+            Some(req) => match crate::sim_target::resolve_requested_class(
+                &req,
+                &candidates,
+                within.as_deref(),
+            ) {
                 Ok(qualified) => qualified,
                 Err(e) => {
                     return Err(format!(

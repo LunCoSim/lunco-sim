@@ -28,7 +28,7 @@ pub(super) struct WireStyle {
 /// canvas. Used as the FALLBACK when we couldn't read the connector
 /// instance's own `icon_color` from the AST.
 pub(super) fn wire_style_for(connector_type: &str) -> WireStyle {
-    let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
+    let leaf = rumoca_core::top_level_last_segment(connector_type);
     use egui::Color32 as C;
     let (color, domain) = match leaf {
         // Electrical: red (positive) — source library Pin uses {0,0,255}; OMEdit

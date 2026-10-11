@@ -783,9 +783,10 @@ impl SourceLibraryIndexer {
 
                 self.resolve_inheritance(full_name, &mut ports, &mut parameters, &mut visited);
 
-                let short_name = lunco_modelica_ast::ast_extract::short_name(full_name).to_string();
-                let category =
-                    lunco_modelica_ast::ast_extract::parent_qualified(full_name).replace('.', "/");
+                let short_name = rumoca_core::top_level_last_segment(full_name).to_string();
+                let category = rumoca_core::parent_scope(full_name)
+                    .unwrap_or("")
+                    .replace('.', "/");
 
                 // Inheritance-merged icon. The merge logic lives in
                 // `extract_icon_inherited`; the resolver does

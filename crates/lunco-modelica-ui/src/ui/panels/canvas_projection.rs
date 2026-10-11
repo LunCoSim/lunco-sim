@@ -276,8 +276,7 @@ pub fn import_model_to_diagram_from_ast(
         None => None,
     };
     if let Some(target) = resolved_target.as_deref() {
-        if lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target).is_none()
-        {
+        if ast.get_class_by_qualified_name(target).is_none() {
             return Err(format!(
                 "target Modelica class '{target}' was not found in the source"
             ));
@@ -433,9 +432,7 @@ pub fn import_model_to_diagram_from_ast(
     if is_source_drill_in {
         // External source classes are self-sufficient on qualified paths.
     } else if let Some(target) = target_class {
-        if let Some(target_class_def) =
-            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-        {
+        if let Some(target_class_def) = ast.get_class_by_qualified_name(target) {
             // Register two scopes for short-name lookup:
             //   1. **Sibling classes inside the target's enclosing
             //      package.** When drilling into
@@ -448,13 +445,8 @@ pub fn import_model_to_diagram_from_ast(
             //   2. **Nested helper classes inside the target itself.**
             //      For composite classes that hold their own helper
             //      types as inner classes.
-            if let Some((parent_path, _)) = target.rsplit_once('.') {
-                if let Some(parent_class_def) =
-                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(
-                        &ast,
-                        parent_path,
-                    )
-                {
+            if let Some((parent_path, _)) = rumoca_core::split_last_top_level(target) {
+                if let Some(parent_class_def) = ast.get_class_by_qualified_name(parent_path) {
                     for (sibling_name, sibling_class) in parent_class_def.classes.iter() {
                         register_local_class(
                             &mut local_classes_by_short,
@@ -472,7 +464,7 @@ pub fn import_model_to_diagram_from_ast(
                 // siblings from the same AST so the root canvas renders the
                 // authored unit icons and double-click can drill into the
                 // exact executable child class.
-                let target_leaf = target.rsplit('.').next().unwrap_or(target);
+                let target_leaf = rumoca_core::top_level_last_segment(target);
                 for (sibling_name, sibling_class) in ast.classes.iter() {
                     if sibling_name != target_leaf
                         && !matches!(
@@ -585,15 +577,9 @@ pub fn import_model_to_diagram_from_ast(
             ast.classes
                 .iter()
                 .find_map(|_| {
-                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-                        .map(|class| {
-                            crate::diagram::collect_inherited_components(
-                                class,
-                                Some(target),
-                                &ast,
-                                0,
-                            )
-                        })
+                    ast.get_class_by_qualified_name(target).map(|class| {
+                        crate::diagram::collect_inherited_components(class, Some(target), &ast, 0)
+                    })
                 })
                 .unwrap_or_default()
         } else {
@@ -610,9 +596,7 @@ pub fn import_model_to_diagram_from_ast(
             // earlier direct-name match handled only single-segment
             // names and silently missed every drill-in into a
             // package-aggregated source.
-            if let Some(target_class_def) =
-                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-            {
+            if let Some(target_class_def) = ast.get_class_by_qualified_name(target) {
                 for (cname, comp) in target_class_def.components.iter() {
                     map.insert(cname.as_str(), comp);
                 }
@@ -711,7 +695,7 @@ pub fn import_model_to_diagram_from_ast(
             // short-form ref in a source-library example silently dropped at
             // conversion (e.g. CompareSincExpSine projecting 0 nodes).
             if let Some(target) = target_class {
-                let mut parts: Vec<&str> = target.split('.').collect();
+                let mut parts: Vec<&str> = rumoca_core::qualified_name_segments(target).collect();
                 // Drop the leaf (the target class itself) — scope walks
                 // start at its enclosing package.
                 parts.pop();
@@ -1563,9 +1547,9 @@ end CompositeFixture;
         let full = COMPOSITE_SOURCE;
         // Reproduce load_library_class's slice: within + RocketStage body.
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class =
-            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
-                .expect("RocketStage in package");
+        let class = ast_full
+            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .expect("RocketStage in package");
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
@@ -1705,9 +1689,9 @@ end Unit_One;
         };
         // slim slice with no target
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class =
-            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
-                .unwrap();
+        let class = ast_full
+            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .unwrap();
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 

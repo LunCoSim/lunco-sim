@@ -30,7 +30,7 @@ pub fn connect_line_routes(
 ) -> HashMap<ConnectEndpointKey, LineRoute> {
     let mut routes = HashMap::new();
     if let Some(target) = target_class {
-        if let Some(class) = crate::class_lookup::find_class_by_qualified_name(ast, target) {
+        if let Some(class) = ast.get_class_by_qualified_name(target) {
             collect_class_routes(class, source, &mut routes, false);
         }
     } else {

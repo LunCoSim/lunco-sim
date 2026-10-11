@@ -271,18 +271,6 @@ pub fn qualify(parent: &str, child: &str) -> String {
     }
 }
 
-/// Return the last dotted segment of a qualified name — the short
-/// display form (`"Modelica.Blocks.PID"` → `"PID"`). For names
-/// without any `.`, returns the whole input. Empty input → empty.
-///
-/// Delegates to rumoca-core's `top_level_last_segment`, so it is
-/// **subscript-aware**: dots inside bracketed subscripts (`a.b[c.d]`)
-/// are ignored rather than split on. Single source of truth shared
-/// with rumoca's own name handling.
-pub fn short_name(qualified: &str) -> &str {
-    rumoca_core::top_level_last_segment(qualified)
-}
-
 /// Read a string literal's value from Rumoca's parsed AST.
 /// Rumoca has already removed source quotes and decoded Modelica escapes.
 /// The retained token text is the value, including any literal quotes or
@@ -296,20 +284,6 @@ pub fn string_literal_value(e: &Expression) -> Option<String> {
         } => Some(token.text.to_string()),
         _ => None,
     }
-}
-
-/// Return the qualified-name prefix *before* the last dotted segment
-/// — the parent scope. `"Modelica.Blocks.PID"` → `"Modelica.Blocks"`.
-/// Names without any `.` (single-segment, e.g. `"PID"`) return `""`
-/// — the implicit top-level scope. Empty input → `""`.
-///
-/// Uses the shared Modelica name segments, so a dot inside a quoted identifier
-/// or a bracketed subscript remains part of that segment.
-pub fn parent_qualified(qualified: &str) -> &str {
-    crate::qualified_name_segments(qualified)
-        .last()
-        .filter(|last| last.len() < qualified.len())
-        .map_or("", |last| &qualified[..qualified.len() - last.len() - 1])
 }
 
 /// Return ALL non-package classes (qualified) reachable from the
@@ -624,46 +598,6 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 // merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
 // nonsensical pile.
 
-/// Find a class by short name, walking nested classes too.
-///
-/// Many source library packages and user-authored multi-class files (e.g.
-/// `AnnotatedRocketStage` which wraps `RocketStage`/`Tank`/`Valve`/…
-/// inside a `package AnnotatedRocketStage`) expose simulatable classes
-/// only inside a wrapper package. A top-level-only lookup misses them
-/// and breaks `describe_model` even when `compile_model` (which uses
-/// `collect_non_package_classes_qualified`) succeeds. Recursing here
-/// keeps the two views consistent.
-///
-/// Returns the first match in iteration order — duplicate short names
-/// across nested levels are resolved by the outer-most occurrence.
-///
-/// NOTE: this is a *distinct concern* from MLS §5.3 scope resolution
-/// ([`crate::scope_chain_candidates`]) — it's an intra-document
-/// leaf search for navigate-to-symbol, with no enclosing-scope/import
-/// context and no library lookup. It is intentionally NOT folded into
-/// the scope-chain resolver.
-pub fn find_class_by_short_name<'a>(
-    ast: &'a StoredDefinition,
-    short_name: &str,
-) -> Option<&'a ClassDef> {
-    find_in_classes(&ast.classes, short_name)
-}
-
-fn find_in_classes<'a>(
-    classes: &'a AstIndexMap<String, ClassDef>,
-    short_name: &str,
-) -> Option<&'a ClassDef> {
-    if let Some((_, class)) = classes.iter().find(|(name, _)| name.as_str() == short_name) {
-        return Some(class);
-    }
-    for class in classes.values() {
-        if let Some(found) = find_in_classes(&class.classes, short_name) {
-            return Some(found);
-        }
-    }
-    None
-}
-
 /// Byte range of a class's FULL source text — from its leading prefix
 /// keyword(s) (`package`/`model`/`partial connector`/…) through the
 /// terminating `;`.
@@ -775,7 +709,11 @@ pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<Str
     }
     qualified_names
         .into_iter()
-        .filter_map(|name| name.split('.').next().map(str::to_owned))
+        .filter_map(|name| {
+            rumoca_core::qualified_name_segments(&name)
+                .next()
+                .map(str::to_owned)
+        })
         .filter(|root| !root.is_empty() && !is_builtin_type_name(root))
         .collect()
 }
@@ -786,7 +724,7 @@ pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<Str
 pub fn required_source_roots_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
     let mut roots = source_root_dependencies_from_ast(ast);
     if let Some(package) = within_package(ast)
-        && let Some(root) = package.split('.').next()
+        && let Some(root) = rumoca_core::qualified_name_segments(&package).next()
         && !ast.classes.contains_key(root)
         && !root.is_empty()
     {
@@ -959,7 +897,7 @@ fn is_input_connector_type(type_name: &str) -> bool {
     // tail. `Modelica.Blocks.Interfaces.RealInput` and bare
     // `RealInput` both resolve to the short name `RealInput`.
     let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = short_name(bare);
+    let short = rumoca_core::top_level_last_segment(bare);
     matches!(
         short,
         "RealInput" | "IntegerInput" | "BooleanInput" | "StringInput"
@@ -970,7 +908,7 @@ fn is_input_connector_type(type_name: &str) -> bool {
 /// connectors — see that doc for the rationale.
 fn is_output_connector_type(type_name: &str) -> bool {
     let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = short_name(bare);
+    let short = rumoca_core::top_level_last_segment(bare);
     matches!(
         short,
         "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"

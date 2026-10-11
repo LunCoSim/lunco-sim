@@ -10,15 +10,9 @@
 //! inspector title) shouldn't have to branch on which source
 //! produced the data.
 //!
-//! [`ClassMetadata`] is the common shape, [`resolve_metadata`] is
-//! the single lookup function. Dispatch is on [`Library`]: system
-//! libraries (source library, third-party, bundled) consult the pre-baked
-//! palette index first; workspace docs (user files, untitled) read
-//! the per-doc [`ModelicaIndex`]. The within-prefix mismatch that
-//! caused the historical "(no documentation)" bug becomes
-//! impossible: [`ClassRef::path`] is always within-library, the
-//! per-doc index keys classes the same way, and the palette index
-//! stores absolute names that match [`ClassRef::qualified`].
+//! [`ClassMetadata`] is the common projection. Source libraries use their
+//! palette index; workspace documents use their parsed declaration and index.
+//! Names retain their exact authored package identity.
 
 use bevy::prelude::World;
 
@@ -76,28 +70,16 @@ pub fn resolve_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata
             {
                 return Some(ClassMetadata::from(&def));
             }
-            // 2. Fallback: if the user has the owning doc open
-            //    (Bundled drill-in opens a Doc), consult its live
-            //    index by the within-relative name.
+            // An open backing document supplies current metadata before its
+            // palette projection is available.
             workspace_doc_metadata(world, class)
         }
         Library::UserFile { .. } | Library::Untitled(_) => workspace_doc_metadata(world, class),
     }
 }
 
-/// String-keyed convenience for call sites that don't yet build a
-/// [`ClassRef`]: look up metadata for the class named `drilled`
-/// inside document `doc_id`. When `drilled` is `None`, falls back
-/// to the first non-package class declared in the document.
-///
-/// This is the lookup path the docs panel uses — its drilled string
-/// may be an absolute source library-rooted name (`"Modelica.Blocks.Examples.PID_Controller"`)
-/// while the doc's index keys are within-relative
-/// (`"Blocks.Examples.PID_Controller"`). The implementation tries
-/// the verbatim key first, then progressively strips leading
-/// segments, then suffix-matches the leaf — same handling
-/// [`workspace_doc_metadata`] does, but driven from an explicit
-/// document id instead of a [`ClassRef`].
+/// Resolve an exact class inside its owning document. An omitted name uses
+/// the document's shared simulation-target selection.
 pub fn resolve_metadata_for_doc(
     world: &World,
     doc_id: lunco_doc::DocumentId,
@@ -115,99 +97,59 @@ pub fn resolve_metadata_for_doc_in<R: ResourceRead>(
 ) -> Option<ClassMetadata> {
     let registry = ctx.read_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()?;
     let host = registry.host(doc_id)?;
-    resolve_metadata_from_index(host.document().index(), drilled)
+    resolve_document_metadata(host.document(), drilled)
 }
 
-/// Index-driven core of [`resolve_metadata_for_doc`]: resolve the
-/// drilled class (with within-tolerance + leaf fallback) or fall back
-/// to the first non-package class.
-fn resolve_metadata_from_index(
-    index: &lunco_modelica_index::index::ModelicaIndex,
-    drilled: Option<&str>,
+/// Project only the declaration addressed by the document's authored identity.
+fn resolve_document_metadata(
+    document: &lunco_modelica_document::ModelicaDocument,
+    requested: Option<&str>,
 ) -> Option<ClassMetadata> {
-    if let Some(q) = drilled {
-        let mut found = index.classes.get(q);
-        if found.is_none() {
-            let mut remainder = q;
-            while let Some((_, rest)) = remainder.split_once('.') {
-                if let Some(e) = index.classes.get(rest) {
-                    found = Some(e);
-                    break;
-                }
-                remainder = rest;
-            }
-        }
-        if found.is_none() {
-            let leaf = lunco_modelica_ast::ast_extract::short_name(q);
-            found = index
-                .classes
-                .iter()
-                .find(|(k, _)| k.as_str() == leaf || k.ends_with(&format!(".{leaf}")))
-                .map(|(_, v)| v);
-        }
-        if let Some(entry) = found {
-            return Some(ClassMetadata::from(entry));
-        }
-    }
-    // Fallback: first non-package class.
-    let fallback = index
-        .classes
-        .values()
-        .find(|c| !matches!(c.kind, ClassKind::Package))
-        .or_else(|| index.classes.values().next())?;
-    Some(ClassMetadata::from(fallback))
+    let selected = match requested {
+        Some(name) => name.to_owned(),
+        None => crate::sim_target::default_class(None, &document.index().simulation_candidates())?,
+    };
+    let ast = document.syntax().ast();
+    ast.get_class_by_qualified_name(&selected)?;
+    let relative = ast.relative_class_name(&selected);
+    let entry = document.index().classes.get(relative)?;
+    let mut metadata = ClassMetadata::from(entry);
+    metadata.qualified = match document
+        .index()
+        .within_path
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        Some(within) => format!("{within}.{relative}"),
+        None => relative.to_string(),
+    };
+    Some(metadata)
 }
 
-/// Search the document registry for a class matching `class`'s
-/// within-relative path. Used by [`resolve_metadata`]'s
-/// non-pre-baked branch and as a fallback for system libraries
-/// whose backing doc happens to be open.
+/// Resolve the owning workspace document, or a unique open source declaration.
 fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata> {
     let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()?;
+    let qualified = class.qualified();
     let target_doc = match &class.library {
-        Library::UserFile { path } => registry.find_by_path(path),
+        Library::UserFile { path } => Some(registry.find_by_path(path)?),
         Library::Untitled(doc_id) => Some(*doc_id),
-        _ => None,
+        Library::Source { .. } | Library::Bundled => None,
     };
-    let qualified = class.path.join(".");
-    let leaf = class.path.last().cloned().unwrap_or_default();
-
-    // Strategy: when we know the owning doc (UserFile/Untitled),
-    // hit its index directly. Otherwise scan every open doc — the
-    // first whose index contains the within-relative name wins.
-    let metadata_from = |entry: &ClassEntry| ClassMetadata::from(entry);
     if let Some(doc_id) = target_doc {
-        if let Some(host) = registry.host(doc_id) {
-            let index = host.document().index();
-            let hit = index
-                .classes
-                .get(&qualified)
-                .or_else(|| index.classes.get(leaf.as_str()))
-                .or_else(|| {
-                    index
-                        .classes
-                        .iter()
-                        .find(|(k, _)| {
-                            k.as_str() == leaf.as_str() || k.ends_with(&format!(".{}", leaf))
-                        })
-                        .map(|(_, v)| v)
-                });
-            return hit.map(metadata_from);
-        }
+        let host = registry.host(doc_id)?;
+        return resolve_document_metadata(host.document(), Some(&qualified));
     }
+    let mut matched = None;
     for (_doc_id, host) in registry.iter() {
-        let index = host.document().index();
-        if let Some(entry) = index.classes.get(&qualified) {
-            return Some(metadata_from(entry));
-        }
-        if let Some(entry) = index
-            .classes
-            .iter()
-            .find(|(k, _)| k.as_str() == leaf.as_str() || k.ends_with(&format!(".{}", leaf)))
-            .map(|(_, v)| v)
-        {
-            return Some(metadata_from(entry));
+        if let Some(metadata) = resolve_document_metadata(host.document(), Some(&qualified)) {
+            if metadata.qualified != qualified {
+                continue;
+            }
+            if matched.is_some() {
+                return None;
+            }
+            matched = Some(metadata);
         }
     }
-    None
+    matched
 }
