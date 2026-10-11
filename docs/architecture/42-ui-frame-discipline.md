@@ -273,6 +273,10 @@ the physics solver empties. Never block that queue:
   an async parse/library completion, or an expired edit-debounce deadline;
   completion workers use a mutex-ordered wake latch, so bounded drains do not
   lose queued work and idle frames do not poll the engine.
+  Native workers prepare the session/document AST copies off-thread and queue
+  the exact typed syntax result with its diagnostics. The UI drain only moves
+  that result; its budget includes document/index installation and it stops
+  after a result exhausts the budget. Index construction remains update-side.
 - **Frame-rate-independent animation.** Anything using time must
   take `dt` from `ui.ctx().input(|i| i.unstable_dt)` (egui) or
   `Time::delta` (bevy). Never assume 60 Hz.

@@ -764,6 +764,18 @@ document registry advances one monotonic revision for document membership or
 source mutations, then the synchronizer compares each document generation
 before parsing or upserting it. Async parse completion remains an explicit
 mutation signal, so a stale completion cannot leave a changed document asleep.
+The parse worker queues an owned `SyntaxCache` with its spawn generation,
+shared AST, and located diagnostics at the session-install boundary. Native
+workers prepare the session's separate owned AST before acquiring its mutex;
+the update-side FIFO moves the queued syntax without cloning a parsed tree.
+The drain checks the generation before document installation and charges both
+queue extraction and index installation to its per-update budget. One result
+can exceed that budget, but subsequent results wait for another update.
+WASM transport and prepared-library results use this same document consumer;
+they do not install the document directly in addition to queuing a completion.
+The production `modelica_parse_completion.rhai` gate exercises a clean scratch
+document, source-located invalid syntax with healthy-index retention, and a
+repaired generation with refreshed classes and cleared parse diagnostics.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.

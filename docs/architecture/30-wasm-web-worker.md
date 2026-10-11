@@ -114,6 +114,13 @@ pub enum WireResult {
 }
 ```
 
+Document parse envelopes carry the spawn generation, recovered AST, and
+located diagnostics. The bridge queues one typed syntax result through the
+Modelica engine's FIFO; the shared generation-checked drain installs the
+document and emits its class changes. Prepared source-library ASTs use the
+same drain. The page still makes the session's owned AST copy at this
+transport boundary; native parse workers make that copy off-thread.
+
 `ModelicaCommand` and `ModelicaResult` derive `Serialize`/`Deserialize`.
 `ModelicaCommand::Compile.stream` is `#[serde(skip)]` because
 `Arc<ArcSwap<SimSnapshot>>` only makes sense in one address space; on

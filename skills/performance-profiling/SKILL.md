@@ -964,9 +964,15 @@ attribute time to its internal owner operations before choosing an async
 boundary or cache.
 
 For startup `drive_engine_sync` outliers, compare
-`modelica_engine_completion_snapshot` (engine lock and parsed-tree snapshot)
+`modelica_engine_completion_snapshot` (engine lock and typed completion move)
 with `modelica_engine_completion_install` (generation validation and document
 syntax/index installation). The latter identifies the document and generation.
+`modelica_engine_syntax_prepare` measures the separate session AST copy. Native
+parse workers execute it before taking the session lock; WASM transport still
+performs that ownership copy on the page. Document results retain the worker's
+shared AST and exact diagnostics through the FIFO. Its per-update budget covers
+installation, but one large index can still exceed the budget. Attribute that
+remaining tail before changing the index preparation boundary.
 For physics telemetry, `physics_telemetry_source_retention` separates registry
 retention from kinematics/contact collection and marks metadata discovery with
 `metadata_dirty`. Compare first discovery with settled sampling before changing

@@ -203,23 +203,6 @@ impl ModelicaEngineHandle {
         true
     }
 
-    /// Admit an off-thread parse for `doc_id`'s immutable `source` snapshot
-    /// and install its result into the engine when it completes.
-    ///
-    /// Returns immediately; the lock is held only briefly to mark
-    /// `doc_id` as pending. The parse itself runs OUTSIDE the lock,
-    /// then a brief lock at the end installs the AST and queues a
-    /// completion via [`ModelicaEngine::finish_parse`].
-    ///
-    /// `gen` is the doc's generation at spawn time — readers that
-    /// drain completions can compare it against the doc's current
-    /// generation and discard stale results.
-    ///
-    /// `admit_fn` must enqueue the task and return `true`, or reject it without
-    /// running it and return `false`. Native callers use the shared async
-    /// admission resource; wasm parsing uses the dedicated Web Worker path.
-    ///
-    /// No-op if a parse for `doc_id` is already in flight (dedupe).
     /// Mark a doc as pending-parse and return its URI without spawning
     /// any parser. Used by the wasm path that ships parsing to the
     /// Web Worker — dispatched through [`ModelicaWorkerBridge`]
@@ -235,26 +218,22 @@ impl ModelicaEngineHandle {
         Some(engine.uri_for(doc_id))
     }
 
-    /// Install a worker-parsed AST and clear the pending slot in one
-    /// atomic step. Counterpart to `mark_pending_for_worker`.
-    pub fn install_worker_parsed_ast(
+    /// Prepare the session's owned AST before taking its lock, then install
+    /// it and queue the matching syntax in one atomic completion boundary.
+    /// Native callers run this on the admitted parse worker; WASM callers
+    /// receive an owned AST from the worker transport.
+    pub fn install_worker_parse_results(
         &self,
         doc_id: DocumentId,
-        r#gen: u64,
-        ast: rumoca_compile::parsing::ast::StoredDefinition,
+        syntax: lunco_modelica_document::SyntaxCache,
     ) {
+        let ast = {
+            let _span = bevy::log::debug_span!("modelica_engine_syntax_prepare").entered();
+            (*syntax.ast).clone()
+        };
         let mut engine = self.lock();
         engine.install_parsed_ast(doc_id, ast);
-        engine.finish_parse(doc_id, r#gen);
-        self.wake_sync();
-    }
-
-    /// Drop the pending slot without installing anything — used when
-    /// the worker reports a parse failure so the dedup gate clears
-    /// and the next gen can retry.
-    pub fn finish_pending_failed(&self, doc_id: DocumentId, r#gen: u64) {
-        let mut engine = self.lock();
-        engine.finish_parse(doc_id, r#gen);
+        engine.finish_parse(doc_id, syntax);
         self.wake_sync();
     }
 
@@ -263,8 +242,14 @@ impl ModelicaEngineHandle {
     /// syntax cache, so the same source generation is not retried forever.
     pub fn finish_worker_parse_failed(&self, doc_id: DocumentId, r#gen: u64, error: String) {
         let mut engine = self.lock();
-        engine.set_parse_diags(doc_id, vec![lunco_doc::Diagnostic::message_only(error)]);
-        engine.finish_parse(doc_id, r#gen);
+        engine.finish_parse(
+            doc_id,
+            lunco_modelica_document::SyntaxCache {
+                generation: r#gen,
+                ast: std::sync::Arc::new(rumoca_compile::parsing::ast::StoredDefinition::default()),
+                errors: vec![lunco_doc::Diagnostic::message_only(error)],
+            },
+        );
         self.wake_sync();
     }
 
@@ -278,9 +263,12 @@ impl ModelicaEngineHandle {
 
     /// Reserve a document parse and offer its immutable job to an admission owner.
     ///
-    /// Returns `true` only when the job is accepted. A duplicate parse or a
-    /// rejected queue submission releases the pending slot so the owner can
-    /// retry after its normal capacity-change signal.
+    /// Returns `true` only when the job is accepted. A duplicate leaves the
+    /// existing parse pending; a rejected submission releases its reservation.
+    /// Parsing and syntax preparation run off-lock on the admitted worker.
+    /// Session installation queues the exact spawn generation's result under
+    /// the engine mutex. `admit_fn` must accept the task or reject it without
+    /// running it.
     pub fn upsert_document_async<F>(
         &self,
         doc_id: DocumentId,
@@ -310,22 +298,20 @@ impl ModelicaEngineHandle {
             let recovery = lunco_modelica_ast::parse_to_syntax(&source, &uri);
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
             let has_errors = recovery.has_errors();
-            // Resolve the lenient parser's structured errors into located
-            // diagnostics now, while we still hold the source. Stashed on
-            // the engine for the drain to fold into the doc's SyntaxCache
-            // — without this the native live-edit path lost them entirely.
+            // Prepare the document's exact syntax result on the worker while
+            // the source and recovery diagnostics are still available.
             let diags: Vec<lunco_doc::Diagnostic> = recovery
                 .parse_errors()
                 .iter()
                 .map(|e| lunco_modelica_document::parse_diag_from_error(e, &source))
                 .collect();
-            let ast = recovery.best_effort().clone();
+            let syntax = lunco_modelica_document::SyntaxCache {
+                generation: r#gen,
+                ast: std::sync::Arc::new(recovery.best_effort().clone()),
+                errors: diags,
+            };
             let t_install = web_time::Instant::now();
-            let mut engine = me.lock();
-            engine.install_parsed_ast(doc_id, ast);
-            engine.set_parse_diags(doc_id, diags);
-            engine.finish_parse(doc_id, r#gen);
-            me.wake_sync();
+            me.install_worker_parse_results(doc_id, syntax);
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
                 "[engine] async parse doc={} gen={} bytes={} parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
@@ -492,46 +478,36 @@ pub fn drive_engine_sync(
     // the UI feeds the hint (headless: always `None` → no reordering).
     let active_doc: Option<DocumentId> = pacing.active_document;
     // ── 1. Drain async-parse completions ──────────────────────────────
-    // Pull a bounded completion batch from the workers. For each, fetch the
-    // strict AST from the session and backfill the doc's local SyntaxCache +
-    // AstCache so panels see the parsed state without needing a separate
-    // `ast_refresh` pass. The wall-clock budget keeps a burst of background
-    // parses from monopolising the frame that receives them.
+    // Move one exact worker result at a time. The budget covers the document
+    // install as well as the queue drain; a large index cannot cause the rest
+    // of a completion burst to be installed in the same update.
     let completion_budget = web_time::Duration::from_millis(pacing.completion_budget_ms);
     let completion_started = web_time::Instant::now();
-    let completed_results: Vec<_> = {
-        let _span = bevy::log::debug_span!("modelica_engine_completion_snapshot").entered();
-        let Some(mut engine) = handle.try_lock() else {
-            return;
-        };
-        let mut results = Vec::new();
-        loop {
-            if !results.is_empty() && completion_started.elapsed() >= completion_budget {
-                break;
-            }
-            let Some((doc_id, parse_gen)) = engine.drain_completed_up_to(1).into_iter().next()
-            else {
-                break;
-            };
-            results.push((
-                doc_id,
-                parse_gen,
-                engine.parsed_for_doc(doc_id).cloned(),
-                engine.take_parse_diags(doc_id),
-            ));
+    let mut installed_any = false;
+    loop {
+        if installed_any && completion_started.elapsed() >= completion_budget {
+            break;
         }
-        results
-    };
-    for (doc_id, parse_gen, parsed_ast, parse_diags) in completed_results {
+        let result = {
+            let _span = bevy::log::debug_span!("modelica_engine_completion_snapshot").entered();
+            let Some(mut engine) = handle.try_lock() else {
+                return;
+            };
+            engine.drain_completed_up_to(1).into_iter().next()
+        };
+        let Some((doc_id, syntax)) = result else {
+            break;
+        };
+        installed_any = true;
+        let parse_gen = syntax.generation;
         let _span = bevy::log::debug_span!(
             "modelica_engine_completion_install",
             document = doc_id.raw(),
             generation = parse_gen
         )
         .entered();
-        // Snapshot current doc gen + URI under a brief engine lock —
-        // we'll backfill if the doc still matches the gen this parse
-        // ran against.
+        // Only the document generation admitted for this parse may consume
+        // its syntax result. Closed documents have no matching host.
         let host_gen = registry
             .host(doc_id)
             .map(|h| h.document().generation())
@@ -551,55 +527,15 @@ pub fn drive_engine_sync(
             }
             continue;
         }
-        match (parsed_ast, registry.host_mut(doc_id)) {
-            (Some(ast), Some(host)) => {
-                let arc_ast = std::sync::Arc::new(ast);
-                let syntax = lunco_modelica_document::SyntaxCache {
-                    generation: parse_gen,
-                    ast: arc_ast,
-                    // Located parse diagnostics captured at spawn time.
-                    errors: parse_diags,
-                };
-                host.document_mut().install_parse_results(syntax);
-                bevy::log::info!(
-                    "[EngineSync] async parse complete doc={} gen={} → backfilled doc.syntax",
-                    doc_id.raw(),
-                    parse_gen,
-                );
-            }
-            (None, _) => {
-                // Strict parse failed (recovered into session via
-                // lenient parser recovery). Surface the failure into the
-                // doc's parse cache so the diagnostics panel can
-                // show a row.
-                if let Some(host) = registry.host_mut(doc_id) {
-                    // Prefer the located diagnostics; fall back to a
-                    // generic note only when the parser gave us none.
-                    let errors = if parse_diags.is_empty() {
-                        vec![lunco_doc::Diagnostic::message_only(
-                            "strict parse failed (lenient recovered)",
-                        )]
-                    } else {
-                        parse_diags
-                    };
-                    let syntax = lunco_modelica_document::SyntaxCache {
-                        generation: parse_gen,
-                        ast: std::sync::Arc::new(
-                            rumoca_compile::parsing::ast::StoredDefinition::default(),
-                        ),
-                        errors,
-                    };
-                    host.document_mut().install_parse_results(syntax);
-                }
-                bevy::log::warn!(
-                    "[EngineSync] async parse strict-failed doc={} gen={}",
-                    doc_id.raw(),
-                    parse_gen,
-                );
-            }
-            (Some(_), None) => {
-                // Doc was closed mid-parse; engine still got the AST.
-            }
+        if let Some(host) = registry.host_mut(doc_id) {
+            let has_errors = syntax.has_errors();
+            host.document_mut().install_parse_results(syntax);
+            bevy::log::info!(
+                "[EngineSync] async parse complete doc={} gen={} has_errors={} → backfilled doc.syntax",
+                doc_id.raw(),
+                parse_gen,
+                has_errors,
+            );
         }
         // install_parse_results rebuilds the index, which emits
         // structured `ClassAdded` / `ClassRemoved` / `ClassRenamed`
@@ -839,28 +775,19 @@ pub fn drive_engine_sync(
                 };
                 if let Some(ast) = cached_ast {
                     let t0 = web_time::Instant::now();
-                    handle.install_worker_parsed_ast(doc_id, r#gen, ast.clone());
-                    let t_engine = t0.elapsed().as_secs_f64() * 1000.0;
-                    let t1 = web_time::Instant::now();
-                    if let Some(host) = registry.host_mut(doc_id) {
-                        let syntax = lunco_modelica_document::SyntaxCache {
+                    handle.install_worker_parse_results(
+                        doc_id,
+                        lunco_modelica_document::SyntaxCache {
                             generation: r#gen,
                             ast: std::sync::Arc::new(ast),
                             errors: Vec::new(),
-                        };
-                        host.document_mut().install_parse_results(syntax);
-                    }
-                    // See sibling site above: rebuild_index emits
-                    // class-diff changes; wake the watermark observer.
-                    registry.mark_changed(doc_id);
-                    let t_doc = t1.elapsed().as_secs_f64() * 1000.0;
+                        },
+                    );
                     bevy::log::info!(
-                        "[EngineSync] reuse pre-parsed source library AST doc={} gen={} \
-                         engine={:.0}ms doc={:.0}ms",
+                        "[EngineSync] queued pre-parsed source library AST doc={} gen={} engine={:.0}ms",
                         doc_id.raw(),
                         r#gen,
-                        t_engine,
-                        t_doc,
+                        t0.elapsed().as_secs_f64() * 1000.0,
                     );
                     continue;
                 }
@@ -965,16 +892,14 @@ pub fn drive_engine_sync(
 /// [`ModelicaWorkerBridge`] per
 /// finished parse; the transport layer pushes each into a crossbeam
 /// channel; this system pulls them off the channel and routes each
-/// through [`ModelicaEngineHandle::install_worker_parsed_ast`] (success)
-/// or [`ModelicaEngineHandle::finish_pending_failed`] (parse error).
+/// through [`ModelicaEngineHandle::install_worker_parse_results`] (success)
+/// or [`ModelicaEngineHandle::finish_worker_parse_failed`] (parse error).
+/// Document installation belongs to the shared generation-checked FIFO drain.
 ///
 #[cfg(target_arch = "wasm32")]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
     worker_bridge: Res<ModelicaWorkerBridge>,
-    mut registry: ResMut<
-        lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
-    >,
 ) {
     use lunco_modelica_document::SyntaxCache;
     use std::sync::Arc;
@@ -993,20 +918,16 @@ pub fn drain_worker_parse_results(
         // well-formed. Both fields land in the doc's single
         // `SyntaxCache` and the engine session adopts the AST as
         // its canonical view.
-        let ast_arc = Arc::new(env.ast);
-        handle.install_worker_parsed_ast(env.doc_id, env.generation, (*ast_arc).clone());
-        if let Some(host) = registry.host_mut(env.doc_id) {
-            let syntax = SyntaxCache {
+        let error_count = env.errors.len();
+        handle.install_worker_parse_results(
+            env.doc_id,
+            SyntaxCache {
                 generation: env.generation,
-                ast: ast_arc,
-                errors: env.errors.clone(),
-            };
-            host.document_mut().install_parse_results(syntax);
-        }
-        // Wake the watermark observer for the class-diff changes the
-        // rebuild may have just pushed.
-        registry.mark_changed(env.doc_id);
-        if env.errors.is_empty() {
+                ast: Arc::new(env.ast),
+                errors: env.errors,
+            },
+        );
+        if error_count == 0 {
             bevy::log::info!(
                 "[EngineSync] worker-parsed install doc={} gen={}",
                 env.doc_id.raw(),
@@ -1017,7 +938,7 @@ pub fn drain_worker_parse_results(
                 "[EngineSync] worker-parsed install doc={} gen={} with {} parse error(s)",
                 env.doc_id.raw(),
                 env.generation,
-                env.errors.len(),
+                error_count,
             );
         }
     }
@@ -1062,13 +983,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_completion_moves_the_exact_worker_syntax() {
+        let handle = ModelicaEngineHandle::default();
+        let doc_id = DocumentId::new(81);
+        let syntax = lunco_modelica_document::SyntaxCache::from_source("model A end A;", 7);
+        let ast = std::sync::Arc::clone(&syntax.ast);
+        handle.install_worker_parse_results(doc_id, syntax);
+        // A session mutation cannot change the already queued generation's AST.
+        handle.lock().upsert_document_with_ast(
+            doc_id,
+            lunco_modelica_ast::parse_to_syntax("model B end B;", "test.mo")
+                .best_effort()
+                .clone(),
+        );
+        let (actual_id, result) = handle.lock().drain_completed_up_to(1).pop().unwrap();
+        assert_eq!(actual_id, doc_id);
+        assert_eq!(result.generation, 7);
+        assert!(std::sync::Arc::ptr_eq(&ast, &result.ast));
+        assert!(result.ast.classes.contains_key("A"));
+        assert!(!result.ast.classes.contains_key("B"));
+    }
+
+    #[test]
+    fn parse_completion_keeps_recovery_and_terminal_failure_diagnostics() {
+        let handle = ModelicaEngineHandle::default();
+        let doc_id = DocumentId::new(82);
+        assert!(handle.upsert_document_async(
+            doc_id,
+            3,
+            std::sync::Arc::from("model Broken Real x = ; end Broken;"),
+            |task| {
+                task();
+                true
+            },
+        ));
+        let (_, recovered) = handle.lock().drain_completed_up_to(1).pop().unwrap();
+        assert_eq!(recovered.generation, 3);
+        assert!(recovered.has_errors());
+        assert!(
+            recovered
+                .errors
+                .iter()
+                .any(|d| d.line.is_some_and(|v| v > 0) && d.col.is_some_and(|v| v > 0))
+        );
+        handle.finish_worker_parse_failed(doc_id, 4, "worker failed".to_string());
+        let (_, failed) = handle.lock().drain_completed_up_to(1).pop().unwrap();
+        assert_eq!(failed.generation, 4);
+        assert!(failed.ast.classes.is_empty());
+        assert_eq!(failed.errors.len(), 1);
+        assert_eq!(failed.errors[0].message, "worker failed");
+    }
+
+    #[test]
     fn engine_sync_wakeup_stays_set_until_completion_queue_is_empty() {
         let handle = ModelicaEngineHandle::default();
         assert!(!handle.sync_wakeup_pending());
 
         {
             let mut engine = handle.lock();
-            engine.finish_parse(DocumentId::new(1), 1);
+            engine.finish_parse(
+                DocumentId::new(1),
+                lunco_modelica_document::SyntaxCache::from_source("model M end M;", 1),
+            );
             handle.wake_sync();
         }
 
@@ -1146,7 +1122,10 @@ mod tests {
 
         {
             let mut engine = handle.lock();
-            engine.finish_parse(DocumentId::new(1), 1);
+            engine.finish_parse(
+                DocumentId::new(1),
+                lunco_modelica_document::SyntaxCache::from_source("model M end M;", 1),
+            );
             handle.wake_sync();
         }
         assert!(engine_sync_is_due(

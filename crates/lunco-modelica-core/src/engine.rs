@@ -140,15 +140,9 @@ pub struct ModelicaEngine {
     /// Inserted by `mark_pending`; cleared by the worker on completion.
     pending: HashSet<DocumentId>,
     /// Async-parse completions ready for the Bevy adapter to drain.
-    /// Each entry carries the doc's generation **at parse spawn**, so
-    /// the adapter can ignore stale results when the doc moved on.
-    completed: Vec<(DocumentId, u64)>,
-    /// Located parse diagnostics from the most recent async parse,
-    /// keyed by doc. Set off-lock by the native spawn (which holds the
-    /// source + recovery) and taken by `drive_engine_sync` on drain to
-    /// fill the doc's `SyntaxCache`. Lets the native live-edit path
-    /// surface clickable parse errors instead of a generic string.
-    parse_diags: HashMap<DocumentId, Vec<lunco_doc::Diagnostic>>,
+    /// Each result owns the exact syntax and diagnostics for its spawn
+    /// generation. Draining moves that result without copying the session AST.
+    completed: Vec<(DocumentId, lunco_modelica_document::SyntaxCache)>,
     /// Bundled source roots currently being parsed by the async loader.
     pending_source_roots: HashSet<String>,
     /// Roots completed since the last Bevy adapter drain.
@@ -179,7 +173,6 @@ impl ModelicaEngine {
             icon_cache: lunco_modelica_ast::source_memo::SourceMemo::default(),
             pending: HashSet::new(),
             completed: Vec::new(),
-            parse_diags: HashMap::new(),
             pending_source_roots: HashSet::new(),
             completed_source_roots: Vec::new(),
             failed_source_roots: HashMap::new(),
@@ -233,19 +226,6 @@ impl ModelicaEngine {
         });
     }
 
-    /// Stash the located parse diagnostics for `doc_id` produced by an
-    /// off-lock async parse. Overwrites any prior set — only the latest
-    /// parse's diagnostics matter.
-    pub fn set_parse_diags(&mut self, doc_id: DocumentId, diags: Vec<lunco_doc::Diagnostic>) {
-        self.parse_diags.insert(doc_id, diags);
-    }
-
-    /// Take (and clear) the parse diagnostics stashed for `doc_id`.
-    /// Returns an empty vec when none were recorded.
-    pub fn take_parse_diags(&mut self, doc_id: DocumentId) -> Vec<lunco_doc::Diagnostic> {
-        self.parse_diags.remove(&doc_id).unwrap_or_default()
-    }
-
     /// URI we'd use for `doc_id` — same value `uri()` would produce, but
     /// callable from `&self` contexts where holding `self` mutably
     /// across a parse would block other engine queries.
@@ -262,9 +242,13 @@ impl ModelicaEngine {
 
     /// Worker reports its parse finished. Clears the in-flight slot
     /// and queues the result for the adapter to drain.
-    pub fn finish_parse(&mut self, doc_id: DocumentId, r#gen: u64) {
+    pub fn finish_parse(
+        &mut self,
+        doc_id: DocumentId,
+        syntax: lunco_modelica_document::SyntaxCache,
+    ) {
         self.pending.remove(&doc_id);
-        self.completed.push((doc_id, r#gen));
+        self.completed.push((doc_id, syntax));
     }
 
     /// Cancel a parse that was not admitted to a worker queue.
@@ -303,10 +287,13 @@ impl ModelicaEngine {
     /// Take at most `limit` completions accumulated since the last drain.
     ///
     /// The Bevy adapter installs each AST into the document registry on the
-    /// main thread. Keeping this queue bounded per update prevents a burst of
+    /// update schedule. Keeping this queue bounded per update prevents a burst of
     /// worker completions from turning one frame into an unbounded batch of
     /// AST/index rebuilds. FIFO order keeps document readiness deterministic.
-    pub fn drain_completed_up_to(&mut self, limit: usize) -> Vec<(DocumentId, u64)> {
+    pub fn drain_completed_up_to(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(DocumentId, lunco_modelica_document::SyntaxCache)> {
         let count = limit.min(self.completed.len());
         self.completed.drain(..count).collect()
     }
@@ -398,7 +385,6 @@ impl ModelicaEngine {
     /// caches, and any resolved-tree state referencing it are
     /// invalidated. Reopening the same `DocumentId` starts fresh.
     pub fn close_document(&mut self, doc_id: DocumentId) {
-        self.parse_diags.remove(&doc_id);
         if let Some(uri) = self.uri_for_doc.remove(&doc_id) {
             self.remove_class_uri_mappings(&uri);
             self.session.remove_document(&uri);
@@ -1057,18 +1043,38 @@ mod tests {
         let second = DocumentId::new(2);
         let third = DocumentId::new(3);
 
-        engine.finish_parse(first, 11);
-        engine.finish_parse(second, 22);
-        engine.finish_parse(third, 33);
+        engine.finish_parse(
+            first,
+            lunco_modelica_document::SyntaxCache::from_source("model A end A;", 11),
+        );
+        engine.finish_parse(
+            second,
+            lunco_modelica_document::SyntaxCache::from_source("model B end B;", 22),
+        );
+        engine.finish_parse(
+            third,
+            lunco_modelica_document::SyntaxCache::from_source("model C end C;", 33),
+        );
 
         assert!(engine.has_parse_work(first));
 
         assert_eq!(
-            engine.drain_completed_up_to(2),
+            engine
+                .drain_completed_up_to(2)
+                .into_iter()
+                .map(|(id, syntax)| (id, syntax.generation))
+                .collect::<Vec<_>>(),
             vec![(first, 11), (second, 22)]
         );
         assert!(!engine.has_parse_work(first));
-        assert_eq!(engine.drain_completed_up_to(2), vec![(third, 33)]);
+        assert_eq!(
+            engine
+                .drain_completed_up_to(2)
+                .into_iter()
+                .map(|(id, syntax)| (id, syntax.generation))
+                .collect::<Vec<_>>(),
+            vec![(third, 33)]
+        );
         assert!(engine.drain_completed_up_to(1).is_empty());
     }
 

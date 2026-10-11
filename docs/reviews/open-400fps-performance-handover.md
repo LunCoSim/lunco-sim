@@ -1,5 +1,63 @@
 # High-quality realtime performance handover
 
+## Move asynchronous Modelica syntax copies to parse workers — 2026-10-11
+
+`lunco-modelica-core` queues each worker's typed syntax cache at the session
+installation boundary. The update-side consumer moves its shared AST,
+generation and located diagnostics directly, validates the document generation,
+and installs it once. Native workers prepare the session's separate owned AST
+off-lock. The existing FIFO, wake latch, pending admission, index owner and
+class-change consumer remain in place. Completion budgeting now includes the
+index installation and stops the drain after a result exhausts the budget.
+WASM transport and prepared-library results share that document consumer;
+the browser page still performs its session ownership copy. This is a generic
+resource/ownership mechanism, with no new lifecycle policy or Rhai hook.
+
+The 347,594,361-byte production Tracy capture passes native CPU exports.
+Fourteen session-copy events run on parse-worker threads distinct from all
+captured update-side drains: 8.930 ms total, 0.286 ms median, 2.635 ms maximum.
+The 39 completion moves total 0.083 ms, with a 2.244 microsecond median and
+6.092 microsecond maximum. Fourteen document installations total 9.435 ms and
+peak at 1.715 ms. These are captured owner diagnostics, not a complete startup
+sample or a causal overall FPS comparison. The earlier capture's long snapshot
+and index-install tails cannot be paired here: the checkout's entire `target/`
+directory disappeared during the pass. Earlier artifacts referenced below
+under `target/entity-tree-perf/` are no longer locally retained. Current
+`syntax-completion-` receipts, capture, normal backup and logs are retained there.
+
+Native `cargo test -p lunco-modelica-core --lib completion -j 4` passes five
+resource seam checks, including exact shared AST identity after session
+mutation, FIFO draining, located recovery diagnostics and terminal worker
+failure. The `wasm32-unknown-unknown` focused compile passes with the repository
+web cfg flags; browser runtime behavior is unobserved. The production
+`modelica_parse_completion.rhai` gate passes seven checks for clean, invalid
+and repaired generations. The repair reaches the existing `ClassRenamed`
+consumer. Its isolated owned PID 2677833 exits through API `Exit` and releases
+4202. Passing runs use explicit task-owned configuration directories.
+
+Normal artifact
+`6b6da728ef499fe3498e5677186a6f76d40ccc30fa1900ac15af094f9dea9e80`
+passes all ten exact replay profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+Its retained gzip backup is hash-verified after restoration. The final normal
+profile verifies actual `sandbox_view` / `rover_build` activation before
+measuring; earlier attempts with unregistered IDs are explicitly invalid for
+perspective comparisons. Its View/Builder/View medians are
+10.911 / 11.021 / 11.097 ms, with 487 / 487 / 486 physics steps in approximately
+eight-second windows and stable 50-body / 33-collider topology. The screenshot
+audit confirms Builder panels, the live scene and High shadows. The final
+normal run reaches warm readiness in 2.445 seconds and records no other Cargo
+or simulator process in its three windows. The missing paired baseline still
+prevents a causal application FPS claim. The Tracy app and collector exit zero, releasing 4202 and 8087;
+the final unprofiled app also exits zero and releases its API port.
+
+External libraries, solver communication, numerical state, simulation ordering,
+physics fidelity and rendering quality retain their contracts. Full loading,
+visual FPS, physics-throughput acceptance and the pre-existing raycast drive
+failure remain open. Large document index preparation remains update-side and
+needs a complete owner-level design that preserves its live map identities and
+class-change semantics before moving it to workers.
+
 ## Serial local-shadow execution and GPU attribution — 2026-10-11
 
 The application-owned `SharedShadowView` schedule uses Bevy's native
