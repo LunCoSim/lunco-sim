@@ -138,6 +138,15 @@ contract. The Bash and PowerShell matrices in
 for each profile and stop on a nonzero exit; they do not parse logs or compare
 JSON. Rhai print/log lines remain diagnostics.
 
+When refreshing that reference, capture an identified pre-change production
+artifact, then require its uninstrumented authored gate to replay every profile
+before testing the candidate against those same rows. Preserve profile inputs,
+checkpoint ticks, identities, zero tolerance and the deliberate mismatch check.
+Review drift from an older fixture against the current physics/Modelica owners;
+a fresh capture alone is not proof that the candidate preserves behavior.
+Record pool width from `clock_snapshot().physics_compute_threads` with
+`physics_profile_known=true`; CLI `threads=0` alone does not observe the width.
+
 A finish helper must update the actor's actual state before reporting. For a
 script-defined receiver method, use `this` in its body and call
 `this.finish(...)`; passing the state map as an ordinary function argument

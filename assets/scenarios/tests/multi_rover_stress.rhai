@@ -562,6 +562,8 @@ fn on_start(me, ctx) {
     } else {
         0
     };
+    print("[multi-rover] compute_threads=" + this.physics_compute_threads
+        + " profile_known=" + this.physics_profile_known);
 
     let group = find_path("/MultiRoverStress/Rovers");
     if group == () || group < 0 {

@@ -1,5 +1,76 @@
 # High-quality realtime performance handover
 
+## Full current-contract determinism matrix and frame ranking — 2026-10-11
+
+The ten authored production profiles now have a refreshed canonical reference
+in `scripts/tests/fixtures/deterministic-physics-reference.json`, SHA
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+The baseline is the preserved Avian-index normal artifact
+`119ee3ad2616ad0b52f0e8d3f75520626be3cd4295d50adbfba0cd1712a2603b`;
+it predates the successful-wiring publication optimization. Its archive is
+decompressed and its SHA verified before launch. Capture adds only row logging
+to the Rhai observer and restores the source before replay. The observer now
+reports its existing typed clock's known compute-pool width at startup.
+
+The baseline independently captures every profile, then replays all ten with
+the normal authored gate. Current normal artifact
+`3e3b0048675018e4a9d9f92fd0f91cf9827956d6179132bb2ac56e1f2cec4dfb`
+replays those same ten profiles. Each artifact passes 360 checks: six four-rover
+profiles with 24 checks each, two eight-rover profiles with 36 each and two
+twenty-rover profiles with 72 each. The two four-rover scheduling profiles and
+four jitter profiles cover 0.25/0.5 jitter and both existing seeds. All runs
+use API 4202 with verified executable/cwd/PID ownership, exit zero and close
+the port. Observed clock facts report width one for serial and 24 for default;
+these describe the compute pool, rather than measuring active CPU execution.
+
+Within each scene size, independently captured serial/default numeric payloads
+are identical. All six four-rover profiles, including both jitter levels and
+seeds, have identical physics, Modelica, articulated and final payloads. Profile
+parameters, widths, checkpoint ticks, identities, first-behavior tick and the
+zero-tolerance comparison contract remain unchanged. The deliberate altered-row
+rejection remains part of every authored gate. The canonical fixture contains
+the exact file bytes used by these replays; its source metadata identifies the
+actual baseline, input hashes and width observation.
+
+The previous fixture predates current physics contracts, including the mounted
+suspension-axis cast repair and collider admission/solver-pose repair. It also
+records a different Modelica variable surface. Initial state fields can match
+while later numeric states differ; this refresh records current-contract state.
+The before/after proof above concerns the successful-wiring optimization and
+cross-profile determinism, without asserting numeric identity to that older
+build. Initial capture runs against the stale fixture intentionally produce
+failed comparison verdicts and are not passing gates. The first baseline driver
+stops after a passing twenty-rover app because it assumes 24 checks for every
+scene; the corrected driver reuses its five valid app results and completes the
+remaining five. The final baseline receipt covers all ten passing apps.
+
+The validated 324,836,276-byte Tracy capture from the wiring-publication section below has
+full CPU self/inclusive and GPU rankings. Native exports contain 10,690,437 CPU
+events in each mode and 73,812 GPU events. Settled View/Build/View windows admit
+events by start time; window edges are not frame-aligned. Schedule self time
+can include executor waits, and inclusive spans across nesting/threads must not
+be summed into an application compute cost.
+
+The entity-tree change gate costs 0.1703/0.1636/0.1518 ms per frame even though
+tree rendering uses a cached view. The workbench render owner costs
+0.4376/1.8175/0.4030 ms inclusively. Render-thread submission means are
+5.0774/4.7656/4.6310 ms; this does not distinguish driver, GPU or scheduling
+causes. GPU shared-shadow early spans average about 0.514 ms per view, with
+roughly twelve shared views per main camera, while camera-shadow early spans
+average 2.13–2.34 ms. Main opaque-pass means are 0.55–0.66 ms. All four shadow
+span names are present. These are contended diagnostic observations with main
+PID 84260 still active and untouched. The first eight seconds separately rank
+queued USD visual processing at 181 ms self time across 27 admissions; this
+is not a load-to-ready measurement.
+
+Full-matrix receipts, logs, the preserved baseline and ranking remain under
+`target/entity-tree-perf/`, prefixes `full-matrix-` and `landing-publication-`.
+The normal executable remains restored and all owned sessions are closed.
+No external library, solver math, ordering, precision, cadence or quality
+changes are made in this step. Next investigations are the entity-tree change
+gate and loading admission. Clean loading, visual FPS and physics-throughput
+acceptance remain open.
+
 ## Publish successful wiring diagnostics once per fabric — 2026-10-11
 
 The shared `PropagationCache` retains a dense acknowledgement after a target's
