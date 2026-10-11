@@ -35,6 +35,23 @@ images are under `.lunco/performance-evidence/entity-tree-perf/`, using
 `startup-rocks-` and `summer-startup-` prefixes. Avoided duplicate work is proven;
 this check does not establish a whole-app loading-time or FPS gain.
 
+Integration preserves main's class-identity/complete-declaration change
+`24a037244`. On merged `256f98cd1`, normal artifact
+`faee8b646cdacd1e9a9935e97ebbfa20309a89cc6e213ac39d9bab7158b799fb`
+builds successfully. Two fresh Summer Space School launches each request 598
+rocks once, skip the unchanged terrain rebuild, and reach readiness without a
+runtime fault. The 20-rover production replay passes all 72 exact checks against
+the unchanged reference. Owned Twin/replay/repeat PIDs
+2145688/2150361/2162147 exit zero and release API 4202.
+
+Whole-startup visual stability remains open: the first integrated image shows
+large flat terrain patches despite complete stream/derived counts. Its hidden
+continuation has no reflected source shader at 27.7 seconds. The same exact
+artifact's repeat has a visible continuation, valid source reflection and no
+such patches. This correlation requires source/material publication tracing;
+it does not establish the patches' cause. The duplicate rock-field reset is
+resolved independently of this remaining visual issue.
+
 ## Thread-affine native Modelica execution — 2026-10-11
 
 Native live sessions now use persistent application-owned solver workers.
