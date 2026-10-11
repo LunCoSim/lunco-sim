@@ -28,6 +28,7 @@ use lunco_engineering_values::{
     CoordinateFrameId, Dimension, Unit, UnitReference, UnitScaleExactness,
 };
 use std::hash::{Hash, Hasher};
+use std::sync::LazyLock;
 
 use lunco_port_core::ports::{
     PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
@@ -312,6 +313,38 @@ pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian_queries::RAYCAST_GROUP,
 ];
 
+/// Immutable name candidates derived from the authoritative table, in its
+/// declaration order. Entity membership is checked live by every consumer.
+static AVIAN_NAMED_SLOTS: LazyLock<std::collections::HashMap<&'static str, Vec<u64>>> =
+    LazyLock::new(|| {
+        let mut names: std::collections::HashMap<&'static str, Vec<u64>> =
+            std::collections::HashMap::new();
+        for (group_index, group) in AVIAN.iter().enumerate() {
+            for (port_index, port) in group.ports.iter().enumerate() {
+                names
+                    .entry(port.name)
+                    .or_default()
+                    .push(avian_slot(group_index, port_index));
+            }
+        }
+        names
+    });
+
+/// Select the first live declaration with the requested name and causality.
+/// Unrelated groups are excluded by immutable schema facts, never by cached ECS state.
+fn avian_named_port(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    accepts: impl Fn(PortDirection) -> bool,
+) -> Option<(u64, &'static AvianGroup, &'static AvianPort)> {
+    AVIAN_NAMED_SLOTS.get(name)?.iter().find_map(|&slot| {
+        let group = &AVIAN[(slot >> 16) as usize];
+        let port = &group.ports[(slot & 0xffff) as usize];
+        (accepts(port.dir) && (group.present)(world, entity)).then_some((slot, group, port))
+    })
+}
+
 /// Install every Avian group's own topology watcher.
 ///
 /// The group table is the authoritative composition point for Avian ports. A
@@ -324,6 +357,14 @@ pub(crate) fn register_avian_port_topology(app: &mut App) {
 }
 
 fn avian_list(world: &World, entity: Entity, out: &mut PortDeclarationQuery<'_>) {
+    if let Some(name) = out.requested_name() {
+        if let Some((_, _, port)) = avian_named_port(world, entity, name, |direction| {
+            out.accepts_direction(direction)
+        }) {
+            out.declare(port.name, port.dir);
+        }
+        return;
+    }
     for group in AVIAN {
         if !(group.present)(world, entity) {
             continue;
@@ -364,11 +405,12 @@ fn avian_metadata(
     name: &str,
     direction: PortDirection,
 ) -> PortMetadata {
-    let (group, port) = AVIAN
-        .iter()
-        .filter(|group| (group.present)(world, entity))
-        .find_map(|group| avian_metadata_port(group, name, direction).map(|port| (group, port)))
-        .expect("Avian metadata is requested only for a listed owner port");
+    let (_, group, _) = avian_named_port(world, entity, name, |port_direction| {
+        direction == PortDirection::InOut || port_direction == direction
+    })
+    .expect("Avian metadata is requested only for a listed owner port");
+    let port = avian_metadata_port(group, name, direction)
+        .expect("selected Avian declaration has its engineering contract");
     let (min, max) = match port.contract.range {
         AvianRange::Unbounded => (None, None),
         AvianRange::Positive => (Some(f64::MIN_POSITIVE), Some(f64::MIN_POSITIVE.recip())),
@@ -488,27 +530,15 @@ fn avian_decode(slot: u64) -> Option<&'static AvianPort> {
 }
 
 /// Resolve the first avian port named `name` whose causality satisfies `dir_ok`
-/// to its [`avian_slot`], scanning [`AVIAN`] groups in precedence order and
-/// skipping groups whose gating component is absent on `entity`. This is the
-/// ONE scan (group-presence + name compare); once resolved, the hot loop reads
-/// by slot with a single component access and no re-scan.
+/// to its [`avian_slot`]. The shared immutable name index narrows candidates;
+/// live membership and table precedence choose the owner on every admission.
 fn avian_resolve(
     world: &World,
     entity: Entity,
     name: &str,
     dir_ok: fn(PortDirection) -> bool,
 ) -> Option<u64> {
-    for (gi, group) in AVIAN.iter().enumerate() {
-        if !(group.present)(world, entity) {
-            continue;
-        }
-        for (pi, p) in group.ports.iter().enumerate() {
-            if p.name == name && dir_ok(p.dir) {
-                return Some(avian_slot(gi, pi));
-            }
-        }
-    }
-    None
+    avian_named_port(world, entity, name, dir_ok).map(|(slot, _, _)| slot)
 }
 
 fn avian_resolve_output(world: &World, entity: Entity, name: &str) -> Option<u64> {
@@ -1218,6 +1248,111 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Measures live resolved writes through the registered backend precedence.
+    #[test]
+    #[ignore = "manual resolved-write performance measurement"]
+    fn resolved_surface_write_benchmark() {
+        let mut world = World::new();
+        world.init_resource::<PortTopologyRevision>();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+        let mut targets = Vec::new();
+        for _ in 0..128 {
+            let endpoint = world.spawn(Port::default()).id();
+            let surface = world
+                .spawn(PortSurface::new(std::collections::HashMap::from([(
+                    "command".into(),
+                    lunco_port_core::PortSurfacePort::new(endpoint, PortDirection::In),
+                )])))
+                .id();
+            let resolved = registry.resolve_input(&world, surface, "command").unwrap();
+            targets.push((surface, endpoint, resolved));
+        }
+        let began = std::time::Instant::now();
+        for tick in 1..=6000 {
+            let value = f64::from(tick);
+            for (surface, _, resolved) in &targets {
+                registry
+                    .write_resolved(&mut world, *surface, resolved, value)
+                    .unwrap();
+            }
+        }
+        let elapsed = began.elapsed();
+        for (_, endpoint, _) in targets {
+            assert_eq!(
+                world.get::<Port>(endpoint).unwrap().value.to_bits(),
+                6000.0f64.to_bits()
+            );
+        }
+        println!(
+            "RESOLVED_WRITE_BENCH elapsed_ns={} writes=768000 final_bits={:016x}",
+            elapsed.as_nanos(),
+            6000.0f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn named_avian_candidates_follow_table_order_and_live_membership() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::Mobility::Kinematic,
+            ))
+            .id();
+        let mut declarations = Vec::new();
+        avian_list(
+            &world,
+            entity,
+            &mut PortDeclarationQuery::all(&mut declarations),
+        );
+        for declaration in declarations {
+            if matches!(
+                declaration.direction,
+                PortDirection::In | PortDirection::InOut
+            ) {
+                let slot = avian_resolve_input(&world, entity, &declaration.name)
+                    .expect("full inspection and named input admission share the table");
+                let port = avian_decode(slot).unwrap();
+                assert_eq!(port.name, declaration.name);
+                assert!(matches!(port.dir, PortDirection::In | PortDirection::InOut));
+            }
+            if matches!(
+                declaration.direction,
+                PortDirection::Out | PortDirection::InOut
+            ) {
+                let slot = avian_resolve_output(&world, entity, &declaration.name)
+                    .expect("full inspection and named output admission share the table");
+                let port = avian_decode(slot).unwrap();
+                assert_eq!(port.name, declaration.name);
+                assert!(matches!(
+                    port.dir,
+                    PortDirection::Out | PortDirection::InOut
+                ));
+            }
+        }
+        for (group_index, group) in AVIAN.iter().enumerate() {
+            for (port_index, port) in group.ports.iter().enumerate() {
+                let candidates = &AVIAN_NAMED_SLOTS[port.name];
+                assert!(candidates.windows(2).all(|pair| pair[0] < pair[1]));
+                assert!(candidates.contains(&avian_slot(group_index, port_index)));
+            }
+        }
+        assert!(avian_resolve_input(&world, entity, "position_x").is_some());
+        world.entity_mut(entity).remove::<lunco_core::Mobility>();
+        assert!(avian_resolve_input(&world, entity, "position_x").is_none());
+        assert!(avian_resolve_output(&world, entity, "position_x").is_some());
+        world
+            .entity_mut(entity)
+            .remove::<avian3d::prelude::RigidBody>();
+        assert!(avian_resolve_output(&world, entity, "position_x").is_none());
+        world
+            .entity_mut(entity)
+            .insert(lunco_core::Mobility::Kinematic);
+        assert!(avian_resolve_input(&world, entity, "position_x").is_some());
+        assert!(avian_resolve_input(&world, entity, "__unknown_port__").is_none());
+    }
 
     #[test]
     fn cached_structural_publication_tracks_units_declarations_and_readmission() {

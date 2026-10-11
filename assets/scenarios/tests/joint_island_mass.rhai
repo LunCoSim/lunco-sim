@@ -25,11 +25,11 @@ fn near_mass(actual, expected) {
     actual != () && expected != () && (actual - expected).abs() <= 1e-9
 }
 
-fn finish(me, failure) {
-    if !me.done {
-        me.done = true;
-        if failure != "" { me.failures.push(failure); }
-        report_verdict(me.failures, "JOINT ISLAND MASS", "JOINT_ISLAND_MASS");
+fn finish(failure) {
+    if !this.done {
+        this.done = true;
+        if failure != "" { this.failures.push(failure); }
+        report_verdict(this.failures, "JOINT ISLAND MASS", "JOINT_ISLAND_MASS");
     }
 }
 
@@ -47,13 +47,13 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.elapsed > 5.0 { finish(this, "mass projection did not finish within five simulation seconds"); return; }
+    if this.elapsed > 5.0 { this.finish("mass projection did not finish within five simulation seconds"); return; }
     if this.phase == 0 {
         this.total = mass_value(this.root, "dynamic_joint_island_mass_kg");
         this.part_mass = mass_value(this.part, "mass");
         this.wheel_mass = mass_value(this.wheel, "mass");
         if this.total == () || this.part_mass == () || this.wheel_mass == () {
-            finish(this, "the admitted physical assembly has no complete solver mass sample"); return;
+            this.finish("the admitted physical assembly has no complete solver mass sample"); return;
         }
         this.failures.push(t_true(this.total > this.part_mass + this.wheel_mass,
             "the root sample does not include the articulated assembly"));
@@ -87,6 +87,6 @@ fn on_tick(me, ctx) {
         this.failures.push(t_true(mass_value(this.root, "dynamic_joint_island_mass_valid") == 1.0
             && mass_value(this.part, "dynamic_joint_island_mass_valid") == 1.0,
             "a complete split island lost its valid-mass status"));
-        finish(this, "");
+        this.finish("");
     }
 }

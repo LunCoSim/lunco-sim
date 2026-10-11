@@ -26,6 +26,9 @@ Port names stay strings in USD, Rhai, commands, and diagnostics. Fixed-step
 targets to owning-backend slots when connections or the shared
 `PortTopologyRevision` changes; steady propagation uses dense target indices
 and those slots. A write-only input is a valid target but not a readable source.
+Avian named discovery shares table-derived candidates across resolution,
+declarations and metadata, checking entity membership live; see the
+[port contract](../../docs/architecture/22-domain-cosim.md#core-concepts).
 `PortMap<T>` provides dynamic named surfaces with layout-checked process-local
 handles. Structural edits publish a topology revision and recompile the fabric;
 stale handles are rejected rather than retried through a name path. Sparse

@@ -255,12 +255,21 @@ updates reuse the recorded key. A participant's new admission must refresh
 auxiliary facts that could have changed while it was absent. Verify metadata
 edits, same-size declaration replacement, removal and re-admission. Keep direct
 backend inspection and write validation on the live contract.
-For fixed-step port costs, backend `declare_ports` uses `PortDeclarationQuery`
+For fixed-step port costs, the exchange exposes `cosim_exchange_topology`,
+`cosim_exchange_accumulate`,
+`cosim_exchange_holds`, `cosim_exchange_write` and `cosim_exchange_diagnostics`
+inside the single propagation owner. Attribute these phases before changing
+lookup or validation; do not add their nested duration to the parent.
+Backend `declare_ports` uses `PortDeclarationQuery`
 for both full inspection and exact-name, direction-constrained discovery.
 Map-backed owners query the requested name directly; named queries retain only
 the first matching direction without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
+Avian resolution, named declarations and metadata selection share immutable
+name candidates derived from `AVIAN`. Preserve candidate order and live group
+membership on removal, re-admission and mobility edits; full inspection retains
+table order. The index does not authorize a write or cache world membership.
 `write_resolved` shares its locator's `Arc<str>` with canonical input-write
 preparation, compares the live owner with its locator, then commits within
 the same exclusive World boundary without a name or single-element batch allocation.

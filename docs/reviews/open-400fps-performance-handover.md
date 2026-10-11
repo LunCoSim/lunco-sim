@@ -1,5 +1,90 @@
 # High-quality realtime performance handover
 
+## Index live Avian port candidates — 2026-10-11
+
+The application-owned `lunco-cosim` backend derives immutable named candidates
+from its authoritative `AVIAN` table. Resolution, named declaration queries and
+metadata selection reuse those candidates in table order and check entity
+membership live. Full inspection retains table enumeration. The index contains
+no entity state, permissions, bounds or samples; the registry still validates
+the live owner and contract for every write. Dependencies, physics ordering,
+solver math, f64 values and scene quality are unchanged.
+
+Five nested exchange spans attribute topology, accumulation, holds, writes and
+diagnostic publication. In the instrumentation baseline, writes account for
+59.7–60.1% of the propagation owner's settled mean and diagnostics for
+18.7–19.5%. Child durations must not be added to their parent. Source inspection
+identified repeated unrelated group-membership probes during named admission,
+including names belonging to other backends; the index removes those probes.
+
+An inline registry benchmark performs 768,000 resolved writes to 128 surfaces
+over 6,000 ticks. One before/after pair takes 298.720/226.606 ms, a 24.14%
+reduction, with identical final bits `40b7700000000000`. This isolates live
+registry admission and writes; it does not establish application throughput.
+The ignored benchmark is `ports::tests::resolved_surface_write_benchmark`.
+Six unchanged native functional checks pass in the initial group run. That
+command exits 101 because the new fixture incorrectly excludes bidirectional
+declarations; the corrected table-order/live-membership fixture then passes its
+focused rerun. Together these cover seven functional checks without claiming
+that the original combined command passed.
+
+Normal production artifact
+`119ee3ad2616ad0b52f0e8d3f75520626be3cd4295d50adbfba0cd1712a2603b`
+runs in owned PID 943207/API 4202. History recording passes 17 checks, sandbox
+smoke passes seven before and seven after replacement, and joint-island mass
+passes ten, including rejected invalid mass, a valid edit and island splitting.
+The separate owner-collision scene passes 11 checks in PID 944279. Readiness,
+diagnostics, advancing physics, three invalid-assembly pause guards, public
+metadata and Modelica reset pass. High quality, no vsync/throttle, 50 bodies,
+33 colliders, 20 joints and the within-run camera remain intact; the inspected
+View image retains shadows. Warm readiness is 2.587 s and View/Build/View frame
+medians are 17.700/17.032/17.149 ms. Main PID 84260 overlaps and remains untouched;
+these observations do not establish a loading or FPS improvement.
+
+The first production driver fails during replacement because the mass gate's
+ordinary finish function mutates a copied state map, repeatedly reporting PASS
+and continuing to query the retired scene. A live Rhai probe confirms copied
+arguments versus receiver mutation. The gate now uses `this.finish(...)` with
+an implicit receiver, records completion before its verdict and emits exactly
+one terminal result, including the additional post-verdict wait and replacement.
+All finish callers and the authoring skill use this contract. The corrected
+production driver passes; the initial driver failure remains excluded evidence.
+
+The exact normal artifact passes serial/default four-rover state replay,
+24 checks each, in PIDs 945125/945302. Serial reference SHA
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`
+retains the preceding 56-value sequence. The default reference changes only
+scheduling metadata; it is not a separately captured parallel baseline or an
+observed thread count. All owned apps exit zero and close API 4202.
+
+Candidate Tracy artifact
+`0957890bc375fe39a7d9c7eac8de92b57132a8d9daaeec1dc2167c46ef816e5c`
+runs in PID 948605/API 4202 with collector 948604/8086. Its 321,511,240-byte
+capture matches the collector size and passes native message/phase exports.
+Readiness, replacement, physics progress, pause guards, quality, topology and
+the inspected shadows pass. This exact artifact also passes 24 serial replay
+checks in PID 949645. App and collector exit zero and release their ports.
+The instrumentation baseline is artifact
+`e058705f333a99d56a19b8ac9c411fdde1637bf0e9f0f18f1d4cb8fb9a9800d3`,
+PID 922004 with collector 922003 and a validated 322,731,014-byte capture.
+
+Settled six-second View/Build/View write-phase means change from
+0.190336/0.180779/0.178131 to 0.169949/0.194611/0.162712 ms:
+10.7% faster, 7.6% slower and 8.7% faster. Whole propagation means change from
+0.318700/0.302862/0.296419 to 0.297394/0.342384/0.285633 ms.
+Baseline calls are 360 per window; candidate calls are 357/360/360. Main overlap
+and the visual-resource prompt persist during both captures. This mixed,
+contended profiler pair does not establish a consistent runtime gain.
+
+Both production builds pass with only the existing prepared-cache `clear`
+warning. The two touched Rust files are formatted once after validation; the
+normal executable is restored from its verified Cargo output after owned-session
+closure. Skills validation passes all 43 skills. Receipts, captures, native
+summaries, benchmark comparison and replay verdicts remain under
+`target/entity-tree-perf/`, prefixes `avian-index-` and `exchange-phases-`.
+Controlled loading, visual FPS, physics throughput and the full thread-profile
+matrix remain open. Diagnostic publication is an attributed next investigation.
+
 ## Avoid redundant physics-history admission lookups — 2026-10-11
 
 `lunco-usd-sim-telemetry` now applies the live-count admission approach used by

@@ -138,6 +138,12 @@ contract. The Bash and PowerShell matrices in
 for each profile and stop on a nonzero exit; they do not parse logs or compare
 JSON. Rhai print/log lines remain diagnostics.
 
+A finish helper must update the actor's actual state before reporting. For a
+script-defined receiver method, use `this` in its body and call
+`this.finish(...)`; passing the state map as an ordinary function argument
+copies it. Verify a runtime gate emits one terminal verdict and stops querying
+or mutating its completed scenario during subsequent ticks and scene replacement.
+
 A fresh-scene startup test asserts that `on_start` observes tick 0 and the first
 `on_tick` observes tick 1; startup readiness must hold the shared clock until
 those callbacks can begin in order.

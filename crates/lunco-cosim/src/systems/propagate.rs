@@ -534,6 +534,7 @@ fn propagate_connections_with_cache(
     // Phase 1: recompile the fabric iff the connection set or port surface changed. The compiled
     // fabric is owned by the shared cache (no world borrow), so the phases below keep
     // `&mut World` for the resolver.
+    let topology_span = bevy::log::info_span!("cosim_exchange_topology").entered();
     let mut rewired = false;
     let compiled = wiring.get_or_rebuild(world, |compiled, world| {
         rewired = true;
@@ -642,6 +643,7 @@ fn propagate_connections_with_cache(
             }
         }
     }
+    drop(topology_span);
 
     if compiled.targets.is_empty() {
         // No wires ⇒ nothing broken. Clear any report left from a prior fabric.
@@ -654,6 +656,7 @@ fn propagate_connections_with_cache(
     }
 
     // Phase 2: seed accumulator slots.
+    let accumulate_span = bevy::log::info_span!("cosim_exchange_accumulate").entered();
     scratch.accumulator.clear();
     scratch.accumulator.resize(compiled.targets.len(), 0.0);
 
@@ -677,6 +680,7 @@ fn propagate_connections_with_cache(
         };
         scratch.accumulator[w.dst_index] += src * w.scale + w.offset;
     }
+    drop(accumulate_span);
 
     // Phase 4: write each target once, by resolved handle where available.
     // Gated per target (see `peer_simulates`), never by process role.
@@ -691,6 +695,7 @@ fn propagate_connections_with_cache(
     // intents that remain live across fixed ticks. Explicit port/control release
     // clears requested holds; authority lifecycle release clears controller
     // holds only; scene teardown clears both layers.
+    let holds_span = bevy::log::info_span!("cosim_exchange_holds").entered();
     let holds = world.get_resource::<PortHolds>();
     let hold_revision = holds.map_or(0, PortHolds::revision);
     if rewired || scratch.held_revision != Some(hold_revision) {
@@ -709,6 +714,8 @@ fn propagate_connections_with_cache(
         }
         scratch.held_revision = Some(hold_revision);
     }
+    drop(holds_span);
+    let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity) {
             continue;
@@ -804,6 +811,7 @@ fn propagate_connections_with_cache(
             }
         }
     }
+    drop(write_span);
 
     // Publish the tick's report. Overwrites last tick's (the set is "what is broken
     // now"), so a wire that resolves once its model loads clears itself.
@@ -818,6 +826,7 @@ fn propagate_connections_with_cache(
     // first write may well arrive late (a joint's `angle` port exists only once
     // avian admits both bodies), and that window is load order, not an authoring
     // error. Only a wire that never lands at all survives here.
+    let _span = bevy::log::info_span!("cosim_exchange_diagnostics").entered();
     let mut diag = world.resource_mut::<CosimDiagnostics>();
     for index in scratch.landed_targets.drain(..) {
         let target = &compiled.targets[index];

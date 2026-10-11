@@ -60,6 +60,12 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   same winning name twice. This is not a persistent owner cache: precedence,
   declarations, metadata, values, revision and slot identity remain live at each
   admission boundary, with unchanged rejection ordering.
+  Avian named discovery derives immutable candidate slots from its authoritative
+  `AVIAN` group/port table, retaining declaration order. Resolution, named
+  declarations and metadata selection share that index and check matching
+  groups' membership live. Full inspection enumerates the table directly.
+  No entity membership, permissions, bounds or numeric samples are cached by
+  this schema index.
   Native joint lower `-infinity` and upper `+infinity` limits map
   to absent port bounds, preserving unbounded travel. Other nonfinite bounds
   remain invalid metadata and reject writes. Map-backed `SimComponent` values
@@ -201,6 +207,13 @@ index during the hot pass; it shares the compiled port name when updating the
 once-per-endpoint landed ledger. Live broken/pending snapshots share those
 compiled names as `Arc<str>` instead of cloning a `String`; warning keys and
 labels are built only on the first terminal fault, not on every failed tick.
+
+CPU trace phases separate `cosim_exchange_topology` (change admission and
+rebuild), `cosim_exchange_accumulate` (source reads and affine summation),
+`cosim_exchange_holds` (hold projection), `cosim_exchange_write` (live target
+validation and application), and `cosim_exchange_diagnostics` (ledger and
+snapshot publication). They are nested within the single propagation owner;
+their time must not be added to that owner's duration.
 
 `RollbackReplay` is an instantaneous simulation invocation driven by recorded
 input frames. Its systems must not use the live `Time<Virtual>` running guard:
