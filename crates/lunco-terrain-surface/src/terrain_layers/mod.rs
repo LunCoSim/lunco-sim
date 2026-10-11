@@ -289,11 +289,12 @@ pub struct TerrainLayersApplied;
 #[derive(Component)]
 pub(crate) struct TerrainLayersPending;
 
-/// The [`TerrainLayerStack::scatter_fingerprint`] of the stack whose scatter is
-/// CURRENTLY spawned on this terrain — written where the scatter applies, read
-/// by `finish_dem_restamp` to no-op recomposes that change nothing.
+/// The admitted [`TerrainLayerStack::scatter_fingerprint`], published when the
+/// field enters its ordered admission queue. Completion is tracked separately
+/// by [`TerrainLayersPending`] and [`TerrainLayersApplied`]. Recomposition must
+/// compare content identity throughout admission, including partially shown fields.
 #[derive(Component)]
-pub struct ScatteredContent(pub u64);
+pub struct TerrainScatterContent(pub u64);
 
 /// Requests a scatter refresh while retaining the current terrain oracle and all
 /// derived height products. This is the fast path for a scatter-only USD/spec edit.
@@ -669,9 +670,11 @@ pub(crate) fn scatter_terrain_layers(
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
-        commands
-            .entity(entity)
-            .try_remove::<(TerrainLayersApplied, TerrainLayersPending, ScatteredContent)>();
+        commands.entity(entity).try_remove::<(
+            TerrainLayersApplied,
+            TerrainLayersPending,
+            TerrainScatterContent,
+        )>();
         commands
             .entity(entity)
             .try_remove::<TerrainScatterRefresh>();
@@ -692,13 +695,13 @@ pub(crate) fn scatter_terrain_layers(
             entry.layer.scatter(&mut cx);
         }
         let fingerprint = stack.scatter_fingerprint();
+        commands
+            .entity(entity)
+            .try_insert(TerrainScatterContent(fingerprint));
         if pending_rock_admission.has_terrain_work(entity) {
-            pending_rock_admission.register_terrain(entity, fingerprint);
             commands.entity(entity).try_insert(TerrainLayersPending);
         } else {
-            commands
-                .entity(entity)
-                .try_insert((TerrainLayersApplied, ScatteredContent(fingerprint)));
+            commands.entity(entity).try_insert(TerrainLayersApplied);
         }
     }
 }

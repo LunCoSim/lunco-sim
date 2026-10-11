@@ -472,10 +472,14 @@ Procedural rock placement and shared mesh selection remain owned by the terrain
 layer. New and recycled rock bodies enter the ECS in stable batches of at most
 8 per `Update`; render-only components are admitted in batches of at most 64.
 Each body batch is committed in deterministic placement order while the current
-simulation continues; rock admission adds no physics hold. The terrain keeps
-`TerrainLayersPending` until both body and visual queues finish, then publishes
-`TerrainLayersApplied` and its scatter fingerprint. Refresh and scene teardown
-cancel queued work.
+simulation continues; rock admission adds no physics hold.
+`TerrainScatterContent` records the admitted field fingerprint as soon as the
+ordered queue is accepted. `TerrainLayersPending` remains until both body and
+visual queues finish, then `TerrainLayersApplied` replaces it. Recomposition
+compares the admitted fingerprint during loading as well as after completion;
+unchanged content cannot cancel and hide a partially displayed field. A changed
+field replaces the fingerprint when its new queue is accepted. Refresh and scene
+teardown cancel queued work.
 
 ## Current state & roadmap
 

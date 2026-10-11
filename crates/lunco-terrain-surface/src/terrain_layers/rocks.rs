@@ -82,7 +82,6 @@ pub(crate) struct PendingTerrainRockAdmission {
     bodies: VecDeque<PendingRockBody>,
     visuals: VecDeque<PendingRockVisual>,
     counts: HashMap<Entity, TerrainAdmissionCounts>,
-    fingerprints: HashMap<Entity, u64>,
 }
 
 impl PendingTerrainRockAdmission {
@@ -98,10 +97,6 @@ impl PendingTerrainRockAdmission {
         }
     }
 
-    pub(super) fn register_terrain(&mut self, terrain: Entity, fingerprint: u64) {
-        self.fingerprints.insert(terrain, fingerprint);
-    }
-
     pub(super) fn has_terrain_work(&self, terrain: Entity) -> bool {
         self.counts
             .get(&terrain)
@@ -112,7 +107,6 @@ impl PendingTerrainRockAdmission {
         self.bodies.retain(|body| body.terrain != terrain);
         self.visuals.retain(|visual| visual.terrain != terrain);
         self.counts.remove(&terrain);
-        self.fingerprints.remove(&terrain);
     }
 
     fn take_body_batch(&mut self) -> Vec<PendingRockBody> {
@@ -161,16 +155,15 @@ impl PendingTerrainRockAdmission {
         }
     }
 
-    fn take_completed(&mut self, terrains: impl IntoIterator<Item = Entity>) -> Vec<(Entity, u64)> {
+    fn take_completed(&mut self, terrains: impl IntoIterator<Item = Entity>) -> Vec<Entity> {
         let mut seen = BTreeSet::new();
         let mut completed = Vec::new();
         for terrain in terrains {
             if !seen.insert(terrain) || self.has_terrain_work(terrain) {
                 continue;
             }
-            self.counts.remove(&terrain);
-            if let Some(fingerprint) = self.fingerprints.remove(&terrain) {
-                completed.push((terrain, fingerprint));
+            if self.counts.remove(&terrain).is_some() {
+                completed.push(terrain);
             }
         }
         completed
@@ -284,12 +277,9 @@ impl bevy::ecs::system::Command for ApplyRockBodyBatch {
             } else {
                 Vec::new()
             };
-        for (terrain, fingerprint) in completed {
+        for terrain in completed {
             if let Ok(mut entity) = world.get_entity_mut(terrain) {
-                entity.insert((
-                    super::TerrainLayersApplied,
-                    super::ScatteredContent(fingerprint),
-                ));
+                entity.insert(super::TerrainLayersApplied);
                 entity.remove::<super::TerrainLayersPending>();
             }
         }
@@ -329,12 +319,9 @@ impl bevy::ecs::system::Command for ApplyRockVisualBatch {
                 pending.complete_visual(*terrain);
             }
             let completed = pending.take_completed(terrains);
-            for (terrain, fingerprint) in completed {
+            for terrain in completed {
                 if let Ok(mut entity) = world.get_entity_mut(terrain) {
-                    entity.insert((
-                        super::TerrainLayersApplied,
-                        super::ScatteredContent(fingerprint),
-                    ));
+                    entity.insert(super::TerrainLayersApplied);
                     entity.remove::<super::TerrainLayersPending>();
                 }
             }

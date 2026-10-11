@@ -2195,7 +2195,7 @@ pub(crate) fn start_dem_restamp(
         Has<Mesh3d>,
         Option<&DemVisualTargetRes>,
         &crate::oracle::DemHeightField,
-        Option<&crate::terrain_layers::ScatteredContent>,
+        Option<&crate::terrain_layers::TerrainScatterContent>,
         Has<TerrainRescatter>,
     )>,
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
@@ -2354,7 +2354,7 @@ pub(crate) fn finish_dem_restamp(
         Option<&TerrainDirty>,
         Has<TerrainRescatter>,
         &crate::terrain_layers::TerrainLayerStack,
-        Option<&crate::terrain_layers::ScatteredContent>,
+        Option<&crate::terrain_layers::TerrainScatterContent>,
     )>,
     mut scattered: Query<
         (
@@ -2396,7 +2396,7 @@ pub(crate) fn finish_dem_restamp(
         commands.entity(entity).try_remove::<TerrainDirty>();
 
         // Idempotent, content-addressed swap: a recompose whose height content
-        // (`surface_key`) and scatter fingerprint both match the live surface is
+        // (`surface_key`) and scatter fingerprint both match the admitted surface is
         // a no-op — swap nothing, invalidate nothing, re-scatter nothing. This
         // is what makes redundant triggers (the startup Added-as-changed stack
         // observation, USD recompose echoes) harmless by design instead of each
@@ -2937,6 +2937,78 @@ pub(crate) fn register(app: &mut App) {
 mod visual_product_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn unchanged_pending_scatter_survives_recomposition_but_changed_content_refreshes() {
+        use crate::terrain_layers::{
+            TerrainLayerStack, TerrainLayersPending, TerrainScatterContent, TerrainScatterRefresh,
+        };
+
+        let base = Arc::new(HeightGrid {
+            res: 3,
+            half_extent: 10.0,
+            heights: vec![0.0; 9],
+        });
+        let base_key = lunco_terrain_bake::grid_content_key(&base);
+        let oracle = Arc::new(crate::oracle::SurfaceOracle::bare(base.clone()));
+        let mut stack = TerrainLayerStack::default();
+        stack.push_layer(
+            "rocks",
+            crate::terrain_layers::rock_layer(
+                lunco_obstacle_field::spec::ObstacleFieldSpec::default().rocks,
+                10.0,
+                Pattern::PoissonDisk { min_spacing: 3.0 },
+                42,
+            ),
+        );
+        let fingerprint = stack.scatter_fingerprint();
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_message::<RegenerateTerrainLayers>()
+            .add_systems(Update, start_dem_restamp);
+        let terrain = app
+            .world_mut()
+            .spawn((
+                DemBaseGrid(base, base_key),
+                crate::oracle::DemHeightField(oracle.clone()),
+                stack,
+                TerrainScatterContent(fingerprint),
+                TerrainLayersPending,
+            ))
+            .id();
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(200));
+        app.update();
+        assert!(app.world().get::<TerrainLayersPending>(terrain).is_some());
+        assert!(app.world().get::<TerrainScatterRefresh>(terrain).is_none());
+        assert!(app.world().get::<DemRestampTask>(terrain).is_none());
+        assert!(app.world().get::<DemRestampDebounce>(terrain).is_none());
+        assert!(Arc::ptr_eq(
+            &app.world()
+                .get::<crate::oracle::DemHeightField>(terrain)
+                .unwrap()
+                .0,
+            &oracle
+        ));
+
+        app.world_mut()
+            .get_mut::<TerrainLayerStack>(terrain)
+            .unwrap()
+            .remove_layer(&"rocks".into());
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(200));
+        app.update();
+        assert!(app.world().get::<TerrainScatterRefresh>(terrain).is_some());
+        assert!(app.world().get::<DemRestampTask>(terrain).is_none());
+        assert_eq!(
+            app.world().get::<TerrainScatterContent>(terrain).unwrap().0,
+            fingerprint
+        );
+    }
 
     #[test]
     fn spawn_dem_parameters_preserve_documented_zero_semantics() {

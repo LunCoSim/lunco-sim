@@ -808,7 +808,10 @@ For large procedural terrain fields, profile both scatter execution and its
 deferred entity commands. Admit generated body bundles and visual components in
 stable bounded batches while physics continues. Keep the terrain's applied
 marker pending until bodies and required visuals are committed. Cancel queued
-entries on refresh and teardown.
+entries on refresh and teardown. Publish the terrain's `TerrainScatterContent`
+fingerprint at queue admission, separately from completion. An unchanged
+recomposition must preserve a partially displayed field; check that startup
+issues one scatter request and that an actual recipe change still refreshes it.
 Gate sparse lifecycle work on an existing pending marker or owner queue; an
 idle Update should not scan lifecycle state for a request that did not arrive.
 For joint admission, use one combined query over the existing

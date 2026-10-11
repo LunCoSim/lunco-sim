@@ -1,5 +1,40 @@
 # High-quality realtime performance handover
 
+## Startup rock admission identity — 2026-10-12
+
+Summer Space School Twin `7ac54a2e32ab2254003e1696aee2acdac5127d17`
+loads once on committed normal baseline
+`d55d8e228139bcf5dc60c0fd773a3f8915568d66c61440fecf8579b9a4f268d2`.
+The terrain requests 598 rocks twice, 0.951 seconds apart. The second request
+recycles and hides the first 312 admitted entities while canceling the remaining
+queue. The reproduction on the separate Modelica experiment also requests that
+field twice, recycling its first 136 entities. This is a redundant scatter
+refresh while the field is still loading.
+
+`lunco-terrain-surface` now records `TerrainScatterContent` when the field enters
+the ordered queue. Pending/applied markers retain completion semantics;
+recomposition compares admitted identity throughout loading. Completion no
+longer stores or republishes a second fingerprint. This content-identity
+invariant belongs to the terrain mechanism; it adds no authored policy hook.
+Placement, quality, body/visual batch sizes and simulation clocks are unchanged.
+
+The focused pending-content resource seam passes both unchanged-content
+preservation and a changed-recipe refresh. Normal production artifact
+`ec6f86fb3a79079c8778659f72ddc9939e008a70384ed0a149663e53a7e00efa`
+uses the committed Modelica worker and only the terrain source changes. Its
+actual Twin startup requests the same 598 rocks once; the later analytic
+recomposition skips rebuilding. Readiness settles with no pending work or
+runtime fault, and the inspected settled image retains terrain, rocks and
+shadows. The authored `terrain_rocks.usda` production gate passes three Rhai
+checks at 30 ticks. Owned app/gate PIDs 2010831/2023318 exit zero and release
+API 4202. The Twin stays clean; its authored files are unchanged.
+
+The normal build passes after checkout-only cleanup, with the exact binary
+archived and verified outside `target/`. Receipts, source fingerprints and
+images are under `.lunco/performance-evidence/entity-tree-perf/`, using
+`startup-rocks-` and `summer-startup-` prefixes. Avoided duplicate work is proven;
+this check does not establish a whole-app loading-time or FPS gain.
+
 ## Thread-affine native Modelica execution — 2026-10-11
 
 Native live sessions now use persistent application-owned solver workers.
