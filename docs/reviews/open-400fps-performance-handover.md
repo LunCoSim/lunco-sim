@@ -1,5 +1,52 @@
 # High-quality realtime performance handover
 
+## Current GPU shadow boundary and normal baseline — 2026-10-11
+
+Native CPU-self and GPU exports of the current 251,446,854-byte
+`wheel-fold-after-tracy-20261011` capture identify shadows as the leading
+render cost. Across 146 complete camera intervals, every interval contains
+12 shared early, 12 shared late and one camera late pass. Shared early GPU
+work averages 8.370 ms per interval; camera early averages 2.161 ms. All four
+shadow lanes together average 10.549 ms. Main opaque rendering averages
+0.544 ms per camera. These are disjoint GPU diagnostics; schedule self time
+and queue-submission time can contain waits and cannot be summed into CPU
+compute cost. The maintained PBR implementation confirms shared point/spot
+roots and camera-owned directional shadows have distinct native delegates.
+
+The owned unprofiled normal run uses unchanged artifact
+`d84101dd9e4f7247a699cb268fdc66191614f7aa3506037ae0c18978cb0d0c28`
+with High quality, no vsync/throttle and equal View/Builder/View camera poses.
+Live reflected light reads identify twelve spotlights, each with 90 m range
+and a 20 degree outer half-angle. The current High policy selects 4,096 px
+directional/spot maps and 2,048 px point maps. The reflection probe does not
+return frustum data; it supplies no evidence that any cone is disjoint from
+the camera. Native spotlight projection and the existing conservative
+render-world relevance filter are already present. Preserve authored light
+intent, range, maps, terrain and physics cadence when investigating redundant
+preparation or shadow reuse; dropping the twelve passes is not an established
+optimization.
+
+Normal frame medians are 12.583/13.284/22.445 ms. The rolling post-step physics
+sample medians are 1.833/1.984/2.032 ms; full fixed-tick service medians are
+4.042/3.911/4.744 ms. Each eight-second window advances 485/487/488 steps with
+50 bodies, 33 colliders and 20 joints. Readiness and diagnostics remain clear;
+no simulation time is discarded by the max-delta limiter. Warm launch readiness
+is 4.895 s. A sibling Cargo process overlaps every window, so these values
+remain contention-affected diagnostics and establish no clean FPS/loading
+acceptance. The GPU is an NVIDIA GeForce RTX 5060 Laptop GPU. The inspected
+View screenshot retains shadows and scene detail. Unchanged behavior/replay
+gates from the preceding mechanism change are reused rather than repeated.
+
+Owned PID 1819899 closes with exit zero and releases API 4202. No source,
+external library or runtime policy is changed by this audit. Receipts,
+screenshots and logs remain under `target/entity-tree-perf/`, prefixes
+`current-unprofiled-acceptance-`, `current-critical-path-ranking-` and
+`current-shadow-frame-inventory-`. Large domain-synthesis validation spans
+already execute through the owner's background preparation closure; their
+size alone does not establish an application-thread stall. Clean acceptance,
+loading-tail attribution, shadow reuse and the existing raycast drive failure
+remain open.
+
 ## Limit raycast mass additions to eligible carriers — 2026-10-11
 
 `lunco-mobility::fold_raycast_wheel_mass` retains the shared ordering validator
