@@ -62,6 +62,18 @@ comparison of the UI change. Latest evidence uses `entity-tree-admission-latest-
 The earlier catalog-spawn fault and native capture remain observations on
 `99f675e80`; they have not been reclassified as newer-main results.
 
+The final merge also preserves main's terminal Modelica failure handling
+`28ce78033`. Artifact
+`a10c4b32f10708023db77d7a58ffc74e92736c69e7b3886e8aa6d7eb84e38dba`
+is rebuilt from merged `15bd61105`; the UI source matches commit `10b1b26cf`
+exactly. Its authored observation-failure scene passes the expected terminal
+`modelica-step-failed` verdict without a process crash (owned PID 493809).
+Both 20-rover reference profiles pass 144 checks at widths 24/1 (owned PIDs
+511607/513031). These processes exit zero and release API 4202. Final-merge
+receipts use `entity-tree-admission-final-merge-`; the current normal executable
+is this merged artifact. Earlier history and frame evidence retain their exact
+source bases rather than being claimed as post-merge measurements.
+
 Full `cargo clean` removes 21,581 files / 23.0 GiB after owned sessions close.
 Task evidence and validated artifact archives formerly under
 `target/entity-tree-perf/` are preserved under
