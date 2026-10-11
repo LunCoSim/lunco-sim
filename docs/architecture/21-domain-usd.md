@@ -232,6 +232,16 @@ asserted through the production scene/Rhai tests under `assets/scenes/tests/`
 and `assets/scenarios/tests/`; the Rust target retains only generic USD
 composition and reader seams.
 
+The `lunco-usd-bevy` structural projector commits each prim's related component
+facts through native bundles. Primitive shape identity accompanies its pending
+mesh request, and grid cell and spatial projection publish together. Projection
+completion removes both waiting markers in one operation; cancelled or rejected
+geometry removes its complete pending definition set together. These groups
+remain within the same prim's ordered command stream. Stable prim/direct-child
+queues, `UsdVisualProjectionSettings`, generation checks and scene replacement
+fences continue to own admission; physics consumes `UsdSceneProjected` at the
+existing boundary.
+
 ## Scope
 
 A USD **stage** is the 3D scene. This doc is the canonical reference for how a

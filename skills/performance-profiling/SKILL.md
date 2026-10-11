@@ -713,6 +713,15 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+Within each prim's deferred work, use native component bundles for facts that
+commit together. Primitive shape identity accompanies its pending mesh request;
+grid cell and spatial projection publish together. Clear projection markers and
+retired geometry definitions in one removal bundle, retaining the owning
+failure, generation and replacement fences. Measure both prim and child
+flushes and CPU mesh publication. Verify complete event counts: a fixed startup
+time slice can omit work under contention. Separate initial and replacement
+admission using a verified inactive gap or an owner marker, and record background
+builds throughout each comparison. Preserve the exact physical replay reference.
 For large procedural terrain fields, profile both scatter execution and its
 deferred entity commands. Admit generated body bundles and visual components in
 stable bounded batches while physics continues. Keep the terrain's applied

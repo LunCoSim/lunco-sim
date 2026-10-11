@@ -1,5 +1,50 @@
 # High-quality realtime performance handover
 
+## Group each prim's structural component commits — 2026-10-11
+
+`lunco-usd-bevy` uses native bundles for related projection writes and removals.
+Primitive identity commits with its pending mesh request; grid cell and spatial
+projection commit together. Completion clears both projection markers together,
+and geometry cancellation/rejection removes the complete pending definition set
+in one command. Non-rendered prim cleanup records one removal instead of six.
+Retired entities use the existing fallible command boundary. Prim/entity command
+stream order, projection caps, generation fences, authored values, physics
+admission, solver math and rendering quality retain their owners. Component
+publication is grouped within a prim; this adds no policy or public API.
+
+Final Tracy artifacts
+`8531f5e7520d8c8e6d9797535ae7c93bbf83fc0bf0fe3eb820193261746a8775` and
+`599998bec1d7d46c7ca0bb204123db9c20003a9ee3b2601768c22522043ddbf0`
+produce valid 258,873,264/260,160,080-byte captures and successful native CPU
+exports. Each initial and replacement group contains 27 prim and 26 child
+admission flushes. Warm replacement prim flush total is 32.805/22.498 ms,
+median 0.507/0.409 ms; child total is 23.347/14.138 ms. Mesh publication takes
+1.426/2.103 ms across 20/21 calls. Background jobs change during these runs;
+the observed timings do not establish a causal overall loading or FPS gain.
+Initial prim maxima are 81.913/110.190 ms, so cold startup tails remain open.
+Full event groups use the verified inactive projection gap; an eight-second
+startup slice can omit admitted work under contention.
+
+Normal artifact
+`f2385ba05622e4aadb4a3eb0a6d616a3eb0f2889b8be78e837aef436b3639dcf`
+passes all ten production determinism profiles, 360 checks, with the unchanged
+reference `276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`
+and compute-pool widths 1/24. The windowed run passes sandbox 7, telemetry
+history 17, mass/island 10, primitive mesh sharing 42 and replacement sandbox 7.
+It verifies one mass verdict, invalid-reset rejection, valid Modelica reset,
+physics progress, readiness and the three existing invalid-assembly pause
+guards. View shadows and replacement hierarchy rows are inspected at High
+quality. Frame medians are 11.276/11.262/11.217 ms under contention; clean
+loading, visual FPS and physics-throughput acceptance remain open.
+
+All owned sessions exit zero and release API 4202/Tracy 8087. The normal
+executable is retained. Receipts, captures, native exports and logs remain under
+`target/entity-tree-perf/`, prefix `visual-transition-`. One truncated capture
+is rejected by the size gate. Disk recovery removes superseded task-generated
+executables, archives and intermediate captures after preserving current
+baseline/reference artifacts, native summaries and receipts. Source, external
+libraries, sibling sessions and shared caches are preserved.
+
 ## Parse schema sources once and admit them deterministically — 2026-10-11
 
 `lunco-usd-authoring::SchemaRegistry` parses a source once before taking its
