@@ -1,0 +1,10 @@
+.vscode
+.idea
+**/target
+#*.json
+*.swp
+**/*.rs.bk
+Cargo.lock
+Session.vim
+.cargo-ok
+cargo-timing*.html

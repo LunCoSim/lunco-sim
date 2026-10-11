@@ -643,9 +643,18 @@ Initial native contact geometry is cached per exact composite leaf within one
 substep. Position closure changes endpoints, so every sweep recomputes its
 whole-arc support bound; unchanged starting geometry does not repeat GJK.
 The cache expires before the next substep captures its starting poses.
-Convex triangle pairs seed Parry's native GJK/EPA with the finite-feature axis
-already computed for their starting geometry. The native kernel still owns the
-contact depth; the search direction supplies no assumed plane penetration.
+Convex triangle starting contacts seed Parry's native GJK/EPA with their finite
+feature axis. The native cast, bisection and fresh contact kernel own the geometry;
+the search direction supplies no assumed plane penetration. Native
+dispatcher witnesses retain their respective local frames until the initial
+contact owner transforms them to world space. Nonfinite witnesses, invalid
+normals, unsupported queries or an unbounded query without geometry fault the
+continuous solve. The adapter retains those failures across Parry's optional-hit
+boundary, so an incomplete query cannot certify a clear trajectory.
+The pinned Parry f64 owner uses maintained GJK distance bounds to classify
+stalled simplices, retaining intersections for overlapping axisymmetric shapes.
+Its enhanced determinism feature enables scalar vector math alongside libm and
+ordered maps. The native Bevy/glam type contract remains unchanged.
 Contact projection alternates with the native hard-geometry joint schedule,
 restricted to the affected connected bodies. It does not reintegrate motors or
 repeat compliant channels. Its symmetric sweeps reverse both constraint kinds

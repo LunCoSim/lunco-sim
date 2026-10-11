@@ -472,6 +472,7 @@ fn support_gap_bound(
     s2: &dyn avian3d::parry::shape::Shape,
     axis: DVec3,
 ) -> Result<Option<(f64, f64)>, String> {
+    let _span = bevy::log::debug_span!("ccd_support_gap_bound").entered();
     let (Some(support1), Some(support2)) = (s1.as_support_map(), s2.as_support_map()) else {
         return Ok(None);
     };
@@ -601,12 +602,7 @@ fn certified_native_axis(
     let Some(contact) = contact else {
         return Ok(false);
     };
-    if !contact.dist.is_finite()
-        || !contact.normal1.is_finite()
-        || (contact.normal1.length_squared() - 1.0).abs() > 1e-6
-    {
-        return Err("continuous initial contact returned invalid native geometry".into());
-    }
+    validate_native_contact(&contact)?;
     let Some((initial, lower)) = support_gap_bound(m1, s1, m2, s2, contact.normal1)? else {
         return Ok(false);
     };
@@ -633,6 +629,7 @@ fn initial_native_contact(
     prediction: f64,
     axis: DVec3,
 ) -> Result<Option<avian3d::parry::query::Contact>, String> {
+    let _span = bevy::log::debug_span!("ccd_initial_native_contact", shape1=?s1.shape_type(), shape2=?s2.shape_type()).entered();
     use avian3d::parry::query::{
         Contact,
         details::contact_support_map_support_map_with_params,
@@ -675,6 +672,163 @@ fn initial_native_contact(
     }
     avian3d::parry::query::contact(&m1.start, s1, &m2.start, s2, prediction)
         .map_err(|error| format!("unsupported continuous initial contact: {error:?}"))
+}
+fn validate_native_contact(contact: &avian3d::parry::query::Contact) -> Result<(), String> {
+    if !contact.dist.is_finite()
+        || !contact.point1.is_finite()
+        || !contact.point2.is_finite()
+        || !contact.normal1.is_finite()
+        || !contact.normal2.is_finite()
+        || (contact.normal1.length_squared() - 1.0).abs() > 1e-6
+        || (contact.normal2.length_squared() - 1.0).abs() > 1e-6
+    {
+        return Err("continuous contact returned invalid native geometry".into());
+    }
+    Ok(())
+}
+
+/// Parry owns the nonlinear cast, bisection and fresh GJK/EPA geometry. Each
+/// contact sample retains its native witnesses at the actual queried pose.
+/// Native query failures survive Parry's optional-hit return boundary.
+#[derive(Default)]
+struct CheckedNativeQueries {
+    failure: bevy::platform::sync::Mutex<Option<String>>,
+}
+impl CheckedNativeQueries {
+    fn reject(&self, error: String) -> avian3d::parry::query::Unsupported {
+        // The dispatcher trait is Sync, but the native cast invokes it serially.
+        // A poisoned error collector is rejected when the cast completes.
+        if let Ok(mut failure) = self.failure.lock() {
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+        }
+        avian3d::parry::query::Unsupported
+    }
+}
+impl avian3d::parry::query::QueryDispatcher for CheckedNativeQueries {
+    fn intersection_test(
+        &self,
+        p: &Pose,
+        a: &dyn avian3d::parry::shape::Shape,
+        b: &dyn avian3d::parry::shape::Shape,
+    ) -> Result<bool, avian3d::parry::query::Unsupported> {
+        avian3d::parry::query::DefaultQueryDispatcher.intersection_test(p, a, b)
+    }
+    fn distance(
+        &self,
+        p: &Pose,
+        a: &dyn avian3d::parry::shape::Shape,
+        b: &dyn avian3d::parry::shape::Shape,
+    ) -> Result<f64, avian3d::parry::query::Unsupported> {
+        avian3d::parry::query::DefaultQueryDispatcher.distance(p, a, b)
+    }
+    fn contact(
+        &self,
+        p: &Pose,
+        a: &dyn avian3d::parry::shape::Shape,
+        b: &dyn avian3d::parry::shape::Shape,
+        prediction: f64,
+    ) -> Result<Option<avian3d::parry::query::Contact>, avian3d::parry::query::Unsupported> {
+        let _span = bevy::log::debug_span!("ccd_cast_native_contact", shape1=?a.shape_type(), shape2=?b.shape_type()).entered();
+        let contact = avian3d::parry::query::DefaultQueryDispatcher
+            .contact(p, a, b, prediction)
+            .map_err(|error| self.reject(format!("unsupported continuous contact: {error:?}")))?;
+        if let Some(contact) = &contact {
+            validate_native_contact(contact).map_err(|error| self.reject(error))?;
+        }
+        if prediction == f64::MAX && contact.is_none() {
+            return Err(self
+                .reject("continuous unbounded native contact query returned no geometry".into()));
+        }
+        Ok(contact)
+    }
+    fn closest_points(
+        &self,
+        p: &Pose,
+        a: &dyn avian3d::parry::shape::Shape,
+        b: &dyn avian3d::parry::shape::Shape,
+        max_dist: f64,
+    ) -> Result<avian3d::parry::query::ClosestPoints, avian3d::parry::query::Unsupported> {
+        let _span = bevy::log::debug_span!("ccd_cast_native_closest_points", shape1=?a.shape_type(), shape2=?b.shape_type()).entered();
+        let points = avian3d::parry::query::DefaultQueryDispatcher
+            .closest_points(p, a, b, max_dist)
+            .map_err(|error| {
+                self.reject(format!("unsupported continuous closest points: {error:?}"))
+            })?;
+        if max_dist == f64::MAX && points == avian3d::parry::query::ClosestPoints::Disjoint {
+            return Err(self.reject(
+                "continuous unbounded native closest-points query returned no geometry".into(),
+            ));
+        }
+        if let avian3d::parry::query::ClosestPoints::WithinMargin(point1, point2) = points {
+            if !point1.is_finite() || !point2.is_finite() {
+                return Err(self.reject(
+                    "continuous closest-points query returned invalid native geometry".into(),
+                ));
+            }
+        }
+        Ok(points)
+    }
+    fn cast_shapes(
+        &self,
+        p: &Pose,
+        velocity: DVec3,
+        a: &dyn avian3d::parry::shape::Shape,
+        b: &dyn avian3d::parry::shape::Shape,
+        options: ShapeCastOptions,
+    ) -> Result<Option<ShapeCastHit>, avian3d::parry::query::Unsupported> {
+        avian3d::parry::query::DefaultQueryDispatcher.cast_shapes(p, velocity, a, b, options)
+    }
+    fn cast_shapes_nonlinear(
+        &self,
+        m1: &NonlinearRigidMotion,
+        a: &dyn avian3d::parry::shape::Shape,
+        m2: &NonlinearRigidMotion,
+        b: &dyn avian3d::parry::shape::Shape,
+        start: f64,
+        end: f64,
+        stop: bool,
+    ) -> Result<Option<ShapeCastHit>, avian3d::parry::query::Unsupported> {
+        avian3d::parry::query::DefaultQueryDispatcher
+            .cast_shapes_nonlinear(m1, a, m2, b, start, end, stop)
+    }
+}
+
+fn native_nonlinear_cast(
+    m1: &NonlinearRigidMotion,
+    s1: &dyn avian3d::parry::shape::Shape,
+    m2: &NonlinearRigidMotion,
+    s2: &dyn avian3d::parry::shape::Shape,
+) -> Result<Option<ShapeCastHit>, String> {
+    use avian3d::parry::query::details::{
+        NonlinearShapeCastMode, cast_shapes_nonlinear_support_map_support_map,
+    };
+    if let (Some(support1), Some(support2)) = (s1.as_support_map(), s2.as_support_map()) {
+        let queries = CheckedNativeQueries::default();
+        let hit = cast_shapes_nonlinear_support_map_support_map(
+            &queries,
+            m1,
+            support1,
+            s1,
+            m2,
+            support2,
+            s2,
+            0.0,
+            1.0,
+            NonlinearShapeCastMode::directional_toi(s1, s2),
+        );
+        return match queries
+            .failure
+            .into_inner()
+            .map_err(|_| "continuous native query error owner was poisoned".to_string())?
+        {
+            Some(error) => Err(error),
+            None => Ok(hit),
+        };
+    }
+    cast_shapes_nonlinear(m1, s1, m2, s2, 0.0, 1.0, false)
+        .map_err(|error| format!("unsupported continuous shapes: {error:?}"))
 }
 /// Reuse native composite BVHs and cast kernels, retaining each part's impact.
 /// Stationary composites use the other whole-arc AABB; moving composites use a
@@ -763,25 +917,28 @@ fn shape_hits(
         return Ok(Vec::new());
     }
     *queries += 1;
-    let hit = if mode == SweepMode::NonLinear {
-        cast_shapes_nonlinear(m1, s1, m2, s2, 0.0, 1.0, false)
-    } else {
-        cast_shapes(
-            &m1.start,
-            m1.linvel,
-            s1,
-            &m2.start,
-            m2.linvel,
-            s2,
-            ShapeCastOptions {
-                max_time_of_impact: 1.0,
-                stop_at_penetration: false,
-                ..default()
-            },
-        )
+    let hit = {
+        let _span = bevy::log::debug_span!("ccd_native_shape_cast", shape1=?s1.shape_type(), shape2=?s2.shape_type()).entered();
+        if mode == SweepMode::NonLinear {
+            native_nonlinear_cast(m1, s1, m2, s2)
+        } else {
+            cast_shapes(
+                &m1.start,
+                m1.linvel,
+                s1,
+                &m2.start,
+                m2.linvel,
+                s2,
+                ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: false,
+                    ..default()
+                },
+            )
+            .map_err(|error| format!("unsupported continuous shapes: {error:?}"))
+        }
     };
-    let Some(mut hit) = hit.map_err(|error| format!("unsupported continuous shapes: {error:?}"))?
-    else {
+    let Some(mut hit) = hit? else {
         return Ok(Vec::new());
     };
     if hit.time_of_impact > 0.0
@@ -828,6 +985,7 @@ fn sweep_geometry(
     diagnostics: &mut ContinuousCollisionDiagnostics,
     initial_contacts: &mut [InitialContactCache],
 ) -> Result<Vec<Plane>, String> {
+    let _span = bevy::log::debug_span!("ccd_sweep_geometry").entered();
     // The native contact graph is prepared once per physics step. Keep newly
     // admitted impact witnesses through its remaining substeps so zero-time
     // touching cannot lose the contact before the next native preparation.
@@ -1446,6 +1604,121 @@ fn solve_contacts(world: &mut World) {
 mod tests {
     use super::*;
     use avian3d::math::SymmetricMatrix;
+
+    #[test]
+    fn continuous_native_queries_validate_geometry() {
+        use avian3d::parry::{
+            query::{DefaultQueryDispatcher, QueryDispatcher},
+            shape::{Ball, Cylinder, HalfSpace, Triangle},
+        };
+        let triangle = Triangle::new(
+            DVec3::new(-2.0, 0.0, -2.0),
+            DVec3::new(-2.0, 0.0, 2.0),
+            DVec3::new(2.0, 0.0, -2.0),
+        );
+        let cylinder = Cylinder::new(0.1, 0.2);
+        assert!(
+            DefaultQueryDispatcher
+                .intersection_test(
+                    &Pose::IDENTITY,
+                    &Cylinder::new(50.0, 100.0),
+                    &Cylinder::new(1.5, 1.0)
+                )
+                .unwrap(),
+            "coincident overlapping cylinders must retain their intersection"
+        );
+        for angle in [0.0, 0.4, 1.2] {
+            for center in [
+                DVec3::new(-0.2, 0.099, -0.2),
+                DVec3::new(0.1, 0.08, 0.1),
+                DVec3::new(1.5, 0.099, 1.5),
+                DVec3::new(-0.2, 0.25, -0.2),
+            ] {
+                let pose = Pose::new(center, DVec3::X * angle);
+                let queries = CheckedNativeQueries::default();
+                for swapped in [false, true] {
+                    let (a, b, p): (
+                        &dyn avian3d::parry::shape::Shape,
+                        &dyn avian3d::parry::shape::Shape,
+                        Pose,
+                    ) = if swapped {
+                        (&cylinder, &triangle, pose.inverse())
+                    } else {
+                        (&triangle, &cylinder, pose)
+                    };
+                    let reference = DefaultQueryDispatcher
+                        .contact(&p, a, b, 10.0)
+                        .unwrap()
+                        .unwrap();
+                    let contact = queries.contact(&p, a, b, 10.0).unwrap().unwrap();
+                    assert!(
+                        (contact.dist - reference.dist).abs() < 1e-6,
+                        "native adapter changed contact depth: {contact:?} vs {reference:?}"
+                    );
+                    assert!(contact.point1.is_finite() && contact.point2.is_finite());
+                    assert!((contact.normal1.length_squared() - 1.0).abs() < 1e-12);
+                    assert!(
+                        ((p * contact.point2 - contact.point1).dot(contact.normal1) - contact.dist)
+                            .abs()
+                            < 1e-12
+                    );
+                    let reference_points = DefaultQueryDispatcher
+                        .closest_points(&p, a, b, 10.0)
+                        .unwrap();
+                    let points = queries.closest_points(&p, a, b, 10.0).unwrap();
+                    match (points, reference_points) {
+                        (
+                            avian3d::parry::query::ClosestPoints::Intersecting,
+                            avian3d::parry::query::ClosestPoints::Intersecting,
+                        ) => {}
+                        (
+                            avian3d::parry::query::ClosestPoints::WithinMargin(a1, b1),
+                            avian3d::parry::query::ClosestPoints::WithinMargin(a2, b2),
+                        ) => {
+                            assert!(((p * b1 - a1).length() - (p * b2 - a2).length()).abs() < 1e-6)
+                        }
+                        result => {
+                            panic!("native adapter changed closest-point geometry: {result:?}")
+                        }
+                    }
+                }
+                assert!(queries.failure.into_inner().unwrap().is_none());
+            }
+        }
+        // The initial-contact cache uses world witnesses, while the native
+        // dispatcher returns each witness in its own shape's local frame.
+        let m1 = NonlinearRigidMotion::constant_position(Pose::new(
+            DVec3::new(8.0, 2.0, -3.0),
+            DVec3::Z * 0.7,
+        ));
+        let m2 = NonlinearRigidMotion::constant_position(
+            m1.start * Pose::from_translation(DVec3::new(0.0, 0.3, 0.0)),
+        );
+        let ball = Ball::new(0.15);
+        let reference = avian3d::parry::query::contact(&m1.start, &ball, &m2.start, &cylinder, 1.0)
+            .unwrap()
+            .unwrap();
+        let contact = initial_native_contact(&m1, &ball, &m2, &cylinder, 1.0, DVec3::Y)
+            .unwrap()
+            .unwrap();
+        assert!((contact.point1 - reference.point1).length() < 1e-12);
+        assert!((contact.point2 - reference.point2).length() < 1e-12);
+        assert!((contact.dist - reference.dist).abs() < 1e-12);
+        let mut invalid = contact;
+        invalid.point2.x = f64::NAN;
+        assert!(validate_native_contact(&invalid).is_err());
+        invalid = contact;
+        invalid.normal2 = DVec3::ZERO;
+        assert!(validate_native_contact(&invalid).is_err());
+        let plane = HalfSpace::new(DVec3::Y);
+        let unsupported = CheckedNativeQueries::default();
+        assert!(
+            unsupported
+                .closest_points(&Pose::IDENTITY, &plane, &plane, f64::MAX)
+                .is_err()
+        );
+        assert!(unsupported.failure.into_inner().unwrap().is_some());
+    }
 
     #[test]
     fn continuous_mesh_casts_obey_native_face_normals() {

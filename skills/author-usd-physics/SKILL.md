@@ -755,6 +755,15 @@ continuous velocity projection. Unsupported kernels or a convergence failure fau
 block pose writeback in that same tick. See the continuous-contact contract in
 `docs/architecture/terrain-substrate.md`.
 
+Convex triangle starting contacts use Parry's native finite-feature search seed.
+Fresh native GJK/EPA and nonlinear bisection retain geometry
+ownership. Incomplete unbounded queries and invalid native witnesses are owner
+faults, not clear-space results. Preserve these diagnostics when changing the
+native query adapter; verify finite edges, swapped local witness frames and the
+production contact/landing/rover gates. The pinned Parry owner includes native
+GJK stall classification and scalar enhanced determinism; preserve overlapping
+cylinder intersections when updating that dependency.
+
 Generated primitive proxies carry `LunCoDerivedGeometryAPI` and exactly one
 `lunco:derived:source` targeting their sibling Cube or Cylinder. The shared
 collider reader rejects dimension, axis or transform drift before admission.

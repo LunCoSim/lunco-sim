@@ -1499,3 +1499,10 @@ its licence and provenance. Native joints own implicit dimensional force and
 acceleration integration, effective inertia, saturation, and hard-only geometry
 passes. `lunco-physics` owns stable ordering and continuous impact closure;
 `lunco-cosim` admits native prismatic force writeback for its measured force port.
+
+The pinned Parry f64 source in `third_party/parry3d-f64` retains the native
+Bevy/glam type contract while supplying maintained GJK stall classification and
+scalar enhanced determinism. `third_party/glam` retains aligned-mask tuple
+serialization for scalar Bevy reflection. Each dependency records its source
+and changes in `LUNCOSIM-PROVENANCE.md`. Continuous native-query failures remain
+owned by `lunco-physics`, which refuses the affected tick's pose writeback.

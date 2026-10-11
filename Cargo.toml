@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "third_party/openusd",
+    "third_party/glam",
     "crates/lunco-core",
     "crates/lunco-runtime-context",
     "crates/lunco-geometry-core",
@@ -249,6 +250,10 @@ resolver = "2"
 [patch.crates-io]
 # Native dimensional motor integration; see third_party/avian3d/LUNCOSIM-PROVENANCE.md.
 avian3d = { path = "third_party/avian3d" }
+# Native GJK stall classification and scalar determinism; see the vendor provenance.
+parry3d-f64 = { path = "third_party/parry3d-f64" }
+# Scalar aligned-mask serialization for Bevy reflection; see vendor provenance.
+glam = { path = "third_party/glam" }
 # scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
 # parol_runtime 4.2 which resolve correctly without overrides.
 

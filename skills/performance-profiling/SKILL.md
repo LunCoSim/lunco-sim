@@ -780,6 +780,18 @@ wall-clock physics cadence and UI isolation are required, measure the whole
 simulation-owner boundary and consume immutable snapshots from the UI/render
 side; separate cycle labels alone do not provide thread isolation.
 
+For articulated continuous-contact cost, enable
+`RUST_LOG=info,lunco_physics=debug` in the owned Tracy session and compare
+`ccd_sweep_geometry`, `ccd_support_gap_bound`, `ccd_initial_native_contact`,
+`ccd_native_shape_cast`, `ccd_cast_native_contact` and
+`ccd_cast_native_closest_points`. Shape-type fields identify
+the native pair kernels. Nested spans overlap; do not add them to their parent.
+Keep fresh native geometry, whole-arc certification, stable part order and joint
+closure when optimizing these queries. Compare separate unprofiled runs over
+the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`
+and recording sample coverage. Those samples establish physics-step timing;
+they do not establish the complete fixed transaction or uncontended viewport FPS.
+
 When `tick_rhai_scenarios` or `tick_rhai_scenario_visualization` has an outlier,
 compare the nested `rhai_user_scenario_hook`, `rhai_user_event_hook`,
 `rhai_native_task_tick`, `rhai_mission_event_projection`,
