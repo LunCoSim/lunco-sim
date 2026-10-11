@@ -1722,9 +1722,11 @@ fn validate_usd_modelica_port_contracts(
 /// Admit loaded sources from unconnected authored values and current causal
 /// producer samples, then dispatch checked solver preparation. Loading remains
 /// pending while its source or physical producers are preparing.
-pub(crate) fn dispatch_loaded_modelica_sources(world: &mut World) {
-    let mut query = world.query_filtered::<Entity, With<PendingModelicaSource>>();
-    let entities: Vec<_> = query.iter(world).collect();
+pub(crate) fn dispatch_loaded_modelica_sources(
+    world: &mut World,
+    mut pending: Local<QueryState<Entity, With<PendingModelicaSource>>>,
+) {
+    let entities: Vec<_> = pending.iter(world).collect();
     if entities.is_empty() || world.contains_resource::<SceneLoadInFlight>() {
         return;
     }

@@ -1013,8 +1013,10 @@ wiring, readiness, telemetry projection, and the Modelica/script participant
 exchange independently from vehicle realization. Wiring facts are cached by
 composed generation and instance, with unchanged runtime edges retained across
 unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
-share a lifecycle-coalesced pending-prim set. Generic scene commands and
-mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns the
+share a lifecycle-coalesced pending-prim set. Pending Modelica source admission
+reuses Bevy's system-local query state across updates and scene replacements.
+Generic scene commands and mount/teardown mechanics live in
+`lunco-usd-bevy-runtime-core`; `sync` owns the
 fixed-step port exchange and authored event projection. Its optional API query
 providers live in `lunco-usd-sim-cosim-api`.
 

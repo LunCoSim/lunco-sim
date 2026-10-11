@@ -1,5 +1,53 @@
 # High-quality realtime performance handover
 
+## Reuse pending-source query metadata — 2026-10-11
+
+`lunco-usd-sim-cosim` retains Bevy's system-local `QueryState` for Modelica
+source admission. Normal iteration refreshes new archetypes and returns current
+pending entities; sampling, source ordering, wiring and initialization stay at
+their existing boundaries. This is an engine metadata mechanism with an existing
+repository consumer pattern, so it adds no policy hook or parallel admission path.
+
+Native Tracy exports compare the same High-quality sandbox and camera in three
+settled eight-second View/Builder/View intervals. The admission system's body
+median falls from 92.162/91.135/81.532 to 1.823/1.744/1.613 microseconds.
+Both owned app/collector pairs exit zero and release API 4202 and Tracy 8087.
+The second capture overlaps a sibling Cargo build and different GPU clocks;
+these are owner-cost diagnostics, not clean loading or FPS gains.
+
+The uncontended prechange capture identifies local-shadow parents at
+6.180/6.248/6.202 ms per camera interval, camera shadows at
+1.849/1.884/1.873 ms and opaque rendering at about 0.41 ms. Child depth-pass
+times are not added to their parents. All twelve spotlights have positive
+intensity and enabled maps; both inspected settled images retain the High
+shadows. No redundant full shading or safe map omission is demonstrated.
+Shadow/terrain performance acceptance remains open.
+
+The normal production artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+passes the 18-check telemetry-history gate and scene restart in owned PID
+3362676/API 4202, then exits zero and releases the port. Readiness is clear;
+diagnostics retain the three existing authored-pose initialization warnings.
+Its High-quality View/Builder/View frame medians are 10.585/10.553/10.614 ms,
+with p99
+12.087/12.227/12.593 ms. Physics-step medians are 1.045/0.987/1.007 ms;
+486/485/484 steps advance over the three eight-second windows and checkpoints.
+The premeasurement inventory contains only the owned app. Frame times are
+consistent with the preceding normal baseline and establish no causal FPS gain.
+All ten uninstrumented replay profiles pass 360 authored checks against the
+unchanged reference digest
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`,
+including serial/24-thread 4/8/20-rover runs, seeded jitter, zero tolerance and
+the altered-row negative control. Every process exits zero and releases API
+4202. Skill catalogue validation passes all 43 entries.
+
+Receipts, captures, native exports and comparisons use the `current-integrated-`
+and `admission-query-cache-` prefixes under `target/entity-tree-perf/`.
+After package cleanup proved insufficient, an authorized checkout-local
+`cargo clean` freed 26.5 GiB. Existing profiling evidence and the exact normal
+production artifact were preserved; source, sibling worktrees and shared
+Cargo/sccache caches were retained. Builds use the normal target and four jobs.
+
 ## Complete initial causal admission after main integration — 2026-10-11
 
 Integration of current main's checked Modelica initialization exposed incomplete

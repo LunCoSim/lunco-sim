@@ -707,6 +707,12 @@ Compiled targets cache surface presence until topology invalidation;
 pending/broken snapshots share compiled names as `Arc<str>`, and fault warning
 keys are formatted only on first failure rather than every fixed step.
 
+Exclusive systems that query pending components must retain a system-local
+`QueryState` rather than create a fresh world query on every update. Its normal
+`iter(world)` refreshes new archetypes while reusing the established matches.
+Keep pending-source sampling, source ordering and reload admission unchanged;
+verify scene replacement and the unchanged exact replay reference.
+
 For deferred USD projectors, keep one entity-work set per owner and feed it
 from the complete lifecycle boundary: identity arrival, projection readiness,
 invalidation, removal, and scene teardown. The same applies to deferred adapter

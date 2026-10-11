@@ -877,8 +877,12 @@ initial admission with its error.
 A declared scalar port can have no sample. Its stable slot accepts the first
 published value without changing port topology; registry reads return unavailable
 until then. Both direct USD programs and generated domain networks use this
-admission before worker dispatch. Generated compile intents retain their pinned
-document owner while waiting and reject a retired owner before dispatch.
+admission before worker dispatch. The USD dispatcher retains a system-local
+`QueryState` for pending sources; Bevy refreshes its archetype cache as new
+entities arrive, so settled updates do not rebuild whole-world query metadata.
+Pending entities still use the same sampling and ordered admission boundary.
+Generated compile intents retain their pinned document owner while waiting and
+reject a retired owner before dispatch.
 The USD lifecycle publishes Modelica participant surfaces before rebuilding
 connections, then admits initial inputs after that wiring transaction commits.
 This gives initialization the complete authored connection set in the update
