@@ -7313,12 +7313,10 @@ acceptance measurements, and miss the 0.5 ms physics and 150 FPS targets.
 
 Tracy recorded `lunco_modelica_telemetry::retain_modelica_runtime_state` at
 248.80 ms during Sandbox readiness and 87.57 ms during Summer Space School
-readiness. Source attribution found a repeated linear
-`ModelicaIndex::find_component_by_leaf` scan for each solver variable while
-document metadata was refreshed, making the dirty batch proportional to
-variables times document components. Live telemetry now consumes the checked
+readiness. Live telemetry consumes the checked
 FMI scalar inventory admitted with its solver; no document-name lookup remains
-in that producer. The historical source profile below measures batching of the
+in that producer. Retained experiment plots read exact per-run units and
+descriptions published by Rumoca and stored with the trajectory. The historical source profile below measures batching of the
 document lookup and is not a performance measurement of the FMI cutover. That
 source profile was captured at the Tracy listener on port 8086:
 `main/target/sss-sandbox-modelica-lookup-2d386e156-20260928.tracy` (60.3 s,

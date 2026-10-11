@@ -40,15 +40,17 @@ fn options() -> SimOptions {
 fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
     let compiled = compile("Coupled", "model Coupled input Real u = 2; Real x(start=0); output Real y; equation y=3*u+x; der(x)=y; end Coupled;", "coupled.mo").unwrap();
     let mut session = FixedStepSession::new(&compiled.dae, options()).unwrap();
-    assert_eq!(session.get("u").unwrap(), Some(2.0));
-    assert_eq!(session.get("y").unwrap(), Some(6.0));
+    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
+    assert_eq!(session.state().unwrap().values.get("y").copied(), Some(6.0));
     assert!(session.set_input("u", f64::NAN).is_err());
     assert!(session.set_input("missing", 1.0).is_err());
-    assert_eq!(session.get("u").unwrap(), Some(2.0));
+    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
     session.step(0.01).unwrap();
-    let x = session.get("x").unwrap().unwrap();
+    let x = session.state().unwrap().values.get("x").copied().unwrap();
     assert!((x - 6.0 * (0.01_f64.exp() - 1.0)).abs() < 1.0e-10);
-    assert!((session.get("y").unwrap().unwrap() - (6.0 + x)).abs() < 1.0e-10);
+    assert!(
+        (session.state().unwrap().values.get("y").copied().unwrap() - (6.0 + x)).abs() < 1.0e-10
+    );
 }
 
 #[test]
@@ -62,7 +64,7 @@ fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
     }
 
     assert!((session.time() - 0.1).abs() < 1.0e-14);
-    let x = session.get("x").expect("read x").expect("x is visible");
+    let x = session.state().expect("read state").values["x"];
     assert!((x - 0.1).abs() < 1.0e-12, "x={x}");
     assert!(session.step(0.02).is_err(), "variable dt must be rejected");
     for invalid_dt in [0.0, -0.01, f64::NAN, f64::INFINITY] {
@@ -85,15 +87,8 @@ fn fixed_rk4_repeats_the_same_operation_sequence() {
 
     assert_eq!(left.time().to_bits(), right.time().to_bits());
     assert_eq!(
-        left.get("x")
-            .expect("left x")
-            .expect("left visible")
-            .to_bits(),
-        right
-            .get("x")
-            .expect("right x")
-            .expect("right visible")
-            .to_bits()
+        left.state().expect("left state").values["x"].to_bits(),
+        right.state().expect("right state").values["x"].to_bits()
     );
 }
 
@@ -174,7 +169,7 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
     assert!(matches!(&left, LiveStepper::Fixed(_)));
     assert!(matches!(&right, LiveStepper::Fixed(_)));
     assert_eq!(left.input_names(), &["u".to_string()]);
-    assert_eq!(left.get("u").unwrap(), Some(0.0));
+    assert_eq!(left.state().unwrap().values.get("u").copied(), Some(0.0));
 
     for step in 0..512 {
         let input = ((step % 11) as f64 - 5.0) * 0.125;
@@ -182,7 +177,7 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
         right
             .set_input("u", input)
             .expect("right input is accepted");
-        assert_eq!(left.get("u").unwrap(), Some(input));
+        assert_eq!(left.state().unwrap().values.get("u").copied(), Some(input));
         left.step(0.01).expect("left fixed step");
         right.step(0.01).expect("right fixed step");
 

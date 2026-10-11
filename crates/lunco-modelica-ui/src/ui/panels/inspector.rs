@@ -584,11 +584,7 @@ fn apply_plot_binding(
         let Some(node) = scene.node(node_id) else {
             return;
         };
-        // No fallback binding. There used to be an `unwrap_or_else(PlotBinding::default)`
-        // here, which silently demoted a `Doc`-bound tile to a pinned one whenever the
-        // downcast failed — a wrong binding renders a plausible plot of the WRONG signal,
-        // which is worse than rendering nothing. If the node is not a plot payload there
-        // is nothing to edit, and the `!kind_is_plot` guard below would bail anyway.
+        // Only a typed plot payload supplies an editable binding.
         let Some(prev_data) = node.data.downcast_ref::<PlotNodeData>() else {
             return;
         };

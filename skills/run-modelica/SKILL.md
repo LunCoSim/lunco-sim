@@ -890,7 +890,11 @@ the directory resolver preserves this manifest semantic without permitting
 parent traversal or using it as a concrete file address.
 
 For causal USD models, initialization waits for all wired producers to publish
-finite current samples. Explicit unconnected USD inputs and connected samples
+finite current samples. Link class declarations refresh at this initialization
+boundary, including nodes created by the current projection transaction.
+External environment sources must be wired into explicit network boundary
+inputs when their consumers belong to a generated acausal collection.
+Explicit unconnected USD inputs and connected samples
 enter `Compile.initial_inputs`; no interface placeholder is an initialization
 value. An unbound input without a declaration default or admitted runtime value
 fails visibly. Reset and reinitialization admit current input values before
@@ -916,3 +920,8 @@ Reset admits current values even when the worker has not stepped after a write.
 `SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
 `minimum`, and `maximum` facts for the installed component, using the same
 optional `names` filter as values. Input sliders use those compiled bounds.
+`GetExperimentResult.metadata` returns the units and descriptions compiled for
+that run, using the same `variables` filter as its series. Draft edits and later
+runs cannot change those retained facts. `modelica_run_metadata.rhai` exercises
+this contract through production runs; version 2 completed-history artifacts
+retain the same facts across persistence.

@@ -7679,6 +7679,7 @@ dependencies = [
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-cosim-core",
  "lunco-embodiment-core",
  "lunco-engineering-values",
  "lunco-environment",

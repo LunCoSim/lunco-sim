@@ -2356,10 +2356,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `CloseScratchModelicaDocument`
 
- Close only an untitled Modelica scratch document through the shared
- document registry. This is intended for generated, non-tab documents used
- by headless tools; saved documents continue through the normal Editor close
- flow.
+ Cancel owned experiments and close an untitled API scratch document through
+ the shared document lifecycle, including its linked execution entities.
+ Saved documents continue through the ordinary document close flow.
 
 - *defined in:* `crates/lunco-modelica-api/src/edit/doc.rs`
 

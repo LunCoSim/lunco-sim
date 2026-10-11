@@ -274,7 +274,6 @@ mod tests {
             tolerance: None,
             solver: None,
             h0: None,
-            runtime: Default::default(),
         }
     }
 

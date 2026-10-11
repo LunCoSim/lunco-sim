@@ -52,6 +52,7 @@ lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 # API query registration uses only the transport-free command/query core.

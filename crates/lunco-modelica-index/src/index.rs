@@ -678,20 +678,6 @@ impl ModelicaIndex {
         self.components.iter().find(|c| c.key == key)
     }
 
-    /// Find a component by name, accepting either a fully-qualified
-    /// instance path (`tank.m_initial`) or a bare leaf (`m_initial`).
-    /// Tries the full string first, then the last `.`-segment. Used
-    /// by panels that key on runtime-published variable names but
-    /// need static metadata (description / `min` / `max`) declared at
-    /// the leaf level. First match wins on collisions across classes.
-    pub fn find_component_by_leaf(&self, name: &str) -> Option<&ComponentEntry> {
-        if let Some(c) = self.components.iter().find(|c| c.name == name) {
-            return Some(c);
-        }
-        let leaf = component_leaf_fallback(name)?;
-        self.components.iter().find(|c| c.name == leaf)
-    }
-
     /// Iterate components in `class` in declaration order.
     pub fn components_in_class<'a>(
         &'a self,
@@ -791,11 +777,6 @@ impl ModelicaIndex {
             .flat_map(|keys| keys.iter())
             .filter_map(move |key| self.connections.iter().find(|c| c.key == *key))
     }
-}
-
-fn component_leaf_fallback(name: &str) -> Option<&str> {
-    let leaf = lunco_modelica_ast::ast_extract::short_name(name);
-    (leaf != name).then_some(leaf)
 }
 
 fn is_subcomponent(qualified: &str, used: &std::collections::HashSet<&str>) -> bool {

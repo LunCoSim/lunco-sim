@@ -133,7 +133,8 @@ the first entity, a fabricated value, or an older behavior.
 - Rumoca owns Modelica expression rendering, decoded parser string tokens,
   string escaping, checked initialization, and visible solver values. Reuse
   those APIs directly. Live scalar metadata comes from checked FMI variables
-  admitted with the worker's stepper, rather than document-name guesses. Keep
+  admitted with the worker's stepper. Retained trajectories consume Rumoca's
+  checked output metadata and carry it through the experiment artifact. Keep
   rejected inputs and observation failures terminal at worker admission; only
   complete finite observations may reach runtime values and streams. Keep
   source-splice authoring and co-simulation admission

@@ -12,9 +12,8 @@ crossbeam-channel = { workspace = true }
 web-time = { workspace = true }
 lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 serde_json = { workspace = true, features = ["raw_value"] }
-# Optional — exposes ExperimentRegistry as a Bevy Resource and ships
-# events. Off by default so headless callers (CLI sweeps, tests) stay
-# Bevy-free.
+# The default host feature exposes ExperimentRegistry as a Bevy Resource and
+# ships events. Renderer-free callers disable default features.
 bevy = { workspace = true, optional = true }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
 lunco-settings = { path = "../lunco-settings", optional = true }

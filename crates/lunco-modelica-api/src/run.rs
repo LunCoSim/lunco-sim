@@ -130,7 +130,6 @@ fn on_run_modelica_solve(
         tolerance: None,
         solver: None,
         h0: None,
-        runtime: Default::default(),
     };
     lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
         .map_err(|error| error.to_string())?;

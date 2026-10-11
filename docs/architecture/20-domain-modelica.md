@@ -89,8 +89,9 @@ scene tests and non-UI hosts.
 an explicit document id, parsed class, and source generation. It returns an
 experiment id immediately; callers poll `RunStatus` and read finite `f64`
 series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
-only untitled generated documents and their completed run records; ordinary
-saved-document closing remains an Editor lifecycle operation.
+only untitled generated documents and their run records. It cancels live
+experiments and delegates document and linked execution-entity retirement to
+the shared `CloseDocument` owner.
 
 Fast Run bounds read the current document AST annotation after any explicit
 draft override, then use the documented one-second default if neither is present.
@@ -131,6 +132,10 @@ outside that span; library documents and duplicate preparation use this owner.
 Read-only library document loading selects the exact qualified class through
 the shared index lookup; a missing sibling cannot resolve another class with
 the same leaf name.
+Deferred edit parsing wakes at its recorded debounce deadline even when the
+document-registry and worker-capacity revisions are unchanged. The source
+generation remains the admission fence; completed runs retain their compiled
+metadata while the replacement draft parses.
 
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them

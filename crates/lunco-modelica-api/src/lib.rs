@@ -1061,6 +1061,23 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             }
         }
 
+        let metadata = ApiValue::Map(
+            series
+                .iter()
+                .filter_map(|(name, _)| {
+                    result.meta.variable_metadata.get(name).map(|fact| {
+                        (
+                            name.clone(),
+                            api_value!({
+                                "unit": fact.unit.clone(),
+                                "description": fact.description.clone(),
+                            }),
+                        )
+                    })
+                })
+                .collect(),
+        );
+
         query_ok(api_value!({
             "experiment_id": exp.id.0.to_string(),
             "name": exp.name.clone(),
@@ -1074,6 +1091,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             "missing_variables": missing,
             "times": times,
             "series": ApiValue::Map(series),
+            "metadata": metadata,
         }))
     }
 }

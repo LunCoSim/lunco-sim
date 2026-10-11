@@ -76,6 +76,16 @@ impl RunResult {
                 "experiment result sample_count does not match its time vector".into(),
             ));
         }
+        if let Some(name) = self
+            .meta
+            .variable_metadata
+            .keys()
+            .find(|name| !self.series.contains_key(*name))
+        {
+            return Err(RunResultError(format!(
+                "experiment metadata `{name}` has no corresponding series"
+            )));
+        }
         for (index, &time) in self.times.iter().enumerate() {
             if !time.is_finite() {
                 return Err(RunResultError(format!(

@@ -141,45 +141,13 @@ pub enum ParamValue {
 // participating. Callers do not name a solver; they state [`RuntimeProfile`] —
 // where the model runs — and call `solver::resolve`.
 
-// ---------- Runtime ----------
-
-/// How a run drives the solver to `t_end`.
-///
-/// The two modes share the same DAE, solver family and tolerances; they
-/// differ only in *who* owns the time loop:
-///
-///  * [`Batch`](RuntimeMode::Batch) — the non-interactive dense-output
-///    path (`rumoca_sim::simulate`). The solver free-steps with its own
-///    adaptive step size and the output samples are produced by dense
-///    interpolation, so the solver step is fully decoupled from the
-///    output spacing. This is the robust default: stiff long-horizon
-///    models (e.g. the lunar rover thermal system across multiple
-///    day/night cycles) complete here regardless of the output `dt`.
-///  * [`Interactive`](RuntimeMode::Interactive) — the live `SimulationSession`
-///    loop (`run_stepping_loop`). The solver is advanced one output
-///    `dt` at a time so the run can stream/pause/scrub in real time, but
-///    that couples the solver step to the output spacing: too coarse a
-///    `dt` makes a stiff solve collapse. Use for the live, playable sim.
-///
-/// Default is [`Batch`](RuntimeMode::Batch): correctness first; opt into
-/// `Interactive` when a run must be streamed/steered live.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeMode {
-    /// Non-interactive dense-output batch solve. Robust default.
-    #[default]
-    Batch,
-    /// Live stepper loop — streamable/steerable, but solver step is
-    /// bounded by the output `dt`.
-    Interactive,
-}
-
 // ---------- Bounds ----------
 
 /// Run window + solver hints. Fields default from the model's
 /// `experiment(...)` annotation when available; otherwise the runner
 /// supplies sane defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunBounds {
     pub t_start: f64,
     pub t_end: f64,
@@ -204,10 +172,6 @@ pub struct RunBounds {
     /// (currently `span / 5_000_000`). Useful for long-horizon runs
     /// where the span-based default over-shoots a stiff transient.
     pub h0: Option<f64>,
-    /// Time-loop ownership for the run. Default is the non-interactive
-    /// [`Batch`](RuntimeMode::Batch) dense-output solve; see [`RuntimeMode`].
-    #[serde(default)]
-    pub runtime: RuntimeMode,
 }
 
 impl Default for RunBounds {
@@ -220,7 +184,6 @@ impl Default for RunBounds {
             tolerance: None,
             solver: None,
             h0: None,
-            runtime: RuntimeMode::Batch,
         }
     }
 }
@@ -305,11 +268,21 @@ impl RunResult {
         self.times.append(&mut delta.times);
         self.meta.sample_count = self.times.len();
         self.meta.wall_time_ms = delta.meta.wall_time_ms; // Update to latest wall time
+        self.meta.variable_metadata = delta.meta.variable_metadata;
     }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SeriesMetadata {
+    pub unit: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunMeta {
+    /// Backend-owned facts captured for this run, keyed by exact series identity.
+    /// An absent entry means the backend supplied no descriptive facts.
+    pub variable_metadata: std::sync::Arc<BTreeMap<String, SeriesMetadata>>,
     #[serde(default)]
     pub source_content: Option<SourceContentIdentity>,
     #[serde(default)]

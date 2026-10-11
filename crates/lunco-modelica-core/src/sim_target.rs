@@ -154,7 +154,6 @@ pub fn default_bounds() -> RunBounds {
         tolerance: None,
         solver: None,
         h0: None,
-        runtime: lunco_experiments::RuntimeMode::Batch,
     }
 }
 
@@ -275,7 +274,6 @@ pub fn bounds_from_experiment(
         tolerance: exp.tolerance,
         solver: None,
         h0: None,
-        runtime: lunco_experiments::RuntimeMode::Batch,
     };
     validate_run_bounds(&bounds)?;
     Ok(Some(bounds))
@@ -329,7 +327,6 @@ mod tests {
             tolerance: None,
             solver: None,
             h0: None,
-            runtime: lunco_experiments::RuntimeMode::Batch,
         }
     }
 

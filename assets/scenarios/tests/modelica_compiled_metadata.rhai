@@ -3,7 +3,7 @@ import "lunco://scripting/tools/modelica_editor" as editor;
 
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["CompileStatus", "SnapshotVariables", "ListTelemetryChannels", "GetDocumentSource", "DescribeModel"], required_inputs: []}
+      query_reads: ["CompileStatus", "SnapshotVariables", "ListTelemetryChannels", "GetDocumentSource", "DescribeModel", "CosimStatus"], required_inputs: []}
 }
 fn source(unit) {
     `model MetadataProbe
@@ -27,8 +27,15 @@ end MetadataProbe;`
 }
 fn channel(name) {
     let result = query("ListTelemetryChannels", #{name: name});
-    if result == () || result.channels == () || result.channels.len() != 1 { return (); }
-    result.channels[0]
+    if result == () || result.channels == () { return (); }
+    let channels = [];
+    for item in result.channels {
+        if item.model_class == "MetadataProbe" && item.model_variable == name {
+            channels.push(item);
+        }
+    }
+    if channels.len() != 1 { return (); }
+    channels[0]
 }
 fn checks(doc, cold_unit) {
     let metadata = query("SnapshotVariables", #{doc_id: doc}).metadata;
@@ -55,19 +62,30 @@ fn checks(doc, cold_unit) {
     ]
 }
 fn finish(state, failures) {
-    state.done = true;
     if state.doc != () { editor::close_scratch(state.doc); }
-    report_verdict(failures, "MODELICA COMPILED METADATA", "MODELICA_COMPILED_METADATA");
+    state.phase = "cleanup";
+    state.cleanup_ticks = 0;
+    state.failures = failures;
     state
 }
 fn on_start(me, ctx) {
-    this = #{done: false, ticks: 0, doc: (), phase: "prepare", failures: []};
+    this = #{done: false, ticks: 0, doc: (), phase: "prepare", failures: [],
+      participants: query("CosimStatus").synchronization.active_participants};
     let created = editor::new_scratch(source("V"), "Compiled metadata contract");
     if created.ok != true { this = finish(this, ["source admission failed"]); return; }
     this.doc = created.doc_id;
 }
 fn on_tick(me, ctx) {
     if this.done { return; }
+    if this.phase == "cleanup" {
+        this.cleanup_ticks += 1;
+        let retired = query("CosimStatus").synchronization.active_participants == this.participants;
+        if !retired && this.cleanup_ticks < 300 { return; }
+        this.failures.push(t_true(retired, "scratch closure retires its live Modelica participant"));
+        report_verdict(this.failures, "MODELICA COMPILED METADATA", "MODELICA_COMPILED_METADATA");
+        this.done = true;
+        return;
+    }
     this.ticks += 1;
     if this.ticks > 6000 { this = finish(this, ["compiled metadata timed out in " + this.phase]); return; }
     let status = query("CompileStatus", #{doc_id: this.doc});

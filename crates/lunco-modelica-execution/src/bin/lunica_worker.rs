@@ -371,13 +371,7 @@ mod wasm {
             return;
         }
 
-        // Drive the run through the SHARED `drive_run` — the EXACT same entry
-        // point native (`lunco_modelica_runner`) uses. It honours
-        // `bounds.runtime`: Batch → the budget-admitted dense-output `simulate_fmi_component`
-        // solve (robust on stiff models), Interactive → the streamable
-        // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
-        // (postMessage + the cancel registry). The admitted limits and output
-        // grid use the same mechanism on both platforms.
+        // Native and browser hosts share the checked batch solver and output grid.
         let mut sink = WorkerSink {
             scope,
             run_id,
@@ -432,31 +426,7 @@ mod wasm {
         }
         fn emit(&mut self, mut update: lunco_experiments::RunUpdate) {
             lunco_experiments::stamp_source_identity(&mut update, &self.source_content);
-            // DIAGNOSTIC: on each streamed Progress, log the worker's wasm linear
-            // memory size. Native runs this exact solve flat at ~905 MB; this
-            // surfaces whether the in-browser worker's memory climbs unbounded
-            // (allocator fragmentation) toward the 4 GiB trap.
-            if let lunco_experiments::RunUpdate::Progress { t_current, .. } = &update {
-                let pages = core::arch::wasm32::memory_size(0);
-                post_log(
-                    self.scope,
-                    format!(
-                        "[mem] sim_t={:.0} wasm_linear={}MB",
-                        t_current,
-                        pages * 64 / 1024
-                    ),
-                );
-            }
             post_run_update(self.scope, self.run_id, update);
-        }
-        fn wall_budget(&self) -> Option<core::time::Duration> {
-            // Generous backstop: a Fast Run that hasn't finished in this long is
-            // almost certainly pathological (e.g. a stiff model over a huge
-            // horizon at a too-tight tolerance). Fail it gracefully so the worker
-            // is freed for the next run instead of grinding indefinitely. A
-            // single runaway solver `step()` that blows the heap before this
-            // fires is caught instead by worker-crash recovery on the main thread.
-            Some(core::time::Duration::from_secs(120))
         }
     }
 

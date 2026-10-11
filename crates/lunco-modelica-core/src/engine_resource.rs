@@ -437,10 +437,14 @@ fn engine_sync_is_due(
     registry.revision() != cursor.registry_revision
         || admission.capacity_revision() != cursor.admission_capacity_revision
         || handle.sync_wakeup_pending()
-        || (!pacing.input_active
-            && cursor
-                .next_debounce_at
-                .is_some_and(|deadline| web_time::Instant::now() >= deadline))
+        || parse_debounce_is_due(cursor, pacing)
+}
+
+fn parse_debounce_is_due(cursor: &EngineSyncCursor, pacing: &ParsePacing) -> bool {
+    !pacing.input_active
+        && cursor
+            .next_debounce_at
+            .is_some_and(|deadline| web_time::Instant::now() >= deadline)
 }
 
 fn engine_sync_due(
@@ -564,6 +568,7 @@ pub fn drive_engine_sync(
     let admission_capacity_revision = admission.capacity_revision();
     if registry_revision == cursor.registry_revision
         && admission_capacity_revision == cursor.admission_capacity_revision
+        && !parse_debounce_is_due(&cursor, &pacing)
     {
         handle.clear_sync_wakeup_if_idle();
         return;
