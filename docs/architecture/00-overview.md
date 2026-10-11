@@ -124,7 +124,7 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 - **UI crates are deliberate cross-layer adapters.** They are not widget
   toolkits under the workbench: `lunco-ui` consumes `lunco-workbench-core` and
   `lunco-workbench-widgets`
-  and reaches into domain crates for mission-control views, while
+  and initializes embodiment role resources for its hosts, while
   `lunco-avatar-ui` owns Avatar-specific egui presentation over
   `lunco-embodiment-core` and `lunco-avatar-policy`; it does not depend on the
   headless-safe `lunco-avatar` implementation. UI and domain state meet below

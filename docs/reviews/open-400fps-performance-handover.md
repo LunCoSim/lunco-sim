@@ -1,5 +1,46 @@
 # High-quality realtime performance handover
 
+## Let registered panels own UI snapshots — 2026-10-11
+
+`lunco-ui` initializes shared selection, embodiment roles and the modal host.
+Domain panels own their presentation snapshots: Command Deck handles selected
+control authority, Avatar handles local embodiment state, and the workbench
+toolbar consumes the shared time transport. Caller and registration discovery,
+including the owned production application, identifies an unconsumed native
+widget and unconditional snapshot producer. Their module, public exports,
+local callback and eight unused domain dependencies are removed together.
+No replacement mechanism, hook, compatibility path or simulation policy is
+introduced. The remaining panel consumers and authoritative clocks retain
+their owners.
+
+The accepted baseline capture `visual-transition-after-final-tracy-20261011`
+records 488 settled snapshot calls, 39.831 ms total, 0.081621 ms mean.
+The 252,307,291-byte final capture `ui-owner-after-tracy-20261011` matches the
+collector's reported size and passes native exports; it contains zero such
+calls throughout the capture. This eliminates that application's unconsumed
+per-frame work. Concurrent main and sibling build workloads prevent a clean
+loading, visual FPS or physics-throughput claim.
+
+Normal artifact
+`778876e40aa8bdccd6bec158a35cf4b035bc43eaf83fe011c6398de9b3c52d8c`
+passes all ten production determinism profiles, 360 checks, against unchanged
+reference `276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`
+at compute widths 1/24. Production scene verdicts pass sandbox 7, telemetry
+history 17, mass/island 10, primitive mesh sharing 42 and replacement sandbox 7.
+Readiness, advancing physics, fixed camera, invalid-assembly pause guards,
+invalid-reset rejection and valid Modelica reset pass. Builder inspection
+shows Command Deck, telemetry and hierarchy rows at High quality. Raw frame
+medians are 15.884/17.169/19.163 ms during concurrent build activity; those are
+contended observations, not acceptance numbers.
+
+Owned normal/replay/Tracy sessions close with zero exits and release API 4202
+and Tracy 8087. Main PID 84260 remains untouched. Both production builds pass;
+the exact validated normal executable is archived, verified and restored.
+Scoped application cleanup occurs only after replay closure and removes this
+checkout's stale application outputs. Source, external libraries, sibling
+sessions and shared caches remain intact. Receipts, captures, exports and logs
+are retained under `target/entity-tree-perf/`, prefix `ui-owner-`.
+
 ## Group each prim's structural component commits — 2026-10-11
 
 `lunco-usd-bevy` uses native bundles for related projection writes and removals.

@@ -689,7 +689,7 @@ impl Plugin for WorkbenchPlugin {
         // fine. Adding it on the workbench shell makes the transport present
         // wherever the toolbar Pause button lives — including modelica-only
         // `lunica`, which has no celestial/USD plugins — so the button drives the
-        // same authority as the avatar hotkey and mission-control panel.
+        // same authority as the avatar hotkey.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }

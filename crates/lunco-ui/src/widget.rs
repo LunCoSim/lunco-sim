@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_widget_id_child_namespacing() {
-        let parent = WidgetId::new("mission_control");
+        let parent = WidgetId::new("dashboard");
         let child_a = parent.with("celestial_bodies");
         let child_b = parent.with("spacecraft_list");
         assert_ne!(parent, child_a);

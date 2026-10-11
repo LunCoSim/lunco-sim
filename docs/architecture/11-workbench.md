@@ -1184,6 +1184,10 @@ dependency chain. In particular, `lunco-workbench-state` and
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files
   panels, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
+  Its plugin initializes shared selection, embodiment roles and the modal
+  host. Registered domain panels own their snapshots: Command Deck presents
+  selected control authority, Avatar presents local embodiment state, and
+  the workbench toolbar consumes the shared time transport.
 - `lunco-ui::log` owns the reusable bounded log model and renderer; domain
   crates provide panel identity and domain-specific production/navigation.
 - `lunco-viz` owns live and multi-series trajectory rendering; domain crates

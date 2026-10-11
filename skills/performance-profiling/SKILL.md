@@ -374,6 +374,10 @@ search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+Before optimizing a panel snapshot's change query, trace its registered reader
+and confirm that reader in the live application. Remove unconsumed producers,
+public exports and dependencies together. Shared widget plugins initialize
+shared infrastructure; active domain panels own their view models.
 Keep topology invalidation separate from the query-heavy snapshot producer:
 mark the revision dirty when scene facts change, then gate snapshot work until
 no prior worker is active. This lets a revision change reject an in-flight tree
