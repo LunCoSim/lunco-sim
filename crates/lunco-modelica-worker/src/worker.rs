@@ -242,13 +242,16 @@ fn build_stepper(
     ),
     rumoca_sim::SimulationDiagnosticError,
 > {
-    let plan = live_build_plan(
-        profile,
-        parameter_overrides,
-        initial_inputs,
-        source_key,
-        library_revision,
-    )?;
+    let plan = {
+        let _span = bevy::log::info_span!("modelica_live_plan_admission").entered();
+        live_build_plan(
+            profile,
+            parameter_overrides,
+            initial_inputs,
+            source_key,
+            library_revision,
+        )?
+    };
     if !prepared.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(
@@ -277,33 +280,42 @@ fn build_stepper(
     let model = prepared
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
-    let stepper = lunco_modelica_solver::simulation_session::live_from_fmi_component(
-        model,
-        &plan.spec,
-        plan.options,
-    )?;
-    let variable_metadata = model
-        .variables()
-        .iter()
-        .flat_map(|variable| {
-            variable
-                .scalar_names()
-                .iter()
-                .enumerate()
-                .map(move |(index, name)| {
-                    (
-                        name.clone(),
-                        lunco_modelica_runtime::ModelicaScalarMetadata {
-                            unit: variable.unit().map(str::to_owned),
-                            description: variable.description().map(str::to_owned),
-                            minimum: variable.minimum().map(|values| values[index]),
-                            maximum: variable.maximum().map(|values| values[index]),
-                        },
-                    )
-                })
-        })
-        .collect();
-    let symbols = collect_stepper_observables(&stepper)?;
+    let stepper = {
+        let _span = bevy::log::info_span!("modelica_live_session_construct").entered();
+        lunco_modelica_solver::simulation_session::live_from_fmi_component(
+            model,
+            &plan.spec,
+            plan.options,
+        )?
+    };
+    let variable_metadata = {
+        let _span = bevy::log::info_span!("modelica_compiled_scalar_metadata").entered();
+        model
+            .variables()
+            .iter()
+            .flat_map(|variable| {
+                variable
+                    .scalar_names()
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, name)| {
+                        (
+                            name.clone(),
+                            lunco_modelica_runtime::ModelicaScalarMetadata {
+                                unit: variable.unit().map(str::to_owned),
+                                description: variable.description().map(str::to_owned),
+                                minimum: variable.minimum().map(|values| values[index]),
+                                maximum: variable.maximum().map(|values| values[index]),
+                            },
+                        )
+                    })
+            })
+            .collect()
+    };
+    let symbols = {
+        let _span = bevy::log::info_span!("modelica_initial_observation").entered();
+        collect_stepper_observables(&stepper)?
+    };
     Ok((stepper, plan.snapshot, variable_metadata, symbols))
 }
 

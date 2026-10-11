@@ -272,6 +272,14 @@ stale-result rejection and exact sample order at the low-level seam, plus
 reader. Preserve detected-symbol/output precedence. Measure this response path
 separately from fixed-step output publication; fewer copies alone do not prove
 throughput gain.
+For loading, separate prepared-FMI lookup/lowering from live installation.
+`modelica_live_plan_admission`, `modelica_live_session_construct`,
+`modelica_compiled_scalar_metadata` and `modelica_initial_observation` divide
+the worker's `build_stepper` boundary. Preserve checked metadata, initial
+observations, native solver selection and thread affinity. Inspect the pinned
+compiler artifact before assuming cloning duplicates its DAE or source map;
+both are already shared by the maintained compiler. Attribute the actual phase
+before adding another cache or execution lane.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable

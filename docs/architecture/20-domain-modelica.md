@@ -390,6 +390,14 @@ while existing DAE lowerings occupy the pool, without allowing an unbounded
 queue of retained compilation artifacts. Solve results still commit in
 submission order, regardless of worker completion order.
 
+Live installation is measured separately from asynchronous FMI preparation.
+`modelica_live_plan_admission`, `modelica_live_session_construct`,
+`modelica_compiled_scalar_metadata` and `modelica_initial_observation` identify
+the ordered phases inside `build_stepper`. The thread-affine session remains
+on its worker owner. Compare these child phases with
+`modelica_finish_compile_work` and `modelica_commit_solve_preparation`; their
+inclusive times overlap and must not be added together.
+
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
 does not request a Modelica compile. The Modelica adapter compares that

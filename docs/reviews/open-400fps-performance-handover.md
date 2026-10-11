@@ -1,5 +1,57 @@
 # High-quality realtime performance handover
 
+## Live Modelica installation attribution — 2026-10-11
+
+Local main contains the validated source-dispatch admission commit `63aacb8b3`.
+Four diagnostic child spans now separate live plan admission, native session
+construction, checked scalar metadata and initial observation. Calls, values,
+ordering, solver selection and error propagation are unchanged.
+
+`cargo check -p lunco-modelica-worker -j 4` passes before the requested cleanup.
+The explicit `cargo clean` removes 4,492 files / 1.6 GiB from this checkout with
+no owned runtime or build active. Source, retained evidence, sibling sessions
+and shared caches are preserved. The subsequent production build
+`cargo build -p lunco-luncosim --features tracy -j 4` passes in 12m 58s.
+The exact Tracy artifact is
+`9d34260bf6c9187766552169052d71b37ea87bcabb838458ab8ccb953ded975a`.
+
+The new native capture contains 18 installations, each with exactly one of
+all four child spans. Inclusive installation time totals 1,128.659 ms; native
+session construction accounts for 1,117.477 ms (99.0%), with median 77.744 ms
+and maximum 118.741 ms. Plan admission totals 0.158 ms, scalar metadata
+9.433 ms and initial observations 0.737 ms. Metadata's maximum 6.827 ms occurs
+in one replacement installation; its median is 0.135 ms. Parent and child
+inclusive times must not be added together. This evidence selects live
+construction for the next ownership/scheduling review; another metadata cache
+would not address the dominant installation cost.
+
+The checked FMI component is already prepared separately. The pinned native
+adaptive constructor builds its execution backend and Model Exchange session
+on the owning thread. Its sessions remain thread-affine; the native compiler
+artifact already shares its DAE, flat model and source map. No external-library
+change, duplicate native adapter, cache, lane or solver change is made here.
+Any scheduling change must retain bounded admission, thread affinity, per-model
+command order, generation retirement and ordered authoritative result commits.
+
+The 425,067,855-byte capture passes native event export. Its compressed payload
+is 405.30 MiB across 20,403 blocks, matching the collector report after container
+headers. Owned app/collector PIDs 922114/922113 both exit zero and release API
+4202/Tracy 8087. API schemas are stable; the telemetry-history gate passes all
+18 checks; scene replacement, readiness and diagnostics pass. The restart image
+shows the scene and shadows. Settled View/Build/View windows advance
+611/609/608 physics steps with 50 bodies, 33 colliders and 20 joints.
+
+The helper's raw foreign-workload flag includes its own collector. Auditing
+all recorded process samples while excluding both owned PIDs finds no foreign
+Cargo or simulator process in the settled windows. These are still Tracy
+measurements, not normal-product FPS or a loading speedup. The helper is corrected
+for subsequent captures; the original receipt is preserved. Readiness is
+4.988 seconds. Loading, visual and physics acceptance remain open.
+
+Evidence lives under `.lunco/performance-evidence/entity-tree-perf/` with
+`modelica-install-phase-` prefixes; the native events and per-installation
+summary retain the exact source boundaries and timings.
+
 ## Admit Modelica source dispatch before its exclusive boundary — 2026-10-11
 
 The USD co-simulation owner uses native pending-source membership and the
@@ -50,7 +102,8 @@ After verifying owned app/build termination, the additional focused
 `cargo clean -p lunco-luncosim` removes 49 files / 4.5 GiB. Source, sibling
 worktrees and shared caches remain intact. Evidence lives under
 `.lunco/performance-evidence/entity-tree-perf/`, with `modelica-source-gate-`
-prefixes. The normal production executable remains available in `target/debug`.
+prefixes. That checkpoint retained the normal production executable in
+`target/debug`; the later cleanup is recorded above.
 
 ## Native entity-tree marker admission — 2026-10-11
 
