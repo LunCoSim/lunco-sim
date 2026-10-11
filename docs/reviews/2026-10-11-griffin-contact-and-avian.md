@@ -318,6 +318,16 @@ joint sweeps, 358.763 ms to 900 native narrow-phase updates, and 223.303 ms to
 from 113 unique leaves. Profiler totals are diagnostic attribution with overhead,
 not product timing or evidence that the budget is met.
 
+The current artifact also passes seven rover runs on owned APIs 6378–6384
+using the existing query-batch control. Selected contact/motion records match
+exactly at batch bounds 64, 16 and zero. All seven windows contain 541 samples
+and every sample exceeds 0.5 ms. Initial batch-16/zero windows measure p50
+2.768009/2.757369 ms, between batch-64 controls at 3.494786/2.937575 ms.
+Repeated 16/64/16 windows measure 3.320581/3.283862/3.196699 ms. Concurrent
+workloads and changing control timings do not establish a reliable improvement;
+the default remains 64. This comparison verifies selected-state equality and
+rejects budget acceptance; it does not establish full-state replay.
+
 The bridge's initial geometry, scale and mass records match in default and
 one-thread diagnostic launches. All 1920 body/collider/compound rows and 917
 prepared-contact rows match exactly after normalizing allocation-only IDs.
