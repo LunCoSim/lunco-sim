@@ -782,7 +782,9 @@ the shared signal registry remains the sole channel-history authority.
 When document metadata needs refresh, telemetry builds one borrowed component
 name lookup for that model's metadata batch. This preserves exact-name then
 qualified-leaf resolution while avoiding a full document-component scan for
-each runtime variable; settled sample batches reuse cached metadata.
+each runtime variable. The producer retains a publication flag and moves first
+or changed metadata into the shared signal registry, which owns comparison and
+storage; settled sample batches do not rebuild metadata.
 Generated USD Modelica source metadata has a separate invalidation boundary in
 `lunco_modelica_runtime::generated_source`: the generated source projection and
 its document link/removal lifecycle. Live `ModelicaModel` output and clock

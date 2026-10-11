@@ -424,6 +424,12 @@ discovery or when an entity's USD owner path changes, then only records samples 
 steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
 registry remains the single metadata owner.
 
+Modelica producers likewise retain only a publication flag. First observation
+and document-generation or authored-layout changes build metadata and move it
+into `SignalRegistry::update_meta`, which owns both comparison and storage.
+Settled solver samples reuse the channel identity and do not reconstruct or
+retain a second copy of the metadata strings.
+
 Physics and Modelica producers add `SignalSource` when an entity first retains a sample. The
 marker owns history cleanup on source removal; later sample batches do not rewrite it.
 The physics producer uses one cached `HashMap::entry` lookup per signal sample, reusing the

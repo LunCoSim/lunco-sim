@@ -88,9 +88,8 @@ struct RuntimeTelemetrySession {
 struct RuntimeSignalCache {
     signal: SignalRef,
     retained: bool,
-    /// Metadata is catalog state, not a per-sample value. Refresh it only when
-    /// the authored layout or document index changes, or on first observation.
-    metadata: Option<SignalMeta>,
+    /// The registry owns metadata; the producer only tracks its publication.
+    metadata_published: bool,
 }
 
 /// Retain the current variables of every live Modelica solver.
@@ -204,7 +203,7 @@ pub fn retain_modelica_runtime_state(
                         RuntimeSignalCache {
                             signal,
                             retained: false,
-                            metadata: None,
+                            metadata_published: false,
                         },
                     );
                     session
@@ -233,17 +232,16 @@ pub fn retain_modelica_runtime_state(
             // Refresh metadata independently of sampling, but only when the
             // authoritative document/layout inputs changed or this variable
             // has not been described in this session yet.
-            if metadata_dirty || cached.metadata.is_none() {
+            if metadata_dirty || !cached.metadata_published {
+                let _span = bevy::log::debug_span!("modelica_telemetry_channel_metadata").entered();
                 if component_names.is_none() {
                     component_names =
                         document_host.map(|host| host.document().index().component_name_lookup());
                 }
                 let meta =
                     model_signal_meta(component_names.as_ref(), model, layout.as_deref(), name);
-                if cached.metadata.as_ref() != Some(&meta) {
-                    signals.update_meta(signal.clone(), meta.clone());
-                }
-                cached.metadata = Some(meta);
+                signals.update_meta(signal.clone(), meta);
+                cached.metadata_published = true;
             }
 
             // The shared signal registry owns due-time and time-reversal for

@@ -820,8 +820,11 @@ separate full-population passes for each index.
 For Modelica telemetry metadata, build `ModelicaIndex::component_name_lookup`
 once per dirty metadata batch and resolve all variables through that borrowed
 lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
-steady sample batches should use the session's cached metadata without walking
-the document index.
+steady sample batches should use the session's metadata-publication flag without
+walking the document index. Move first or changed metadata into the shared signal
+registry, which owns comparison and storage; do not retain a second `SignalMeta`
+in the producer. `modelica_telemetry_channel_metadata` attributes that publication
+with the Modelica telemetry debug filter enabled.
 Cache each runtime producer's stable `SignalRef` identity for the session and
 borrow it when recording an existing channel. Avoid reconstructing and cloning
 signal paths for every due sample.

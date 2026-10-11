@@ -1,5 +1,47 @@
 # High-quality realtime performance handover
 
+## Keep Modelica telemetry metadata in its registry — 2026-10-11
+
+`lunco-modelica-telemetry` retains a publication flag per runtime variable and
+moves first or changed metadata into `lunco-signal::SignalRegistry`. The registry
+owns equality checks and storage. This removes the producer's duplicate
+`SignalMeta`, including its owned strings, while retaining the existing
+document-generation/layout invalidation, channel identities, iteration order,
+solver-time sampling and session reset. This is a generic resource ownership
+change; the existing authored telemetry policy and lifecycle remain in place.
+
+The normal production build passes. Its artifact is
+`a86ed1bdde4324ae8880e643c8b259331eab658398c7593a14ad2db486d7cfda`.
+The production `telemetry_recording_history.rhai` gate passes 18 checks,
+including Modelica provenance, model/variable/source metadata, steady histories,
+ordered timestamps, rate/retention and absent-channel rejection. Scene restart,
+readiness and diagnostics pass in owned PID 2854710/API 4202, which exits zero
+and releases the port. All ten profiles pass the unchanged exact replay
+reference, totaling 360 authored checks with serial/default 24-thread execution,
+large seeds, jitter and 4/8/20 rovers. No simulation precision, cadence or quality
+setting changes.
+
+The 312,877,532-byte production Tracy capture passes native CPU exports.
+`modelica_telemetry_channel_metadata` records 4,094 publications totaling
+13.168 ms across loading and replacement, with none in the three settled
+View/Builder/View windows. Its owned app/collector PIDs 2879666/2879665 exit
+zero and release API 4202 and Tracy 8087. Capture and normal measurements overlap
+another simulator and Cargo build, so they establish no causal loading or FPS
+gain. The inspected Builder image retains scene detail and High shadows.
+
+The prior current capture's settled GPU attribution still identifies the larger
+cost: local shadow parents total 6.164–6.174 ms per camera interval, directional
+shadows 1.843–1.851 ms, and opaque rendering about 0.674–0.678 ms. Parent and
+child events are not added together. Application shader specialization keeps
+native depth-only shadow/prepass handling; no unnecessary full shading is
+demonstrated by this inspection. Shadow optimization and clean full-scene
+loading/render/physics acceptance remain open.
+
+Task-owned `metadata-publication-` receipts, logs, capture, exports and normal
+archive are retained under `target/entity-tree-perf/`. Scoped application cleanup
+preserves source and shared caches. The verified normal artifact is restored
+and its digest verified after profiling. Final formatting changes no Rust source.
+
 ## Move asynchronous Modelica syntax copies to parse workers — 2026-10-11
 
 `lunco-modelica-core` queues each worker's typed syntax cache at the session
