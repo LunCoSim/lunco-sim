@@ -128,8 +128,8 @@ impl From<&LibraryLoadState> for MirrorMemo {
 /// Drain live-sim sample batches ([`lunco_modelica_runtime::SimSampleStream`]) into the viz
 /// `SignalRegistry` — the reactive UI projection of the running simulation.
 ///
-/// This is the plot-aware half of the old `worker::handle_modelica_responses`
-/// viz block; the core handler now only appends UI-agnostic samples. Per batch:
+/// The worker bridge publishes immutable step outputs and detected symbols.
+/// Per batch:
 /// clear history on a fresh compile, push every scalar, attach doc-index
 /// descriptions on compile/param-update, and reset the default graph bindings.
 pub fn drain_sim_samples_to_viz(
@@ -162,7 +162,7 @@ pub fn drain_sim_samples_to_viz(
             .map(|settings| settings.default_deadband)
             .unwrap_or_default();
         if batch.is_new_model {
-            for (name, _) in &batch.samples {
+            for (name, _) in batch.samples() {
                 // Core runtime telemetry owns unbound state retention.  Only
                 // clear a signal here when this UI-created plot binding is
                 // also being refreshed; otherwise a late UI observer would
@@ -172,7 +172,7 @@ pub fn drain_sim_samples_to_viz(
                 }
             }
         }
-        for (name, val) in &batch.samples {
+        for (name, val) in batch.samples() {
             if !recorded.contains(name) {
                 continue;
             }
@@ -196,7 +196,7 @@ pub fn drain_sim_samples_to_viz(
                 .and_then(|r| r.host(batch.document))
                 .map(|h| h.document().index());
             if let Some(index) = index_ref {
-                for (name, _) in &batch.samples {
+                for (name, _) in batch.samples() {
                     if !recorded.contains(name) {
                         continue;
                     }
@@ -797,7 +797,8 @@ mod tests {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
+                outputs: vec![("solar_power".to_string(), 307.0)].into(),
+                detected_symbols: Vec::new(),
                 is_new_model: false,
                 is_parameter_update: false,
             });
@@ -826,7 +827,8 @@ mod tests {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
+                outputs: vec![("solar_power".to_string(), 307.0)].into(),
+                detected_symbols: Vec::new(),
                 is_new_model: false,
                 is_parameter_update: false,
             });

@@ -1,5 +1,85 @@
 # High-quality realtime performance handover
 
+## Share admitted Modelica output snapshots — 2026-10-11
+
+`lunco-modelica-runtime` owns immutable output slices shared by the accepted
+communication transaction and the bounded presentation queue. The worker
+bridge converts its owned result vector after session and transaction fencing;
+retaining the accepted record clones only the slice's `Arc`. Observable
+variables still reuse their existing keys and apply outputs after detected
+symbols. `SimSampleBatch::samples` reads outputs followed by detected symbols
+without joining those buffers. Subsequent responses and reset cannot mutate
+an earlier snapshot. The serialized worker protocol, reflected variable map,
+solver inputs, native f64 values, clocks, ordering and fixed-step publication
+remain unchanged. This is generic payload ownership, with no changeable
+policy or hook and no external-library edit.
+
+`cargo test -p lunco-modelica-worker --lib accepted_step_reuses_variable_keys_and_transfers_sample_buffers -j 4`
+passes one check (64 filtered). The existing resource-seam check now verifies
+shared allocation identity and original string ownership, exact sample order,
+reset isolation, signed-zero preservation and stale-result rejection. Both
+production builds pass; their only warning is the existing unused
+`PreparedSolveCache::clear` method. Architecture and profiling guidance use
+the shared slice and chained presentation reader.
+
+Normal artifact
+`750f96d5b58c9efd9adccb11e24e2960665ccb6820cb8f3895ac5ac4ea7417c8`
+passes 15 authored `rocket_engine_observables` checks in PID 742303, including
+the public accepted-step input/output reader and first-command consumption.
+It completes 180 ticks/3 simulated seconds and exits zero. Serial replay PID
+742556 passes 24 exact checks over 780 ticks/13 simulated seconds against the
+unchanged 56-row four-rover reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Default-Compute PID 742793 also passes 24 exact checks against those same
+serial state rows, using a derived reference with only profile metadata
+adapted for default-width admission. This tests width independence; it is not
+a separately captured default-width baseline. Derived reference SHA-256:
+`98a768728903e6d2285e8237a3e932d43370f551162f5eb82822d646dab8a922`.
+Both replays retain the deliberate-mismatch negative control. All three
+processes exit zero and close API 4202. The ten-profile matrix remains open.
+
+Normal windowed PID 743048 passes seven sandbox checks before and after
+replacement, readiness, diagnostics, advancing physics and three invalid
+assembly pause checks. High quality, no vsync/throttle and topology of
+50 bodies/33 colliders/20 joints remain unchanged. Camera poses remain fixed
+within the run, and the inspected screenshot shows shadows. Warm readiness
+is 3.875 s; raw View/Build/View medians are
+16.952555/16.632176/16.487246 ms, with maxima
+24.288615/46.524439/23.065261 ms. Main PID 84260 overlaps the run; it remains
+untouched. GPU observation is 96% utilization at 2782 MHz. This is not a
+controlled loading or FPS improvement. The process exits zero and API 4202
+closes.
+
+Tracy PID 664319, collector 664318, passes readiness, diagnostics, advancing
+physics, invalid-assembly guards and replacement. The inspected screenshot
+retains shadows. Its 312,160,893-byte capture matches the reported size and
+passes native message and response-owner CPU exports. Across settled six-second
+View/Build/View windows, response-system mean costs are
+1.148384/0.694328/1.488523 ms versus the retained gravity baseline's
+0.546197/0.610923/0.469815 ms. Calls are 88/112/65 versus 168/150/186;
+total owner time is 101.058/77.765/96.754 ms versus
+91.761/91.638/87.386 ms. This mixed comparison establishes no measured owner
+speedup. Main PID 84260 and USD Cargo PID 664080 are recorded at launch;
+exact workload overlap across the windows is unknown. The shared-allocation
+check proves eliminated output-name copies, not a throughput gain.
+App and collector exit zero and close API 4202/profiler 8086. Tracy SHA-256:
+`1ca75d6d6f57a0060567aaa19d20f6e7a58025b04341e9d049899238634c5d6d`.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `shared-step-outputs-`.
+The installed normal artifact and hash-verified 273,227,877-byte gzip archive
+are retained, alongside validated raw baseline/candidate captures, receipts,
+exports, comparisons, authored verdict logs and both replay references.
+The prior normal rollback archive remains. Completed test executables were
+retired. After the Tracy build left 41 MB free, its executable was preserved
+while `cargo clean --profile dev` removed only this checkout's generated debug
+outputs, then restored unchanged for capture. The normal build regenerated
+those outputs; source, lockfile, sibling worktrees and shared caches were
+preserved. The Tracy executable is replaced by the normal artifact after
+capture; its hash remains recorded above. This retention statement supersedes
+older dated inventories. Overall loading, visual FPS, physics throughput,
+clean acceptance and the existing detach/fall failure remain open. Official
+Trello tools remain unavailable.
+
 ## Admit only relevant gravity work — 2026-10-11
 
 `lunco-environment` separates flat-field admission from surface-field
@@ -2177,13 +2257,8 @@ tails and full replay acceptance remain open.
 
 ## Worker response ownership and current trajectory comparison — 2026-10-09
 
-`lunco-modelica-worker::worker::bridge` now transfers validated in-flight input
-samples into the accepted-step record and moves response samples into the
-bounded UI queue. Existing observable-variable names reuse their map keys.
-The accepted record still owns a separate output snapshot. Session/step/endpoint
-validation, detected-symbol/output precedence, UI sample order and `f64` values
-are unchanged; this is buffer ownership within the existing admission mechanism,
-with no policy hook, scheduling or equation change.
+The current response-ownership contract is documented in
+[Modelica runtime](../architecture/20-domain-modelica.md).
 
 The nine worker bridge lifecycle tests pass, including stale-session rejection,
 exact signed-zero/full-precision values, input/output buffer transfer and reset

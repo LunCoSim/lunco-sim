@@ -983,7 +983,7 @@ pub fn handle_modelica_responses(
             // Validate its sequence and communication point before clearing the
             // in-flight flag or touching the model clock. This is the local
             // equivalent of an FMI master's `doStep` transaction fence.
-            if !lifecycle_result {
+            let accepted_step = if !lifecycle_result {
                 let Some(in_flight) = model.in_flight_step.as_ref() else {
                     let detail = format!(
                         "Modelica worker returned step {} for `{}` without an in-flight request",
@@ -1054,16 +1054,7 @@ pub fn handle_modelica_responses(
                     .in_flight_step
                     .take()
                     .expect("the validated step transaction remains live through admission");
-                if result.error.is_none() {
-                    model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
-                        session_id: model.session_id,
-                        step_id: in_flight.step_id,
-                        input_time_s: in_flight.start_time,
-                        output_time_s: result.new_time,
-                        inputs: in_flight.sampled_inputs,
-                        outputs: result.outputs.clone(),
-                    });
-                }
+                result.error.is_none().then_some(in_flight)
             } else {
                 // A lifecycle transition supersedes any older transaction only
                 // after its session has advanced. It starts a fresh sequence.
@@ -1073,6 +1064,19 @@ pub fn handle_modelica_responses(
                 model.in_flight_step = None;
                 model.last_accepted_step = None;
                 model.next_step_id = 1;
+                None
+            };
+
+            let outputs: std::sync::Arc<[(String, f64)]> = result.outputs.into();
+            if let Some(in_flight) = accepted_step {
+                model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
+                    session_id: model.session_id,
+                    step_id: in_flight.step_id,
+                    input_time_s: in_flight.start_time,
+                    output_time_s: result.new_time,
+                    inputs: in_flight.sampled_inputs,
+                    outputs: outputs.clone(),
+                });
             }
 
             if lifecycle_result {
@@ -1348,7 +1352,7 @@ pub fn handle_modelica_responses(
             }
 
             // Update observable variables from detected symbols and step outputs
-            for (name, val) in result.detected_symbols.iter().chain(result.outputs.iter()) {
+            for (name, val) in result.detected_symbols.iter().chain(outputs.iter()) {
                 if !model.inputs.contains_key(name) && !model.parameters.contains_key(name) {
                     if let Some(current) = model.variables.get_mut(name) {
                         *current = *val;
@@ -1385,20 +1389,16 @@ pub fn handle_modelica_responses(
             let time_val = model.current_time;
 
             // Emit this step's observable samples to the reactive UI layer.
-            // The core handler no longer knows about plots / `lunco_viz`: it
-            // just appends UI-agnostic samples that `ui::core_observers::
-            // drain_sim_samples_to_viz` projects into the SignalRegistry (clear
-            // on a fresh compile, push every scalar, attach doc-index meta, and
-            // reset the default graph). Bounded at the producer so a headless
-            // build (no drainer) can't grow the queue without limit.
+            // The presentation observer projects queued outputs and symbols
+            // into SignalRegistry. Bound publication here so headless hosts
+            // without a drainer cannot grow the queue without limit.
             if sample_stream.batches.len() < 16_384 {
-                let mut samples = result.outputs;
-                samples.extend(result.detected_symbols);
                 sample_stream.batches.push(SimSampleBatch {
                     entity: result.entity,
                     document: model.document,
                     time: time_val,
-                    samples,
+                    outputs,
+                    detected_symbols: result.detected_symbols,
                     is_new_model: result.is_new_model,
                     is_parameter_update: result.is_parameter_update,
                 });
@@ -1740,12 +1740,21 @@ mod compile_fault_tests {
         assert!(!model.variables.contains_key("gain"));
         let accepted = model.last_accepted_step.as_ref().unwrap();
         assert_eq!(accepted.inputs[0].0.as_ptr(), input_key);
-        assert_eq!(accepted.outputs, expected);
+        assert_eq!(&*accepted.outputs, expected);
         assert!(model.in_flight_step.is_none());
-        let samples = &app.world().resource::<SimSampleStream>().batches[0].samples;
-        assert_eq!(samples[0].0.as_ptr(), output_key);
-        assert_eq!(&samples[..4], expected);
-        assert_eq!(samples[4], ("x".to_owned(), 8.0));
+        let batch = &app.world().resource::<SimSampleStream>().batches[0];
+        assert!(std::sync::Arc::ptr_eq(&accepted.outputs, &batch.outputs));
+        assert_eq!(accepted.outputs[0].0.as_ptr(), output_key);
+        assert_eq!(&*batch.outputs, expected);
+        assert_eq!(batch.detected_symbols, [("x".to_owned(), 8.0)]);
+        assert_eq!(
+            batch.samples().collect::<Vec<_>>(),
+            expected
+                .iter()
+                .chain(&batch.detected_symbols)
+                .collect::<Vec<_>>()
+        );
+        let retained_outputs = accepted.outputs.clone();
         results
             .send(ModelicaResult {
                 entity,
@@ -1760,6 +1769,11 @@ mod compile_fault_tests {
         assert_eq!(model.variables.len(), 1);
         assert_eq!(model.variables["x"], 3.0);
         assert!(model.last_accepted_step.is_none());
+        assert_eq!(&*retained_outputs, expected);
+        assert_eq!(
+            app.world().resource::<SimSampleStream>().batches[1].outputs[0],
+            ("x".to_owned(), 3.0)
+        );
     }
 
     #[test]

@@ -208,9 +208,14 @@ reduce this preparation cost.
 For Modelica response retention, reuse existing observable-variable keys and
 transfer owned input/output buffers after transaction validation. The accepted
 step and UI stream are separate consumers, so retain one output snapshot for
-the accepted record. Preserve detected-symbol/output precedence and the UI
-stream's output-then-symbol order. Measure this response path separately from
-fixed-step output publication; fewer copies alone do not prove throughput gain.
+the accepted record, shared with the bounded UI queue as an immutable slice.
+Read the UI sequence through `SimSampleBatch::samples`, which chains outputs
+then detected symbols. Verify shared allocation identity, reset isolation,
+stale-result rejection and exact sample order at the low-level seam, plus
+`rocket_engine_observables` through production for the public accepted-step
+reader. Preserve detected-symbol/output precedence. Measure this response path
+separately from fixed-step output publication; fewer copies alone do not prove
+throughput gain.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable

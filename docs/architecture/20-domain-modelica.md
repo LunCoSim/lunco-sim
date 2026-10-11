@@ -563,10 +563,13 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 The response bridge validates the session, step identity and communication
 endpoint before taking the in-flight transaction. Its sampled inputs move into
 the accepted-step record; observable variables reuse existing map keys, with
-step outputs applied after detected symbols. The accepted record retains its
-own output snapshot, while the response's owned outputs and detected symbols
-move into the bounded UI sample queue in that order. These ownership transfers
-preserve the admission boundary, sample order and native `f64` values.
+step outputs applied after detected symbols. The accepted record and bounded
+UI sample queue share one immutable output slice. Detected symbols remain
+separate; `SimSampleBatch::samples` presents outputs followed by symbols without
+joining or copying their names. Reset and subsequent responses cannot mutate
+an earlier slice. The worker wire result still owns its output vector until
+admission. These ownership transfers preserve the admission boundary, sample
+order and native `f64` values.
 
 The shared compiler owns native diagnostic heartbeat threads per compile.
 An RAII guard closes their stop channel and joins them on normal return,

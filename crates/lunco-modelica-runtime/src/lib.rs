@@ -13,6 +13,7 @@ use lunco_signal::{SignalExposure, SimStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub mod generated_source;
 pub mod source_asset;
@@ -106,7 +107,8 @@ pub struct ModelicaStepSample {
     pub input_time_s: f64,
     pub output_time_s: f64,
     pub inputs: Vec<(String, f64)>,
-    pub outputs: Vec<(String, f64)>,
+    /// Immutable worker outputs, also read by the presentation sample queue.
+    pub outputs: Arc<[(String, f64)]>,
 }
 
 /// One exact communication transaction awaiting a worker result.
@@ -602,9 +604,18 @@ pub struct SimSampleBatch {
     pub entity: Entity,
     pub document: lunco_doc::DocumentId,
     pub time: f64,
-    pub samples: Vec<(String, f64)>,
+    /// Worker outputs shared with the accepted communication transaction.
+    pub outputs: Arc<[(String, f64)]>,
+    pub detected_symbols: Vec<(String, f64)>,
     pub is_new_model: bool,
     pub is_parameter_update: bool,
+}
+
+impl SimSampleBatch {
+    /// Presentation order: step outputs followed by detected symbols.
+    pub fn samples(&self) -> impl Iterator<Item = &(String, f64)> {
+        self.outputs.iter().chain(&self.detected_symbols)
+    }
 }
 
 /// UI-agnostic queue of live simulation samples awaiting projection.
