@@ -767,12 +767,15 @@ repaired generation with refreshed classes and cleared parse diagnostics.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
-When document metadata needs refresh, telemetry builds one borrowed component
-name lookup for that model's metadata batch. This preserves exact-name then
-qualified-leaf resolution while avoiding a full document-component scan for
-each runtime variable. The producer retains a publication flag and moves first
-or changed metadata into the shared signal registry, which owns comparison and
-storage; settled sample batches do not rebuild metadata.
+Live metadata comes from the checked FMI scalar inventory published with worker
+construction. The existing session/source-generation fences admit it together
+with the solver; successful compile, reset, or parameter-update results require
+the inventory. A reinitializing Step moves newly checked facts on its exact
+completion. The runtime retains immutable compiled facts, and telemetry only
+publishes metadata when that inventory or the generated USD identity changes.
+It never walks authoring documents or interprets variable names as units. Draft
+edits do not change an installed solver's unit/description facts. The shared
+signal registry owns comparison, storage, and first/changed publication.
 Generated USD Modelica source metadata has a separate invalidation boundary in
 `lunco_modelica_runtime::generated_source`: the generated source projection and
 its document link/removal lifecycle. Live `ModelicaModel` output and clock

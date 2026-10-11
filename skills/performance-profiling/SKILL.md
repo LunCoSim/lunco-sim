@@ -847,14 +847,14 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
-For Modelica telemetry metadata, build `ModelicaIndex::component_name_lookup`
-once per dirty metadata batch and resolve all variables through that borrowed
-lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
-steady sample batches should use the session's metadata-publication flag without
-walking the document index. Move first or changed metadata into the shared signal
-registry, which owns comparison and storage; do not retain a second `SignalMeta`
-in the producer. `modelica_telemetry_channel_metadata` attributes that publication
-with the Modelica telemetry debug filter enabled.
+Modelica live metadata comes from the worker's checked FMI scalar inventory.
+Construction publishes it once; ordinary steps move only observations. Admit the
+inventory under the same session/source fences as the stepper and retain its
+immutable identity. Draft document edits must not invalidate live telemetry
+metadata or trigger component-name scans. Move first or changed facts into the
+shared signal registry, which owns comparison and storage; do not retain a
+second `SignalMeta` in the producer. `modelica_telemetry_channel_metadata`
+attributes that publication with the Modelica telemetry debug filter enabled.
 Cache each runtime producer's stable `SignalRef` identity for the session and
 borrow it when recording an existing channel. Avoid reconstructing and cloning
 signal paths for every due sample.

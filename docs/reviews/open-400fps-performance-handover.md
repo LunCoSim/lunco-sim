@@ -7127,11 +7127,10 @@ Tracy recorded `lunco_modelica_telemetry::retain_modelica_runtime_state` at
 readiness. Source attribution found a repeated linear
 `ModelicaIndex::find_component_by_leaf` scan for each solver variable while
 document metadata was refreshed, making the dirty batch proportional to
-variables times document components. The index now exposes a borrowed
-`ComponentNameLookup` for bulk exact/qualified-leaf resolution, and telemetry
-builds it once for each metadata refresh batch. Settled samples keep using the
-session metadata cache. This preserves first-match and exact-before-leaf
-resolution semantics. The focused telemetry crate check passed. A post-change
+variables times document components. Live telemetry now consumes the checked
+FMI scalar inventory admitted with its solver; no document-name lookup remains
+in that producer. The historical source profile below measures batching of the
+document lookup and is not a performance measurement of the FMI cutover. That
 source profile was captured at the Tracy listener on port 8086:
 `main/target/sss-sandbox-modelica-lookup-2d386e156-20260928.tracy` (60.3 s,
 4,595 frames, 20,006,355 zones, 125.19 MB). Its telemetry system had 4,317

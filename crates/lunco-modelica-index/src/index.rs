@@ -93,22 +93,6 @@ pub struct ModelicaIndex {
     pub has_errors: bool,
 }
 
-/// Borrowed name lookup for consumers that resolve many runtime names against
-/// one immutable document index. Duplicate names preserve the index's
-/// first-entry-wins lookup contract.
-pub struct ComponentNameLookup<'a> {
-    by_name: HashMap<&'a str, &'a ComponentEntry>,
-}
-
-impl<'a> ComponentNameLookup<'a> {
-    /// Find an exact component name first, then the leaf of a qualified name.
-    pub fn find_component_by_leaf(&self, name: &str) -> Option<&'a ComponentEntry> {
-        self.by_name.get(name).copied().or_else(|| {
-            component_leaf_fallback(name).and_then(|leaf| self.by_name.get(leaf).copied())
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ComponentEntry {
     pub key: ComponentKey,
@@ -706,18 +690,6 @@ impl ModelicaIndex {
         }
         let leaf = component_leaf_fallback(name)?;
         self.components.iter().find(|c| c.name == leaf)
-    }
-
-    /// Build one borrowed name lookup for a batch of exact or qualified-name
-    /// queries. Use this when multiple runtime variables resolve against the
-    /// same document generation; the temporary index costs one component
-    /// traversal instead of one traversal per variable.
-    pub fn component_name_lookup(&self) -> ComponentNameLookup<'_> {
-        let mut by_name = HashMap::with_capacity(self.components.len());
-        for component in &self.components {
-            by_name.entry(component.name.as_str()).or_insert(component);
-        }
-        ComponentNameLookup { by_name }
     }
 
     /// Iterate components in `class` in declaration order.

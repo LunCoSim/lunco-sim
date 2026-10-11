@@ -79,6 +79,7 @@ fn reject_missing_modelica_variables(
     model.last_accepted_step = None;
     model.resume_after_compile = false;
     model.live_solver_snapshot = None;
+    model.variable_metadata = None;
     model.last_error = Some(detail.clone());
     if let Some(faults) = faults {
         faults.raise(
@@ -516,6 +517,7 @@ pub fn spawn_modelica_requests(
             model.is_compiled = false;
             model.is_stepping = false;
             model.live_solver_snapshot = None;
+            model.variable_metadata = None;
             model.last_error = Some(error.clone());
             if first_report {
                 if let Some(faults) = faults.as_deref_mut() {
@@ -615,6 +617,7 @@ pub fn spawn_modelica_requests(
             model.paused = true;
             model.is_compiled = false;
             model.live_solver_snapshot = None;
+            model.variable_metadata = None;
             model.last_error = Some(error.clone());
             if let Some(faults) = faults.as_deref_mut() {
                 faults.raise(
@@ -655,6 +658,7 @@ pub fn spawn_modelica_requests(
             model.paused = true;
             model.is_compiled = false;
             model.live_solver_snapshot = None;
+            model.variable_metadata = None;
             model.last_error = Some("Modelica worker channel closed".to_string());
             if let Some(faults) = faults.as_deref_mut() {
                 faults.raise(
@@ -801,7 +805,7 @@ pub fn handle_modelica_responses(
     let mut step_diagnostics = step_diagnostics;
     let mut transport_failure = None;
     loop {
-        let result = match channels.rx.try_recv() {
+        let mut result = match channels.rx.try_recv() {
             Ok(result) => result,
             Err(crossbeam_channel::TryRecvError::Empty) => break,
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
@@ -962,6 +966,7 @@ pub fn handle_modelica_responses(
                 model.paused = true;
                 model.is_compiled = false;
                 model.live_solver_snapshot = None;
+                model.variable_metadata = None;
                 model.last_error = Some(detail);
                 continue;
             }
@@ -1082,12 +1087,21 @@ pub fn handle_modelica_responses(
                 continue;
             }
 
+            if lifecycle_result && result.error.is_none() && result.variable_metadata.is_none() {
+                result.error = Some(
+                    "Modelica worker omitted the checked scalar metadata inventory".to_owned(),
+                );
+                result.detected_symbols.clear();
+                result.outputs.clear();
+            }
+
             // Retain the worker's resolved plan only after session fencing.
             // Compile results also pass the source-generation check above;
             // step-transaction failures below clear the snapshot before this
             // system returns. Failures cannot leave facts for a dead stepper.
             if result.error.is_some() {
                 model.live_solver_snapshot = None;
+                model.variable_metadata = None;
             } else if lifecycle_result {
                 model.live_solver_snapshot = result.live_solver_snapshot.clone();
             } else if let Some(snapshot) = result.live_solver_snapshot.as_ref() {
@@ -1120,6 +1134,7 @@ pub fn handle_modelica_responses(
                     model.paused = true;
                     model.is_compiled = false;
                     model.live_solver_snapshot = None;
+                    model.variable_metadata = None;
                     model.last_error = Some(detail);
                     continue;
                 };
@@ -1150,6 +1165,7 @@ pub fn handle_modelica_responses(
                     model.paused = true;
                     model.is_compiled = false;
                     model.live_solver_snapshot = None;
+                    model.variable_metadata = None;
                     model.last_error = Some(detail);
                     continue;
                 }
@@ -1181,6 +1197,12 @@ pub fn handle_modelica_responses(
                 model.next_step_id = 1;
                 None
             };
+
+            if result.error.is_none()
+                && let Some(metadata) = result.variable_metadata
+            {
+                model.variable_metadata = Some(std::sync::Arc::new(metadata));
+            }
 
             let outputs: std::sync::Arc<[(String, f64)]> = result.outputs.into();
             if let Some(in_flight) = accepted_step {
@@ -1289,11 +1311,6 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-
-            // Variable description strings now live on the document
-            // index ([`ModelicaIndex::find_component_by_leaf`]); panels
-            // read them directly. The worker no longer mirrors them
-            // into ECS state.
 
             if let Some(err) = &result.error {
                 if let Some(cs) = compile_states.as_mut() {
@@ -1502,6 +1519,7 @@ pub fn handle_modelica_responses(
                     model.paused = true;
                     model.is_compiled = false;
                     model.live_solver_snapshot = None;
+                    model.variable_metadata = None;
                     model.last_error = Some(error.clone());
                     if let Some(faults) = faults.as_deref_mut() {
                         faults.raise(
@@ -1573,6 +1591,7 @@ pub fn handle_modelica_responses(
                 model.in_flight_step = None;
                 model.resume_after_compile = false;
                 model.live_solver_snapshot = None;
+                model.variable_metadata = None;
                 model.last_error = Some(error.clone());
                 if let Some(states) = compile_states.as_deref_mut() {
                     states.set_error_message(model.document, error.clone());
@@ -1696,6 +1715,7 @@ mod compile_fault_tests {
                         entity,
                         session_id: 4,
                         is_new_model: true,
+                        variable_metadata: Some(std::collections::BTreeMap::new()),
                         live_solver_snapshot: Some(test_solver_snapshot()),
                         ..Default::default()
                     })
@@ -1835,6 +1855,7 @@ mod compile_fault_tests {
                     entity,
                     session_id,
                     is_new_model: true,
+                    variable_metadata: Some(std::collections::BTreeMap::new()),
                     live_solver_snapshot: Some(test_solver_snapshot()),
                     outputs: vec![("x".to_owned(), 1.0)],
                     ..Default::default()
@@ -1972,6 +1993,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 1,
                 is_reset: true,
+                variable_metadata: Some(std::collections::BTreeMap::new()),
                 outputs: vec![("x".to_owned(), 3.0)],
                 ..Default::default()
             })
@@ -1990,7 +2012,7 @@ mod compile_fault_tests {
     }
 
     #[test]
-    fn accepted_worker_solver_plan_is_retained_and_failed_lifecycle_clears_it() {
+    fn checked_solver_facts_are_fenced_and_missing_metadata_is_terminal() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .init_resource::<SimSampleStream>()
@@ -2003,6 +2025,14 @@ mod compile_fault_tests {
             rx: rx_result,
         });
         let snapshot = test_solver_snapshot();
+        let metadata = std::collections::BTreeMap::from([(
+            "power".to_owned(),
+            lunco_modelica_runtime::ModelicaScalarMetadata {
+                unit: Some("W".to_owned()),
+                description: Some("Power".to_owned()),
+                ..Default::default()
+            },
+        )]);
         let entity = app
             .world_mut()
             .spawn(ModelicaModel {
@@ -2018,6 +2048,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 1,
                 is_new_model: true,
+                variable_metadata: Some(metadata.clone()),
                 live_solver_snapshot: Some(snapshot.clone()),
                 ..Default::default()
             })
@@ -2031,12 +2062,40 @@ mod compile_fault_tests {
             Some(snapshot)
         );
 
+        let admitted = app
+            .world()
+            .get::<ModelicaModel>(entity)
+            .unwrap()
+            .variable_metadata
+            .clone()
+            .unwrap();
+        assert_eq!(*admitted, metadata);
+        tx_result
+            .send(ModelicaResult {
+                entity,
+                session_id: 0,
+                is_new_model: true,
+                variable_metadata: Some(std::collections::BTreeMap::new()),
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        assert!(std::sync::Arc::ptr_eq(
+            &admitted,
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .variable_metadata
+                .as_ref()
+                .unwrap()
+        ));
+
         tx_result
             .send(ModelicaResult {
                 entity,
                 session_id: 1,
                 is_new_model: true,
-                error: Some("compile failed".to_owned()),
+                variable_metadata: None,
                 ..Default::default()
             })
             .unwrap();
@@ -2047,6 +2106,16 @@ mod compile_fault_tests {
                 .unwrap()
                 .live_solver_snapshot,
             None
+        );
+        let failed = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(failed.variable_metadata.is_none());
+        assert!(!failed.is_compiled && failed.paused);
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("checked scalar metadata inventory")
         );
     }
 
@@ -2089,6 +2158,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 4,
                 is_new_model: true,
+                variable_metadata: Some(std::collections::BTreeMap::new()),
                 error: Some("authored equation did not compile".to_owned()),
                 ..Default::default()
             })
@@ -2181,6 +2251,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 4,
                 is_new_model: true,
+                variable_metadata: Some(std::collections::BTreeMap::new()),
                 live_solver_snapshot: Some(test_solver_snapshot()),
                 ..Default::default()
             })
@@ -2403,6 +2474,7 @@ mod document_runtime_owner_tests {
                 entity: geometry,
                 session_id: 1,
                 is_new_model: true,
+                variable_metadata: Some(std::collections::BTreeMap::new()),
                 outputs: vec![("x".into(), 99.0)],
                 ..Default::default()
             })

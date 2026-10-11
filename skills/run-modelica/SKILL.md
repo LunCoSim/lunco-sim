@@ -44,6 +44,11 @@ containing only packages, records, connectors, types, or functions has no
 simulation target. Component metadata uses Rumoca's complete expression
 rendering and already-decoded string values; preserve literal quotes,
 backslashes, and description concatenation when inspecting authored facts.
+Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
+including inherited units and scalar array entries. Editing a draft does not
+change live units or descriptions; recompile to install a new inventory. A name
+such as `p.v` alone implies no electrical unit. Use
+`modelica_compiled_metadata.rhai` for that lifecycle contract.
 
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
@@ -741,7 +746,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 **Results & viz**
 | command | params | returns / effect |
 |---|---|---|
-| `SnapshotVariables` | `{doc, names?}` | one-shot live `{t, parameters, inputs, variables}` |
+| `SnapshotVariables` | `{doc_id, names?}` | one-shot live `{t, parameters, inputs, variables, metadata}` |
 | `ListRuns` | `{doc?}` | experiment rows (newest first) |
 | `RunStatus` | `{experiment_id}` | one run's progress/terminal state |
 | `GetExperimentResult` | `{experiment_id? \| doc, variables?, max_points?}` | full trajectory `{times, series}` |
@@ -896,3 +901,7 @@ source snapshot in `RunScenarioAsset.params` (`source` and
 `source_uri: "lunco://models/DescentGuidance.mo"`). It checks sensor feedback,
 current gain initialization, paused input changes, and the authority gate.
 Reset admits current values even when the worker has not stepped after a write.
+
+`SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
+`minimum`, and `maximum` facts for the installed component, using the same
+optional `names` filter as values. Input sliders use those compiled bounds.

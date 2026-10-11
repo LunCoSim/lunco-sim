@@ -226,9 +226,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component and its required `ModelicaVariables` native observable snapshot, typed live-solver snapshot, worker command/result protocol, source asset loader, exact runtime attribution for generated documents and live participants, per-entity session epochs, communication schedule, notices, immutable output slices shared by accepted transactions and the sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
-| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes inspectable Modelica metadata. Session-scoped publication cursors avoid repeated wire-owner lookups while observing live ownership and registry catalog edits. It is installed by the execution host and is separate from compiler/document ownership. |
-| **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, borrowed batch lookup for exact and qualified component names, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
+| **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component and its required `ModelicaVariables` native observable snapshot, typed live-solver snapshot and immutable checked scalar metadata (units, descriptions, bounds), worker command/result protocol, source asset loader, exact runtime attribution for generated documents and live participants, per-entity session epochs, communication schedule, notices, immutable output slices shared by accepted transactions and the sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
+| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes exact checked FMI unit/description facts with authored USD provenance. Session-scoped publication cursors avoid repeated wire-owner lookups while observing live ownership and registry catalog edits. It is installed by the execution host and is separate from compiler/document ownership. |
+| **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
 | **`lunco-modelica-source-roots`** | Twin/workspace Modelica source-root admission: root inventory, manifest-aware Twin path resolution, demand-driven worker loading, and source-root readiness state. `ModelicaCorePlugin` installs this capability for interactive and headless Modelica hosts; the document/runtime core consumes no Twin-specific admission policy. |
 | **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, source-root seating, per-root CID source closures, strict reachable-DAE compilation, actual participating-source CIDs, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
@@ -1389,9 +1389,9 @@ allocation on both platforms.
 Render-free execution-side telemetry projection. It retains the current
 variables of landed `ModelicaModel` sessions in the shared `SignalRegistry`,
 uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
-Modelica signal metadata from the authored document and generated layout. The
-execution host installs its plugin after worker responses; compiler/document
-hosts do not compile this projection.
+Modelica scalar metadata from the admitted FMI inventory and authored provenance
+from the generated USD layout. The execution host installs its plugin after
+worker responses; compiler/document hosts do not compile this projection.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source

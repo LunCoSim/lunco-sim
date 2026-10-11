@@ -132,7 +132,9 @@ the first entity, a fabricated value, or an older behavior.
 
 - Rumoca owns Modelica expression rendering, decoded parser string tokens,
   string escaping, checked initialization, and visible solver values. Reuse
-  those APIs directly; keep source-splice authoring and co-simulation admission
+  those APIs directly. Live scalar metadata comes from checked FMI variables
+  admitted with the worker's stepper, rather than document-name guesses. Keep
+  source-splice authoring and co-simulation admission
   at their LunCoSim owners. See the
   [Rumoca ownership review](../../docs/architecture/29-rumoca-runtime-contracts.md#ownership-review)
   for the retained upstream extension boundaries.

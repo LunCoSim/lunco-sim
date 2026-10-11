@@ -233,7 +233,14 @@ fn build_stepper(
     source_key: u64,
     library_revision: Option<u64>,
     prepared: &mut PreparedSolveCache,
-) -> Result<(LiveStepper, ModelicaLiveSolverSnapshot), rumoca_sim::SimulationDiagnosticError> {
+) -> Result<
+    (
+        LiveStepper,
+        ModelicaLiveSolverSnapshot,
+        std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
+    ),
+    rumoca_sim::SimulationDiagnosticError,
+> {
     let plan = live_build_plan(
         profile,
         parameter_overrides,
@@ -274,7 +281,28 @@ fn build_stepper(
         &plan.spec,
         plan.options,
     )?;
-    Ok((stepper, plan.snapshot))
+    let variable_metadata = model
+        .variables()
+        .iter()
+        .flat_map(|variable| {
+            variable
+                .scalar_names()
+                .iter()
+                .enumerate()
+                .map(move |(index, name)| {
+                    (
+                        name.clone(),
+                        lunco_modelica_runtime::ModelicaScalarMetadata {
+                            unit: variable.unit().map(str::to_owned),
+                            description: variable.description().map(str::to_owned),
+                            minimum: variable.minimum().map(|values| values[index]),
+                            maximum: variable.maximum().map(|values| values[index]),
+                        },
+                    )
+                })
+        })
+        .collect();
+    Ok((stepper, plan.snapshot, variable_metadata))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -840,7 +868,7 @@ fn finish_compile_work(
         prepared_solve_cache,
     );
     match stepper_result {
-        Ok((stepper, live_solver_snapshot)) => {
+        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
             let CompileWork {
                 entity,
                 session_id,
@@ -859,6 +887,12 @@ fn finish_compile_work(
                 plan: _,
                 intent,
             } = work;
+            let (published_metadata, pending_metadata) =
+                if matches!(&intent, CompileIntent::StepInit(_)) {
+                    (None, Some(variable_metadata))
+                } else {
+                    (Some(variable_metadata), None)
+                };
             let input_names = stepper.input_names().to_vec();
             let symbols = collect_stepper_observables(&stepper);
             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -875,6 +909,7 @@ fn finish_compile_work(
                     unit_hash,
                     library_gen,
                     live_solver_snapshot: live_solver_snapshot.clone(),
+                    pending_variable_metadata: pending_metadata,
                 },
             );
             steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -897,6 +932,7 @@ fn finish_compile_work(
                             loaded_source_root_id: None,
                             compile_diagnostics: Vec::new(),
                             live_solver_snapshot: Some(live_solver_snapshot.clone()),
+                            variable_metadata: published_metadata,
                             ..Default::default()
                         },
                         &comp_res,
@@ -907,6 +943,7 @@ fn finish_compile_work(
                         reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
                     result.compile_diagnostics = Vec::new();
                     result.live_solver_snapshot = Some(live_solver_snapshot.clone());
+                    result.variable_metadata = published_metadata;
                     let _ = tx.send(result);
                 }
                 CompileIntent::UpdateParameters => {
@@ -924,6 +961,7 @@ fn finish_compile_work(
                         detected_input_names: input_names,
                         compile_diagnostics: Vec::new(),
                         live_solver_snapshot: Some(live_solver_snapshot),
+                        variable_metadata: published_metadata,
                         ..Default::default()
                     });
                 }
@@ -1443,6 +1481,8 @@ struct CachedModel {
     library_gen: u64,
     /// The resolved solver plan used by the installed or rebuildable stepper.
     live_solver_snapshot: ModelicaLiveSolverSnapshot,
+    pending_variable_metadata:
+        Option<std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>>,
 }
 
 /// Key identifying WHAT a cached artifact was compiled from: the assembled
@@ -2937,13 +2977,13 @@ pub fn modelica_worker(
                             );
                         } else {
                             steppers.remove(&entity);
-                            let _ = tx_inner.send(reset_ok(
+                            let _ = tx_inner.send(ModelicaResult {
                                 entity,
                                 session_id,
-                                Vec::new(),
-                                Vec::new(),
-                                "Reset complete (no cached model).",
-                            ));
+                                is_reset: true,
+                                error: Some("Reset requires a cached compiled model".to_owned()),
+                                ..Default::default()
+                            });
                         }
                     }
                     ModelicaCommand::UpdateParameters {
@@ -3268,6 +3308,9 @@ pub fn modelica_worker(
                                         worker_step_duration_ns: Some(worker_step_duration_ns),
                                         worker_backlog_count,
                                         live_solver_snapshot,
+                                        variable_metadata: cached_models.get_mut(&entity).and_then(
+                                            |cached| cached.pending_variable_metadata.take(),
+                                        ),
                                         ..Default::default()
                                     });
                                 }
@@ -3577,20 +3620,23 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     if let Some(mut rb) = rebuild {
                         merge_initial_inputs(&mut rb.initial_inputs, &inputs);
                         if let Ok(comp_res) = rb.outcome {
-                            if let Ok((mut s, live_solver_snapshot)) = build_stepper(
-                                &comp_res,
-                                profile_for(entity, &w.realtime_models),
-                                &rb.parameter_overrides,
-                                &rb.initial_inputs,
-                                comp_res.prepared_source_key,
-                                rb.library_revision,
-                                &mut w.prepared_solve_cache,
-                            ) {
+                            if let Ok((mut s, live_solver_snapshot, variable_metadata)) =
+                                build_stepper(
+                                    &comp_res,
+                                    profile_for(entity, &w.realtime_models),
+                                    &rb.parameter_overrides,
+                                    &rb.initial_inputs,
+                                    comp_res.prepared_source_key,
+                                    rb.library_revision,
+                                    &mut w.prepared_solve_cache,
+                                )
+                            {
                                 for (name, val) in &inputs {
                                     let _ = s.set_input(name, *val);
                                 }
                                 if let Some(cached) = w.cached_models.get_mut(&entity) {
                                     cached.live_solver_snapshot = live_solver_snapshot;
+                                    cached.pending_variable_metadata = Some(variable_metadata);
                                 }
                                 w.steppers
                                     .insert(entity, (session_id, model_name.clone(), s));
@@ -3668,6 +3714,10 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             is_reset: false,
                             detected_input_names: Vec::new(),
                             live_solver_snapshot,
+                            variable_metadata: w
+                                .cached_models
+                                .get_mut(&entity)
+                                .and_then(|cached| cached.pending_variable_metadata.take()),
                             worker_step_duration_ns: Some(worker_step_duration_ns),
                             ..Default::default()
                         });
@@ -3752,7 +3802,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
-                        Ok((stepper, live_solver_snapshot)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -3769,6 +3819,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     unit_hash,
                                     library_gen: w.library_gen,
                                     live_solver_snapshot: live_solver_snapshot.clone(),
+                                    pending_variable_metadata: None,
                                 },
                             );
 
@@ -3790,6 +3841,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     compiled_model_name: Some(model_name.clone()),
                                     loaded_source_root_id: None,
                                     live_solver_snapshot: Some(live_solver_snapshot),
+                                    variable_metadata: Some(variable_metadata),
                                     ..Default::default()
                                 },
                                 &comp_res,
@@ -3880,15 +3932,17 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some(rb) = rebuild {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok((stepper, live_solver_snapshot)) = build_stepper(
-                            &comp_res,
-                            profile_for(entity, &w.realtime_models),
-                            &rb.parameter_overrides,
-                            &rb.initial_inputs,
-                            comp_res.prepared_source_key,
-                            rb.library_revision,
-                            &mut w.prepared_solve_cache,
-                        ) {
+                        if let Ok((stepper, live_solver_snapshot, variable_metadata)) =
+                            build_stepper(
+                                &comp_res,
+                                profile_for(entity, &w.realtime_models),
+                                &rb.parameter_overrides,
+                                &rb.initial_inputs,
+                                comp_res.prepared_source_key,
+                                rb.library_revision,
+                                &mut w.prepared_solve_cache,
+                            )
+                        {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             w.steppers
@@ -3898,6 +3952,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             }
                             if let Some(cached) = w.cached_models.get_mut(&entity) {
                                 cached.live_solver_snapshot = live_solver_snapshot.clone();
+                                cached.pending_variable_metadata = None;
                             }
                             let mut result = reset_ok(
                                 entity,
@@ -3907,6 +3962,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 "Reset complete.",
                             );
                             result.live_solver_snapshot = Some(live_solver_snapshot);
+                            result.variable_metadata = Some(variable_metadata);
                             send(result);
                         } else {
                             send(ModelicaResult {
@@ -3945,13 +4001,13 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 }
             } else {
                 w.steppers.remove(&entity);
-                send(reset_ok(
+                send(ModelicaResult {
                     entity,
                     session_id,
-                    Vec::new(),
-                    Vec::new(),
-                    "Reset complete (no cached model).",
-                ));
+                    is_reset: true,
+                    error: Some("Reset requires a cached compiled model".to_owned()),
+                    ..Default::default()
+                });
             }
         }
         ModelicaCommand::UpdateParameters {
@@ -4013,7 +4069,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
-                        Ok((stepper, live_solver_snapshot)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
@@ -4032,6 +4088,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     unit_hash,
                                     library_gen: w.library_gen,
                                     live_solver_snapshot: live_solver_snapshot.clone(),
+                                    pending_variable_metadata: None,
                                 },
                             );
 
@@ -4051,6 +4108,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 detected_input_names: input_names,
                                 compile_diagnostics: Vec::new(),
                                 live_solver_snapshot: Some(live_solver_snapshot),
+                                variable_metadata: Some(variable_metadata),
                                 ..Default::default()
                             });
                         }

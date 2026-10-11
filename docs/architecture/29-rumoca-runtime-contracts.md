@@ -84,6 +84,7 @@ Parsed AST fields must be serialized completely for positional readers.
 | String literal decoding and encoding | Rumoca parser tokens and `rumoca-core::escape_modelica_string` | Copy decoded values into typed metadata; use canonical escaping when inserting new source nodes. Descriptions concatenate decoded tokens without adding whitespace. |
 | Checked DAE, initialization, parameter and input binding | Rumoca compiler and `SimOptions` preparation | Supply the complete authored source closure and admitted causal inputs. |
 | FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
+| Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
 | Visible values and algebraic refresh policy | `SolveRuntime::visible_values_for_names` and `rumoca-eval-solve::projection_policy` | Fixed prediction integration uses the same input slots, visible-value reader, tolerance, and iteration budget. |
 | Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps and reject unsupported event/discrete/clock/table models. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
@@ -91,8 +92,24 @@ Parsed AST fields must be serialized completely for positional readers.
 
 Plain package/type/function documents have no automatic simulation target.
 An explicit class selection or a runnable model/block/class is required.
-Telemetry units come from decoded declaration metadata, rather than rendered
-modifier strings. Optimistic unit edits wait for parsed metadata to reconcile.
+Live telemetry units, descriptions, and input bounds come exclusively from the
+checked FMI scalar inventory. Construction carries that inventory through the typed worker
+result alongside the installed solver plan. Session and source-generation fences
+apply before publication; a successful lifecycle result without its inventory is
+a terminal protocol diagnostic. Ordinary steps carry no repeated inventory.
+The runtime retains one immutable metadata map; telemetry observes its identity
+and publishes first or changed channel facts. Draft document changes cannot
+replace the facts of an installed solver. Generated USD layouts retain authored
+provenance, grouping, exposure, and precompile port facts; they do not supply a
+second live unit/description reader. Undocumented declarations remain absent,
+even for connector-shaped names.
+
+Input controls read per-scalar minimum and maximum values from the same checked
+FMI inventory. They do not parse bundled source to repair missing bounds.
+`SnapshotVariables.metadata` exposes exact checked scalar facts alongside values
+and applies the same optional name filter. Draft documents remain the owner of
+pre-compile authoring facts; the UI does not overwrite compiled channel metadata.
+Optimistic authoring edits wait for parsed metadata to reconcile.
 `DescribeModel` numeric defaults include Rumoca's semantic start value when no
 binding is authored. Input-binding admission and lint facts separately retain
 the absence of an authored default; a start guess is not a causal input binding.
@@ -120,12 +137,6 @@ it never falls through to a start value.
   The inspected main does not expose the equivalent public construction and
   guard surface consumed by this host. Their owning Rumoca crates remain the
   correct implementation location.
-- Checked `FmiComponent::variables()` already supplies qualified scalar names,
-  units, and descriptions. A live telemetry metadata cutover should carry those
-  facts through the typed worker result and use them at telemetry admission.
-  Source-index metadata remains necessary for authoring before compilation;
-  generated USD member provenance remains application-owned. Replace the live
-  source-name lookup only with that complete producer/consumer cutover.
 - Upstream main exposes trajectory sensitivities, adjoint objective gradients,
   and A/B/C/D linearization. New numerical-analysis tools should consume those
   checked Rumoca APIs when that revision is admitted; application code should
@@ -135,5 +146,8 @@ Verification covers decoded strings and complete expression metadata, source
 index reconciliation, fixed-step/algebraic math, and deterministic input
 schedules. The production metadata scenario observes decoded authoring facts through
 `DescribeModel`; controller and scoped-input scenarios exercise live
-initialization/reset through the worker. Browser compilation is a separate
+initialization/reset through the worker. `modelica_compiled_metadata.rhai`
+checks repeated leaf names, inherited array units, scalar bounds, undocumented
+connector-shaped names, reset, unchanged compiled facts during draft edits, and replacement after
+recompilation. Browser compilation is a separate
 check from browser runtime acceptance.

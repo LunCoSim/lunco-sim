@@ -1450,6 +1450,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
                 "parameters": ApiValue::Map(Vec::new()),
                 "inputs": ApiValue::Map(Vec::new()),
                 "variables": ApiValue::Map(Vec::new()),
+                "metadata": ApiValue::Map(Vec::new()),
             }));
         };
 
@@ -1461,6 +1462,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
                 "parameters": ApiValue::Map(Vec::new()),
                 "inputs": ApiValue::Map(Vec::new()),
                 "variables": ApiValue::Map(Vec::new()),
+                "metadata": ApiValue::Map(Vec::new()),
             }));
         };
 
@@ -1490,15 +1492,35 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             ApiValue::Map(inner)
         };
 
+        let metadata = ApiValue::Map(
+            model
+                .variable_metadata
+                .iter()
+                .flat_map(|facts| facts.iter())
+                .filter(|(name, _)| in_filter(name))
+                .map(|(name, facts)| {
+                    (
+                        name.clone(),
+                        api_value!({
+                            "unit": facts.unit.clone(),
+                            "description": facts.description.clone(),
+                            "minimum": facts.minimum,
+                            "maximum": facts.maximum,
+                        }),
+                    )
+                })
+                .collect(),
+        );
         query_ok(api_value!({
             "doc_id": doc_id.raw(),
             "t": model.current_time,
-            "compiled": true,
+            "compiled": model.is_compiled,
             "model_name": model.model_name.clone(),
             "paused": model.paused,
             "parameters": project(&model.parameters),
             "inputs": project(&model.inputs),
             "variables": project(&variables.values),
+            "metadata": metadata,
         }))
     }
 }

@@ -20,6 +20,15 @@ pub mod source_asset;
 
 pub use source_asset::{ModelicaSource, ModelicaSourceAssetPlugin, ModelicaSourceLoader};
 
+/// Facts for one scalar identity in the installed checked FMI component.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelicaScalarMetadata {
+    pub unit: Option<String>,
+    pub description: Option<String>,
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+}
+
 /// Maximum interval one live worker transaction may integrate.
 pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.0;
 
@@ -237,6 +246,9 @@ pub struct ModelicaResult {
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
+    /// Exact scalar declaration facts from the checked FMI component.
+    /// Published once when construction installs or replaces a live stepper.
+    pub variable_metadata: Option<BTreeMap<String, ModelicaScalarMetadata>>,
     pub error: Option<String>,
     pub log_message: Option<String>,
     pub is_new_model: bool,
@@ -305,6 +317,7 @@ impl Default for ModelicaResult {
             new_time: 0.0,
             outputs: Vec::new(),
             detected_symbols: Vec::new(),
+            variable_metadata: None,
             error: None,
             log_message: None,
             is_new_model: false,
@@ -535,6 +548,9 @@ pub struct ModelicaModel {
     /// Exact live solver plan that produced the installed stepper.
     #[reflect(ignore)]
     pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
+    /// Immutable compiled facts admitted with this solver session.
+    #[reflect(ignore)]
+    pub variable_metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
     #[reflect(ignore)]
     pub pending_generation: u64,
     #[reflect(ignore)]
@@ -566,6 +582,7 @@ impl Default for ModelicaModel {
             is_compiled: false,
             compiled_generation: 0,
             live_solver_snapshot: None,
+            variable_metadata: None,
             pending_generation: 0,
             resume_after_compile: false,
         }
