@@ -1,5 +1,56 @@
 # High-quality realtime performance handover
 
+## Parse schema sources once and admit them deterministically — 2026-10-11
+
+`lunco-usd-authoring::SchemaRegistry` parses a source once before taking its
+global write lock. It consumes the validated layer in standard spec-path
+order. `lunco-usd-bevy-runtime-core` admits the requested module prefix,
+waiting at unresolved sources and reporting terminal failures before admitting
+later sources. Project-over-core bare-name priority, schema-qualified
+declarations and core linear-unit validation retain their owners. Hash-map
+traversal and worker completion no longer select declaration precedence.
+This remains synchronous startup registration; bounded worker preparation
+and clean loading acceptance remain open.
+
+One inline benchmark pair over 128 classes and 4,096 attributes, with 16
+registrations after warmup, takes 427.058/170.561 ms, a 60.1% reduction.
+The focused authoring and pending-asset seams pass seven checks, including
+that benchmark, invalid-source rejection without mutation, spec-path
+precedence, reversed source readiness and a valid source following rejection.
+These are generic parser and private resource seams, using inline schema text.
+
+Production Tracy artifacts
+`5f8a43deed5258a679e38f2952df144fde84f02c54e29e95b7d8f7b41a3bf23a` and
+`dfcb0526dcbcd61ec8d61ad63bbba715ed8c5e282e551f867d56e84ae06c1626`
+produce valid 261,071,445/259,600,592-byte captures. Native CPU exports each
+contain two startup registrar calls: total 10.696/6.783 ms and maximum
+10.676/6.769 ms, a 36.6% total reduction. Registration sleeps after completion,
+so the complete owner export covers startup only. Owned apps and collectors
+exit zero and release API 4202/Tracy 8086. Another main-worktree simulator
+remains active. Initial readiness is 3.371/4.167 s under contention; these
+captures establish a registrar cost reduction, not faster overall loading or
+clean FPS acceptance.
+
+Normal artifact
+`ca984bc0dc4e9cac14415261dbe2a9b5b95b72269b6a81241f15f9b823c67e09`
+passes all ten authored production determinism profiles, 360 checks, against
+the unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+Observed compute-pool widths remain 1/24; authored inputs remain unchanged.
+The final owned windowed run passes sandbox 7, telemetry history 17, mass and
+island checks 10, and replacement sandbox 7. It verifies one mass verdict,
+invalid-reset rejection, valid Modelica reset, readiness, physics progress and
+the three existing invalid-assembly pause guards. View shadows and replacement
+hierarchy rows are inspected at High quality. Warm readiness is 2.959 s and
+frame p50 values are 17.160/17.353/16.877 ms under contention. The normal
+executable is retained and all owned sessions are closed.
+
+Receipts, captures, logs and native exports remain under
+`target/entity-tree-perf/`, prefix `schema-registration-`. Disk recovery removes
+only completed task-generated test executables and `lunco-luncosim` outputs;
+the validated normal baseline remains in a hash-verified gzip archive. Source,
+external libraries, sibling sessions and shared caches are preserved.
+
 ## Admit entity-tree changes before fetching candidate data — 2026-10-11
 
 `lunco-luncosim-edit-ui::ui::entity_list::scene_topology_changed` now filters

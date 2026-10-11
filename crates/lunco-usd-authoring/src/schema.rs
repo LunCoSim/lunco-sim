@@ -21,20 +21,6 @@
 //! A `generatedSchema.usda` is just USDA, and we already parse USDA. Core USD's
 //! schema definitions were never unavailable to us — they simply weren't *read*.
 //!
-//! ### What this replaced
-//!
-//! A hand-written `CORE_UNIFORM` table: ten core properties we happened to author,
-//! each typed out with the variability someone had looked up. It was there because
-//! "Rust `openusd` has no schema registry", which was true and beside the point —
-//! the fork has no schema registry, but it has a USDA parser, and a schema is a
-//! USDA file.
-//!
-//! The table's failure mode was silence. Author a `SetAttribute` for a core
-//! `uniform` property nobody had added to it, and the property was written
-//! `varying` — no error, just a subtly wrong layer. That is precisely how
-//! `info:id` and `physics:axis` came to be authored wrong in the first place. The
-//! registry now knows all 202 core properties, not the 10 we remembered.
-//!
 //! ## `custom`, and why we still don't guess it
 //!
 //! In USD, `custom` marks a property that **no schema declares**. Now that core is
@@ -293,7 +279,7 @@ pub struct PropertySpec {
     pub ui_hint: Option<AttrUiHint>,
 }
 
-/// The parsed `luncoSchema` plus the core `uniform` table.
+/// Property declarations from project and core USD schema libraries.
 #[derive(Debug, Default)]
 pub struct SchemaRegistry {
     /// Every declaration, keyed by `(declaring schema, property name)`.
@@ -316,6 +302,8 @@ pub struct SchemaRegistry {
     /// declaration, because those are the namespaces we control and can be held
     /// to. Within a tier the most recently ingested declaration wins, which is
     /// what makes re-registering an extension refresh it rather than be ignored.
+    /// Declarations within a source enter in spec-path order. The startup asset
+    /// owner commits sources in its requested order, irrespective of I/O completion.
     /// Divergent redeclarations are still warned at ingest: the tie-break makes
     /// the answer *defined*, it does not make the collision *fine*.
     ///
@@ -405,13 +393,14 @@ impl SchemaRegistry {
     }
 
     fn register_source(src: &str, own: bool) -> bool {
-        if usda_to_data(src).is_err() {
+        let Ok(data) = usda_to_data(src) else {
             return false;
-        }
+        };
         let Ok(mut reg) = Self::global().write() else {
             return false;
         };
-        reg.ingest(src, own)
+        reg.ingest_parsed(&data, own);
+        true
     }
 
     /// Stamp available [`CORE_LINEAR_UNITS`] onto declarations already admitted.
@@ -437,14 +426,15 @@ impl SchemaRegistry {
     }
 
     /// Fold one `generatedSchema.usda` into the registry. `own` records the file's
-    /// prim types and API schemas as *ours* (see [`load`](Self::load)).
-    fn ingest(&mut self, src: &str, own: bool) -> bool {
+    /// prim types and API schemas as project-owned. Parsing completes before
+    /// the global write lock; this pass consumes the validated layer once.
+    fn ingest_parsed(&mut self, data: &sdf::Data, own: bool) {
         let reg = self;
-        let Ok(data) = usda_to_data(src) else {
-            return false;
-        };
-
-        for (path, spec) in data.iter() {
+        // Bare-name precedence depends on admission order. Data::iter is a
+        // hash-map traversal, so order borrowed specs by their standard paths.
+        let mut specs = data.iter().collect::<Vec<_>>();
+        specs.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        for (path, spec) in specs {
             match spec.ty {
                 SpecType::Prim => {
                     let Some(class) = path.as_str().strip_prefix('/') else {
@@ -575,7 +565,6 @@ impl SchemaRegistry {
                 _ => {}
             }
         }
-        true
     }
 
     /// What a schema declares about property `name`, or `None` when no schema this
@@ -725,6 +714,41 @@ pub fn ui_hint_of(name: &str) -> Option<AttrUiHint> {
 mod tests {
     use super::*;
 
+    /// Measure the real registration path over an inline schema library.
+    #[test]
+    #[ignore = "manual schema registration performance measurement"]
+    fn schema_registration_benchmark() {
+        let mut source = String::from("#usda 1.0\n");
+        for class in 0..128 {
+            source.push_str(&format!("class \"RegistrationBench{class:03}\" {{\n"));
+            for field in 0..32 {
+                source.push_str(&format!(
+                    "    uniform double bench:value{class}_{field} = 1.25\n"
+                ));
+            }
+            source.push_str("}\n");
+        }
+        assert!(SchemaRegistry::register_core_extension(&source));
+        let began = std::time::Instant::now();
+        for _ in 0..16 {
+            assert!(SchemaRegistry::register_core_extension(&source));
+        }
+        let elapsed = began.elapsed();
+        let registry = SchemaRegistry::global().read().unwrap();
+        assert_eq!(
+            registry
+                .property_in("RegistrationBench127", "bench:value127_31")
+                .unwrap()
+                .default_value,
+            Some(sdf::Value::Double(1.25))
+        );
+        println!(
+            "SCHEMA_REGISTRATION_BENCH elapsed_ns={} registrations=16 classes=128 attributes=4096 bytes={}",
+            elapsed.as_nanos(),
+            source.len()
+        );
+    }
+
     const INLINE_SCHEMA: &str = r#"#usda 1.0
 (
     upAxis = "Y"
@@ -743,7 +767,7 @@ class "ProbeAPI" (
     #[test]
     fn inline_schema_is_typed_and_unit_annotated() {
         let mut registry = SchemaRegistry::default();
-        assert!(registry.ingest(INLINE_SCHEMA, true));
+        registry.ingest_parsed(&usda_to_data(INLINE_SCHEMA).unwrap(), true);
         assert!(registry.api_schemas().contains(&"ProbeAPI".to_owned()));
 
         let label = registry
@@ -763,10 +787,61 @@ class "ProbeAPI" (
 
     #[test]
     fn invalid_schema_is_rejected_without_mutating_registry() {
+        let before = {
+            let registry = SchemaRegistry::global().read().unwrap();
+            (
+                registry.properties.clone(),
+                registry.typed_api_schemas.clone(),
+                registry.by_name.clone(),
+                registry.prim_types.clone(),
+                registry.api_schemas.clone(),
+            )
+        };
+        assert!(!SchemaRegistry::register_extension("not USDA"));
+        let registry = SchemaRegistry::global().read().unwrap();
+        assert_eq!(
+            before,
+            (
+                registry.properties.clone(),
+                registry.typed_api_schemas.clone(),
+                registry.by_name.clone(),
+                registry.prim_types.clone(),
+                registry.api_schemas.clone()
+            )
+        );
+    }
+
+    #[test]
+    fn schema_declaration_precedence_follows_spec_path_order() {
+        let mut source = String::from("#usda 1.0\n");
+        for index in (0..32).rev() {
+            source.push_str(&format!(
+                "class \"OrderedSchema{index:02}\" {{ double ordered:value = {index}.0 }}\n"
+            ));
+        }
         let mut registry = SchemaRegistry::default();
-        assert!(!registry.ingest("not USDA", true));
-        assert!(registry.prim_types().is_empty());
-        assert!(registry.api_schemas().is_empty());
+        registry.ingest_parsed(&usda_to_data(&source).unwrap(), true);
+        assert_eq!(
+            registry.property("ordered:value").unwrap().declared_by,
+            "OrderedSchema31"
+        );
+        assert_eq!(
+            registry.property("ordered:value").unwrap().default_value,
+            Some(sdf::Value::Double(31.0))
+        );
+        assert!(
+            registry
+                .prim_types()
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert_eq!(
+            registry
+                .property_in("OrderedSchema00", "ordered:value")
+                .unwrap()
+                .default_value,
+            Some(sdf::Value::Double(0.0))
+        );
     }
 
     #[test]
@@ -785,7 +860,7 @@ class "Sphere"
 }
 "#;
 
-        assert!(registry.ingest(camera, false));
+        registry.ingest_parsed(&usda_to_data(camera).unwrap(), false);
         registry.apply_core_linear_units();
         assert_eq!(
             registry.linear_unit("Camera", "focalLength"),
@@ -799,7 +874,7 @@ class "Sphere"
                 .any(|missing| missing == ("Sphere", "radius"))
         );
 
-        assert!(registry.ingest(sphere, false));
+        registry.ingest_parsed(&usda_to_data(sphere).unwrap(), false);
         registry.apply_core_linear_units();
         assert_eq!(
             registry.linear_unit("Sphere", "radius"),

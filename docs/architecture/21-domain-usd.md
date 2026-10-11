@@ -197,11 +197,18 @@ revision-fenced preparation gate before the sink consumes them; its
 through that projection. See the [asset admission owner](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 
 Core USD schema assets register incrementally through
-`lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
-facts as declarations arrive and validates missing entries only after all
-vendored core schema sources load successfully. The registration pass sleeps
-after every source reaches a terminal load state and that validation completes;
-it does not clone or rescan the manifest entries on settled frames.
+`lunco-usd-bevy-runtime-core`, in requested module order. An unresolved source
+holds later admission; a reported terminal failure permits later sources to
+proceed. `lunco-usd-authoring` parses each source once before taking the global
+registry write lock, then folds declarations in standard spec-path order.
+Bare-name lookup retains project-over-core priority and the last admitted
+declaration within each tier; neither hash traversal nor I/O completion chooses
+that precedence. Schema-qualified lookup retains every declaration. The owner
+applies matching linear-unit facts as declarations arrive and validates missing
+entries only after all vendored core schema sources load successfully. The
+registration pass sleeps after every source reaches a terminal load state and
+that validation completes; it does not clone or rescan the manifest entries on
+settled frames.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
