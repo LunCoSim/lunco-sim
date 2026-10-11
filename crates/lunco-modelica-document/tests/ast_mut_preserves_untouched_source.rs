@@ -43,7 +43,7 @@ fn apply(op: ModelicaOp) -> String {
     h.apply(op).expect("op applies");
     let out = h.document().source().to_string();
     // Whatever we spliced, the result must still parse.
-    lunco_modelica_ast::parse_to_ast(&out, "test.mo")
+    rumoca_phase_parse::parse_to_ast(&out, "test.mo")
         .unwrap_or_else(|e| panic!("post-op source does not parse: {e:?}\n=== src ===\n{out}"));
     out
 }

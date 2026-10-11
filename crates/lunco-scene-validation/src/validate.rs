@@ -546,7 +546,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("validate.mo");
-    let syntax = lunco_modelica_ast::parse_to_syntax(text, file_name);
+    let syntax = rumoca_phase_parse::parse_to_syntax(text, file_name);
     if syntax.has_errors() {
         match syntax.parse_error() {
             Some(joined) => report.errors.extend(joined.lines().map(|l| l.to_string())),

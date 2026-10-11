@@ -27,7 +27,7 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 /// AST-driven span splicing produces the expected renamed source.
 #[test]
 fn ast_class_rename_via_token_spans() {
-    use lunco_modelica_ast::parse_to_ast;
+    use rumoca_phase_parse::parse_to_ast;
     let src = "within Foo.Bar;\n\nmodel OldName \"a class\"\n  Real x;\nend OldName;\n";
     let ast = parse_to_ast(src, "t.mo").expect("parses");
     let class = ast

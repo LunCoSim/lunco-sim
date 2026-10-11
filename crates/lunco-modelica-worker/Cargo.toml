@@ -42,6 +42,7 @@ lunco-storage = { path = "../lunco-storage" }
 zstd.workspace = true
 
 [dev-dependencies]
+rumoca-phase-parse.workspace = true
 tempfile.workspace = true
 
 [lints]

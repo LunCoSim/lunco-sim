@@ -18,6 +18,7 @@ name = "modelica_tester"
 path = "src/bin/modelica_tester.rs"
 
 [dependencies]
+rumoca-phase-parse.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
 bevy.workspace = true
 crossbeam-channel.workspace = true

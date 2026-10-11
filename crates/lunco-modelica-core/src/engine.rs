@@ -618,7 +618,7 @@ mod tests {
 
     /// Install an explicitly parsed inline source at the engine boundary.
     fn upsert_test(engine: &mut ModelicaEngine, id: DocumentId, src: &str) {
-        let ast = lunco_modelica_ast::parse_to_ast(src, "test.mo").expect("test source must parse");
+        let ast = rumoca_phase_parse::parse_to_ast(src, "test.mo").expect("test source must parse");
         engine.upsert_document_with_ast(id, ast);
     }
 
@@ -781,10 +781,8 @@ mod tests {
         let parsed = files
             .into_iter()
             .map(|(uri, source)| {
-                (
-                    uri.clone(),
-                    lunco_modelica_ast::parse_to_ast(&source, &uri).expect("bundled source parses"),
-                )
+                rumoca_compile::compile::ParsedSourceDocument::parse(uri, source)
+                    .expect("bundled source parses")
             })
             .collect();
         assert!(engine.finish_source_root_load("DemoRoot", parsed, Vec::new()) > 0);

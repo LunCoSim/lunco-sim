@@ -479,7 +479,7 @@ mod tests {
     /// Facts from real source, through the same recovering parse `validate_asset`
     /// uses — the conditional facts only exist if the AST really carries them.
     fn facts_of_source(src: &str) -> H {
-        let syntax = crate::parse_to_syntax(src, "M.mo");
+        let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
         let ast = syntax.best_effort();
         modelica_facts(ast)
     }

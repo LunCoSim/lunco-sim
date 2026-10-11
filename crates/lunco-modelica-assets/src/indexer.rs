@@ -266,7 +266,7 @@ struct SourceLibraryIndexer {
 /// short name for the palette tagline lookup, full qualified names
 /// are matched elsewhere).
 fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
-    let Ok(ast) = lunco_modelica_ast::parse_to_ast(source, "library.mo") else {
+    let Ok(ast) = rumoca_phase_parse::parse_to_ast(source, "library.mo") else {
         return HashMap::new();
     };
     let mut out: HashMap<String, String> = HashMap::new();
@@ -967,7 +967,7 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// not parse work.
 ///
 /// So we bypass the cache layer entirely: parse each file with the **raw,
-/// lock-free** `lunco_modelica_ast::parse_to_ast` (exactly what
+/// lock-free** `rumoca_phase_parse::parse_to_ast` (exactly what
 /// `parse_files_parallel` calls internally — identical AST) on a
 /// **dedicated, bounded** rayon pool. No shared global pool, no global
 /// mutex → no contention with the render loop; capped threads leave cores
@@ -1023,7 +1023,7 @@ pub fn parse_native_library_bundle() -> Vec<(String, StoredDefinition)> {
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
     let src = std::fs::read_to_string(path).ok()?;
-    match lunco_modelica_ast::parse_to_ast(&src, &path.to_string_lossy()) {
+    match rumoca_phase_parse::parse_to_ast(&src, &path.to_string_lossy()) {
         Ok(ast) => Some((path.to_string_lossy().to_string(), ast)),
         Err(e) => {
             log::warn!(
@@ -1236,19 +1236,15 @@ pub fn run_with_cancel(
 fn scan_bundled_examples() -> Vec<lunco_modelica_index::package_tree::types::PackageNode> {
     use lunco_modelica_core::models::bundled_models;
 
-    // `parse_to_syntax(...).best_effort()` is the same path
-    // `SyntaxCache::from_source` uses and is what the workspace
-    // browser already renders cleanly — it preserves the full
-    // nested class list, including `partial connector` siblings
-    // that the bare `parse_to_recovered_ast` recovery parser
-    // truncates after the first error-ish token.
+    // Use the document's recovering syntax projection so the catalog retains
+    // complete valid declarations and recoverable siblings with diagnostics.
     let Ok(models) = bundled_models() else {
         return Vec::new();
     };
     models
         .into_iter()
         .filter_map(|m| {
-            let syntax = lunco_modelica_ast::parse_to_syntax(&m.source, &m.filename);
+            let syntax = rumoca_phase_parse::parse_to_syntax(&m.source, &m.filename);
             let ast = syntax.best_effort();
             let (top_short, top_class) = ast.classes.iter().next()?;
             Some(bundled_class_node(&m.filename, top_short, top_class, ""))
@@ -1448,7 +1444,7 @@ fn push_file_units(path: &std::path::Path, units: &mut Vec<(String, WarmKind)>) 
         .to_string();
     // Lenient parse to discover top-level classes. Errors don't kill
     // the warm — we still emit any classes the parser could salvage.
-    let syntax = lunco_modelica_ast::parse_to_syntax(&source, &filename);
+    let syntax = rumoca_phase_parse::parse_to_syntax(&source, &filename);
     let ast = syntax.best_effort();
     let mut emitted = 0;
     for (top_name, class_def) in &ast.classes {

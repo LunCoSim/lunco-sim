@@ -1055,7 +1055,7 @@ mod tests {
         let source = r#"model Labels "\"Model\" " + "description"
   Real value(unit="\"K\"", min=sin(2)) "\"Value\" " + "description";
 end Labels;"#;
-        let ast = lunco_modelica_ast::parse_to_ast(source, "labels.mo").unwrap();
+        let ast = rumoca_phase_parse::parse_to_ast(source, "labels.mo").unwrap();
         let mut index = ModelicaIndex::default();
         index.rebuild_from_ast(&ast, source);
         assert_eq!(index.classes["Labels"].description, "\"Model\" description");
@@ -1077,7 +1077,7 @@ end Labels;"#;
 
     #[test]
     fn rebuild_populates_within_classes_components() {
-        let ast = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, SRC);
 
@@ -1208,12 +1208,12 @@ end Labels;"#;
     #[test]
     fn rebuild_clears_old_state() {
         let mut idx = ModelicaIndex::new();
-        let ast1 = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast1 = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
         idx.rebuild_from_ast(&ast1, SRC);
         let gen_before = idx.generation;
 
         let small = "model Tiny\nend Tiny;\n";
-        let ast2 = lunco_modelica_ast::parse_to_ast(small, "Tiny.mo").expect("parses");
+        let ast2 = rumoca_phase_parse::parse_to_ast(small, "Tiny.mo").expect("parses");
         idx.rebuild_from_ast(&ast2, small);
 
         assert!(idx.generation > gen_before, "generation must advance");
@@ -1322,7 +1322,7 @@ end Labels;"#;
     #[test]
     fn rebuild_extracts_connect_annotation_waypoints() {
         let src = "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b) annotation(Line(points={{0,0},{10,5},{20,10}}));\nend M;\n";
-        let ast = lunco_modelica_ast::parse_to_ast(src, "M.mo").expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, src);
 

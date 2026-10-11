@@ -298,7 +298,7 @@ impl ModelicaEngineHandle {
             let t_total = web_time::Instant::now();
             // Lenient parser: always produces a usable tree.
             let t_parse = web_time::Instant::now();
-            let recovery = lunco_modelica_ast::parse_to_syntax(&source, &uri);
+            let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
             let has_errors = recovery.has_errors();
             // Prepare the document's exact syntax result on the worker while
@@ -1000,7 +1000,7 @@ mod tests {
         // A session mutation cannot change the already queued generation's AST.
         handle.lock().upsert_document_with_ast(
             doc_id,
-            lunco_modelica_ast::parse_to_syntax("model B end B;", "test.mo")
+            rumoca_phase_parse::parse_to_syntax("model B end B;", "test.mo")
                 .best_effort()
                 .clone(),
         );

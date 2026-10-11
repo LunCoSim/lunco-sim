@@ -1,9 +1,9 @@
 //! Fragment parsing and stub-class trick helpers.
 
 use super::errors::AstMutError;
-use crate::parse_to_ast;
 use crate::pretty;
 use rumoca_ir_ast::StoredDefinition;
+use rumoca_phase_parse::parse_to_ast;
 use std::sync::Arc;
 
 /// Wrapper class name used when fragments of Modelica (a binding

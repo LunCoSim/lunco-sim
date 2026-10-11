@@ -668,7 +668,7 @@ fn parse_validated_root_interface(
     outputs: &BTreeSet<String>,
     aliases: &[(String, String, String)],
 ) -> Result<StoredDefinition, String> {
-    let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
+    let ast = rumoca_phase_parse::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = ast
         .get_class_by_qualified_name(model_name)

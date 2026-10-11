@@ -834,7 +834,8 @@ mod tests {
         let text = "\"quoted\"\\n\n\t\r\x07\x08\x0c\x0b";
         let header = class_header("Label", ClassKindSpec::Model, text, false);
         let source = format!("{header}\nend Label;");
-        let ast = crate::parse_to_ast(&source, "label.mo").expect("encoded class parses");
+        let ast =
+            rumoca_phase_parse::parse_to_ast(&source, "label.mo").expect("encoded class parses");
         assert_eq!(
             crate::ast_extract::description_from_tokens(&ast.classes["Label"].description),
             Some(text.to_string())
@@ -849,7 +850,8 @@ mod tests {
             title: text.into(),
         });
         let source = format!("model Label annotation(__LunCo(plotNodes={{{plot}}})); end Label;");
-        let ast = crate::parse_to_ast(&source, "plot.mo").expect("encoded plot parses");
+        let ast =
+            rumoca_phase_parse::parse_to_ast(&source, "plot.mo").expect("encoded plot parses");
         let plots = crate::annotations::extract_lunco_plot_nodes(&ast.classes["Label"].annotation);
         assert_eq!(plots[0].title, text);
     }
@@ -1013,8 +1015,8 @@ mod tests {
         };
         let body = component_decl(&d);
         let source = format!("model M\n{}end M;\n", body);
-        let ast =
-            crate::parse_to_ast(&source, "test.mo").expect("emitted component decl should parse");
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "test.mo")
+            .expect("emitted component decl should parse");
         let class = ast.classes.get("M").expect("class M");
         assert!(
             class.components.contains_key("x"),
@@ -1032,7 +1034,7 @@ mod tests {
         };
         let body = connect_equation(&eq);
         let source = format!("model M\n  Real a;\n  Real b;\nequation\n{}end M;\n", body);
-        let res = crate::parse_to_ast(&source, "test.mo");
+        let res = rumoca_phase_parse::parse_to_ast(&source, "test.mo");
         assert!(res.is_ok(), "connect(...) should parse: {:?}", res.err());
     }
 }

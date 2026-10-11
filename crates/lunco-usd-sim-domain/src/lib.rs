@@ -4592,7 +4592,7 @@ def Scope "Rig"
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));
         assert!(source.contains("Force allocation | 1 actuator(s)"));
-        let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
         let class = ast
             .get_class_by_qualified_name("AttitudeActuation")
