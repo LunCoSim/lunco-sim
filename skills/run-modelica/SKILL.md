@@ -446,6 +446,12 @@ seam test, since public folder replacement cannot force that worker boundary.
 Native preparation runs on the existing task pool; browser Bevy tasks
 retain the browser editor's deferred parsing contract.
 
+For Editor checkpoints, use `modelica_editor::inspect(doc)` to combine native
+source and compile facts, then `authoring_session::checkpoint("modelica", doc)`
+to require the current compiled model. `CompileModel` admits compile intent;
+`CompileStatus` reports completion. Exercise that path, invalid current source,
+and closed-document rejection with `modelica_editor_checkpoint.rhai`.
+
 Projection must remain responsive while a native package or inherited icon is
 being resolved. Verify that `/api/ready` stays responsive, the canvas shows an
 explicit loading/error state, and the completion event reprojects the authored

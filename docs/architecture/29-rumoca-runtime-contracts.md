@@ -81,6 +81,13 @@ Parse-time `lint.modelica` policy checks declaration conflicts. Conditional
 expressions and events are compiler/solver capabilities, not blanket syntax
 errors. Runtime acceptance uses authored Rhai through the production binary.
 
+The `modelica_editor` facade consumes native source and compile query data
+through its shared query-result predicate. Inspection combines both current
+facts; `authoring_session::checkpoint` requires a ready compiled model before
+reporting verification. Invalid current source and retired documents remain
+visible rejections. The production `modelica_editor_checkpoint.rhai` gate covers
+that consumer and its negative cases.
+
 ## Ownership review
 
 The reviewed release is upstream `v0.10.2` (`276e82bd`); upstream main was
