@@ -10,5 +10,4 @@ pub mod annotation_source;
 pub mod doc_extract;
 pub mod index;
 pub mod package_tree;
-pub mod source_deps;
 pub mod visual_diagram;

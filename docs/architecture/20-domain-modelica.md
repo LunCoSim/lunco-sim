@@ -65,6 +65,15 @@ through the shared `sim_target::resolve_requested_class` resolver. Explicit and
 default targets enter the compiler with one qualified identity; dispatch does
 not reparse source or repair package prefixes. `modelica_class_compile.rhai`
 verifies qualified, relative, bare quoted, default and headless run targets.
+Compiler admission parses each unique URI once with Rumoca's
+`ParsedSourceDocument` and installs the paired source/definition as one batch.
+Single-source and multi-source compilation share that boundary. The definition's
+`qualified_class_name` and `declared_class_names` queries preserve authored scope;
+root boundaries use `qualified_name_segments`. Exact source CIDs permit reuse of
+loaded root definitions; changed owned sources, mixed ownership and conflicting
+contents under one URI fail before overlay installation. New `within` namespaces
+can compile without requiring a filesystem package. Participating source identity
+reads `Session::document_source_text`, which addresses the parser's retained text.
 [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/) owns AST interface
 projections and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless

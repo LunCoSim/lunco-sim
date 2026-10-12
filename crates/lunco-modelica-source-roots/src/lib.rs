@@ -1031,7 +1031,7 @@ pub fn admit_compile_roots(
 /// dependency, classify each against the registry, and emit a
 /// one-line summary.
 pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
-    let deps = lunco_modelica_index::source_deps::scan_source_root_deps(ast);
+    let deps = lunco_modelica_ast::ast_extract::source_root_dependencies_from_ast(ast);
     if deps.is_empty() {
         bevy::log::info!(
             "[source-roots] compile `{}`: no external library deps",
