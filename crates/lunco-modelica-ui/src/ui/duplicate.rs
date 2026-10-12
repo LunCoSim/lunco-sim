@@ -13,7 +13,7 @@
 /// `source[full_start..full_end]`).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DuplicateExtract {
-    /// Declaration slice within the source, from `class_full_text_span`.
+    /// Complete declaration slice from Rumoca's source location.
     pub full_start: usize,
     pub full_end: usize,
     /// Class-name-token span (absolute in source).
@@ -43,14 +43,9 @@ pub(crate) fn spans_from_ast(
 ) -> Option<DuplicateExtract> {
     let class = ast.get_class_by_qualified_name(class_name)?;
     let end_tok = class.end_name_token.as_ref()?;
-    // rumoca's `ClassDef.location` spans only NAME → `end <Name>`, omitting
-    // the prefix keyword and the trailing `;`. `class_full_text_span` widens
-    // it to the real declaration bounds (the canonical helper, shared with
-    // `load_library_class`). `rewrite_inject_in_one_pass` re-anchors these
-    // absolute spans by `full_start`, so the caller must pass the matching
-    // `source[full_start..full_end]` slice.
-    let (full_start, full_end) =
-        lunco_modelica_ast::ast_extract::class_full_text_span(class, source);
+    let full_start = class.location.start as usize;
+    let full_end = class.location.end as usize;
+    source.get(full_start..full_end)?;
     Some(DuplicateExtract {
         full_start,
         full_end,
@@ -476,9 +471,7 @@ end CompositeFixture;
 
     #[test]
     fn duplicate_flat_model_keeps_keyword_and_semicolon() {
-        // The core regression isolated: `ClassDef.location` omits the
-        // `model` keyword and the trailing `;`. Pre-fix this produced
-        // `BallCopy … end BallCopy` (no keyword, no semicolon).
+        // The complete declaration survives the token-span rename.
         let src = "model Ball\n  Real h;\nequation\n  h = 1;\nend Ball;\n";
         let out = duplicate(src, "Ball", "BallCopy", None);
         assert!(parses_clean(&out), "must parse:\n{out}");
@@ -488,8 +481,7 @@ end CompositeFixture;
 
     #[test]
     fn duplicate_partial_connector_keeps_qualifier() {
-        // `class_full_text_span` rewinds over the `partial` qualifier too,
-        // so the whole keyword chain survives the rename.
+        // The declaration location includes the partial qualifier.
         let src = "partial connector Pin\n  Real v;\n  flow Real i;\nend Pin;\n";
         let out = duplicate(src, "Pin", "PinCopy", None);
         assert!(parses_clean(&out), "must parse:\n{out}");

@@ -414,10 +414,10 @@ compile acceptance plus wrong-package rejection are covered by
 `assets/scenarios/tests/modelica_class_compile.rhai`. Source query and compile
 acceptance remain distinct boundaries.
 
-For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
-from the same parsed bytes. Its inline seam test covers same-line enclosing
-declarations and class qualifiers; do not derive declaration bounds by scanning
-backward through arbitrary identifiers.
+For class source extraction, use Rumoca's `ClassDef.location` against the same
+parsed bytes. It includes declaration qualifiers, the terminating semicolon and
+element constraints. Check the range and UTF-8 boundaries at the source reader;
+invalid coordinates are errors. Name/end-name tokens own only identifier spans.
 Read-only library views also require exact qualified identity. The generic
 library extraction seam checks sibling leaf names and a missing sibling without
 reading repository fixtures.
@@ -429,11 +429,17 @@ Closing the source or target lifetime during preparation must cancel publication
 and release pending names, tabs and status. Use inline parser tests for span and
 rewrite boundaries, and authored Rhai commands/queries for these public lifecycle
 outcomes. `assets/scenarios/tests/modelica_duplicate_lifecycle.rhai` exercises
-qualified siblings and quoted names, error diagnostics and exact-name reuse,
+qualified siblings, quoted names and complete commented declaration extents,
+error diagnostics and exact-name reuse,
 observed pending source-close cancellation, original-target Twin replacement
 without retagging, and a valid successor. Run it in a UI-capable host with
 Application/Retain lifetime and API-authored `root_a`, `root_b`, `entry_scene`
-fixtures. Asynchronous folder scanning permits a duplicate to install while its
+fixtures.
+Application hosts require a settled scene to open scenario lifecycle; pass
+the application fixture through `RunScenarioAsset.scene_asset` while leaving
+`owner_twin_id` omitted for this gate. The default host receives its identity
+through session admission before declared simulation queries execute.
+Asynchronous folder scanning permits a duplicate to install while its
 old Twin is live; the gate preserves that valid retained-source outcome. Exact
 Twin/connection retirement of never-ready tasks belongs to the generic resource
 seam test, since public folder replacement cannot force that worker boundary.

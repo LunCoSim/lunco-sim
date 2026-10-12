@@ -15,6 +15,12 @@ fn record(title) {
     for entry in listed.open_documents { if entry.kind == "modelica" && entry.title == title { return entry; } }
     ()
 }
+fn document_entry(doc) {
+    let listed = query("ListOpenDocuments", #{});
+    if listed == () || listed.open_documents == () { return (); }
+    for entry in listed.open_documents { if entry.doc_id == doc { return entry; } }
+    ()
+}
 fn ready(doc, class) {
     let status = query("CompileStatus", #{doc_id: doc});
     status != () && status.ok != false && status.ast_parsed == true
@@ -52,13 +58,13 @@ fn on_start(me, params) {
         this = finish(this, ["distinct fixture roots and an API-authored entry_scene are required"]); return;
     }
     let twin = query("ReadActiveTwinContract", #{});
-    if twin == () || twin.open != false { this = finish(this, ["initial Application document scope is required"]); return; }
+    if twin == () || twin.open != false { this = finish(this, ["initial Application document scope is required: " + twin.to_string()]); return; }
     subscribe("modelica-duplicate-failed");
     subscribe("modelica-duplicate-cancelled");
     this.qualified = "DuplicateGateRoot.B.Part";
     this.quoted = "DuplicateGateRoot.B.'Quoted Part'";
-    this.source_a = "package DuplicateGateRoot package A model Part Real fromA; end Part; end A; package B model Part Real fromB; end Part; model 'Quoted Part' Real quotedValue; end 'Quoted Part'; end B; end DuplicateGateRoot;";
-    this.source_b = "package DuplicateGateRoot package A model Part Real successorA; end Part; end A; package B model Part Real successorB; end Part; model 'Quoted Part' Real quotedSuccessor; end 'Quoted Part'; end B; end DuplicateGateRoot;";
+    this.source_a = "package DuplicateGateRoot package A model Part Real fromA; end Part; end A; package B final /* α */ model Part Real fromB; end Part /*tail*/ ; model 'Quoted Part' Real quotedValue; end 'Quoted Part'; end B; end DuplicateGateRoot;";
+    this.source_b = "package DuplicateGateRoot package A model Part Real successorA; end Part; end A; package B final /* α */ model Part Real successorB; end Part /*tail*/ ; model 'Quoted Part' Real quotedSuccessor; end 'Quoted Part'; end B; end DuplicateGateRoot;";
     let app = editor::new_scratch("package DuplicateGateRoot package B model Part Real fromApplication; end Part; end B; end DuplicateGateRoot;", "Duplicate application source");
     if app.ok != true { this = finish(this, [app.to_string()]); return; }
     this.app = app.doc_id; this.docs.push(this.app); this.phase = "application";
@@ -94,9 +100,9 @@ fn on_tick(me, params) {
     }
     if this.phase == "source_a" {
         if !ready(this.a, this.qualified) || !ready(this.a, this.quoted) { return; }
-        let entry = record("Duplicate scoped source A");
+        let entry = document_entry(this.a);
         if entry == () || entry.runtime_context.kind != "local_twin" {
-            this = finish(this, ["A source did not receive its exact Twin owner"]); return;
+            this = finish(this, ["A source did not receive its exact Twin owner: " + entry.to_string()]); return;
         }
         this.expected_owner = entry.runtime_context;
         this.marker = "fromB"; this.forbidden = "fromA";
@@ -108,11 +114,15 @@ fn on_tick(me, params) {
         let entry = record(this.expected_title);
         if entry == () { return; }
         let source = query("GetDocumentSource", #{doc_id: entry.doc_id});
-        if source == () || source.ok != true || !ready(entry.doc_id, this.expected_class) { return; }
+        if source == () || source.source == () || !ready(entry.doc_id, this.expected_title) { return; }
         if entry.runtime_context != this.expected_owner || source.origin.kind != "untitled"
             || !source.source.contains(this.marker) || source.source.contains(this.forbidden)
             || source.source.contains("fromApplication") || !source.source.contains("within DuplicateGateRoot.B;") {
             this = finish(this, ["duplicate published the wrong class bytes, lexical scope or runtime owner: " + source.to_string()]); return;
+        }
+        if (this.marker == "fromB" || this.marker == "successorB")
+            && (!source.source.contains("final /* α */ model ") || !source.source.contains("/*tail*/ ;")) {
+            this = finish(this, ["duplicate lost the complete parser-owned declaration extent: " + source.source]); return;
         }
         this.docs.push(entry.doc_id);
         this.checks.push(t_true(true, "installed exact qualified duplicate " + this.expected_class + " under its admitted owner"));
@@ -166,7 +176,7 @@ fn on_tick(me, params) {
             this = finish(this, ["source-close pending task was not observed; cancellation case unexercised"]); return;
         }
         let installed = query("GetDocumentSource", #{doc_id: pending.doc_id});
-        if installed != () && installed.ok == true {
+        if installed != () && installed.source != () {
             this.docs.push(pending.doc_id);
             this = finish(this, ["source-close copy already installed; pending cancellation case unexercised"]); return;
         }
@@ -180,7 +190,7 @@ fn on_tick(me, params) {
         let error = this.errors[this.cancel_before];
         let installed = query("GetDocumentSource", #{doc_id: this.source_pending});
         if error.name != "modelica-duplicate-cancelled" || record("DuplicateGateRootCopy") != ()
-            || (installed != () && installed.ok == true) {
+            || (installed != () && installed.source != ()) {
             this = finish(this, ["source retirement did not cancel the observed task and release its reservation"]); return;
         }
         this.checks.push(t_true(true, "closing the exact source fenced observed pending task publication and released its namespace"));
@@ -221,7 +231,7 @@ fn on_tick(me, params) {
             // remains live. Retained source must still be owned by A, and an
             // uninstalled reservation cannot survive actual A retirement.
             let source = query("GetDocumentSource", #{doc_id: outgoing.doc_id});
-            if outgoing.runtime_context != this.expected_owner || source == () || source.ok != true
+            if outgoing.runtime_context != this.expected_owner || source == () || source.source == ()
                 || !source.source.contains("fromB") || source.source.contains("successorB") {
                 this = finish(this, ["queued A duplicate retained a dead reservation or was retagged into B"]); return;
             }
@@ -229,7 +239,7 @@ fn on_tick(me, params) {
             editor::close(outgoing.doc_id);
         } else if this.pending != () {
             let source = query("GetDocumentSource", #{doc_id: this.pending});
-            if source != () && source.ok == true {
+            if source != () && source.source != () {
                 this.docs.push(this.pending);
                 this = finish(this, ["outgoing duplicate installed without its admitted metadata"]); return;
             }
@@ -241,7 +251,7 @@ fn on_tick(me, params) {
     }
     if this.phase == "source_b" {
         if !ready(this.b, this.qualified) { return; }
-        let entry = record("Duplicate scoped source B");
+        let entry = document_entry(this.b);
         if entry == () || entry.runtime_context.kind != "local_twin" || entry.runtime_context == this.expected_owner {
             this = finish(this, ["B successor did not receive its distinct exact Twin owner"]); return;
         }

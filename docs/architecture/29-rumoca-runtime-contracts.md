@@ -23,7 +23,7 @@ consumed as state derivatives and invalid source rejection.
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same
-correlated lowering. Prepared cache version 10 stores the canonical typed FMI
+correlated lowering. Prepared cache version 11 stores the canonical typed FMI
 construction wire through a bounded JSON persistence adapter and zstd. Loading
 replays Rumoca's checked construction; unsupported versions, malformed metadata,
 identity mismatches, and oversized records are rejected before use.
@@ -44,8 +44,10 @@ text and syntax together. Admission uses `replace_in_memory_source_set`;
 source spans and portable content identities address those retained bytes.
 The native indexer writes the same paired-source record shape and returns terminal
 admission errors to its CLI and UI consumers before publishing artifacts.
-The artifact tag is `rumoca-0.10.2+bincode2-ast2`. Native and browser decoders require
+The artifact tag is `rumoca-0.10.2+bincode2-ast3`. Native and browser decoders require
 complete records and full byte consumption; a partial bundle is never installed.
+Declaration locations include qualifiers and terminating semicolons. Artifact
+consumers require this span contract before using source ranges.
 The packager admits every source before publishing either artifact; read or parse
 errors abort publication with the source identity.
 
@@ -89,6 +91,8 @@ Parsed AST fields must be serialized completely for positional readers.
 | Mechanism | Authoritative owner | LunCoSim responsibility |
 |---|---|---|
 | Expression rendering | `rumoca-ir-ast::Expression` Display | Use its complete representation in component modifications, indexer defaults, and canvas labels. |
+| Complete declaration extents | Rumoca parser `ClassDef.location` | Slice the original source after range validation; use name tokens separately for renaming. |
+| Qualified source names | `rumoca_core::qualified_name_segments` and `StoredDefinition` declaration queries | Preserve quoted identifiers and exact package boundaries without a host name parser. |
 | String literal decoding and encoding | Rumoca parser tokens and `rumoca-core::escape_modelica_string` | Copy decoded values into typed metadata; use canonical escaping when inserting new source nodes. Descriptions concatenate decoded tokens without adding whitespace. |
 | Checked DAE, initialization, parameter and input binding | Rumoca compiler and `SimOptions` preparation | Supply the complete authored source closure and admitted causal inputs. |
 | FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
@@ -133,10 +137,6 @@ it never falls through to a start value.
   provide the open session, changing input, or step-lattice API used here.
   `MeIntegratorBackend` is the appropriate extension boundary. Solver selection,
   prediction admission, and ECS synchronization remain application-owned.
-- Quote-aware qualified-name segmentation belongs in Rumoca's core name
-  primitives. The inspected path splitters handle bracket depth but do not
-  protect dots/brackets inside escaped quoted identifiers. LunCoSim's shared
-  borrowed name-segment reader retains that required authoring contract.
 - `Equation::Connect` should retain its authored annotation in the parsed AST.
   The inspected release and main store only endpoints. The current source-span
   annotation reader and source-preserving edit path remain necessary until the

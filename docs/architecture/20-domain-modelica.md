@@ -161,10 +161,12 @@ browser worker compile check passed. Summer Space School's six authored startup
 assertions passed with all three participants running in the integrated native
 session.
 
-Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
-at the parsed class-kind token, includes its declaration qualifiers, and ends
-after the closing semicolon. Enclosing declarations on the same line remain
-outside that span; library documents and duplicate preparation use this owner.
+Rumoca's `ClassDef.location` owns complete declaration bounds, including
+qualifiers, terminating semicolons and element constraints. Library source
+slicing and duplicate preparation use that range against its matching source
+text; neither rescans surrounding characters nor clamps invalid coordinates.
+Identifier-token locations remain separate rename spans. Same-line siblings,
+comments and short definitions are covered by the parser's source-span checks.
 Read-only library document loading selects the exact qualified class through
 Rumoca's stored-definition lookup; a missing sibling cannot resolve another class with
 the same leaf name.

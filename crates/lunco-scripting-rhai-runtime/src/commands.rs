@@ -459,7 +459,7 @@ fn on_run_scenario(
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root)?;
+    let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root, &mut commands)?;
     let twin_owner = resolve_scenario_twin_owner(workspace.as_deref(), None, None, false)?;
     let parameters_revision = q_existing
         .get(target)
@@ -532,7 +532,9 @@ fn on_run_scenario_asset(
         Some(scene)
     };
     let target = match (cmd.target, owner_twin) {
-        (Some(requested), _) => resolve_scenario_target(Some(requested), &entities, &world_root)?,
+        (Some(requested), _) => {
+            resolve_scenario_target(Some(requested), &entities, &world_root, &mut commands)?
+        }
         (None, Some(owner)) => twin_hosts
             .iter()
             .find(|(_, host)| host.0 == owner.twin)
@@ -549,7 +551,7 @@ fn on_run_scenario_asset(
                     ))
                     .id()
             }),
-        (None, None) => resolve_scenario_target(None, &entities, &world_root)?,
+        (None, None) => resolve_scenario_target(None, &entities, &world_root, &mut commands)?,
     };
     let handle = asset_server.load::<lunco_scripting_rhai_world::source_asset::RhaiSource>(path);
     commands.entity(target).try_insert(PendingScenarioAsset {
@@ -682,6 +684,7 @@ fn resolve_scenario_target(
     requested: Option<Entity>,
     entities: &Query<Entity>,
     world_root: &Query<Entity, With<lunco_spatial::WorldRoot>>,
+    commands: &mut Commands,
 ) -> Result<Entity, String> {
     if let Some(requested) = requested {
         if requested != Entity::PLACEHOLDER {
@@ -691,10 +694,16 @@ fn resolve_scenario_target(
             return Err(format!("scenario target {requested:?} does not exist"));
         }
     }
-    world_root
+    let target = world_root
         .iter()
         .next()
-        .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())
+        .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())?;
+    // The session owner admits runtime-instance identity before lifecycle
+    // execution, allowing this persistent Application host's declared queries.
+    commands
+        .entity(target)
+        .try_insert(lunco_core::Provenance::Authoritative);
+    Ok(target)
 }
 
 /// Register a rhai source as a `ScriptDocument` and attach a `ScriptedModel` to

@@ -563,70 +563,6 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 // merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
 // nonsensical pile.
 
-/// Byte range of a class's FULL source text — from its leading prefix
-/// keyword(s) (`package`/`model`/`partial connector`/…) through the
-/// terminating `;`.
-///
-/// rumoca's `ClassDef.location` is misleading: despite its doc comment
-/// ("spanning from class keyword to end statement") it actually covers
-/// only the NAME token → the `end <Name>` token, omitting BOTH the prefix
-/// keyword(s) and the closing `;`. Slicing `source` by that bare range
-/// drops them and yields invalid Modelica (`FooCopy … end FooCopy` with no
-/// `package` and no `;`). Any code that extracts or duplicates a class's
-/// source text must use this span, never `location` directly.
-pub fn class_full_text_span(class: &ClassDef, source: &str) -> (usize, usize) {
-    let bytes = source.as_bytes();
-    // The parser's class-kind token owns the declaration start. Only class
-    // qualifiers may precede it; enclosing names on the same line are not
-    // part of this declaration.
-    let mut start = (class.class_type_token.location.start as usize).min(bytes.len());
-    loop {
-        let mut i = start;
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            i -= 1;
-        }
-        let word_end = i;
-        while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
-            i -= 1;
-        }
-        if i == word_end
-            || !matches!(
-                source.get(i..word_end),
-                Some(
-                    "encapsulated"
-                        | "partial"
-                        | "final"
-                        | "inner"
-                        | "outer"
-                        | "replaceable"
-                        | "redeclare"
-                        | "expandable"
-                        | "operator"
-                        | "pure"
-                        | "impure"
-                )
-            )
-        {
-            break;
-        }
-        start = i;
-    }
-    // Advance from the `end <Name>` token past the terminating `;`.
-    let mut end = class
-        .end_name_token
-        .as_ref()
-        .map(|t| t.location.end as usize)
-        .unwrap_or(class.location.end as usize)
-        .min(bytes.len());
-    while end < bytes.len() && bytes[end].is_ascii_whitespace() {
-        end += 1;
-    }
-    if end < bytes.len() && bytes[end] == b';' {
-        end += 1;
-    }
-    (start, end)
-}
-
 /// Visit every type-name reference reachable from `class`, recursing
 /// into nested classes. Emits each `extends` base name and each
 /// component `type_name` raw — **no filtering**. Callers apply their
@@ -966,32 +902,6 @@ end Metadata;"#;
         );
         assert!(string_literal_value(class.components["gain"].binding.as_ref().unwrap()).is_none());
         assert_eq!(extract_typed_inputs_for_class(class)[0].default, None);
-    }
-
-    #[test]
-    fn class_full_text_span_confines_same_line_nested_declarations() {
-        for (source, expected) in [
-            (
-                "package Root package B model Part Real value; end Part; end B; end Root;",
-                "model Part Real value; end Part;",
-            ),
-            (
-                "package Root package B partial connector Part Real value; end Part; end B; end Root;",
-                "partial connector Part Real value; end Part;",
-            ),
-            (
-                "package Root package B encapsulated\npartial model Part Real value; end Part\n; end B; end Root;",
-                "encapsulated\npartial model Part Real value; end Part\n;",
-            ),
-        ] {
-            let syntax = rumoca_phase_parse::parse_to_syntax(source, "class-span.mo");
-            assert!(!syntax.has_errors());
-            let ast = syntax.parsed().expect("valid inline source");
-            let class = &ast.classes["Root"].classes["B"].classes["Part"];
-            let (start, end) = class_full_text_span(class, source);
-            assert_eq!(&source[start..end], expected);
-            assert!(!rumoca_phase_parse::parse_to_syntax(expected, "extracted.mo").has_errors());
-        }
     }
 
     #[test]

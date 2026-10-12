@@ -62,6 +62,12 @@ The runtime uses these existing cycle families:
 | `Ui` | egui/workbench updates and authored pointer/menu tool hooks | host frame/input cadence; typed tool hooks run after picking in `PreUpdate`, before fixed simulation, while egui paints in `PostUpdate`; foreground context-menu bounds are registered as chrome in `ScenePickGate`, so a popup inside a scene viewport owns its clicks; pointer-move hooks run only for an opted-in document interaction, with samples coalesced as presentation updates |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
+Default API-launched scenarios use the persistent `WorldRoot` as their
+Application host. Script-command admission marks that host authoritative;
+the session's identity admission and entity index supply its stable identity
+before declared simulation queries consume it. Twin scenario hosts use the
+same session mechanism and retain their explicit Twin lifetime.
+
 The USD-to-telemetry bridge samples connected co-simulation event edges only
 while the virtual simulation clock advances. It runs after `SimTickSet` and the
 full `ScriptingSet`, and stamps each event from `MissionClock` at that exact
