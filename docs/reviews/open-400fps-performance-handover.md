@@ -9219,3 +9219,44 @@ recorded in `owned-gpu-experiment-trace-retirement-20261012.json` and
 are no longer retained. Source, sibling worktrees, shared caches and foreign
 sessions were preserved. The validated normal executable is restored to
 `target/debug/luncosim` after the profiling build.
+
+## Settled Summer acceptance measurement — 2026-10-12
+
+After integrating `7dcb10b92`, the same verified normal artifact runs Summer
+at High quality, 1280x720, without vsync, throttling or Tracy. The ten-second
+settled window and all ten quality checkpoints observe only the owned simulator;
+there is no concurrent Cargo build or simulator in those checkpoints. A foreign
+tutorials build overlaps startup, so this run does not certify clean startup
+latency. Early green readiness at 0.208/0.597 s regresses to pending; the first
+later clear sample is 2.195 s. All 256 terrain tiles are resident at 2.741 s.
+
+The 258 revision-distinct frame samples have median 11.906 ms, p95 14.591 ms,
+p99 25.665 ms and maximum 35.613 ms: approximately 84 FPS at the median, below
+the 150 FPS target. Physics advances 614 steps with 624 bodies and 618 colliders.
+The final retained 120-step physics history has p50 0.413 ms, p95 0.501 ms,
+p99 0.521 ms and maximum 0.579 ms; its upper tail exceeds the 0.5 ms target.
+The final 240-tick timing window has fixed-tick service p50 7.379 ms,
+p95 8.043 ms, p99 8.393 ms and maximum 8.925 ms. Clipped simulation demand is
+zero; pending duration is 0.015143 s, below one 60 Hz tick. Modelica reports no
+held causal barrier. GPU utilization at settled checkpoints is 21–36%, with
+variable graphics clocks. API sampling contributes measurement overhead.
+
+Readiness, runtime diagnostics and complete terrain residency pass throughout
+the settled window. The inspected final image retains terrain, rocks and shadows;
+the log scatters 598 rocks once and skips identical analytic recomposition.
+The owned PID 3898432 exits zero and releases API 4202. Evidence uses prefixes
+`clean-summer-normal` and `clean-summer-summary` in the evidence directory above.
+This measurement leaves loading and FPS acceptance open and identifies the
+solar terrain-query service, rather than native solver time alone, as the next
+application-owned fixed-tick cost to address.
+
+A separate pure-math diagnostic prepares immutable crater populations for
+1,039 queried neighborhoods. Its 4,096 height bit patterns match over 16 passes;
+sampling measures 1,171 ns per point versus 1,937 ns without preparation, with
+3.308 ms preparation cost and 6,273 retained crater records. This is candidate
+attribution, not a production optimization or an FPS result. The existing
+`HeightModifier::for_region` and `SurfaceOracle::detail_limited_region` contracts
+already own footprint preparation for bake consumers; any further work must
+reuse those owners and preserve exact values, fold order, query bounds and
+bounded lifetime. The temporary diagnostic is removed and original source
+bytes are verified. Its evidence is `region-preparation-diagnostic-20261012.log`.
