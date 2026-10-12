@@ -9148,3 +9148,10 @@ Evidence uses prefixes `terrain-point-attribution`, `overzoom-phase` and
 `overzoom-density-reuse` under `.lunco/performance-evidence/entity-tree-perf/`.
 Exact production executables are compressed and hash-verified there. Owned API
 4202 and Tracy 8087 are released; foreign sessions and shared caches are preserved.
+
+
+Integration preserves main `065834644`'s removal of the unused Modelica
+compile-picker walker. No callers remain, and the focused
+`cargo check -p lunco-modelica-ast -j 4` passes in 41.23s. Runtime evidence above
+is retained for the tested terrain implementation; that non-behavioral AST
+removal was compile-checked without repeating unchanged scene inputs.
