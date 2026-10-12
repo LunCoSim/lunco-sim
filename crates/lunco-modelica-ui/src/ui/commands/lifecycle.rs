@@ -668,14 +668,7 @@ pub fn on_duplicate_model_from_read_only(
 
     let name_for_task = name.clone();
     let origin_fqn_for_task = origin_fqn;
-    let mut source_for_task = ResolvedClassSource::from_resident(source_full, source_pin.clone());
-    source_for_task.origin_path =
-        registry
-            .host(source_doc)
-            .and_then(|host| match host.document().origin() {
-                DocumentOrigin::File { path, .. } => Some(path.clone()),
-                _ => None,
-            });
+    let source_for_task = ResolvedClassSource::from_resident(source_full, source_pin.clone());
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
         PreparedDuplicate::build(doc_id, name_for_task, &origin_fqn_for_task, source_for_task)
     });

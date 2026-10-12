@@ -176,7 +176,7 @@ prepared AST interface, document compiles derive them from the primary and
 sibling ASTs, and a generated policy's `source_roots` list is its required root
 manifest. The worker commits root preparations in admission order before
 compilation, rejects unadmitted roots, and reports failed roots without retrying
-synchronous discovery. Synchronous compiler helpers remain for CLI and batch
+synchronous discovery. Synchronous compiler helpers remain for standalone CLI
 callers.
 The worker's successful load acknowledgement carries the authored top-level
 namespaces parsed by that exact source-set operation. The registry retains those
@@ -227,7 +227,12 @@ root wait for ECS publication. Worker completion never bypasses the oldest
 request or its Twin/stage/instance validation.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
-DAE cache. Source-root installation, `Compile`, `Reset`, parameter updates, and
+DAE cache. Native experiment `CompileBatch` requests use this same actor and
+admitted package context; copies retain their `within` scope without injecting
+imports. The typed batch reply carries the DAE and participating-source CID.
+Only the background run thread waits, and cancellation releases its scheduler
+slot while the compiler finishes immutable preparation. Source-root installation,
+`Compile`, `Reset`, parameter updates, and
 cache-invalidating Step auto-init share a FIFO. The worker commits results in
 submission order after entity-session and library-generation checks; a Step
 that needs a rebuild resumes only after its initialization commits. These

@@ -19,5 +19,9 @@ lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
 web-time.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rumoca-ir-dae.workspace = true
+lunco-hash = { path = "../lunco-hash" }
+
 [lints]
 workspace = true

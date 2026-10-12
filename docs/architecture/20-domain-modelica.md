@@ -179,8 +179,12 @@ Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
 to a replacement Twin. Duplication captures the target owner before queued
 command delivery and snapshots resident source bytes with their document owner.
-The existing task resolves library paths, reads selected sources and enclosing
-package imports, and rewrites the exact qualified class from those bytes.
+The task resolves library paths, reads the selected source, and renames only the
+parser-owned class name tokens. The copy retains its explicit `within` scope;
+Rumoca resolves enclosing imports from admitted package sources. Native batch
+and live compilation use the same compiler actor, source roots, and artifact
+cache. Batch replies carry typed immutable DAE and content identity; only the
+background run thread waits for compilation.
 Known-source read, decode, parse, or rewrite failures end the operation visibly;
 source and target retirement cancel it. Failed or cancelled duplicates release
 their pending document metadata, name, tab and busy handle. Successful native

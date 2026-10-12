@@ -19,6 +19,16 @@ and connected bindings retain equation ownership. The production
 reset, and batch execution. `modelica_aggregate_output.rhai` covers outputs
 consumed as state derivatives and invalid source rejection.
 
+Native batch compilation submits `CompileBatch` through the existing worker
+source-root admission lane to the same Rumoca actor used for live models. The
+bounded artifact cache includes library generation and retains the exact source
+CID with its checked DAE. Copies preserve package scope through `within`;
+Rumoca owns parent-import resolution and validates missing references; a
+standalone `within` namespace is not an external library admission requirement. `modelica_duplicate_lifecycle.rhai`
+exercises copied classes with commented, concatenated descriptions and a type
+alias declared only in the admitted parent package, then rejects a missing type
+without reusing the completed trajectory or crashing the host.
+
 ## Prepared execution and persistence
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session

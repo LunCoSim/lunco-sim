@@ -1232,7 +1232,8 @@ fn stage_preparation_result(
         }
         WorkerPreparationResult::Compiler(result) => {
             let id = match &result {
-                CompilerCompletion::Compile { id, .. }
+                CompilerCompletion::Batch { id, .. }
+                | CompilerCompletion::Compile { id, .. }
                 | CompilerCompletion::SourceRoot { id, .. }
                 | CompilerCompletion::SourceRootUnload { id, .. } => *id,
             };
@@ -1447,6 +1448,9 @@ fn commit_ready_compiler_completions(
 ) {
     while let Some(completion) = pop_ready_in_order(order, ready) {
         match completion {
+            CompilerCompletion::Batch { reply, outcome, .. } => {
+                let _ = reply.send(outcome);
+            }
             CompilerCompletion::SourceRoot {
                 id,
                 source_root_operation_id,
@@ -1689,6 +1693,8 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
 struct CompiledModelArtifact {
     compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
     prepared_source_key: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    source_content: lunco_hash::content::Cid,
 }
 
 type CompiledArtifactCache = BoundedReuseCache<u64, CompiledModelArtifact>;
@@ -1702,16 +1708,17 @@ fn prepared_source_key(
     model_name: &str,
     doc_uri: &str,
     unit: &CompileUnit,
+    source_content: lunco_hash::content::Cid,
 ) -> Result<u64, String> {
     use std::hash::{Hash, Hasher};
     let generated = is_generated_structural_unit(model_name, unit, doc_uri);
-    let identity = compiler.compiled_source_content_identity(compiled, |source| {
-        if generated {
+    let identity = if generated {
+        compiler.compiled_source_content_identity(compiled, |source| {
             generated_structural_source(model_name, source)
-        } else {
-            source.to_owned()
-        }
-    })?;
+        })?
+    } else {
+        source_content
+    };
     let mut h = std::collections::hash_map::DefaultHasher::new();
     identity.to_bytes().hash(&mut h);
     Ok(h.finish())
@@ -1846,10 +1853,20 @@ fn compile_shared(
         )
     };
     let compiled = outcome?;
-    let prepared_source_key = prepared_source_key(compiler, &compiled, model_name, doc_uri, unit)?;
+    let source_content = compiler.compiled_source_content_identity(&compiled, str::to_owned)?;
+    let prepared_source_key = prepared_source_key(
+        compiler,
+        &compiled,
+        model_name,
+        doc_uri,
+        unit,
+        source_content,
+    )?;
     let artifact = CompiledModelArtifact {
         compiled,
         prepared_source_key,
+        #[cfg(not(target_arch = "wasm32"))]
+        source_content,
     };
     artifacts.insert(key, artifact.clone());
     Ok(artifact)
@@ -2569,6 +2586,8 @@ pub fn failed_result_for_command(
             result.unloaded_source_root_id = Some(id.clone());
             result.source_root_operation_id = Some(*operation_id);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        ModelicaCommand::CompileBatch { .. } => {}
         ModelicaCommand::Despawn { .. } => {}
     }
     result
@@ -3076,7 +3095,12 @@ pub fn modelica_worker(
                 | ModelicaCommand::Reset { entity, .. }
                 | ModelicaCommand::Despawn { entity } => Some(*entity),
                 ModelicaCommand::LoadSourceRoot { .. }
-                | ModelicaCommand::UnloadSourceRoot { .. } => None,
+                | ModelicaCommand::UnloadSourceRoot { .. }
+                | ModelicaCommand::CompileBatch { .. } => None,
+            };
+            let batch_failure_reply = match &cmd {
+                ModelicaCommand::CompileBatch { reply, .. } => Some(reply.clone()),
+                _ => None,
             };
             let panic_result = panic_result_for_command(
                 &cmd,
@@ -3097,6 +3121,28 @@ pub fn modelica_worker(
             log::debug!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
+                    ModelicaCommand::CompileBatch {
+                        model_name,
+                        source,
+                        doc_uri,
+                        extra_sources,
+                        cancel,
+                        reply,
+                    } => {
+                        match compiler.submit_batch(
+                            model_name,
+                            assemble_compile_unit(&source, extra_sources),
+                            doc_uri,
+                            library_gen,
+                            cancel,
+                            reply.clone(),
+                        ) {
+                            Ok(id) => compiler_order.push_back(id),
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
+                            }
+                        }
+                    }
                     ModelicaCommand::Reset {
                         entity,
                         session_id,
@@ -3569,6 +3615,10 @@ pub fn modelica_worker(
             }
 
             if result.is_err() {
+                if let Some(reply) = batch_failure_reply {
+                    let _ =
+                        reply.send(Err("Modelica batch preparation command panicked".to_owned()));
+                }
                 if let Some(entity) = panic_entity {
                     steppers.remove(&entity);
                     cached_models.remove(&entity);
@@ -3607,6 +3657,9 @@ fn command_label(cmd: &ModelicaCommand) -> String {
         ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
         ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
         ModelicaCommand::UnloadSourceRoot { id, .. } => format!("UnloadSourceRoot id={id}"),
+        ModelicaCommand::CompileBatch { model_name, .. } => {
+            format!("CompileBatch model={model_name}")
+        }
     }
 }
 
@@ -3623,9 +3676,9 @@ fn cmd_entity(cmd: &ModelicaCommand) -> Entity {
         // from is_squashable), so the placeholder is only consulted
         // by the result-fence logic which keys on a different
         // structural shape.
-        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => {
-            Entity::PLACEHOLDER
-        }
+        ModelicaCommand::LoadSourceRoot { .. }
+        | ModelicaCommand::UnloadSourceRoot { .. }
+        | ModelicaCommand::CompileBatch { .. } => Entity::PLACEHOLDER,
     }
 }
 
@@ -3637,7 +3690,9 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
         ModelicaCommand::UpdateParameters { session_id, .. } => *session_id,
         ModelicaCommand::Reset { session_id, .. } => *session_id,
         ModelicaCommand::Despawn { .. } => 0,
-        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => 0,
+        ModelicaCommand::LoadSourceRoot { .. }
+        | ModelicaCommand::UnloadSourceRoot { .. }
+        | ModelicaCommand::CompileBatch { .. } => 0,
     }
 }
 
@@ -4943,8 +4998,17 @@ mod artifact_cache_tests {
         let compiled = compiler
             .compile_str_multi(model, &unit.source, uri, &unit.extras)
             .expect("inline strict compilation succeeds");
-        prepared_source_key(&compiler, &compiled, model, uri, &unit)
-            .expect("participating source bytes are available")
+        prepared_source_key(
+            &compiler,
+            &compiled,
+            model,
+            uri,
+            &unit,
+            compiler
+                .compiled_source_content_identity(&compiled, str::to_owned)
+                .unwrap(),
+        )
+        .expect("participating source bytes are available")
     }
 
     /// The hash keys the whole assembled CompileUnit: primary source, extras,
@@ -5174,8 +5238,17 @@ mod artifact_cache_tests {
         );
         let prepare = |compiler: &mut ModelicaCompiler| {
             let compiled = compiler.compile_str("Probe", source, "Probe.mo").unwrap();
-            let source_key =
-                prepared_source_key(compiler, &compiled, "Probe", "Probe.mo", &unit).unwrap();
+            let source_key = prepared_source_key(
+                compiler,
+                &compiled,
+                "Probe",
+                "Probe.mo",
+                &unit,
+                compiler
+                    .compiled_source_content_identity(&compiled, str::to_owned)
+                    .unwrap(),
+            )
+            .unwrap();
             let revision = compiler.library_revision();
             let plan = live_build_plan(
                 solver::RuntimeProfile {

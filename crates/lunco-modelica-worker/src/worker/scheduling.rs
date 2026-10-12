@@ -138,6 +138,9 @@ pub(super) fn take_runnable_compile_command(
 ) -> Option<ModelicaCommand> {
     let command = compile_lane.front()?;
     let runnable = match command {
+        ModelicaCommand::CompileBatch { .. } => {
+            preparation_capacity_available && !source_root_preparation_pending
+        }
         ModelicaCommand::Compile { entity, .. } => {
             preparation_capacity_available
                 && !source_root_preparation_pending

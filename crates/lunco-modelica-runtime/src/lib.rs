@@ -151,6 +151,13 @@ pub enum ModelicaExecutionDomain {
     Document,
 }
 
+/// Immutable checked batch artifact from the shared native compiler owner.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ModelicaBatchArtifact {
+    pub dae: std::sync::Arc<rumoca_ir_dae::Dae>,
+    pub source_content: lunco_hash::content::Cid,
+}
+
 /// Commands sent to the background simulation worker.
 #[derive(Serialize, Deserialize)]
 pub enum ModelicaCommand {
@@ -206,6 +213,18 @@ pub enum ModelicaCommand {
         id: String,
         /// Monotonic registry operation identity that fences older loads.
         operation_id: u64,
+    },
+    /// Native batch preparation shares the admitted source roots and cache.
+    /// This typed in-process request never crosses the serialized worker wire.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    CompileBatch {
+        model_name: String,
+        source: String,
+        doc_uri: String,
+        extra_sources: Vec<(String, String)>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<Result<ModelicaBatchArtifact, String>>,
     },
 }
 

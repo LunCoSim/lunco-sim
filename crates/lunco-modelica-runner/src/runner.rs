@@ -10,11 +10,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use lunco_core_runtime::LockExt;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-#[cfg(not(target_arch = "wasm32"))]
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -71,7 +67,7 @@ struct QueuedJob {
     cancel: Arc<AtomicBool>,
 }
 
-/// Native + wasm-shared scheduling and compiled snapshot cache.
+/// Native and browser run admission and bounded scheduling.
 struct RunnerState {
     /// Max concurrently-executing runs. `run_fast` starts a run
     /// immediately while `in_flight.len() < max_parallel`, else queues it.
@@ -82,74 +78,22 @@ struct RunnerState {
     /// FIFO of runs waiting for a slot. Drained by `pump_scheduler` as
     /// in-flight runs finish.
     pending: VecDeque<QueuedJob>,
-    /// Source content and runtime owner identify reusable compiled snapshots.
     #[cfg(not(target_arch = "wasm32"))]
-    dae_cache: HashMap<u64, CachedDae>,
-    /// Persistent compiler reused across runs, so source library installs **once** for
-    /// the runner (on first source-root admission via `ModelicaCompiler`) instead of
-    /// rebuilding a fresh session per run. Behind its **own** lock, not the
-    /// `state` mutex: a compile can take seconds, and holding `state` across
-    /// it would stall the scheduler and every parallel run (which only need
-    /// `state` briefly for cache lookups). Native only — the web build
-    /// compiles on the worker, so the runner never constructs one. See
-    /// [`run_inner`].
-    #[cfg(not(target_arch = "wasm32"))]
-    compiler: Arc<Mutex<lunco_modelica_compiler::ModelicaCompiler>>,
+    compile_tx: Sender<lunco_modelica_runtime::ModelicaCommand>,
 }
 
-/// Source identity whose newer compiled revision replaces an older cache entry.
-#[cfg(not(target_arch = "wasm32"))]
-type ModelIdent = (String, String);
-
-#[cfg(not(target_arch = "wasm32"))]
-struct CachedDae {
-    model: ModelIdent,
-    runtime: lunco_workspace::DocumentRuntimeOwner,
-    dae: Arc<Dae>,
-    source_content: lunco_experiments::SourceContentIdentity,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_cached_dae(
-    state: &mut RunnerState,
-    source: &ModelSource,
-    key: u64,
-    dae: Arc<Dae>,
-    cancel: &AtomicBool,
-    source_content: lunco_experiments::SourceContentIdentity,
-) {
-    // Called under the state lock: owner retirement sets cancellation before
-    // taking the same lock, so closed work cannot repopulate its cache.
-    if cancel.load(Ordering::SeqCst) {
-        return;
-    }
-    let model = (source.model_name.clone(), source.filename.clone());
-    state
-        .dae_cache
-        .retain(|_, entry| entry.model != model || entry.runtime != source.runtime);
-    state.dae_cache.insert(
-        key,
-        CachedDae {
-            model,
-            runtime: source.runtime.clone(),
-            dae,
-            source_content,
-        },
-    );
-}
-
-impl Default for RunnerState {
-    fn default() -> Self {
+impl RunnerState {
+    fn new(
+        #[cfg(not(target_arch = "wasm32"))] compile_tx: Sender<
+            lunco_modelica_runtime::ModelicaCommand,
+        >,
+    ) -> Self {
         Self {
             max_parallel: ExperimentSettings::default().resolved_max_parallel(),
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            dae_cache: HashMap::new(),
-            // Cheap: `new()` builds an empty session and installs no source library
-            // (Layer A). source library lands on the first run that actually needs it.
-            #[cfg(not(target_arch = "wasm32"))]
-            compiler: Arc::new(Mutex::new(lunco_modelica_compiler::ModelicaCompiler::new())),
+            compile_tx,
         }
     }
 }
@@ -184,6 +128,7 @@ pub struct ModelicaRunner {
     state: Arc<Mutex<RunnerState>>,
 }
 
+#[cfg(target_arch = "wasm32")]
 impl Default for ModelicaRunner {
     fn default() -> Self {
         Self::new()
@@ -191,9 +136,16 @@ impl Default for ModelicaRunner {
 }
 
 impl ModelicaRunner {
-    pub fn new() -> Self {
+    pub fn new(
+        #[cfg(not(target_arch = "wasm32"))] compile_tx: Sender<
+            lunco_modelica_runtime::ModelicaCommand,
+        >,
+    ) -> Self {
         Self {
-            state: Arc::new(Mutex::new(RunnerState::default())),
+            state: Arc::new(Mutex::new(RunnerState::new(
+                #[cfg(not(target_arch = "wasm32"))]
+                compile_tx,
+            ))),
         }
     }
 
@@ -213,18 +165,6 @@ impl ModelicaRunner {
     /// Current max-parallel cap.
     pub fn max_parallel(&self) -> usize {
         self.state.lock().map(|s| s.max_parallel).unwrap_or(1)
-    }
-
-    /// Release this runtime owner's compiled snapshots after its runs cancel.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn retire_runtime_cache(
-        &self,
-        owner: &lunco_workspace::DocumentRuntimeOwner,
-    ) -> Result<(), String> {
-        let mut state =
-            lock_runner_state(&self.state).map_err(|_| POISONED_RUNNER_STATE.to_owned())?;
-        state.dae_cache.retain(|_, entry| &entry.runtime != owner);
-        Ok(())
     }
 
     /// `true` when no scheduler slot is free — i.e. starting another run
@@ -610,22 +550,6 @@ pub fn pump_wasm_forwarders() {
     }
 }
 
-/// Exact source and runtime identity for the immutable compile cache. Run values
-/// enter simulation options, so sweeps reuse this artifact.
-#[cfg(not(target_arch = "wasm32"))]
-fn dae_cache_key(src: &ModelSource) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.runtime.hash(&mut h);
-    src.model_name.hash(&mut h);
-    src.filename.hash(&mut h);
-    src.source.hash(&mut h);
-    for (name, body) in &src.extras {
-        name.hash(&mut h);
-        body.hash(&mut h);
-    }
-    h.finish()
-}
-
 /// Admit finite scalar run values through Rumoca's parameter and input options.
 pub fn apply_run_values(
     options: &mut rumoca_sim::SimOptions,
@@ -681,97 +605,60 @@ fn run_inner(
         t_current: bounds.t_start,
     });
 
-    // Persistent runner compiler: clone the handle out of `state` (brief
-    // lock), then compile under the compiler's OWN lock so the multi-second
-    // compile never holds `state` and stall the scheduler / parallel runs.
-    // source library installs once into this session (lazily) instead of per run.
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
-    let compiler_handle = match lock_runner_state(&state) {
-        Ok(s) => s.compiler.clone(),
+    let compile_tx = match lock_runner_state(&state) {
+        Ok(state) => state.compile_tx.clone(),
         Err(_) => {
             let _ = tx.send(RunUpdate::Failed {
-                error: "runner state poisoned".to_string(),
+                error: POISONED_RUNNER_STATE.to_owned(),
             });
             return;
         }
     };
-
-    // Compile-once: compile the CLEAN model source (no inputs/overrides baked
-    // in) a single time and cache the resulting DAE. Inputs and overrides are
-    // applied to simulation options (see `apply_run_values`), so a
-    // whole parameter/input sweep shares ONE compile and recompiles zero times.
-    let key = dae_cache_key(&source);
-    let cached = state.lock().ok().and_then(|s| {
-        s.dae_cache
-            .get(&key)
-            .map(|entry| (entry.dae.clone(), entry.source_content.clone()))
-    });
-    let (base_dae, source_content) = match cached {
-        Some(d) => d,
-        None => {
-            let compiled = {
-                let mut compiler = match compiler_handle.lock() {
-                    Ok(compiler) => compiler,
-                    Err(_) => {
-                        let _ = tx.send(RunUpdate::Failed {
-                            error: "experiment compiler is poisoned after an earlier panic"
-                                .to_owned(),
-                        });
-                        return;
-                    }
-                };
-                if cancel.load(Ordering::SeqCst) {
-                    let _ = tx.send(RunUpdate::Cancelled);
-                    return;
-                }
-                let result = compiler.compile_str_multi(
-                    &source.model_name,
-                    &source.source,
-                    &source.filename,
-                    &source.extras,
-                );
-                let identity = result
-                    .as_ref()
-                    .map_err(|error| error.clone())
-                    .and_then(|compiled| {
-                        compiler.compiled_source_content_identity(compiled, str::to_owned)
-                    })
-                    .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
-                    .unwrap_or_else(|reason| {
-                        lunco_experiments::SourceContentIdentity::Unavailable { reason }
-                    });
-                compiler.clear_user_documents();
-                (result, identity)
-            };
-            let (compiled, identity) = compiled;
-            match compiled {
-                Ok(d) => {
-                    let dae = d.dae.clone();
-                    if let Ok(mut s) = lock_runner_state(&state) {
-                        publish_cached_dae(
-                            &mut s,
-                            &source,
-                            key,
-                            dae.clone(),
-                            &cancel,
-                            identity.clone(),
-                        );
-                    }
-                    (dae, identity)
-                }
-                Err(e) => {
-                    let _ = tx.send(RunUpdate::Failed {
-                        error: format!("compile failed: {e}"),
-                    });
-                    return;
-                }
+    let (reply, compiled_rx) = crossbeam_channel::bounded(1);
+    if compile_tx
+        .send(lunco_modelica_runtime::ModelicaCommand::CompileBatch {
+            model_name: source.model_name.clone(),
+            source: source.source.clone(),
+            doc_uri: source.filename.clone(),
+            extra_sources: source.extras.clone(),
+            cancel: cancel.clone(),
+            reply,
+        })
+        .is_err()
+    {
+        let _ = tx.send(RunUpdate::Failed {
+            error: "Modelica compiler worker is unavailable".to_owned(),
+        });
+        return;
+    }
+    // Only this background run thread waits. The shared owner admits the request
+    // after source-root commits; cancellation releases its scheduler slot promptly.
+    let artifact = loop {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = tx.send(RunUpdate::Cancelled);
+            return;
+        }
+        match compiled_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(Ok(artifact)) => break artifact,
+            Ok(Err(error)) => {
+                let _ = tx.send(RunUpdate::Failed {
+                    error: format!("compile failed: {error}"),
+                });
+                return;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                let _ = tx.send(RunUpdate::Failed {
+                    error: "Modelica batch compilation reply disconnected".to_owned(),
+                });
+                return;
             }
         }
     };
-
+    let base_dae = artifact.dae;
+    let source_content = lunco_experiments::SourceContentIdentity::Available {
+        cid: artifact.source_content,
+    };
     if cancel.load(Ordering::SeqCst) {
         let _ = tx.send(RunUpdate::Cancelled);
         return;
@@ -1419,9 +1306,28 @@ pub fn drain_pending_handles(
 mod tests {
     use super::*;
 
+    fn test_runner() -> ModelicaRunner {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = unbounded();
+            std::thread::spawn(move || {
+                while let Ok(command) = rx.recv() {
+                    if let lunco_modelica_runtime::ModelicaCommand::CompileBatch { reply, .. } =
+                        command
+                    {
+                        let _ = reply.send(Err("test compiler rejection".to_owned()));
+                    }
+                }
+            });
+            ModelicaRunner::new(tx)
+        }
+        #[cfg(target_arch = "wasm32")]
+        ModelicaRunner::new()
+    }
+
     #[test]
     fn set_max_parallel_floors_at_one() {
-        let r = ModelicaRunner::new();
+        let r = test_runner();
         r.set_max_parallel(0);
         assert_eq!(r.max_parallel(), 1, "cap must never drop below 1");
         r.set_max_parallel(4);
@@ -1454,7 +1360,7 @@ mod tests {
 
     #[test]
     fn poisoned_runner_state_rejects_queued_and_new_runs_without_rescheduling() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let held = mint_exp(&mut registry, "HeldSlot");
@@ -1497,7 +1403,7 @@ mod tests {
 
     #[test]
     fn queued_same_name_runs_keep_their_admitted_source_snapshots() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let held = mint_exp(&mut registry, "Held");
@@ -1537,86 +1443,12 @@ mod tests {
         assert_eq!(runner.queued_count(), 0);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn cache_retirement_keeps_other_owners_and_rejects_late_cancelled_publish() {
-        let runner = ModelicaRunner::new();
-        let twin = lunco_workspace::TwinId::new(1);
-        let mut source = test_source("CacheProbe");
-        let mut owned = source.clone();
-        owned.runtime = lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin);
-        let mut other = source.clone();
-        other.runtime =
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(2));
-        let cancel = AtomicBool::new(false);
-        for input in [&source, &owned, &other] {
-            publish_cached_dae(
-                &mut runner.state.lock().expect("state"),
-                input,
-                dae_cache_key(input),
-                checked_test_dae(),
-                &cancel,
-                lunco_experiments::SourceContentIdentity::Unavailable {
-                    reason: "inline cache fixture".into(),
-                },
-            );
-        }
-        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 3);
-        cancel.store(true, Ordering::SeqCst);
-        runner
-            .retire_runtime_cache(&lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin))
-            .expect("cache retirement");
-        {
-            let mut state = runner.state.lock().expect("state");
-            publish_cached_dae(
-                &mut state,
-                &owned,
-                dae_cache_key(&owned),
-                checked_test_dae(),
-                &cancel,
-                lunco_experiments::SourceContentIdentity::Unavailable {
-                    reason: "inline cache fixture".into(),
-                },
-            );
-            assert_eq!(state.dae_cache.len(), 2);
-            assert!(!state.dae_cache.contains_key(&dae_cache_key(&owned)));
-        }
-        // A newer application snapshot replaces only its own model revision.
-        source.source = "new application source".into();
-        publish_cached_dae(
-            &mut runner.state.lock().expect("state"),
-            &source,
-            dae_cache_key(&source),
-            checked_test_dae(),
-            &AtomicBool::new(false),
-            lunco_experiments::SourceContentIdentity::Unavailable {
-                reason: "inline cache fixture".into(),
-            },
-        );
-        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 2);
-    }
-
-    fn checked_test_dae() -> Arc<Dae> {
-        let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
-        compiler
-            .compile_str(
-                "CacheFixture",
-                "model CacheFixture Real x; equation x=1; end CacheFixture;",
-                "cache.mo",
-            )
-            .expect("checked test model")
-            .dae
-    }
-
-    /// Submitting more runs than `max_parallel` must NOT reject the extras
-    /// (the old busy-gate behaviour) — they queue and drain as slots free,
-    /// every run reaching a terminal update, and the scheduler settling
-    /// back to empty. Explicit malformed source produces a compile rejection.
+    /// The scheduler drains every admitted run after compiler rejection.
     #[test]
     fn scheduler_queues_beyond_cap_and_drains_all() {
         use std::time::Duration;
 
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(2);
 
         let mut reg = ExperimentRegistry::new();
@@ -1662,7 +1494,7 @@ mod tests {
 
     #[test]
     fn invalid_bounds_fail_before_scheduler_or_solver_admission() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         let mut registry = ExperimentRegistry::new();
         let mut exp = mint_exp(&mut registry, "BoundsProbe");
         exp.bounds.dt = Some(1.0e-300);
@@ -1683,28 +1515,6 @@ mod tests {
         assert_eq!(runner.queued_count(), 0);
         assert_eq!(runner.in_flight_count(), 0);
 
-        struct Capture(Vec<RunUpdate>);
-        impl RunSink for Capture {
-            fn is_cancelled(&mut self) -> bool {
-                false
-            }
-            fn emit(&mut self, update: RunUpdate) {
-                self.0.push(update);
-            }
-        }
-        let mut sink = Capture(Vec::new());
-        drive_run(
-            &checked_test_dae(),
-            &exp.bounds,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            lunco_experiments::RunResultLimits::default(),
-            web_time::Instant::now(),
-            &mut sink,
-        );
-        assert!(
-            matches!(&sink.0[..], [RunUpdate::Failed { error }] if error.contains("output grid"))
-        );
         assert!(matches!(
             stepper_options_from_bounds(&exp.bounds),
             Err(RunConfigurationError::Bounds(_))
@@ -1713,7 +1523,7 @@ mod tests {
 
     #[test]
     fn cancelling_queued_run_withdraws_it_before_admission() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let active = mint_exp(&mut registry, "Active");
@@ -1789,21 +1599,21 @@ mod tests {
     fn native_worker_panic_releases_slot_and_admits_successor() {
         use std::time::Duration;
 
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let panicking = mint_exp(&mut registry, "PanickingWorker");
         let successor = mint_exp(&mut registry, "Successor");
-        let compiler = {
-            let mut state = runner.state.lock().expect("runner state");
-            state.in_flight.insert(panicking.id);
-            state.compiler.clone()
-        };
+        runner
+            .state
+            .lock()
+            .expect("runner state")
+            .in_flight
+            .insert(panicking.id);
         let (panic_tx, panic_rx) = unbounded();
         let (release_tx, release_rx) = crossbeam_channel::bounded(1);
         start_native_job(runner.state.clone(), panicking.id, panic_tx, move || {
             release_rx.recv().expect("release worker");
-            let _compiler = compiler.lock().expect("compiler starts valid");
             panic!("injected experiment compiler panic");
         });
         let successor_handle = runner.run_fast(&successor, test_source(&successor.model_ref.0));
@@ -1827,7 +1637,7 @@ mod tests {
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
             Ok(RunUpdate::Failed { error })
-                if error.contains("compiler is poisoned")
+                if error.contains("test compiler rejection")
         ));
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
@@ -2010,50 +1820,6 @@ mod tests {
                 .drain()
                 .count(),
             0
-        );
-    }
-
-    /// Cache identity includes the exact source body and every extra source.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn dae_cache_key_folds_source_body_and_extras() {
-        let base = ModelSource {
-            model_name: "M".into(),
-            source: "model M Real x = 1; end M;".into(),
-            filename: "M.mo".into(),
-            extras: vec![],
-            runtime: lunco_workspace::DocumentRuntimeOwner::Application,
-            result_limits: Default::default(),
-        };
-
-        // Identical input → identical key (the cache must still HIT on a re-run
-        // that changed nothing, e.g. a sweep varying only overrides).
-        assert_eq!(
-            dae_cache_key(&base),
-            dae_cache_key(&base.clone()),
-            "identical sources must yield the same key"
-        );
-
-        // Edited body, same name/filename → different key (the exact stale-DAE bug).
-        let edited = ModelSource {
-            source: "model M Real x = 2; end M;".into(),
-            ..base.clone()
-        };
-        assert_ne!(
-            dae_cache_key(&base),
-            dae_cache_key(&edited),
-            "editing the source body must change the DAE cache key (CQ-525)"
-        );
-
-        // A changed companion/extra source must also bust the key.
-        let with_extra = ModelSource {
-            extras: vec![("Lib".into(), "package Lib end Lib;".into())],
-            ..base.clone()
-        };
-        assert_ne!(
-            dae_cache_key(&base),
-            dae_cache_key(&with_extra),
-            "a changed extra source must change the key (CQ-525)"
         );
     }
 }

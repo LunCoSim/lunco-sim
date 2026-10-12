@@ -89,17 +89,12 @@ impl PreparedDuplicate {
         qualified: &str,
         source: crate::ui::class_source::ResolvedClassSource,
     ) -> Result<Self, String> {
-        let imports = match source.origin_path.as_deref() {
-            Some(path) => crate::ui::duplicate::collect_parent_imports(path)?,
-            None => Vec::new(),
-        };
         let spans = crate::ui::duplicate::extract_class_spans_inline(&source.source, qualified);
         let rewritten = crate::ui::duplicate::build_duplicate_source(
             &source.source,
             spans.as_ref(),
             &name,
             Some(qualified),
-            &imports,
         )?;
         let syntax = lunco_modelica_document::SyntaxCache::from_source(&rewritten, 0);
         if syntax.has_errors() {

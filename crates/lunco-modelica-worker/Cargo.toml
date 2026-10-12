@@ -6,6 +6,7 @@ license.workspace = true
 description = "Modelica worker engine, live co-simulation bridge, and worker-local caches"
 
 [dependencies]
+lunco-hash = { path = "../lunco-hash" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
@@ -36,6 +37,7 @@ serde.workspace = true
 web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rumoca-eval-solve.workspace = true
 serde_json.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-storage = { path = "../lunco-storage" }

@@ -596,9 +596,9 @@ impl ModelicaCompiler {
         self.compile_str_mode(model_name, source, filename, false)
     }
 
-    /// Compile after a live worker has explicitly admitted all source roots.
-    /// Missing roots are terminal here; the worker never performs synchronous
-    /// file discovery as a fallback on its serialized command lane.
+    /// Compile in the live worker's settled source-root context without file I/O.
+    /// Rumoca owns scope and reference validation, including standalone `within`
+    /// namespaces. Failed admitted roots retain their terminal diagnostics.
     pub fn compile_str_after_source_root_admission(
         &mut self,
         model_name: &str,
@@ -613,9 +613,9 @@ impl ModelicaCompiler {
         model_name: &str,
         source: &str,
         filename: &str,
-        require_admitted_roots: bool,
+        source_roots_admitted: bool,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_multi_mode(model_name, source, filename, &[], require_admitted_roots)
+        self.compile_str_multi_mode(model_name, source, filename, &[], source_roots_admitted)
     }
 
     /// Release user-document overlays after a caller has captured its compile
@@ -701,9 +701,8 @@ impl ModelicaCompiler {
         self.compile_str_multi_mode(model_name, source, filename, extras, false)
     }
 
-    /// Compile after a live worker has explicitly admitted all source roots
-    /// used by the primary and sibling documents. Missing roots fail on the
-    /// worker lane rather than triggering synchronous discovery.
+    /// Compile primary and sibling documents in the live worker's settled roots.
+    /// This path performs no file discovery; Rumoca validates all references.
     pub fn compile_str_multi_after_source_root_admission(
         &mut self,
         model_name: &str,
@@ -720,7 +719,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         extras: &[(String, String)],
-        require_admitted_roots: bool,
+        source_roots_admitted: bool,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         use rumoca_compile::compile::ParsedSourceDocument;
         let primary = ParsedSourceDocument::parse(filename, source)
@@ -758,7 +757,7 @@ impl ModelicaCompiler {
             seen.insert(uri.clone(), content);
             documents.push((document, content));
         }
-        self.prepare_requested_source_roots(require_admitted_roots)?;
+        self.prepare_requested_source_roots(source_roots_admitted)?;
         let mut admitted = Vec::new();
         let mut keep = std::collections::HashSet::new();
         for (document, content) in documents {
@@ -863,7 +862,10 @@ impl ModelicaCompiler {
     /// compile attempt.  The compiler session is the sole owner of this
     /// operation; callers only provide source text and never duplicate the
     /// dependency inventory or root installation logic.
-    fn prepare_requested_source_roots(&mut self, require_admitted: bool) -> Result<(), String> {
+    fn prepare_requested_source_roots(
+        &mut self,
+        source_roots_admitted: bool,
+    ) -> Result<(), String> {
         let mut roots = self
             .requested_source_roots
             .iter()
@@ -874,12 +876,7 @@ impl ModelicaCompiler {
             if let Some(error) = self.failed_source_roots.get(&root) {
                 return Err(format!("Modelica source root `{root}` failed: {error}"));
             }
-            if !self.installed_roots.contains(&root) {
-                if require_admitted {
-                    return Err(format!(
-                        "Modelica source root `{root}` was not admitted before compile"
-                    ));
-                }
+            if !source_roots_admitted && !self.installed_roots.contains(&root) {
                 let _ = self.ensure_source_root_installed(&root);
             }
         }

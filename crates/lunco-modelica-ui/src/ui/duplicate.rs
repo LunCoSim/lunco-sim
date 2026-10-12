@@ -1,14 +1,14 @@
 //! Pure parsing/text helpers for the class-duplication flow.
 //!
-//! Admitted tasks extract the exact qualified class, collect its enclosing
-//! package imports, and rewrite the captured source with a new name. Native
+//! Admitted tasks rename the exact qualified class and preserve its package
+//! scope through `within`. Rumoca resolves the admitted package context. Native
 //! tasks use the task pool; browser scheduling does not imply another thread.
 //!
 //! Scheduling and publication stay in `ui::commands` and the document loader.
 
 /// Class-name and end-token byte spans, plus the parsed declaration slice.
 /// All offsets refer to the exact source given to `parse_to_syntax`.
-/// `rewrite_inject_in_one_pass`
+/// `rename_class_tokens`
 /// re-anchors them against its `src` slice (the caller passes
 /// `source[full_start..full_end]`).
 #[derive(Debug, Clone, Copy)]
@@ -56,114 +56,11 @@ pub(crate) fn spans_from_ast(
     })
 }
 
-/// Walk from a class file's directory up through the filesystem,
-/// collecting `import` statements from every `package.mo` on the
-/// way. These are the imports that were in scope for the class at
-/// its original location — once the class is extracted into a
-/// standalone workspace file, it loses that scope, so the imports
-/// must be injected into the class body itself (Modelica allows
-/// class-local imports).
-///
-/// Stops walking as soon as a directory has no `package.mo` — that
-/// marks the boundary of the enclosing package hierarchy. Returns
-/// imports in outer-to-inner order, deduplicated while preserving
-/// first-seen position.
-///
-/// Covers the SI/unit shortcuts that break duplication of source library
-/// examples: e.g. `Modelica/Blocks/package.mo` declares
-/// `import Modelica.Units.SI;` which is why `SI.Angle` resolves
-/// inside `Modelica.Blocks.Examples.PID_Controller` but not in a
-/// naïvely extracted copy.
-pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Result<Vec<String>, String> {
-    // Browser package imports are supplied by the compiler's resident library bundle.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = class_file;
-        Ok(Vec::new())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut chain = Vec::new();
-        let mut dir = class_file.parent();
-        while let Some(parent) = dir {
-            let package = parent.join("package.mo");
-            match lunco_storage::entry_kind_file_sync(&package) {
-                Err(lunco_storage::StorageError::NotFound) => break,
-                Ok(lunco_storage::StorageEntryKind::File) => {}
-                Ok(kind) => {
-                    return Err(format!(
-                        "enclosing package {} is {kind:?}, not a file",
-                        package.display()
-                    ));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "cannot inspect enclosing package {}: {error}",
-                        package.display()
-                    ));
-                }
-            }
-            // AST spans always refer to these exact admitted bytes, never a second path read.
-            let source = lunco_modelica_runtime::source_asset::read_text_sync(&package).map_err(
-                |error| {
-                    format!(
-                        "cannot read enclosing package {}: {error}",
-                        package.display()
-                    )
-                },
-            )?;
-            let mut level = package_imports(&source)
-                .map_err(|error| format!("enclosing package {}: {error}", package.display()))?;
-            level.append(&mut chain);
-            chain = level;
-            dir = parent.parent();
-        }
-        let mut seen = std::collections::HashSet::new();
-        chain.retain(|import| seen.insert(import.clone()));
-        Ok(chain)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn package_imports(source: &str) -> Result<Vec<String>, String> {
-    let syntax = rumoca_phase_parse::parse_to_syntax(source, "duplicate-package.mo");
-    if syntax.has_errors() {
-        return Err("package has syntax errors".into());
-    }
-    let ast = syntax.parsed().ok_or("package has no valid syntax")?;
-    let class = ast
-        .classes
-        .values()
-        .next()
-        .ok_or("package contains no class")?;
-    let mut imports = Vec::new();
-    for import in &class.imports {
-        use rumoca_compile::parsing::ast::Import;
-        let location = match import {
-            Import::Qualified { location, .. }
-            | Import::Renamed { location, .. }
-            | Import::Unqualified { location, .. }
-            | Import::Selective { location, .. } => location,
-        };
-        let mut text = source
-            .get(location.start as usize..location.end as usize)
-            .ok_or("package has invalid import spans")?
-            .trim()
-            .to_owned();
-        if !text.ends_with(';') {
-            text.push(';');
-        }
-        imports.push(text);
-    }
-    Ok(imports)
-}
-
-/// Rename and inject imports using spans parsed from the exact source snapshot.
+/// Rename the two name tokens using spans from the exact source snapshot.
 /// Invalid or non-UTF-8-boundary spans reject the rewrite without slicing.
-pub(crate) fn rewrite_inject_in_one_pass(
+pub(crate) fn rename_class_tokens(
     src: &str,
     new_name: &str,
-    imports: &[String],
     spans: &DuplicateExtract,
 ) -> Option<String> {
     // Spans are absolute in the original file. Re-anchor against the
@@ -184,7 +81,7 @@ pub(crate) fn rewrite_inject_in_one_pass(
     for &idx in &[name_start, name_end, end_start, end_end] {
         if !src.is_char_boundary(idx) {
             bevy::log::warn!(
-                "[rewrite_inject_in_one_pass] span index {idx} not on char \
+                "[rename_class_tokens] span index {idx} not on char \
                  boundary in {}-byte source; skipping rewrite",
                 src.len()
             );
@@ -192,57 +89,10 @@ pub(crate) fn rewrite_inject_in_one_pass(
         }
     }
 
-    // Inject anchor: position in `src` immediately after the class
-    // name's optional description string(s).
-    let bytes = src.as_bytes();
-    let skip_ws = |mut i: usize| {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        i
-    };
-    let mut anchor = name_end;
-    let mut scan = skip_ws(anchor);
-    while scan < bytes.len() && bytes[scan] == b'"' {
-        let mut j = scan + 1;
-        while j < bytes.len() {
-            match bytes[j] {
-                b'\\' if j + 1 < bytes.len() => j += 2,
-                b'"' => {
-                    j += 1;
-                    break;
-                }
-                _ => j += 1,
-            }
-        }
-        anchor = j;
-        scan = skip_ws(j);
-    }
-    if anchor > end_start {
-        return None;
-    }
-    let want_inject = !imports.is_empty();
-    let inject_block: String = if want_inject {
-        imports.iter().map(|i| format!("  {i}\n")).collect()
-    } else {
-        String::new()
-    };
-
-    let mut out = String::with_capacity(src.len() + inject_block.len() + 4);
+    let mut out = String::with_capacity(src.len() + new_name.len() * 2);
     out.push_str(&src[..name_start]);
-    // Replace class name.
     out.push_str(new_name);
-    // Description / whitespace between class name and inject anchor.
-    out.push_str(&src[name_end..anchor]);
-    if want_inject {
-        let needs_leading_newline = !out.ends_with('\n');
-        if needs_leading_newline {
-            out.push('\n');
-        }
-        out.push_str(&inject_block);
-    }
-    // Body from inject anchor up to end-token.
-    out.push_str(&src[anchor..end_start]);
+    out.push_str(&src[name_end..end_start]);
     // Replace end-token name.
     out.push_str(new_name);
     // Tail.
@@ -257,14 +107,13 @@ pub(crate) fn build_duplicate_source(
     spans: Option<&DuplicateExtract>,
     new_name: &str,
     origin_fqn: Option<&str>,
-    imports: &[String],
 ) -> Result<String, String> {
     let spans =
         spans.ok_or_else(|| "duplicate source contains no valid selected class".to_owned())?;
     let slice = source
         .get(spans.full_start..spans.full_end)
         .ok_or_else(|| "duplicate source has invalid class spans".to_owned())?;
-    let renamed = rewrite_inject_in_one_pass(slice, new_name, imports, spans)
+    let renamed = rename_class_tokens(slice, new_name, spans)
         .ok_or_else(|| "duplicate source has invalid rewrite spans".to_owned())?;
     // Preserve the origin package's lexical scope. The document index and
     // run-target resolver retain the copied class's qualified identity.
@@ -299,7 +148,7 @@ mod tests {
     /// source, then build the duplicate source.
     fn duplicate(source: &str, origin_short: &str, new_name: &str, fqn: Option<&str>) -> String {
         let spans = extract_class_spans_inline(source, fqn.unwrap_or(origin_short));
-        build_duplicate_source(source, spans.as_ref(), new_name, fqn, &[])
+        build_duplicate_source(source, spans.as_ref(), new_name, fqn)
             .expect("valid inline duplicate")
     }
 
@@ -311,8 +160,7 @@ mod tests {
         ] {
             let spans = extract_class_spans_inline(source, selected);
             assert!(
-                build_duplicate_source(source, spans.as_ref(), "Copy", Some(selected), &[])
-                    .is_err()
+                build_duplicate_source(source, spans.as_ref(), "Copy", Some(selected)).is_err()
             );
         }
     }
@@ -324,18 +172,13 @@ model Source Real x; end Source;";
         let valid = extract_class_spans_inline(source, "Source").expect("valid inline source");
         let mut reversed = valid;
         reversed.name_start = reversed.name_end + 1;
-        assert!(
-            build_duplicate_source(source, Some(&reversed), "Copy", Some("Source"), &[]).is_err()
-        );
+        assert!(build_duplicate_source(source, Some(&reversed), "Copy", Some("Source")).is_err());
         let mut split_unicode = valid;
         split_unicode.full_start = source.find('λ').unwrap() + 1;
         assert!(
-            build_duplicate_source(source, Some(&split_unicode), "Copy", Some("Source"), &[])
-                .is_err()
+            build_duplicate_source(source, Some(&split_unicode), "Copy", Some("Source")).is_err()
         );
-        assert!(
-            build_duplicate_source(source, Some(&valid), "Bad Name", Some("Source"), &[]).is_err()
-        );
+        assert!(build_duplicate_source(source, Some(&valid), "Bad Name", Some("Source")).is_err());
     }
 
     #[test]
@@ -347,8 +190,7 @@ model Source Real x; end Source;";
         assert!(!output.contains("fromA"));
         let spans = extract_class_spans_inline(source, "Root.C.Part");
         assert!(
-            build_duplicate_source(source, spans.as_ref(), "Copy", Some("Root.C.Part"), &[])
-                .is_err()
+            build_duplicate_source(source, spans.as_ref(), "Copy", Some("Root.C.Part")).is_err()
         );
         let within = "within Root.B; model Part Real fromB; end Part;";
         let output = duplicate(within, "Part", "Copy", Some("Root.B.Part"));
@@ -388,20 +230,6 @@ model Source Real x; end Source;";
         );
         assert!(output.starts_with("within Root;"));
         assert!(parses_clean(&output));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn duplicate_package_imports_use_exact_bytes_and_reject_invalid_source() {
-        let imports =
-            package_imports("package P import Alias = Other.Value; import Other.*; end P;")
-                .expect("valid package");
-        assert_eq!(
-            imports,
-            vec!["import Alias = Other.Value;", "import Other.*;"]
-        );
-        assert!(package_imports("package P import ; end P;").is_err());
-        assert!(package_imports("// missing package").is_err());
     }
 
     #[test]

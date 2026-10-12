@@ -64,7 +64,7 @@ lunco-modelica-core/
 
 lunco-modelica-runner/
   ModelicaRunner: ExperimentRunner
-  owner-scoped compile-once DAE cache and typed simulation-option overrides
+  bounded scheduling, shared worker compile admission and typed simulation-option overrides
   shared native/browser batch execution and run-bound resolution
 
 lunco-modelica-worker/
@@ -417,12 +417,14 @@ the same class name from changed source and compare CIDs and values.
 A sweep runs many points at once, bounded by one scheduler. Two things carry
 most of the win, and both already exist — do not rebuild them.
 
-**Compile once, sweep many.** `lunco-modelica-runner` caches the compiled `Dae`
-keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
-overrides through `SimOptions::param_overrides` and inputs through
-`initial_inputs` (`apply_run_values`) without mutating the DAE or reflattening
-per run. A sweep that varies only top-level scalar parameters recompiles
-**zero** times after the first point.
+**Compile once, sweep many.** Native `lunco-modelica-runner` submits typed
+`CompileBatch` requests to the Modelica worker's single Rumoca actor. Batch and
+live compilation share admitted source roots and the bounded compiled-artifact
+cache, keyed by source and library generation. The artifact carries the exact
+participating-source CID captured before user overlays are cleared. The runner
+applies `SimOptions::param_overrides` and `initial_inputs` (`apply_run_values`)
+without mutating the DAE or reflattening per run. Browser batches compile in the
+Modelica Web Worker.
 
 **Per-run demux.** Results route by exact `run_id` and admitted origin — native: one `crossbeam` channel
 per `RunHandle`, drained by `drain_pending_handles`; wasm: the `RUN_SENDERS`
@@ -442,9 +444,10 @@ the lock. On a terminal update `finish_run` frees the slot and re-pumps.
 Cancellation withdraws queued jobs immediately. Each job owns the immutable
 source text, document URI, extras, and exact typed runtime owner captured
 at admission; execution never looks up a mutable class-name source map.
-Compiled DAE entries include that owner; `TwinClosed` removes its entries,
-and cancelled workers cannot republish them after retirement. User overlays
-are released after compilation while admitted application libraries stay installed. The panel shows
+`TwinClosed` cancels the owner's queued and executing runs and unloads its
+source roots through the compiler FIFO. Cancelled runs cannot publish completed
+results. User overlays are released after compilation; immutable cache reuse is
+fenced by source content and library generation. The panel shows
 "⏳ Queued"; the Run button queues rather than disabling.
 
 Native solves install a scoped thread-local cancellation guard backed by the
