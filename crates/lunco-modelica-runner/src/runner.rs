@@ -1062,10 +1062,9 @@ pub fn detect_top_level_literal_parameters(
     lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class(class)
         .into_iter()
         .map(|c| {
-            // Arrays/records can't be rebound to a scalar literal by the
-            // DAE value-binding path, so grey those rows; bracket in the
-            // type name is the cheap, reliable array signal.
-            let unsupported = c.type_name.contains('[') || c.type_name == "String";
+            // Run values are scalar. Rumoca retains declaration dimensions
+            // independently of the type name, including symbolic dimensions.
+            let unsupported = c.has_array_dimensions || c.type_name == "String";
             DetectedParam {
                 name: c.name,
                 type_name: c.type_name,
@@ -1323,6 +1322,35 @@ mod tests {
         }
         #[cfg(target_arch = "wasm32")]
         ModelicaRunner::new()
+    }
+
+    #[test]
+    fn parameter_rows_use_declared_shape_instead_of_type_spelling() {
+        let source = r#"model ShapeFacts
+          type 'Bracket[Scalar]' = Real;
+          parameter Integer n=2;
+          parameter Real literal[2]={1,2};
+          parameter Real symbolic[n]=fill(1,n);
+          parameter Real[2,3] matrix=ones(2,3);
+          parameter 'Bracket[Scalar]' scalar=1;
+          parameter String text="label";
+        end ShapeFacts;"#;
+        let ast = rumoca_compile::parsing::parse_source_to_ast(source, "shape-facts.mo")
+            .expect("valid declarations");
+        let class = ast
+            .get_class_by_qualified_name("ShapeFacts")
+            .expect("class");
+        let rows = detect_top_level_literal_parameters(class);
+        for name in ["literal", "symbolic", "matrix", "text"] {
+            let row = rows.iter().find(|row| row.name == name).expect("parameter");
+            assert!(!row.supportable, "{name} must not accept a scalar override");
+            assert!(row.reason.is_some());
+        }
+        for name in ["n", "scalar"] {
+            let row = rows.iter().find(|row| row.name == name).expect("parameter");
+            assert!(row.supportable, "{name} is a scalar declaration");
+            assert!(row.reason.is_none());
+        }
     }
 
     #[test]

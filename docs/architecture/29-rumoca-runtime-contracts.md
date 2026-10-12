@@ -24,10 +24,25 @@ source-root admission lane to the same Rumoca actor used for live models. The
 bounded artifact cache includes library generation and retains the exact source
 CID with its checked DAE. Copies preserve package scope through `within`;
 Rumoca owns parent-import resolution and validates missing references; a
-standalone `within` namespace is not an external library admission requirement. `modelica_duplicate_lifecycle.rhai`
+standalone `within` namespace is not an external library admission requirement.
+`modelica_duplicate_lifecycle.rhai`
 exercises copied classes with commented, concatenated descriptions and a type
 alias declared only in the admitted parent package, then rejects a missing type
 without reusing the completed trajectory or crashing the host.
+
+## Declaration dimensions and connector presentation
+
+`DescribeModel` carries `has_array_dimensions` from Rumoca's component `shape`
+and `shape_expr` fields. Parameter rows use this fact to exclude
+declarations with dimensions from scalar overrides. Brackets in a quoted type
+name do not imply declaration dimensions. Effective alias and tunability
+admission remains with the compiler and solver.
+
+Canvas wires consume the projected `PortKind`. Rumoca's short-form class
+causality supplies signal connector direction, and declared flow members supply
+acausal ports. A connector's spelling does not change its wire direction.
+`modelica_declaration_shapes.rhai` checks the public declaration facts; focused
+inline parser/projection tests cover parameter rows and connector kinds.
 
 ## Prepared execution and persistence
 

@@ -1222,8 +1222,8 @@ impl ApiQueryProvider for GetShareLinkProvider {
 //
 // Returns the structural picture of one class within a doc:
 // class_kind, extends, components (subinstances), connections (wiring),
-// plus typed inputs / parameters / outputs with units, bounds and
-// defaults. The agent picks which class via the `class` parameter; the
+// plus typed inputs / parameters / outputs with units, bounds, declaration
+// dimensions and defaults. The agent picks the class via the `class` parameter; the
 // omitted value uses the selected class or an unambiguous simulation root.
 // Equations and full annotations are intentionally not surfaced here
 // — those are best read via `get_document_source` when the agent
@@ -1396,6 +1396,7 @@ fn typed_api_value(c: &lunco_modelica_ast::ast_extract::TypedComponent) -> ApiVa
     api_value!({
         "name": c.name.clone(),
         "type": c.type_name.clone(),
+        "has_array_dimensions": c.has_array_dimensions,
         "unit": c.unit.clone(),
         "default": c.default,
         "min": c.min,

@@ -712,6 +712,8 @@ pub struct TypedComponent {
     pub name: String,
     /// Declared Modelica type name.
     pub type_name: String,
+    /// Whether this component declaration carries array dimensions.
+    pub has_array_dimensions: bool,
     /// Optional `unit` modification.
     pub unit: Option<String>,
     /// Numeric binding or start value, when one is available.
@@ -800,6 +802,7 @@ where
         .map(|c| TypedComponent {
             name: c.name.clone(),
             type_name: c.type_name.to_string(),
+            has_array_dimensions: !c.shape.is_empty() || !c.shape_expr.is_empty(),
             unit: unit_of_component(c),
             default: c
                 .binding

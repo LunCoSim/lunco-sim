@@ -1508,6 +1508,33 @@ fn eval_condition(
 mod composite_slim_slice_tests {
     use super::*;
 
+    #[test]
+    fn connector_causality_uses_declarations_instead_of_names() {
+        use lunco_modelica_index::visual_diagram::PortKind;
+        let source = "package Facts connector Receiver = input Real; connector Sender = output Real; connector FuelInput Real pressure; flow Real mass; end FuelInput; connector FuelOutput Real pressure; flow Real mass; end FuelOutput; end Facts;";
+        let ast = rumoca_phase_parse::parse_to_ast(source, "connector-facts.mo")
+            .expect("valid declarations");
+        for (name, expected) in [
+            ("Receiver", PortKind::Input),
+            ("Sender", PortKind::Output),
+            ("FuelInput", PortKind::Acausal),
+            ("FuelOutput", PortKind::Acausal),
+        ] {
+            let qualified = format!("Facts.{name}");
+            let class = ast
+                .get_class_by_qualified_name(&qualified)
+                .expect("connector");
+            let (kind, flows) = classify_connector(
+                class,
+                &qualified,
+                &ast,
+                crate::class_cache::ClassLookupMode::Cached,
+            );
+            assert_eq!(kind, expected, "{qualified}");
+            assert_eq!(flows.len(), usize::from(expected == PortKind::Acausal));
+        }
+    }
+
     const COMPOSITE_SOURCE: &str = "\
 // compact composite fixture; the shipped rocket is covered by authored runtime tests
 package CompositeFixture
