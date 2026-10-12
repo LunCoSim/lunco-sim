@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, PoisonError, Weak,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -154,6 +154,7 @@ struct QueueKey {
 
 #[derive(Default)]
 struct SharedWorkState {
+    queued: Weak<Mutex<QueuedWorkState>>,
     active_keys: Mutex<HashSet<AsyncWorkKey>>,
     in_flight: [AtomicUsize; 3],
     submitted: AtomicU64,
@@ -164,14 +165,32 @@ struct SharedWorkState {
     capacity_revision: AtomicU64,
 }
 
-#[derive(Default)]
 struct QueuedWorkState {
+    max_queued: usize,
+    max_in_flight: usize,
+    stopped: bool,
     jobs: BTreeMap<QueueKey, AsyncWork>,
     keys: HashSet<AsyncWorkKey>,
     #[cfg(not(target_arch = "wasm32"))]
     required_streak: u8,
     #[cfg(not(target_arch = "wasm32"))]
     admissions_since_background: u8,
+}
+
+impl Default for QueuedWorkState {
+    fn default() -> Self {
+        Self {
+            jobs: BTreeMap::new(),
+            keys: HashSet::new(),
+            max_queued: 256,
+            max_in_flight: 4,
+            stopped: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            required_streak: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            admissions_since_background: 0,
+        }
+    }
 }
 
 /// Shared admission queue for CPU preparation running on Bevy's async pool.
@@ -182,22 +201,32 @@ struct QueuedWorkState {
 /// types, stale-result checks, and commit boundaries.
 #[derive(Resource)]
 pub struct AsyncWorkAdmission {
-    queued: Mutex<QueuedWorkState>,
+    queued: Arc<Mutex<QueuedWorkState>>,
     shared: Arc<SharedWorkState>,
-    /// Maximum number of requests waiting for a worker slot.
-    max_queued: usize,
-    /// Maximum number of admitted requests running or waiting on the task pool.
-    max_in_flight: usize,
 }
 
 impl Default for AsyncWorkAdmission {
     fn default() -> Self {
-        Self {
-            queued: Mutex::new(QueuedWorkState::default()),
-            shared: Arc::new(SharedWorkState::default()),
-            max_queued: 256,
-            max_in_flight: 4,
-        }
+        let queued = Arc::new(Mutex::new(QueuedWorkState::default()));
+        let shared = Arc::new(SharedWorkState {
+            queued: Arc::downgrade(&queued),
+            ..Default::default()
+        });
+        Self { queued, shared }
+    }
+}
+
+impl Drop for AsyncWorkAdmission {
+    fn drop(&mut self) {
+        let abandoned = {
+            let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+            queued.stopped = true;
+            queued.keys.clear();
+            std::mem::take(&mut queued.jobs)
+        };
+        // Captured external permits can release capacity when jobs retire.
+        // Their drop must happen outside the queue lock and cannot restart it.
+        drop(abandoned);
     }
 }
 
@@ -224,7 +253,7 @@ impl AsyncWorkAdmission {
             .iter()
             .map(|count| count.load(Ordering::Acquire))
             .sum::<usize>()
-            >= self.max_in_flight
+            >= queued.max_in_flight
         {
             Some(AsyncWorkRejection::QueueFull)
         } else {
@@ -292,7 +321,7 @@ impl AsyncWorkAdmission {
             }
             drop(active);
 
-            if queued.jobs.len() >= self.max_queued {
+            if queued.jobs.len() >= queued.max_queued {
                 self.shared.rejected.fetch_add(1, Ordering::Relaxed);
                 self.shared.revision.fetch_add(1, Ordering::Release);
                 return Err(AsyncWorkRejection::QueueFull);
@@ -320,7 +349,7 @@ impl AsyncWorkAdmission {
         max_queued: usize,
         max_in_flight: usize,
     ) -> Result<(), AsyncWorkLimitError> {
-        let queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
         if max_queued == 0 || max_in_flight == 0 {
             return Err(AsyncWorkLimitError::ZeroLimit);
         }
@@ -330,8 +359,8 @@ impl AsyncWorkAdmission {
                 requested: max_queued,
             });
         }
-        self.max_queued = max_queued;
-        self.max_in_flight = max_in_flight;
+        queued.max_queued = max_queued;
+        queued.max_in_flight = max_in_flight;
         self.shared.revision.fetch_add(1, Ordering::Release);
         self.shared
             .capacity_revision
@@ -360,13 +389,15 @@ impl AsyncWorkAdmission {
             let Some(queue_key) = queue_key else {
                 return false;
             };
-            queued.jobs.remove(&queue_key);
+            let abandoned = queued.jobs.remove(&queue_key);
             queued.keys.remove(&key);
             self.shared.cancelled.fetch_add(1, Ordering::Relaxed);
             self.shared.revision.fetch_add(1, Ordering::Release);
             self.shared
                 .capacity_revision
                 .fetch_add(1, Ordering::Release);
+            drop(queued);
+            drop(abandoned);
             true
         }
     }
@@ -398,8 +429,9 @@ impl AsyncWorkAdmission {
                 })
                 .copied()
                 .collect::<Vec<_>>();
+            let mut abandoned = Vec::with_capacity(keys.len());
             for queue_key in &keys {
-                queued.jobs.remove(queue_key);
+                abandoned.extend(queued.jobs.remove(queue_key));
                 queued.keys.remove(&queue_key.key);
             }
             if !keys.is_empty() {
@@ -411,6 +443,8 @@ impl AsyncWorkAdmission {
                     .capacity_revision
                     .fetch_add(1, Ordering::Release);
             }
+            drop(queued);
+            drop(abandoned);
             keys.len()
         }
     }
@@ -452,71 +486,68 @@ impl AsyncWorkAdmission {
             .is_empty()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn active_count(&self) -> usize {
-        self.shared
-            .in_flight
-            .iter()
-            .map(|count| count.load(Ordering::Acquire))
-            .sum()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     fn pop_next(&self) -> Option<(AsyncWorkPriority, AsyncWorkKey, AsyncWork)> {
-        const REQUIRED_STREAK_LIMIT: u8 = 8;
-        const BACKGROUND_SHARE_INTERVAL: u8 = 16;
-
         let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
-        let interactive = queued
-            .jobs
-            .keys()
-            .any(|key| key.priority == AsyncWorkPriority::Interactive);
-        let background = queued
-            .jobs
-            .keys()
-            .any(|key| key.priority == AsyncWorkPriority::Background);
-        let forced_priority =
-            if background && queued.admissions_since_background >= BACKGROUND_SHARE_INTERVAL {
-                Some(AsyncWorkPriority::Background)
-            } else if interactive && queued.required_streak >= REQUIRED_STREAK_LIMIT {
-                Some(AsyncWorkPriority::Interactive)
-            } else {
-                None
-            };
-        let queue_key = forced_priority
-            .and_then(|priority| {
-                queued
-                    .jobs
-                    .keys()
-                    .find(|key| key.priority == priority)
-                    .copied()
-            })
-            .or_else(|| queued.jobs.keys().next().copied())?;
-
-        let job = queued.jobs.remove(&queue_key)?;
-        queued.keys.remove(&queue_key.key);
-        self.shared.revision.fetch_add(1, Ordering::Release);
-        self.shared
-            .capacity_revision
-            .fetch_add(1, Ordering::Release);
-        match queue_key.priority {
-            AsyncWorkPriority::SimulationRequired => {
-                queued.required_streak = queued.required_streak.saturating_add(1);
-                queued.admissions_since_background =
-                    queued.admissions_since_background.saturating_add(1);
-            }
-            AsyncWorkPriority::Interactive => {
-                queued.required_streak = 0;
-                queued.admissions_since_background =
-                    queued.admissions_since_background.saturating_add(1);
-            }
-            AsyncWorkPriority::Background => {
-                queued.required_streak = 0;
-                queued.admissions_since_background = 0;
-            }
-        }
-        Some((queue_key.priority, queue_key.key, job))
+        pop_next_queued(&self.shared, &mut queued)
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pop_next_queued(
+    shared: &SharedWorkState,
+    queued: &mut QueuedWorkState,
+) -> Option<(AsyncWorkPriority, AsyncWorkKey, AsyncWork)> {
+    const REQUIRED_STREAK_LIMIT: u8 = 8;
+    const BACKGROUND_SHARE_INTERVAL: u8 = 16;
+
+    let interactive = queued
+        .jobs
+        .keys()
+        .any(|key| key.priority == AsyncWorkPriority::Interactive);
+    let background = queued
+        .jobs
+        .keys()
+        .any(|key| key.priority == AsyncWorkPriority::Background);
+    let forced_priority =
+        if background && queued.admissions_since_background >= BACKGROUND_SHARE_INTERVAL {
+            Some(AsyncWorkPriority::Background)
+        } else if interactive && queued.required_streak >= REQUIRED_STREAK_LIMIT {
+            Some(AsyncWorkPriority::Interactive)
+        } else {
+            None
+        };
+    let queue_key = forced_priority
+        .and_then(|priority| {
+            queued
+                .jobs
+                .keys()
+                .find(|key| key.priority == priority)
+                .copied()
+        })
+        .or_else(|| queued.jobs.keys().next().copied())?;
+
+    let job = queued.jobs.remove(&queue_key)?;
+    queued.keys.remove(&queue_key.key);
+    shared.revision.fetch_add(1, Ordering::Release);
+    shared.capacity_revision.fetch_add(1, Ordering::Release);
+    match queue_key.priority {
+        AsyncWorkPriority::SimulationRequired => {
+            queued.required_streak = queued.required_streak.saturating_add(1);
+            queued.admissions_since_background =
+                queued.admissions_since_background.saturating_add(1);
+        }
+        AsyncWorkPriority::Interactive => {
+            queued.required_streak = 0;
+            queued.admissions_since_background =
+                queued.admissions_since_background.saturating_add(1);
+        }
+        AsyncWorkPriority::Background => {
+            queued.required_streak = 0;
+            queued.admissions_since_background = 0;
+        }
+    }
+    Some((queue_key.priority, queue_key.key, job))
 }
 
 struct WorkCompletionGuard {
@@ -539,6 +570,9 @@ impl Drop for WorkCompletionGuard {
         self.shared
             .capacity_revision
             .fetch_add(1, Ordering::Release);
+        drop(active);
+        #[cfg(not(target_arch = "wasm32"))]
+        refill_async_work(&self.shared);
     }
 }
 
@@ -547,7 +581,7 @@ pub struct ExternalWorkPermit {
     _completion: WorkCompletionGuard,
 }
 
-/// Plugin installing the shared queue and its bounded PostUpdate dispatcher.
+/// Install the initial PostUpdate dispatch and completion-driven worker refill.
 pub struct AsyncWorkAdmissionPlugin;
 
 impl Plugin for AsyncWorkAdmissionPlugin {
@@ -564,34 +598,53 @@ fn async_work_is_queued(admission: Res<AsyncWorkAdmission>) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn dispatch_async_work(admission: ResMut<AsyncWorkAdmission>) {
+fn dispatch_async_work(admission: Res<AsyncWorkAdmission>) {
+    refill_async_work(&admission.shared);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn refill_async_work(shared: &Arc<SharedWorkState>) {
+    let Some(queued_state) = shared.queued.upgrade() else {
+        return;
+    };
     let Some(pool) = AsyncComputeTaskPool::try_get() else {
         bevy::log::warn_once!(
             "[async-work] queued preparation cannot start before AsyncComputeTaskPool is initialized"
         );
         return;
     };
-    while admission.active_count() < admission.max_in_flight {
-        let Some((priority, key, job)) = admission.pop_next() else {
-            break;
+    loop {
+        let (priority, key, job) = {
+            let mut queued = queued_state.lock().unwrap_or_else(PoisonError::into_inner);
+            let active_count = shared
+                .in_flight
+                .iter()
+                .map(|n| n.load(Ordering::Acquire))
+                .sum::<usize>();
+            if queued.stopped || active_count >= queued.max_in_flight {
+                break;
+            }
+            let Some((priority, key, job)) = pop_next_queued(shared, &mut queued) else {
+                break;
+            };
+            let mut active = shared
+                .active_keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if !active.insert(key) {
+                bevy::log::error!(
+                    "[async-work] duplicate key reached dispatch: {priority:?} {key:?}"
+                );
+                continue;
+            }
+            shared.in_flight[priority.index()].fetch_add(1, Ordering::AcqRel);
+            shared.revision.fetch_add(1, Ordering::Release);
+            (priority, key, job)
         };
-        let mut active = admission
-            .shared
-            .active_keys
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if !active.insert(key) {
-            bevy::log::error!("[async-work] duplicate key reached dispatch: {priority:?} {key:?}");
-            continue;
-        }
-        drop(active);
-
-        admission.shared.in_flight[priority.index()].fetch_add(1, Ordering::AcqRel);
-        admission.shared.revision.fetch_add(1, Ordering::Release);
         let completion = WorkCompletionGuard {
             key,
             priority,
-            shared: Arc::clone(&admission.shared),
+            shared: Arc::clone(shared),
         };
         pool.spawn(async move {
             let _completion = completion;
@@ -605,6 +658,101 @@ fn dispatch_async_work(admission: ResMut<AsyncWorkAdmission>) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn worker_completion_refills_queue_without_another_app_update() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AsyncWorkAdmissionPlugin));
+        let (finished_tx, finished_rx) = mpsc::channel();
+        {
+            let mut admission = app.world_mut().resource_mut::<AsyncWorkAdmission>();
+            admission.set_limits(16, 1).unwrap();
+            for identity in 0..8 {
+                let finished_tx = finished_tx.clone();
+                admission
+                    .submit(AsyncWorkPriority::Interactive, key(identity), move || {
+                        finished_tx.send(identity).unwrap();
+                    })
+                    .unwrap();
+            }
+        }
+        app.world_mut().run_schedule(PostUpdate);
+        for identity in 0..8 {
+            assert_eq!(
+                finished_rx.recv_timeout(Duration::from_secs(2)).expect(
+                    "accepted immutable work must refill freed capacity without a host frame"
+                ),
+                identity
+            );
+        }
+    }
+
+    #[test]
+    fn retiring_admission_discards_queued_work_before_worker_completion() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AsyncWorkAdmissionPlugin));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (retired_tx, retired_rx) = mpsc::channel();
+        {
+            let mut admission = app.world_mut().resource_mut::<AsyncWorkAdmission>();
+            admission.set_limits(4, 1).unwrap();
+            admission
+                .submit(AsyncWorkPriority::Interactive, key(1), move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                })
+                .unwrap();
+            admission
+                .submit(AsyncWorkPriority::Interactive, key(2), move || {
+                    retired_tx.send(()).unwrap();
+                })
+                .unwrap();
+        }
+        app.world_mut().run_schedule(PostUpdate);
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        app.world_mut().remove_resource::<AsyncWorkAdmission>();
+        release_tx.send(()).unwrap();
+        assert!(matches!(
+            retired_rx.recv_timeout(Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn queued_cancellation_releases_captured_permits_outside_queue_lock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AsyncWorkAdmissionPlugin));
+        let (started_tx, started_rx) = mpsc::channel();
+        {
+            let mut admission = app.world_mut().resource_mut::<AsyncWorkAdmission>();
+            admission.set_limits(4, 1).unwrap();
+            let permit = admission
+                .admit_external(AsyncWorkPriority::Interactive, key(1))
+                .unwrap();
+            admission
+                .submit(AsyncWorkPriority::Interactive, key(2), move || drop(permit))
+                .unwrap();
+            admission
+                .submit(AsyncWorkPriority::Interactive, key(3), move || {
+                    started_tx.send(()).unwrap();
+                })
+                .unwrap();
+            assert!(admission.cancel_queued(key(2)));
+        }
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("released external capacity must refill surviving work");
+    }
 
     fn key(identity: u64) -> AsyncWorkKey {
         AsyncWorkKey::new(AsyncWorkKind::RhaiCompilation, 4, identity as u128, 12, 0)

@@ -135,6 +135,12 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For loading throughput, compare worker CPU duration with the complete job window
+and idle gaps while preparation is queued. `AsyncWorkAdmission` starts work in
+PostUpdate and refills released slots on completion; its global bound, priority
+service, cancellation and weak queue lifetime remain independent of frame rate.
+Verify refill without another host update and retirement with captured permits,
+then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately
 from native physics. Distinguish terrain enclosure cache misses from actual
 height evaluations: a warm bounds cache can still repeat procedural samples

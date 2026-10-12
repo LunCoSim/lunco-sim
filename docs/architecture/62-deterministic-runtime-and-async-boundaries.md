@@ -698,7 +698,16 @@ source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
 service, and exposes aggregate queue counters. It can withdraw queued work but
 does not preempt a running task. Owners still validate and commit their typed
-results at their own boundary. Modelica document parsing, inline Rhai roots and
+results at their own boundary. `PostUpdate` starts queued native preparation;
+worker and external-permit completion refill released capacity immediately on
+the existing async-compute pool. Queue selection and slot reservation share
+one short critical section, preserving the global bound and priority service.
+Jobs are spawned after releasing that lock. The queue owns its limits;
+completion guards retain only a weak queue reference. Resource retirement stops refill and
+drops queued captures outside the lock, including captures that own permits.
+Execution can advance between host frames; simulation admission, scope, clock,
+source validation and ordered result commitment remain at the domain owner.
+Modelica document parsing, inline Rhai roots and
 source-matched import misses, Twin SysML source-set analysis, and default USD
 Twin source parsing plus persistent-source serialization use this path. USD
 source parse results are checked against the current asset text before the

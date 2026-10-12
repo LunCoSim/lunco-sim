@@ -9155,3 +9155,67 @@ compile-picker walker. No callers remain, and the focused
 `cargo check -p lunco-modelica-ast -j 4` passes in 41.23s. Runtime evidence above
 is retained for the tested terrain implementation; that non-behavioral AST
 removal was compile-checked without repeating unchanged scene inputs.
+
+## Completion-driven preparation refill — 2026-10-12
+
+The Summer startup trace contains 257 tile preparations with 575.416 ms of
+combined CPU work spread across 3,067.107 ms. The shared admission queue dispatched
+only in PostUpdate, leaving completed worker slots idle until another host frame.
+There were 63 fully idle tile gaps above 5 ms. A mechanism test reproduces the
+failure with eight queued jobs, one worker slot and only one host update.
+
+`lunco-core-runtime::AsyncWorkAdmission` now refills released slots on worker or
+external-permit completion. Queue selection and slot reservation are serialized
+under the existing queue lock; job execution starts after releasing it. Limits,
+semantic priorities, fairness and owner-selected ordering retain one owner.
+Completion guards hold a weak queue reference. Resource retirement stops refill
+and discards queued captures outside the lock, as does owner cancellation.
+Running jobs remain non-preemptible. Inputs and outputs remain immutable typed
+preparation; live World evaluation, source fences, logical clocks and ordered
+authoritative commitment remain at their domain owners. This is a generic
+scheduling mechanism, with no new scenario policy, hook or external-library edit.
+
+The candidate trace records the same 257 jobs across 575.132 ms, with 595.321 ms
+combined CPU work and eight fully idle gaps above 5 ms. The improvement removes
+host-frame waiting; it does not reduce terrain math or change quality. Native
+capture size checks and CPU CSV exports pass. A separate normal Summer run
+reaches settled readiness in 2.522 s versus 3.992 s in the preceding run.
+Both normal runs had a concurrent tutorials simulator, so these readiness
+observations and frame timings are not clean product-performance acceptance.
+The candidate reaches all 256 resident tiles while Modelica initialization is
+still pending. Its log creates the 598-rock field once and skips the later
+identical analytic composition; the inspected startup image retains rocks and
+shadows. The motion audit's final image is below the terrain after flying forward
+with a downward camera pitch. Residency and diagnostics pass, but that image
+does not establish acceptable moving-camera presentation.
+
+All 15 focused async-work mechanism tests pass, including completion refill
+without another host update, retirement and cancellation of captured permits.
+They pass again after checkout cleanup. The normal production executable passes
+72/72 exact checks against the unchanged 20-rover reference through tick 780,
+31/31 compiled metadata checks, and scene restart with restored readiness and no
+runtime diagnostics. The scenario-source and Modelica-observation negative
+fixtures both return their authored expected terminal faults. A driver initially
+expected the wrong Modelica fault string; its receipt was corrected against the
+authored verdict without rerunning the passing scene.
+
+The verified normal artifact is
+`b9a2f76abc5ce44c53d72eb542e2b54609656bb1176a92f950e0e872d7c458c0`;
+the Tracy artifact is
+`09e91f13afde3aa7c290549034dfdfcd2611ad09f86f7425e4dddd74f105d6b8`.
+Both compressed executables and the current native capture are retained under
+`.lunco/performance-evidence/entity-tree-perf/`, with prefixes
+`async-worker-refill` and baseline `summer-motion-audit-normal`.
+Integration preserves main `fc7c35264`, including its current Rumoca context and
+declaration contracts. Builds use the normal target, sccache and `-j 4`.
+Owned applications and collector exit zero; API 4202 and Tracy 8087 are released.
+The authored Twin stays clean. Overall clean loading, visual FPS and physics FPS
+acceptance remains open.
+
+Disk recovery removed this checkout's generated target outputs and ten older
+task-owned native captures. Their hashes, sizes and retained related exports are
+recorded in `owned-gpu-experiment-trace-retirement-20261012.json` and
+`owned-historical-trace-retirement-20261012.json`; those historical raw captures
+are no longer retained. Source, sibling worktrees, shared caches and foreign
+sessions were preserved. The validated normal executable is restored to
+`target/debug/luncosim` after the profiling build.
