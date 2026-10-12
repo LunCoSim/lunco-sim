@@ -188,8 +188,8 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// [`ModelicaDocument::ast`](lunco_modelica_document::ModelicaDocument::ast)
 /// or [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax)
 /// — this function never parses. The Document's off-thread refresh
-/// in [`crate::ui::ast_refresh`] is the single source of truth for
-/// parsed Modelica trees in the workbench.
+/// in [`lunco_modelica_core::engine_resource::drive_engine_sync`] owns parsed
+/// Modelica trees in the workbench.
 ///
 /// `max_nodes` is a guard against accidentally projecting a huge
 /// package (e.g. `Modelica.Units`) into a diagram — returns an error

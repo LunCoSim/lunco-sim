@@ -173,7 +173,9 @@ the same leaf name.
 Deferred edit parsing wakes at its recorded debounce deadline even when the
 document-registry and worker-capacity revisions are unchanged. The source
 generation remains the admission fence; completed runs retain their compiled
-metadata while the replacement draft parses.
+metadata while the replacement draft parses. Only edits to that document
+extend its debounce; unrelated mouse and keyboard activity cannot delay
+admission. Worker capacity and completion budgets bound preparation.
 
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
@@ -1105,9 +1107,9 @@ gets a single round-trip and a guaranteed ordering. The single-op
 wrappers exist because hand-written agent code reads cleaner with
 named commands than with a flat `ApiOp::AddComponent { ... }` payload.
 
-API edits backdate the AST debounce timer (`waive_ast_debounce`), so
-the canvas + text editor refresh inside the same frame instead of
-waiting out the keystroke debounce window — see § 5.7.
+API edits waive the source-edit debounce (`waive_ast_debounce`). They enter
+the bounded parse queue immediately and refresh the canvas and editor when
+the generation-checked result is installed — see § 5.7.
 
 **Current gaps** — typed wrappers we don't expose yet, available
 via `ApplyModelicaOps` or planned as standalones:

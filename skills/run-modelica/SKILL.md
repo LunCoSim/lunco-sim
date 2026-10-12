@@ -994,3 +994,8 @@ retain declaration defaults on omitted values, and reject invalid text before
 changing the draft or dispatching a run. `modelica_type_prefixes.rhai` is the
 production authoring gate for signal aliases, record-name negatives and alias
 array dimensions.
+
+Modelica draft reparsing is paced by that document's source-edit timestamp and
+bounded worker admission. API edits waive the typing debounce; unrelated UI
+activity cannot block parsing. `modelica_run_metadata.rhai` verifies that a
+replacement draft compiles while earlier runs retain their checked facts.

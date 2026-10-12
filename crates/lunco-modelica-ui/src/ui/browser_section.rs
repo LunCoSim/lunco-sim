@@ -18,8 +18,8 @@
 //! This panel **does not parse**. It reads
 //! [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax)
 //! — the lenient parse cache that the off-thread refresh in
-//! [`crate::ui::ast_refresh`] keeps up to date — and derives the
-//! class tree from it on each render. The browser sees exactly the
+//! [`lunco_modelica_core::engine_resource::drive_engine_sync`] keeps up to date.
+//! It derives the class tree from it on each render. The browser sees exactly the
 //! same parse the rest of the workbench sees; no panel-local cache
 //! and no panel-local rumoca call.
 //!
@@ -53,7 +53,7 @@ struct ClassEntry {
 /// The Modelica Twin-Browser section. Stateless — every render
 /// derives the class tree from
 /// [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax),
-/// which is kept up to date off-thread by [`crate::ui::ast_refresh`].
+/// which is kept up to date off-thread by [`lunco_modelica_core::engine_resource::drive_engine_sync`].
 #[derive(Default)]
 pub struct ModelicaSection;
 
