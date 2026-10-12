@@ -467,8 +467,9 @@ end CompositeFixture;
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
         assert!(out.starts_with("within CompositeFixture;"));
         assert!(out.contains("Tank tank;"), "sibling reference preserved");
+        let ast = rumoca_phase_parse::parse_to_ast(&out, "duplicate-fixture.mo").unwrap();
         assert_eq!(
-            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
+            lunco_modelica_ast::ast_extract::within_package(&ast).as_deref(),
             Some("CompositeFixture")
         );
     }

@@ -6,7 +6,6 @@ license.workspace = true
 description = "Reusable Modelica source index, diagram metadata, and package-tree contracts"
 
 [dependencies]
-rumoca-phase-parse.workspace = true
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy.workspace = true
 lunco-doc = { path = "../lunco-doc" }
@@ -16,6 +15,9 @@ rumoca-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+rumoca-phase-parse.workspace = true
 
 [lints]
 workspace = true

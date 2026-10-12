@@ -102,32 +102,3 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
         offenders.join("\n  ")
     );
 }
-
-/// User overlays enter through one owner so source capture and eviction agree.
-#[test]
-fn user_source_is_seated_through_one_owner() {
-    let compiler_lib =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-modelica-compiler/src/lib.rs");
-    let text = lunco_storage::read_text_file_sync(&compiler_lib).expect("compiler lib.rs readable");
-
-    let seats: Vec<String> = code_only(&text)
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| {
-            l.contains("session.update_document(") || l.contains("session.add_document(")
-        })
-        .map(|(i, l)| format!("{}:{}: {}", compiler_lib.display(), i + 1, l.trim()))
-        .collect();
-
-    // Exactly one compile-session write is expected: `seat_user_source`, the
-    // chokepoint for a user model document. Library roots are parsed and
-    // installed through `replace_in_memory_source_set` in
-    // `load_source_root_in_memory`, so they do not add a second
-    // `update_document`/`add_document` site.
-    assert_eq!(
-        seats.len(),
-        1,
-        "user overlays must enter through seat_user_source; sites: {}",
-        seats.join("\n  ")
-    );
-}

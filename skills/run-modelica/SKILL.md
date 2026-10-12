@@ -385,6 +385,13 @@ default run targets against the document index's eligible candidates and parsed
 identity unchanged. Verify both run APIs and an unrelated-prefix rejection through
 `assets/scenarios/tests/modelica_class_compile.rhai`.
 
+Compiler admission uses Rumoca's `ParsedSourceDocument` once per unique URI and
+the definition's `qualified_class_name`/`declared_class_names` queries. Reuse a
+loaded source root only for exact admitted source bytes; changed or mixed owned
+definitions require updating that root or choosing a distinct namespace.
+Read participating text through `Session::document_source_text` for content
+identity. Single-source and multi-source compiles share this admission boundary.
+
 Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
 query for exact source selection and editing. `relative_class_name` strips only
 the actual authored `within` package. Use `rumoca_core::qualified_name_segments`

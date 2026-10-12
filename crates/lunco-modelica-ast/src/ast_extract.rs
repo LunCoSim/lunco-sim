@@ -200,14 +200,6 @@ pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
 /// The package a file's classes belong to, from its `within` clause —
 /// `within LunCo.Propulsion;` → `Some("LunCo.Propulsion")`.
 ///
-/// This is what makes a `.mo` a package MEMBER rather than a standalone
-/// document, and the two cannot be compiled the same way: a member's
-/// fully-qualified class is already owned by its package's source root, so
-/// seating the file on its own registers that class a second time and rumoca's
-/// merge pass rejects the pair (`Duplicate class '…' with non-identical
-/// definition`). The Modelica compiler host routes on this distinction before
-/// seating source into Rumoca.
-///
 /// A bare `within;` names the top level and is reported as `None` — it declares
 /// membership of no package, which is the same thing as having no clause.
 pub fn within_package(ast: &StoredDefinition) -> Option<String> {
@@ -215,18 +207,9 @@ pub fn within_package(ast: &StoredDefinition) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Source-level counterpart of [`within_package`], for callers that do not
-/// already hold a parsed AST. Parses; `None` on a source too broken to parse
-/// (such a file has no compilable class either, so the caller's next step
-/// fails on its own terms).
-pub fn within_package_of_source(source: &str) -> Option<String> {
-    within_package(&parse(source)?)
-}
-
 /// Fully qualified names declared by a source document, including nested
 /// classes. This is document metadata, not a model-specific rule: the
-/// compiler uses it to decide whether a durable source root already owns an
-/// extra document before registering a second URI for the same class.
+/// Twin lint uses it to inspect the authored namespace.
 /// Extract every fully qualified class name declared by one source document.
 ///
 /// This is the same recovered AST walk used by the Modelica source-root
@@ -234,27 +217,9 @@ pub fn within_package_of_source(source: &str) -> Option<String> {
 /// names that the compiler can actually resolve, rather than comparing file
 /// basenames.
 pub fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
-    let ast = parse_recovered(source, file_label);
-    let prefix = ast
-        .within
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let mut names = Vec::new();
-    collect_declared_class_names(&ast.classes, &prefix, &mut names);
-    names
-}
-
-fn collect_declared_class_names(
-    classes: &AstIndexMap<String, ClassDef>,
-    prefix: &str,
-    names: &mut Vec<String>,
-) {
-    for (name, class) in classes {
-        let qualified = qualify(prefix, name);
-        names.push(qualified.clone());
-        collect_declared_class_names(&class.classes, &qualified, names);
-    }
+    rumoca_phase_parse::parse_to_syntax(source, file_label)
+        .best_effort()
+        .declared_class_names()
 }
 
 /// Join a parent qualified name with a child segment to form a new
