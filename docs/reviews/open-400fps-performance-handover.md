@@ -9031,3 +9031,60 @@ physics-thread stalls. Tracy and the concurrent simulator workloads make all
 timings diagnostic only; clean FPS, physics, and readiness acceptance remain
 open. The owned sessions were closed, and the other active sessions were left
 untouched. This handover remains uncommitted.
+
+
+## Summer Twin solar ray sample reuse — 2026-10-12
+
+The actual Summer Space School Twin exposed a fixed-update terrain-query cost.
+The native Tracy capture ranks `publish_sun_visibility` at 11.915 ms mean
+(2,947 calls), against 12.458 ms for FixedUpdate and 0.292 ms for native
+PhysicsSchedule. Temporary child attribution puts input preparation at 0.019 ms,
+geometry-index update at 0.001 ms, and each of nine terrain rays at 1.548 ms.
+The retained enclosure cache is warm: only 54 new bounds were admitted across
+512 measured ticks, while actual height evaluations accumulated about 19,800
+per tick. Shared cell and refinement endpoints repeat the same pure oracle work.
+
+`SurfaceOracle::occludes_ray` now retains point heights by exact x/z f64 bit
+identity within that immutable ray. The existing oracle remains the calculation
+owner and physical solar visibility remains its consumer. The map retires on
+return and contains at most three entries per admitted interval. Traversal,
+breadth-first refinement, interval admission, conservative clear certificates,
+blocker comparisons, non-finite diagnostics and fault boundaries are unchanged.
+This is reuse of continuous-math results, with no routing or scenario policy,
+new public API, hook, external-library change, approximation or clock change.
+
+The candidate native capture measures solar visibility at 6.841 ms mean
+(2,190 calls) and FixedUpdate at 7.396 ms; native physics is 0.339 ms. These
+whole-capture owner observations show about 43% less solar span time. The owned
+PID/port and collector connection were verified, the saved capture matches its
+reported compressed size, and native CPU export succeeds. All temporary spans
+and counters were removed before the candidate build; the solar publisher's
+original bytes were verified exactly.
+
+Four focused certified-occlusion mechanism tests pass, including exact shared
+endpoint reuse, unchanged work quotas, narrow features, grazing/error boundaries,
+moving rays and surface replacement. The production positive solar gate passes
+8/8 with all six observation rows exactly equal to the unchanged production
+artifact; partial, blocked, restored and elevated power remain identical.
+The invalid-admission gate produces the expected terminal `solar-sample-unavailable`
+fault. The unchanged 20-rover production determinism reference passes 72/72
+checks through tick 780 with compute width 24.
+
+The separate normal Summer runs observe frame p50 39.773 ms before and
+13.465 ms after, with 614/610 physics steps advanced in their ten-second windows.
+Another agent's tutorials simulator remained active and GPU load varied, so
+these are contention-affected observations, not clean FPS acceptance. The
+candidate checks terrain residency and derived-map readiness throughout its
+window: 256 wanted/resident, zero pending, one ready/total, no active bake.
+Screenshots retain rocks and their shadows. Startup creates the 598-rock field
+once; the later identical analytic composition skips terrain rebuilding. The
+Twin's authored worktree stays clean.
+
+The normal artifacts are `cf23bc7899663d384aa5bf9ab99112864c4db2afb812f1f0941dc3632a537e6b`
+and `0086c4b3a99c31991eaf669345d409a15cc46b325ca9cf4a4897993a11e93971`.
+Evidence is under `.lunco/performance-evidence/entity-tree-perf/` with prefixes
+`solar-owner-attribution`, `solar-ray-counters`, `solar-fixture-normal`, and
+`solar-exact-reuse`; the acceptance receipt records artifacts, windows and
+concurrent workloads. Owned apps and collectors exit zero, API 4202 and Tracy
+8087 are closed. Clean overall loading, visual FPS and physics FPS acceptance
+remains open.

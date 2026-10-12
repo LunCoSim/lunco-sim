@@ -204,8 +204,12 @@ fixed co-simulation exchange. Terrain queries traverse native raster cells and
 check coarse cells before breadth-first refinement using conservative enclosures
 of the same bicubic surface and analytic modifiers used by the terrain oracle.
 Actual surface samples certify blockers; clear results require complete
-interval coverage. This search order keeps an uncertain contact edge from
-starving a later definite blocker. Unsupported bounds, numerical
+interval coverage. Within one ray, exact coordinate-bit identities reuse
+height samples at shared endpoints and refinement positions. This cache is
+discarded with the ray and holds at most three samples per admitted interval;
+it changes neither interval budgets nor the classification order. This search
+order keeps an uncertain contact edge from starving a later definite blocker.
+Unsupported bounds, numerical
 ambiguity and exhausted work return unavailable data. `SurfaceOcclusionBudget`
 bounds each ray, total interval work per fixed tick, and retained cell enclosures.
 Probe admission follows unique composed USD paths; terrain intervals follow

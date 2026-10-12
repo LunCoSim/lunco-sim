@@ -135,6 +135,14 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For physical solar visibility, attribute `publish_sun_visibility` separately
+from native physics. Distinguish terrain enclosure cache misses from actual
+height evaluations: a warm bounds cache can still repeat procedural samples
+at adjacent-cell and refinement endpoints. Ray-local sample reuse must use
+exact f64 coordinate bits and preserve traversal, interval budgets, unavailable
+data and fault behavior. Run the focused certified-occlusion mechanism checks
+and the production terrain solar visibility and invalid-admission gates; compare
+the unchanged solar-power observations and run a separate production Twin window.
 For dataset consent, check `publish_dataset_provisioning_surface` separately
 from its Rhai policy. Diagnostic-outbox drains must not mark registry catalog
 facts changed. Bevy excludes a system's own writes from its next change check;

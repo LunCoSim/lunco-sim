@@ -127,6 +127,10 @@ impl SurfaceOracle {
         let mut examined = 0;
         let mut ambiguous = false;
         let mut pending = std::collections::VecDeque::new();
+        // Adjacent cells and refinement intervals share endpoints. The oracle
+        // is immutable during this ray; reuse only identical f64 coordinates.
+        // Sample residency cannot change interval admission or classification.
+        let mut point_samples = std::collections::HashMap::new();
         let mut classify = |cell, a: f64, b: f64, node, rect| -> Result<Option<bool>, String> {
             if *remaining == 0 {
                 return Err("solar fixed-tick interval budget exceeded".into());
@@ -152,7 +156,9 @@ impl SurfaceOracle {
             // conservative enclosures over every interval it traverses.
             for t in [a, a + (b - a) * 0.5, b] {
                 let point = origin + direction * t;
-                let height = self.height_at(point.x, point.z);
+                let height = *point_samples
+                    .entry([point.x.to_bits(), point.z.to_bits()])
+                    .or_insert_with(|| self.height_at(point.x, point.z));
                 if !height.is_finite() {
                     return Err("non-finite terrain sample".into());
                 }
@@ -287,6 +293,51 @@ mod tests {
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{BrushModifier, HeightModifier};
     use std::sync::Arc;
+
+    #[test]
+    fn certified_occlusion_reuses_shared_interval_endpoints() {
+        struct CountedSurface(Arc<std::sync::atomic::AtomicUsize>);
+        impl HeightModifier for CountedSurface {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                height
+            }
+            fn height_bounds(&self, rect: [f64; 4], _: [f64; 2]) -> Option<[f64; 2]> {
+                // Coarse intervals need actual samples; their children certify
+                // the same flat surface without further point evaluations.
+                Some(if rect[2] - rect[0] >= 1.0 {
+                    [0.0, 2.0]
+                } else {
+                    [0.0, 0.0]
+                })
+            }
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let surface = SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(9, 4.0)),
+            vec![HeightContribution {
+                modifier: Arc::new(CountedSurface(calls.clone())),
+                content_key: 1,
+            }],
+        );
+        let budget = SurfaceOcclusionBudget::default();
+        let mut remaining = budget.max_tick_intervals;
+        assert!(
+            !surface
+                .occludes_ray(
+                    DVec3::new(-3.5, 1.0, 0.1),
+                    DVec3::X,
+                    budget,
+                    &mut remaining,
+                    &mut SurfaceOcclusionCache::default(),
+                )
+                .unwrap()
+        );
+        // Eight coarse intervals have nine distinct endpoints and eight
+        // midpoints. Repeated endpoints must not evaluate the modifier again.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 17);
+        assert_eq!(budget.max_tick_intervals - remaining, 23);
+    }
 
     #[test]
     fn certified_occlusion_reuses_procedural_enclosures_for_moving_rays() {
