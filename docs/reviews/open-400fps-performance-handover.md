@@ -9106,3 +9106,45 @@ The inspected final image retains terrain, rocks and shadows. The authored
 Twin remains clean, the owned app exits zero and API 4202 is released.
 The integrated acceptance receipt and verified compressed executable are retained
 with prefix `solar-exact-reuse-integrated` beside the earlier evidence.
+
+
+## Query-local procedural density preparation — 2026-10-12
+
+The settled Summer solar window samples 8,512 height evaluations across 600
+fixed calls. Native sampled child spans put Overzoom above raster interpolation
+and curvature. A separate pure-math diagnostic attributes about three quarters
+of synthesis to crater-population generation. Adjacent cells share their 4x4
+macro-group density, making its hashed lambda and initial Poisson mass reusable.
+
+`lunco-terrain-core::Overzoom` now prepares one immutable Poisson distribution
+for the current density group within a band traversal. Each cell still uses its
+own uniform hash and starts its inverse-CDF walk from the same exact f64 mass.
+The traversal, draw cap, operation order, crater parameters, warp, noise,
+Nyquist gates and field content keys are unchanged. The descriptor retires with
+the query; no population cache, RNG state, public API, policy hook, extra
+setting or external-library change is introduced. Continuous synthesis remains
+at its existing mathematical owner, consumed by surface queries and bake workers.
+
+The math diagnostic improves from 757.783 to 665.640 ns per point, with all
+4,096 height bit patterns identical. Ten final Overzoom mechanism tests pass,
+including repeat/reordered draws, density variance, bounds and Nyquist behavior.
+Temporary instrumentation and the diagnostic test were removed. The real Twin
+Tracy capture observes solar visibility at 6.418 ms mean (2,130 calls), versus
+6.841 ms in the preceding capture; FixedUpdate is 6.977 ms versus 7.396 ms.
+Native physics is 0.350 ms. Captures retain the owned PID/ports, saved-size
+checks and successful native CSV exports; these are diagnostic owner timings.
+
+The normal production artifact
+`f0fd275613862e6d72c3feaa86c3b9bfa76ed4665ded25d8498c00a16849d334`
+passes 8/8 solar checks with all six observation rows equal to the unchanged
+artifact, the expected invalid-sampling terminal fault, and 72/72 exact
+20-rover replay checks through tick 780. The High-quality Summer window passes
+ten terrain quality checkpoints and advances 608 physics steps with 624 bodies
+and 618 colliders. Frame p50/p99 are 14.091/34.407 ms with another tutorials
+simulator active; clean overall FPS acceptance remains open. The inspected image
+retains terrain, rocks and shadows. Authored Twin files remain clean.
+
+Evidence uses prefixes `terrain-point-attribution`, `overzoom-phase` and
+`overzoom-density-reuse` under `.lunco/performance-evidence/entity-tree-perf/`.
+Exact production executables are compressed and hash-verified there. Owned API
+4202 and Tracy 8087 are released; foreign sessions and shared caches are preserved.

@@ -143,6 +143,11 @@ exact f64 coordinate bits and preserve traversal, interval budgets, unavailable
 data and fault behavior. Run the focused certified-occlusion mechanism checks
 and the production terrain solar visibility and invalid-admission gates; compare
 the unchanged solar-power observations and run a separate production Twin window.
+For procedural synthesis, separate noise, population generation and profile
+evaluation. Reuse input-constant preparation at the existing mathematical owner
+before adding a population cache. Preserve cell hashes, f64 operation order and
+draw independence; compare exact point bits as well as production terrain and
+simulation outputs. Keep math diagnostics separate from whole-app acceptance.
 For dataset consent, check `publish_dataset_provisioning_surface` separately
 from its Rhai policy. Diagnostic-outbox drains must not mark registry catalog
 facts changed. Bevy excludes a system's own writes from its next change check;

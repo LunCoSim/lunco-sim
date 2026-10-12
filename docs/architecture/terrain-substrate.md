@@ -531,6 +531,12 @@ tiles (`stream_viz`) with vertex-morph geomorph via `ShaderMaterial`, tiles
 `NotShadowCaster` while remaining directional-shadow receivers (terrain
 self-shadow rides the horizon cache, while the cascade carries dynamic-object
 shadows onto the ground);
+
+Overzoom's band traversal prepares the Poisson distribution once for adjacent
+cells in the same density group. This query-local value retains the exact f64
+initial probability; independent cell hashes and the inverse-CDF operation order
+are unchanged. It stores no population or random state between queries.
+
 **the collider ring** (`collider_ring`) — 3×3 independently selected
 physics tiles around each focus, with authored `colliderDepth` and
 `colliderResolution`, `FIX_INTERNAL_EDGES`, baked off-thread with stale-swap on

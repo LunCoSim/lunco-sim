@@ -6,8 +6,8 @@
 //! that scale, as one more [`HeightModifier`] on the oracle stack:
 //!
 //! - **craterlet population** — small impact bowls in geometric size bands from
-//!   `max_radius` down to `min_radius`, hashed per spatial cell (nothing stored,
-//!   infinite extent), sizes following the lunar equilibrium size-frequency shape
+//!   `max_radius` down to `min_radius`, generated from spatial hashes over
+//!   infinite extent, sizes following the lunar equilibrium size-frequency shape
 //!   (`N(>r) ∝ r⁻²` within a band — many small, few large), each evaluated
 //!   analytically through [`crater_profile_rim_limited`](crate::crater::crater_profile_rim_limited),
 //!   which widens the lip to the sampling step so a craterlet rim never falls
@@ -92,24 +92,37 @@ pub(crate) fn nyquist_fade(r: f64, w: f64) -> f64 {
 }
 
 /// Deterministic Poisson draw: inverse-CDF walk of the Poisson pmf at `lambda`
-/// against a single uniform `u`. Real crater populations are Poisson — clumps,
-/// occasional pairs, and empty stretches — where the old floor+Bernoulli split
-/// produced 0-or-1 per cell, i.e. a jittered grid that reads as a repeating
-/// pattern. Capped so a pathological hash can't explode a cell.
-#[inline]
-fn poisson_count(u: f64, lambda: f64) -> u32 {
-    if lambda <= 0.0 {
-        return 0;
+/// against a single uniform `u`. Cells sharing a density reuse the initial
+/// probability; each independent draw starts from that same mass. Counts are
+/// capped so a pathological hash cannot explode a cell.
+struct PoissonDistribution {
+    lambda: f64,
+    initial_probability: f64,
+}
+impl PoissonDistribution {
+    #[inline]
+    fn new(lambda: f64) -> Self {
+        Self {
+            lambda,
+            initial_probability: (-lambda).exp(),
+        }
     }
-    let mut p = (-lambda).exp();
-    let mut cum = p;
-    let mut k = 0u32;
-    while u > cum && k < 8 {
-        k += 1;
-        p *= lambda / k as f64;
-        cum += p;
+
+    #[inline]
+    fn count(&self, u: f64) -> u32 {
+        if self.lambda <= 0.0 {
+            return 0;
+        }
+        let mut p = self.initial_probability;
+        let mut cum = p;
+        let mut k = 0u32;
+        while u > cum && k < 8 {
+            k += 1;
+            p *= self.lambda / k as f64;
+            cum += p;
+        }
+        k
     }
-    k
 }
 
 impl Overzoom {
@@ -204,11 +217,22 @@ impl Overzoom {
         let cell = r_hi * CRATER_REACH;
         let band_seed = self.seed ^ band.wrapping_mul(0xA076_1D64_78BD_642F);
         let dens_seed = band_seed ^ 0xD1CE_D1CE_D1CE_D1CE;
+        // Density is constant over each 4x4 lattice group. Its distribution
+        // can serve adjacent cells without changing their independent hashes.
+        let mut density: Option<([i64; 2], PoissonDistribution)> = None;
         for cz in (rect[1] / cell).floor() as i64 - 1..=(rect[3] / cell).floor() as i64 + 1 {
             for cx in (rect[0] / cell).floor() as i64 - 1..=(rect[2] / cell).floor() as i64 + 1 {
-                let u_dens = hash01(cx.div_euclid(4), cz.div_euclid(4), dens_seed);
-                let lambda = self.crater_mean * (0.2 + 1.6 * u_dens);
-                let count = poisson_count(hash01(cx, cz, band_seed), lambda);
+                let group = [cx.div_euclid(4), cz.div_euclid(4)];
+                if density.as_ref().map(|(key, _)| *key) != Some(group) {
+                    let u_dens = hash01(group[0], group[1], dens_seed);
+                    let lambda = self.crater_mean * (0.2 + 1.6 * u_dens);
+                    density = Some((group, PoissonDistribution::new(lambda)));
+                }
+                let count = density
+                    .as_ref()
+                    .expect("density distribution admitted for this cell")
+                    .1
+                    .count(hash01(cx, cz, band_seed));
                 for k in 0..count {
                     let ks = band_seed ^ ((k as u64 + 1).wrapping_mul(0xE703_7ED1_A0B4_28DB));
                     let ux = hash01(cx, cz, ks ^ 0x11);
@@ -403,14 +427,15 @@ mod tests {
     }
 
     #[test]
-    fn poisson_count_matches_distribution() {
-        // Inverse-CDF walk: quantiles of Poisson(0.9) — P(0)=.407, P(≤1)=.772,
-        // P(≤2)=.937. Counts above 1 exist (the clumping the jittered grid lacked).
-        assert_eq!(poisson_count(0.30, 0.9), 0);
-        assert_eq!(poisson_count(0.60, 0.9), 1);
-        assert_eq!(poisson_count(0.90, 0.9), 2);
-        assert!(poisson_count(0.995, 0.9) >= 3);
-        assert_eq!(poisson_count(0.5, 0.0), 0);
+    fn poisson_draw_matches_distribution() {
+        // Poisson(0.9): P(0)=.407, P(≤1)=.772, P(≤2)=.937.
+        // Shared distribution draws remain independent of call order.
+        let distribution = PoissonDistribution::new(0.9);
+        for (u, count) in [(0.90, 2), (0.30, 0), (0.60, 1), (0.90, 2), (0.30, 0)] {
+            assert_eq!(distribution.count(u), count);
+        }
+        assert!(distribution.count(0.995) >= 3);
+        assert_eq!(PoissonDistribution::new(0.0).count(0.5), 0);
     }
 
     #[test]
@@ -425,7 +450,7 @@ mod tests {
             for r in -50i64..50 {
                 let u_dens = hash01(c.div_euclid(4), r.div_euclid(4), dens_seed);
                 let lambda = s.crater_mean * (0.2 + 1.6 * u_dens);
-                match poisson_count(hash01(c, r, band_seed), lambda) {
+                match PoissonDistribution::new(lambda).count(hash01(c, r, band_seed)) {
                     0 => empty += 1,
                     n if n >= 2 => multi += 1,
                     _ => {}
