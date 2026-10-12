@@ -835,15 +835,15 @@ pub enum UsdOp {
         /// Attribute name, including any namespace separators.
         name: String,
     },
-    /// Restore the exact local attribute subtree captured by `RemoveAttribute`.
-    RestoreAttribute {
+    /// Restore the exact local attribute or relationship subtree captured by a property removal.
+    RestoreProperty {
         /// Layer to write.
         edit_target: LayerId,
-        /// Absolute USD path of the attribute's owning prim.
+        /// Absolute USD path of the property's owning prim.
         path: String,
-        /// Attribute name, including any namespace separators.
+        /// Property name, including any namespace separators.
         name: String,
-        /// USDA fragment containing only the removed attribute subtree.
+        /// USDA fragment containing only the removed property subtree.
         snapshot_usda: String,
         /// Parent property order before removal.
         sibling_order: Vec<String>,
@@ -1061,6 +1061,13 @@ pub enum UsdOp {
         name: String,
         /// Absolute target paths the relationship points at.
         targets: Vec<String>,
+    },
+    /// Remove this layer's relationship opinion. A weaker layer is untouched.
+    /// The inverse restores only this property, including target list operations.
+    RemoveRelationship {
+        edit_target: LayerId,
+        path: String,
+        name: String,
     },
     /// Author the attribute-**connection** targets (`connectionPaths`) of
     /// attribute `name` on the prim at `path`. Connections are USD's typed
@@ -1290,7 +1297,7 @@ impl UsdOp {
             | Self::RemoveXformOp { edit_target, .. }
             | Self::RestoreXformOp { edit_target, .. }
             | Self::RemoveAttribute { edit_target, .. }
-            | Self::RestoreAttribute { edit_target, .. }
+            | Self::RestoreProperty { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -1301,6 +1308,7 @@ impl UsdOp {
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
+            | Self::RemoveRelationship { edit_target, .. }
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
@@ -1338,7 +1346,7 @@ impl UsdOp {
             | Self::RemoveXformOp { edit_target, .. }
             | Self::RestoreXformOp { edit_target, .. }
             | Self::RemoveAttribute { edit_target, .. }
-            | Self::RestoreAttribute { edit_target, .. }
+            | Self::RestoreProperty { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -1349,6 +1357,7 @@ impl UsdOp {
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
+            | Self::RemoveRelationship { edit_target, .. }
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
@@ -1386,7 +1395,7 @@ impl UsdOp {
             | Self::RemoveXformOp { path, .. }
             | Self::RestoreXformOp { path, .. }
             | Self::RemoveAttribute { path, .. }
-            | Self::RestoreAttribute { path, .. }
+            | Self::RestoreProperty { path, .. }
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
@@ -1397,6 +1406,7 @@ impl UsdOp {
             | Self::SetTimeSample { path, .. }
             | Self::RemoveTimeSample { path, .. }
             | Self::SetRelationship { path, .. }
+            | Self::RemoveRelationship { path, .. }
             | Self::SetConnection { path, .. }
             | Self::SetPrimKind { path, .. }
             | Self::SetPrimOrder { path, .. }
@@ -2330,7 +2340,7 @@ impl UsdDocument {
     /// A variant root is an Sdf `Variant` spec rather than a `Prim` spec, but
     /// it can own properties such as `inputs:*`. Attribute operations address
     /// that spec directly and does not need to create an over prim first.
-    fn require_attribute_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
+    fn require_property_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
         let authored_variant = sdf.is_prim_variant_selection_path()
             && [&self.base, &self.runtime, &self.view]
@@ -2745,7 +2755,7 @@ impl Document for UsdDocument {
             | UsdOp::RemoveXformOp { edit_target, .. }
             | UsdOp::RestoreXformOp { edit_target, .. }
             | UsdOp::RemoveAttribute { edit_target, .. }
-            | UsdOp::RestoreAttribute { edit_target, .. }
+            | UsdOp::RestoreProperty { edit_target, .. }
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
@@ -2756,6 +2766,7 @@ impl Document for UsdDocument {
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
+            | UsdOp::RemoveRelationship { edit_target, .. }
             | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::SetDefaultPrim { edit_target, .. }
             | UsdOp::SetStageMetrics { edit_target, .. }
@@ -3113,8 +3124,20 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
-            UsdOp::RemoveAttribute { path, name, .. } => {
-                let prim_sdf = match self.require_attribute_owner_anywhere(&path) {
+            UsdOp::RemoveAttribute { path, name, .. }
+            | UsdOp::RemoveRelationship { path, name, .. } => {
+                let relationship = matches!(&logged_op, UsdOp::RemoveRelationship { .. });
+                let kind = if relationship {
+                    "relationship"
+                } else {
+                    "attribute"
+                };
+                let expected = if relationship {
+                    sdf::SpecType::Relationship
+                } else {
+                    sdf::SpecType::Attribute
+                };
+                let prim_sdf = match self.require_property_owner_anywhere(&path) {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
@@ -3126,7 +3149,7 @@ impl Document for UsdDocument {
                 };
                 let property = prim_sdf.append_property(&name).map_err(|error| {
                     DocumentError::ValidationFailed(format!(
-                        "RemoveAttribute `{path}.{name}` has an invalid property name: {error}"
+                        "remove {kind} `{path}.{name}` has an invalid property name: {error}"
                     ))
                 })?;
                 match self.layer(target).spec(&property).map(|spec| spec.ty) {
@@ -3134,16 +3157,24 @@ impl Document for UsdDocument {
                         // Clearing an opinion that this layer does not own is
                         // an idempotent no-op; it must not erase a weaker
                         // component asset's authored value.
-                        return Ok(UsdOp::RemoveAttribute {
-                            edit_target: id,
-                            path,
-                            name,
+                        return Ok(if relationship {
+                            UsdOp::RemoveRelationship {
+                                edit_target: id,
+                                path,
+                                name,
+                            }
+                        } else {
+                            UsdOp::RemoveAttribute {
+                                edit_target: id,
+                                path,
+                                name,
+                            }
                         });
                     }
-                    Some(sdf::SpecType::Attribute) => {}
+                    Some(spec) if spec == expected => {}
                     Some(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
-                            "RemoveAttribute `{path}.{name}` targets a non-attribute property"
+                            "cannot remove {kind} `{path}.{name}`: the authored property has another Sdf spec type"
                         )));
                     }
                 }
@@ -3156,7 +3187,7 @@ impl Document for UsdDocument {
                 )
                 .map_err(author_err)?;
                 let snapshot_usda =
-                    author::snapshot_attribute_subtree(self.layer(target), &prim_sdf, &name)
+                    author::snapshot_property_subtree(self.layer(target), &prim_sdf, &name)
                         .map_err(author_err)?;
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
@@ -3165,7 +3196,7 @@ impl Document for UsdDocument {
                 }
                 stage.remove_property(property).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
-                let inverse = UsdOp::RestoreAttribute {
+                let inverse = UsdOp::RestoreProperty {
                     edit_target: id,
                     path: path.clone(),
                     name: name.clone(),
@@ -3176,7 +3207,7 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
-            UsdOp::RestoreAttribute {
+            UsdOp::RestoreProperty {
                 path,
                 name,
                 snapshot_usda,
@@ -3185,7 +3216,7 @@ impl Document for UsdDocument {
             } => {
                 let prim_sdf = parse_prim_path(&path)?;
                 let mut new_data = self.layer(target).clone();
-                author::restore_attribute_subtree(
+                author::restore_property_subtree(
                     &mut new_data,
                     &prim_sdf,
                     &name,
@@ -3193,10 +3224,23 @@ impl Document for UsdDocument {
                     &sibling_order,
                 )
                 .map_err(author_err)?;
-                let inverse = UsdOp::RemoveAttribute {
-                    edit_target: id,
-                    path: path.clone(),
-                    name: name.clone(),
+                let property = prim_sdf.append_property(&name).map_err(author_err)?;
+                let inverse = match new_data.spec(&property).map(|spec| spec.ty) {
+                    Some(sdf::SpecType::Attribute) => UsdOp::RemoveAttribute {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                    },
+                    Some(sdf::SpecType::Relationship) => UsdOp::RemoveRelationship {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                    },
+                    _ => {
+                        return Err(DocumentError::ValidationFailed(
+                            "restored property has an invalid Sdf spec type".into(),
+                        ));
+                    }
                 };
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
@@ -3405,7 +3449,7 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let (prim_sdf, define_local_over) =
-                    match self.require_attribute_owner_anywhere(&path) {
+                    match self.require_property_owner_anywhere(&path) {
                         Ok(prim) => (prim, false),
                         Err(error) => {
                             let prim = parse_prim_path(&path)?;
@@ -3880,7 +3924,7 @@ impl Document for UsdDocument {
             } => {
                 let prim_sdf = parse_prim_path(&path)?;
                 if prim_sdf.contains_prim_variant_selection() {
-                    self.require_attribute_owner_anywhere(&path)?;
+                    self.require_property_owner_anywhere(&path)?;
                 } else {
                     let composed = self.open_composed_stage()?;
                     if !composed

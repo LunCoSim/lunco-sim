@@ -11,8 +11,8 @@
 //! `joint_viz` gizmo pass).
 //!
 //! Row sources, per joint kind:
-//! - **Revolute** (physical wheels, rocker-bogie pins, doors): angle = twist of
-//!   the relative joint-basis rotation about `hinge_axis`; ω = relative angular
+//! - **Revolute** (physical wheels, rocker-bogie pins, doors): angle = the native
+//!   hinge coordinate used by the motor; ω = relative angular
 //!   velocity projected on the world hinge axis; target / torque cap read
 //!   straight from the joint's [`AngularMotor`] for ordinary position drives.
 //!   Wheel joints instead show the solved torque published by their authored
@@ -24,8 +24,7 @@
 //!   scalar port. Physical steering is an ordinary revolute joint, so its angle
 //!   is shown by the same generic joint row.
 
-use avian3d::prelude::{AngularVelocity, JointBasis, JointFrame, RevoluteJoint, Rotation};
-use bevy::math::{DQuat, DVec3};
+use avian3d::prelude::{AngularVelocity, RevoluteJoint, Rotation};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_mobility::WheelRaycast;
@@ -111,27 +110,6 @@ fn root_of(entity: Entity, q_child_of: &Query<&ChildOf>) -> Entity {
     cur
 }
 
-/// World-space joint-basis orientation for one side of a joint.
-fn basis_world(rot: &Rotation, frame: &JointFrame) -> DQuat {
-    match frame.basis {
-        JointBasis::Local(q) => rot.0 * q,
-        JointBasis::FromGlobal(q) => q,
-    }
-}
-
-/// Signed twist angle (rad, in (−π, π]) of `rel` about the unit `axis`
-/// (swing–twist decomposition; the swing component is discarded).
-fn twist_about(rel: DQuat, axis: DVec3) -> f64 {
-    let proj = DVec3::new(rel.x, rel.y, rel.z).dot(axis);
-    let mut angle = 2.0 * proj.atan2(rel.w);
-    if angle > std::f64::consts::PI {
-        angle -= std::f64::consts::TAU;
-    } else if angle <= -std::f64::consts::PI {
-        angle += std::f64::consts::TAU;
-    }
-    angle
-}
-
 /// A motor `max_torque` of `Scalar::MAX` (avian's "unlimited" default) or any
 /// other absurd magnitude is a solver setting, not a physical readout — hide it.
 fn readable_torque(t: f64) -> Option<f64> {
@@ -215,11 +193,9 @@ pub fn populate_joint_state_view(
             continue;
         };
 
-        let b1 = basis_world(rot1, &joint.frame1);
-        let b2 = basis_world(rot2, &joint.frame2);
-        let rel = b1.inverse() * b2;
-        let angle = twist_about(rel, joint.hinge_axis);
-        let axis_world = b1 * joint.hinge_axis;
+        let Some((angle, axis_world)) = joint.angle_and_axis(rot1.0, rot2.0) else {
+            continue;
+        };
         let omega = (av2.0 - av1.0).dot(axis_world);
 
         // Ordinary authored angle drives use Avian's AngularMotor. Wheel

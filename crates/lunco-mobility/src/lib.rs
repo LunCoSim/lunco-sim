@@ -2087,44 +2087,6 @@ pub struct DifferentialCoupling {
     pub drive_type: DifferentialDriveType,
 }
 
-/// Signed rotation angle (rad) of a relative quaternion about `axis` — the twist
-/// component of a swing-twist decomposition. For a pure rotation `θ` about a unit
-/// `axis`, `q = (cos θ/2, sin θ/2 · axis)` and this returns `θ`, wrapped to
-/// `(-π, π]`. Used to read each rocker's pitch in the chassis frame.
-#[cfg(test)]
-fn angle_about_axis(rel: DQuat, axis: DVec3) -> f64 {
-    let a = axis.normalize_or_zero();
-    if a == DVec3::ZERO {
-        return 0.0;
-    }
-
-    // Remove swing before measuring the hinge twist.  Using the raw relative
-    // quaternion's `atan2(projected_vector, w)` treats the swing component as
-    // part of the scalar half-angle; once a rover is tilted, that produces a
-    // different angle from the native revolute joint and the two constraints
-    // fight.  This is the same swing-twist decomposition used by the joint
-    // telemetry backend, kept here in f64 for the solver.
-    let vector = DVec3::new(rel.x, rel.y, rel.z);
-    let projected = a * vector.dot(a);
-    let twist = DQuat::from_xyzw(projected.x, projected.y, projected.z, rel.w);
-    let norm_sq = twist.length_squared();
-    if norm_sq <= 1e-24 {
-        return 0.0;
-    }
-    let twist = twist.normalize();
-    let mut angle = 2.0 * twist.w.clamp(-1.0, 1.0).acos();
-    if vector.dot(a) < 0.0 {
-        angle = -angle;
-    }
-    while angle > std::f64::consts::PI {
-        angle -= std::f64::consts::TAU;
-    }
-    while angle <= -std::f64::consts::PI {
-        angle += std::f64::consts::TAU;
-    }
-    angle
-}
-
 /// Read the angular state of a native Avian revolute joint using the same
 /// joint-frame construction as its XPBD solver. `Rotation` is the frame-start
 /// body orientation and `delta_rotation` is the accumulated substep correction.
@@ -2135,23 +2097,7 @@ fn native_revolute_state(
     body1_delta: DQuat,
     body2_delta: DQuat,
 ) -> Option<(f64, DVec3)> {
-    let basis1 = joint.local_basis1()?;
-    let basis2 = joint.local_basis2()?;
-    let axis = joint.hinge_axis;
-    let axis1 = body1_rotation * basis1 * axis;
-    let b1 = body1_rotation * basis1 * axis.any_orthonormal_vector();
-    let b2 = body2_rotation * basis2 * axis.any_orthonormal_vector();
-    let corrected_axis = (body1_delta * axis1).normalize_or_zero();
-    if corrected_axis == DVec3::ZERO {
-        return None;
-    }
-    let corrected_b1 = body1_delta * b1;
-    let corrected_b2 = body2_delta * b2;
-    let angle = corrected_b1
-        .cross(corrected_b2)
-        .dot(corrected_axis)
-        .atan2(corrected_b1.dot(corrected_b2));
-    Some((angle, corrected_axis))
+    joint.angle_and_axis(body1_delta * body1_rotation, body2_delta * body2_rotation)
 }
 
 /// The gear's relation `c = θ_a − r·θ_b − rest_offset`, on rocker pitches
@@ -3006,26 +2952,6 @@ mod force_law_tests {
         );
         assert!((f.length() - 1.0).abs() < 1e-9 && (r.length() - 1.0).abs() < 1e-9);
         assert!(f.dot(r).abs() < 1e-9, "forward/right not orthogonal");
-    }
-
-    // ── G5 differential coupling: twist angle + PD law ──────────────────────
-    #[test]
-    fn angle_about_axis_reads_pure_twist() {
-        let axis = DVec3::X;
-        // A +0.3 rad rotation about X reads back as +0.3.
-        let q = DQuat::from_axis_angle(DVec3::X, 0.3);
-        assert!((angle_about_axis(q, axis) - 0.3).abs() < 1e-9);
-        // Sign flips with rotation direction.
-        let q_neg = DQuat::from_axis_angle(DVec3::X, -0.3);
-        assert!((angle_about_axis(q_neg, axis) + 0.3).abs() < 1e-9);
-        // Identity ⇒ zero pitch.
-        assert!(angle_about_axis(DQuat::IDENTITY, axis).abs() < 1e-12);
-
-        // Swing must not change the hinge angle.  This is the case the rover
-        // reaches while its chassis is tilted on a step; the differential and
-        // the native revolute joint must read the same DOF there.
-        let swung = DQuat::from_axis_angle(DVec3::Z, 0.7) * DQuat::from_axis_angle(DVec3::X, 0.3);
-        assert!((angle_about_axis(swung, axis) - 0.3).abs() < 1e-9);
     }
 
     // ── suspension_force_mag: bounded, never negative, damps both ways ───────

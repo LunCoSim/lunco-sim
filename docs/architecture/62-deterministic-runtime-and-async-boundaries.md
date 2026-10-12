@@ -244,20 +244,32 @@ Terrain initial-pose support validation also waits for the active root's
 structural and USD simulation projection to settle before checking colliders;
 bounded projection order cannot admit a body while its authored support
 collider is still absent.
-Rhai compilation, dependency planning, initialization, and `on_start` run in an
-ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
-until `on_start` completes. A fresh process therefore starts `on_start` at
-`SimTick=0` and admits its first `on_tick` at `SimTick=1`, without advancing a
-physics or Modelica step during scene admission.
-File-backed scene scenarios reserve `ScriptPreparation` when their typed asset
-path enters the loader, before a script document exists. The same key passes
-through document admission and compilation to `on_start`; document-only
-cancellation cannot release a source still owned by the loader. Pending sources
-also hold startup activation so asset completion order cannot choose which
-actor initializes first. The loader retains the admitted path with its handle,
-replaces superseded inputs, and retires removed actors/inputs. Load, identity,
-import-closure or attachment failure raises `scenario-source-failed` at the
-scripting owner. UI and asset work continue while authoritative time is held.
+USD `EmbeddedScenarioPath` publication immediately reserves one actor-owned
+`ScriptPreparation` hold through `ScenarioPreparationAdmissions`. The same key
+passes through document admission, compilation and `on_start`; document-only
+cancellation cannot release a source still owned by the loader. Pending actor
+sources also block startup activation, so asset completion order cannot choose
+which actor initializes first. Replacement resets the loader's terminal state
+while retaining its actor hold; removal and despawn retire the actor's source
+admission. Independent `RunScenarioAsset` requests use allocator-owned
+`ScriptSourcePreparation` keys until their serial attachment transfers
+admission to compilation; discarding a request releases only its own key.
+
+Root and recursive imports must be loaded and published in main-world `Assets`
+before attachment. `lunco-scripting-rhai-world` validates the complete source
+closure before committing either the source or prepared AST registry. Native
+load completion alone is insufficient; pending publication retains the request
+and hold. Invalid closures commit neither registry. Built-in preludes and Twin
+tool libraries use that same closure owner. Load, identity or import-closure
+failure raises `scenario-source-failed` at the scripting owner and retains the
+authored input and its admission until replacement or removal. Failed sources
+are terminal for that revision rather than retried every frame.
+
+Rhai compilation, dependency planning, initialization and `on_start` run in an
+ordered pre-tick lifecycle pass; the preparation hold remains active until
+`on_start` completes. A fresh process starts `on_start` at `SimTick=0` and admits
+its first `on_tick` at `SimTick=1`, without advancing physics or Modelica during
+scene admission. UI and asset work continue while authoritative time is held.
 The preparation pass borrows canonical script documents while checking revision
 and eligibility. It copies source and asset identity only when an actual compile
 or capacity retry is admitted; unchanged actors do not copy their source per

@@ -40,7 +40,12 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
-        app.init_resource::<lunco_core_runtime::SimulationProgress>();
+        app.init_resource::<lunco_core_runtime::SimulationProgress>()
+            .init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<lunco_scripting::scenario::ScenarioPreparationAdmissions>()
+            .add_observer(commands::admit_embedded_source)
+            .add_observer(commands::retire_embedded_source)
+            .add_observer(commands::release_requested_source);
 
         if !app.is_plugin_added::<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin>()
         {

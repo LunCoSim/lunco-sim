@@ -180,6 +180,7 @@ impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_physics::DeterministicJointSolverPlugin)
             .init_resource::<JointAdmissionBatch>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .configure_sets(Update, JointPreparation.before(JointAdmission))
             .add_observer(collision_filters::on_remove_joint_collision_pair);
         app.add_systems(
@@ -223,6 +224,20 @@ pub fn attach_joint<J: Component + Clone>(
     body1: Entity,
     joint: JointSpec<J>,
 ) {
+    if body0 == body1 {
+        commands.queue(move |world: &mut World| {
+            world
+                .resource_mut::<lunco_physics::PhysicsHolds>()
+                .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+                "physics-joint-endpoints-invalid",
+                Some(joint_entity),
+                order_key,
+                "joint endpoints resolve to the same body",
+            );
+        });
+        return;
+    }
     let JointSpec { joint, seat } = joint;
     collision_filters::filter_pair(commands, joint_entity, body0, body1);
     commands.entity(joint_entity).try_insert((

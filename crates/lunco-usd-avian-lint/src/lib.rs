@@ -33,7 +33,7 @@
 //!   stage: "<identifier>",
 //!   bodies: [ #{ path, type, kinematic, simulated, collider, subtree_collider,
 //!                host_body, jointed, collider_min, collider_max } ],
-//!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
+//!   joints: [ #{ path, type, bodies: [path, …], resolved_bodies: [path, …], missing: [path, …] } ],
 //!   vehicle_parts: [ #{ path, type, vehicle, body, purpose, collision_api,
 //!                        collision_state, wheel_projector, physical_wheel,
 //!                        rigid_body_api, collision_attribute_authored,
@@ -61,9 +61,8 @@
 //! reads 0 N at 0 stroke while carrying the vehicle. Nothing logs it; the vehicle
 //! sits level at a plausible height.
 //!
-//! Drive facts use `realization = "derived"` when a force spring has no explicit
-//! generalized inertia. That is not an error: the runtime asks Avian for the
-//! computed mass/inertia after the body's collider tree and density are live.
+//! Drive facts retain dimensional coefficients independent of authored mass;
+//! the native solver owns effective inertia and implicit integration.
 //!
 //! `collider_min` / `collider_max` are the world-space bounds of everything a body
 //! can touch the world with — the union over its collider subtree, taken through
@@ -73,7 +72,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_core::program::ProgramGraph;
@@ -524,21 +522,12 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
             continue;
         };
 
-        let (realization, frequency, damping_ratio) = match drive.motor_model() {
-            Ok(MotorModel::SpringDamper {
-                frequency,
-                damping_ratio,
-            }) => ("spring_damper", frequency, damping_ratio),
-            Ok(MotorModel::ForceBased { .. }) => ("force_based", 0.0, 0.0),
-            Ok(MotorModel::AccelerationBased { .. }) => ("acceleration_based", 0.0, 0.0),
-            // Missing authored mass/inertia is valid USD authoring. The runtime
-            // resolves this drive from Avian's computed properties after the
-            // body's collider tree has been admitted; policy must not turn a
-            // schema-valid omission into an error.
-            Err(lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia) => {
-                ("derived", 0.0, 0.0)
-            }
-            Err(lunco_physics::ForceDriveMotorError::InvalidCoefficients) => ("invalid", 0.0, 0.0),
+        let realization = match drive
+            .drive_type
+            .unwrap_or(openusd::schemas::physics::DriveType::Force)
+        {
+            openusd::schemas::physics::DriveType::Force => "force_based",
+            openusd::schemas::physics::DriveType::Acceleration => "acceleration_based",
         };
         let stiffness = drive.stiffness.unwrap_or(0.0);
         let damping = drive.damping.unwrap_or(0.0);
@@ -548,18 +537,13 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
             ("body0", H::str(spec.body0_path)),
             ("body1", H::str(spec.body1_path)),
             ("realization", H::str(realization)),
+            ("valid", H::Bool(drive.motor_model().is_ok())),
             ("stiffness", H::Float(stiffness)),
             ("damping", H::Float(damping)),
             (
                 "max_force",
                 drive.max_force.map(H::Float).unwrap_or(H::Unit),
             ),
-            (
-                "generalized_inertia",
-                drive.generalized_inertia.map(H::Float).unwrap_or(H::Unit),
-            ),
-            ("frequency", H::Float(frequency)),
-            ("damping_ratio", H::Float(damping_ratio)),
         ]));
     }
     drives
@@ -653,7 +637,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .cloned();
         // The RESOLVED endpoints, so `jointed` answers "is this body held" rather
         // than "was this body's path typed into a joint".
-        attached.extend(resolved);
+        attached.extend(resolved.iter().cloned());
         joints.push(H::map([
             ("path", H::str(jp.to_string())),
             (
@@ -663,6 +647,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             (
                 "bodies",
                 H::Array(targets.iter().cloned().map(H::str).collect()),
+            ),
+            (
+                "resolved_bodies",
+                H::Array(resolved.iter().cloned().map(H::str).collect()),
             ),
             ("missing", H::Array(missing.map(H::str).collect())),
         ]));
@@ -1634,10 +1622,8 @@ def Xform "Vehicle" (
         assert_eq!(field(motor, "connected"), &H::Array(vec![H::str("p")]));
     }
 
-    /// Drive facts must describe the motor model the loader will install. A
-    /// massed linear force drive is converted to the implicit SpringDamper path;
-    /// the same authored law without explicit generalized inertia is marked for
-    /// runtime derivation from the body's computed mass properties.
+    /// Drive facts preserve the dimensional native motor law independently
+    /// of whether endpoint mass properties are authored or computed.
     #[test]
     fn drive_facts_preserve_the_runtime_motor_realization() {
         let f = facts(
@@ -1679,12 +1665,12 @@ def Xform "Vehicle" (
             .iter()
             .find(|drive| field(drive, "path") == &H::str("/Rig/Implicit"))
             .expect("massed drive fact");
-        assert_eq!(field(implicit, "realization"), &H::str("spring_damper"));
+        assert_eq!(field(implicit, "realization"), &H::str("force_based"));
         let conditional = drives
             .iter()
             .find(|drive| field(drive, "path") == &H::str("/Rig/Conditional"))
             .expect("unmassed drive fact");
-        assert_eq!(field(conditional, "realization"), &H::str("derived"));
+        assert_eq!(field(conditional, "realization"), &H::str("force_based"));
         let stage = match &f {
             H::Map(entries) => entries
                 .iter()

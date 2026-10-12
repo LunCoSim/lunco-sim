@@ -42,13 +42,14 @@
 //! `Update` schedule and retries every frame until the asset is available.
 
 use avian3d::dynamics::solver::{islands::PhysicsIslands, joint_graph::JointGraph};
-use avian3d::physics_transform::{Position, Rotation};
+use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::schedule::common_conditions::any_with_component;
-use bevy::math::{DQuat, DVec3};
-use bevy::mesh::VertexAttributeValues;
+#[cfg(test)]
+use bevy::math::DQuat;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
@@ -67,7 +68,7 @@ use openusd::sdf::Path as SdfPath;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, JointDrive, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
+    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
     ShouldBeDynamic, UsdPhysicsProjected,
 };
 use lunco_usd_avian_reader::{
@@ -313,6 +314,16 @@ pub fn subtree_requires_stage_projection_reset(
     prim_path: &str,
 ) -> bool {
     let prefix = prim_path.trim_end_matches('/');
+    // Geometry descendants contribute to compound bodies even when their own
+    // collisionEnabled is false (a derived proxy may read that visual source).
+    if world.iter_entities().any(|entity| {
+        entity.contains::<RigidBody>()
+            && entity.get::<UsdPrimPath>().is_some_and(|prim| {
+                prim.stage_handle.id() == stage_id && prefix.starts_with(&format!("{}/", prim.path))
+            })
+    }) {
+        return true;
+    }
     let affected: EntityHashSet = world
         .iter_entities()
         .filter(|entity| {
@@ -626,227 +637,6 @@ fn enforce_kinematic_on_animated(
     }
 }
 
-/// Mass properties needed to turn a USD force drive into Avian's implicit
-/// spring-damper model. These are the live, composed properties after Avian has
-/// combined the body's own collider tree and any authored mass overrides.
-#[derive(Clone, Copy)]
-struct LiveDriveMassProperties {
-    mass: f64,
-    angular_inertia: ComputedAngularInertia,
-    center_of_mass: DVec3,
-}
-
-/// Why a live body's computed mass properties cannot yet be used by a drive.
-#[derive(Clone, Copy)]
-enum LiveDriveMassPropertiesError {
-    /// Avian has not run its mass-property update for this body yet.
-    NotReady,
-    /// Avian has produced an infinite/degenerate property for a body that the
-    /// drive expects to move.
-    Invalid,
-}
-
-/// The result of resolving a force drive's generalized inertia. `Waiting` is a
-/// real lifecycle state: USD permits mass/inertia to be omitted, and Avian
-/// computes them from attached colliders. The joint must wait for that computed
-/// state rather than rejecting a valid stage or installing a timestep-sensitive
-/// explicit motor.
-enum ResolvedJointDrive {
-    Ready(MotorModel),
-    Waiting,
-    Invalid(lunco_physics::ForceDriveMotorError),
-}
-
-/// Return the finite live mass properties for an endpoint.
-///
-/// `None` is a world/static endpoint and therefore contributes infinite
-/// generalized inertia. An `Err` is deliberately distinct from that case: a
-/// dynamic/kinematic body whose computed properties are not available yet must
-/// defer joint admission, while a body whose computed properties are present but
-/// degenerate is a terminal physics authoring error.
-fn live_drive_mass_properties(
-    query: &Query<(
-        &RigidBody,
-        Option<&ShouldBeDynamic>,
-        Option<&ComputedMass>,
-        Option<&ComputedAngularInertia>,
-        Option<&ComputedCenterOfMass>,
-    )>,
-    entity: Option<Entity>,
-) -> Result<Option<LiveDriveMassProperties>, LiveDriveMassPropertiesError> {
-    let Some(entity) = entity else {
-        return Ok(None);
-    };
-    let Ok((body, should_be_dynamic, mass, angular_inertia, center_of_mass)) = query.get(entity)
-    else {
-        return Err(LiveDriveMassPropertiesError::NotReady);
-    };
-    if matches!(body, RigidBody::Static)
-        || (matches!(body, RigidBody::Kinematic) && should_be_dynamic.is_none())
-    {
-        return Ok(None);
-    }
-    let (Some(mass), Some(angular_inertia), Some(center_of_mass)) =
-        (mass, angular_inertia, center_of_mass)
-    else {
-        return Err(LiveDriveMassPropertiesError::NotReady);
-    };
-    let mass = mass.value();
-    let center_of_mass = center_of_mass.0;
-    if !mass.is_finite()
-        || mass <= 0.0
-        || !angular_inertia.is_finite()
-        || !center_of_mass.is_finite()
-    {
-        return Err(LiveDriveMassPropertiesError::Invalid);
-    }
-    Ok(Some(LiveDriveMassProperties {
-        mass,
-        angular_inertia: *angular_inertia,
-        center_of_mass,
-    }))
-}
-
-/// Resolve a USD force drive against Avian's computed attached-body properties.
-///
-/// Authored generalized inertia wins when present. When it is absent, the
-/// implicit conversion is calculated from the actual live bodies: effective
-/// mass for a slider, or effective moment about the joint axis for a hinge,
-/// including the parallel-axis term from each body's computed centre of mass.
-/// This is the general articulated-body path; it contains no rover or steering
-/// knowledge.
-fn resolve_joint_drive_motor_model(
-    drive: JointDrive,
-    pending: &PendingUsdJoint,
-    body0: Option<Entity>,
-    body1: Option<Entity>,
-    pose0: Option<(DVec3, DQuat)>,
-    pose1: Option<(DVec3, DQuat)>,
-    mass_properties: &Query<(
-        &RigidBody,
-        Option<&ShouldBeDynamic>,
-        Option<&ComputedMass>,
-        Option<&ComputedAngularInertia>,
-        Option<&ComputedCenterOfMass>,
-    )>,
-) -> ResolvedJointDrive {
-    // This first call validates the authored coefficients and resolves all
-    // acceleration drives and force drives that do not need an inertia. Only a
-    // missing generalized inertia proceeds to live-property derivation.
-    match drive.motor_model() {
-        Ok(model) => return ResolvedJointDrive::Ready(model),
-        Err(lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia) => {}
-        Err(error) => return ResolvedJointDrive::Invalid(error),
-    }
-
-    let properties0 = match live_drive_mass_properties(mass_properties, body0) {
-        Ok(properties) => properties,
-        Err(LiveDriveMassPropertiesError::NotReady) => return ResolvedJointDrive::Waiting,
-        Err(LiveDriveMassPropertiesError::Invalid) => {
-            return ResolvedJointDrive::Invalid(
-                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            );
-        }
-    };
-    let properties1 = match live_drive_mass_properties(mass_properties, body1) {
-        Ok(properties) => properties,
-        Err(LiveDriveMassPropertiesError::NotReady) => return ResolvedJointDrive::Waiting,
-        Err(LiveDriveMassPropertiesError::Invalid) => {
-            return ResolvedJointDrive::Invalid(
-                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            );
-        }
-    };
-
-    let generalized_inertia = if pending.joint_type == "PhysicsPrismaticJoint" {
-        let inverse_mass = properties0.map(|p| 1.0 / p.mass).unwrap_or(0.0)
-            + properties1.map(|p| 1.0 / p.mass).unwrap_or(0.0);
-        if !inverse_mass.is_finite() || inverse_mass <= f64::EPSILON {
-            return ResolvedJointDrive::Invalid(
-                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            );
-        }
-        1.0 / inverse_mass
-    } else if pending.joint_type == "PhysicsRevoluteJoint" {
-        let scalar_inertia = |properties: Option<LiveDriveMassProperties>,
-                              pose: Option<(DVec3, DQuat)>,
-                              local_axis: DVec3,
-                              local_anchor: DVec3|
-         -> Result<Option<f64>, ResolvedJointDrive> {
-            let Some(properties) = properties else {
-                return Ok(None);
-            };
-            let Some((position, rotation)) = pose else {
-                return Err(ResolvedJointDrive::Waiting);
-            };
-            let local_axis = local_axis.normalize_or_zero();
-            if !local_axis.is_finite() || local_axis.length_squared() <= f64::EPSILON {
-                return Err(ResolvedJointDrive::Invalid(
-                    lunco_physics::ForceDriveMotorError::InvalidCoefficients,
-                ));
-            }
-            let rotational = local_axis.dot(properties.angular_inertia.value() * local_axis);
-            let axis_world = rotation * local_axis;
-            let anchor_world = position + rotation * local_anchor;
-            let center_of_mass_world = position + rotation * properties.center_of_mass;
-            let offset = anchor_world - center_of_mass_world;
-            let perpendicular_offset_squared =
-                (offset.length_squared() - offset.dot(axis_world).powi(2)).max(0.0);
-            let scalar = rotational + properties.mass * perpendicular_offset_squared;
-            if !scalar.is_finite() || scalar <= f64::EPSILON {
-                return Err(ResolvedJointDrive::Invalid(
-                    lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-                ));
-            }
-            Ok(Some(scalar))
-        };
-        let i0 = match scalar_inertia(
-            properties0,
-            pose0,
-            pending.local_rot0 * pending.axis,
-            pending.local_pos0,
-        ) {
-            Ok(value) => value,
-            Err(result) => return result,
-        };
-        let i1 = match scalar_inertia(
-            properties1,
-            pose1,
-            pending.local_rot1 * pending.axis,
-            pending.local_pos1,
-        ) {
-            Ok(value) => value,
-            Err(result) => return result,
-        };
-        let inverse = i0.map(|i| 1.0 / i).unwrap_or(0.0) + i1.map(|i| 1.0 / i).unwrap_or(0.0);
-        if !inverse.is_finite() || inverse <= f64::EPSILON {
-            return ResolvedJointDrive::Invalid(
-                lunco_physics::ForceDriveMotorError::MissingGeneralizedInertia,
-            );
-        }
-        1.0 / inverse
-    } else {
-        // Fixed/spherical/distance joints do not install a linear/angular motor
-        // from this reader. Keep the resolution closed over the explicit joint
-        // kinds that carry the corresponding USD drive instance.
-        return ResolvedJointDrive::Invalid(
-            lunco_physics::ForceDriveMotorError::InvalidCoefficients,
-        );
-    };
-
-    let mut resolved = drive;
-    resolved.generalized_inertia = Some(generalized_inertia);
-    match resolved.motor_model() {
-        Ok(model) => ResolvedJointDrive::Ready(model),
-        Err(error) => ResolvedJointDrive::Invalid(error),
-    }
-}
-
-/// Force (N) / torque (N·m) saturation a USD-driven joint motor gets when its
-/// `physics:maxForce` is left unauthored — generous enough to hold the target
-/// against gravity, matching `lunco_physics::joint`'s wire-driven default.
-const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
-
 /// Adds a collider component to an entity based on USD prim type and dimensions.
 fn add_collider_from_usd(
     commands: &mut Commands,
@@ -956,8 +746,7 @@ mod terrain_collider_owner_tests {
 }
 
 /// Builds the static collider for a mesh-backed terrain once its `Mesh3d`
-/// asset is available. Prefers a [`heightfield`](heightfield_from_mesh) when
-/// the mesh is a regular DEM grid; otherwise falls back to a general trimesh.
+/// asset is available. The exact triangle mesh supports nonlinear sweeps.
 fn build_terrain_mesh_colliders(
     q: Query<(Entity, &Mesh3d, Option<&UsdPrimPath>), With<PendingTerrainCollider>>,
     meshes: Res<Assets<Mesh>>,
@@ -971,13 +760,10 @@ fn build_terrain_mesh_colliders(
             continue;
         };
 
-        let collider = heightfield_from_mesh(mesh).or_else(|| {
-            warn!(
-                "[usd-avian] terrain mesh isn't a regular DEM grid; \
-                   building a (heavier) trimesh collider instead"
-            );
-            Collider::trimesh_from_mesh(mesh)
-        });
+        let collider = Collider::trimesh_from_mesh_with_config(
+            mesh,
+            avian3d::prelude::TrimeshFlags::FIX_INTERNAL_EDGES,
+        );
 
         match collider {
             Some(c) => {
@@ -1014,76 +800,6 @@ fn build_terrain_mesh_colliders(
     }
 }
 
-/// Builds a parry **heightfield** `Collider` from a regular grid mesh (a DEM /
-/// heightmap, like the Shackleton ridge glTF). Returns `None` if the mesh
-/// isn't a square, axis-aligned, row-major XZ grid — the caller then falls
-/// back to a general trimesh.
-///
-/// Why a heightfield instead of a trimesh: a DEM *is* an N×N grid of height
-/// samples. A heightfield collider stores exactly that grid and resolves a
-/// contact by indexing the two cells under the query point — O(1), ~N²
-/// floats — whereas a trimesh stores 2·(N−1)² triangles in a BVH that must be
-/// built and traversed. For this 458×458 ridge that's a 209,764-cell grid vs
-/// a ~417,800-triangle BVH: dramatically cheaper to build (no offline pre-bake
-/// needed) and to query, with zero loss of fidelity — the grid is the source
-/// geometry.
-///
-/// avian's heightfield indexes **rows along X, columns along Z**, centred on
-/// the XZ plane and scaled per axis. Our mesh is row-major with each row a
-/// line of constant Z and each column a line of constant X (Blender's DEM
-/// export order), so vertex (row r = Z, col c = X) sits at index `r*side + c`
-/// and maps to `heights[x = c][z = r]`. The `scale` restores the metric
-/// footprint; height scale stays 1 because vertex Y is already in metres. The
-/// collider therefore coincides with the visual mesh (same source, same
-/// entity transform).
-fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
-    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-    else {
-        return None;
-    };
-
-    let n = pos.len();
-    let side = (n as f64).sqrt() as usize;
-    if side < 2 || side * side != n {
-        return None;
-    }
-
-    // Probe the expected layout (row = constant Z, column = constant X). If it
-    // doesn't hold, bail to trimesh rather than build a scrambled collider.
-    let eps = 1.0_f32;
-    let row_const_z =
-        (pos[0][2] - pos[1][2]).abs() < eps && (pos[0][2] - pos[side - 1][2]).abs() < eps;
-    let col_const_x = (pos[0][0] - pos[side][0]).abs() < eps;
-    if !row_const_z || !col_const_x {
-        return None;
-    }
-
-    let (mut min_x, mut max_x, mut min_z, mut max_z) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-    for v in pos {
-        min_x = min_x.min(v[0]);
-        max_x = max_x.max(v[0]);
-        min_z = min_z.min(v[2]);
-        max_z = max_z.max(v[2]);
-    }
-    let scale_x = (max_x - min_x) as f64;
-    let scale_z = (max_z - min_z) as f64;
-    if scale_x <= 0.0 || scale_z <= 0.0 {
-        return None;
-    }
-
-    let mut heights = vec![vec![0.0_f64; side]; side];
-    for r in 0..side {
-        for c in 0..side {
-            heights[c][r] = pos[r * side + c][1] as f64;
-        }
-    }
-
-    Some(Collider::heightfield(
-        heights,
-        DVec3::new(scale_x, 1.0, scale_z),
-    ))
-}
-
 /// Deferred system that maps USD physics attributes to Avian3D components.
 ///
 /// This system runs in the `Update` schedule and processes all `UsdPrimPath` entities
@@ -1114,7 +830,14 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdSceneProjected>,
-    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdPhysicsProjected>>,
+    query: Query<
+        (
+            &UsdPrimPath,
+            Option<&UsdInstanceProjection>,
+            Option<&UsdInstanceMember>,
+        ),
+        Without<UsdPhysicsProjected>,
+    >,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -1128,7 +851,7 @@ fn process_usd_avian_prims(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, instance_projection)) = query.get(entity) else {
+    let Ok((prim_path, instance_projection, instance_member)) = query.get(entity) else {
         return;
     };
     // A USD Editor preview shares the normal visual projection pipeline with
@@ -1196,6 +919,14 @@ fn process_usd_avian_prims(
         path = %prim_path.path,
     )
     .entered();
+    // Referenced instances retain source paths on their members. Scope stable
+    // collider identity exactly as the joint owner scopes native constraints.
+    let instance_path = instance_member.map_or("", |member| member.root_path.as_str());
+    commands
+        .entity(entity)
+        .try_insert(lunco_physics::PhysicsOrderKey(format!(
+            "{instance_path}|{sdf_path}"
+        )));
     extract_avian_prim(
         &reader,
         entity,
@@ -1348,7 +1079,7 @@ fn project_pending_joint(
     }
     // Wheel joints belong to raycast-wheel realization. Lint-only fixtures are
     // available to the linter but are never runtime constraints or faults.
-    if reader.boolean(sdf_path, "lunco:lintOnly") == Some(true)
+    if !lunco_usd_avian_reader::joint::is_runtime_joint_enabled(reader, sdf_path)
         || joint_targets_simulated_wheel(reader, sdf_path)
     {
         return true;
@@ -1655,8 +1386,16 @@ fn extract_avian_prim(
                 return;
             }
         };
-        if !compound_shapes.is_empty() {
-            let collider = Collider::compound(compound_shapes);
+        let sources = if compound_shapes.shapes.is_empty() {
+            vec![sdf_path.to_string()]
+        } else {
+            compound_shapes.source_paths
+        };
+        commands
+            .entity(entity)
+            .try_insert(lunco_usd_avian_contracts::UsdColliderSources(sources));
+        if !compound_shapes.shapes.is_empty() {
+            let collider = Collider::compound(compound_shapes.shapes);
             if lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
                 commands.entity(entity).try_insert(collider);
             } else {
@@ -1856,7 +1595,6 @@ enum PendingUsdJointWait {
     MissingBody { body0: bool, body1: bool },
     MissingPoseOwner { body0: bool, body1: bool },
     UnseededPose { body0: bool, body1: bool },
-    ComputedDriveInertia,
 }
 
 #[derive(Default)]
@@ -1894,17 +1632,6 @@ fn build_usd_physics_joints(
     // bridge has seeded it. Keeping those two facts separate prevents seating
     // against the required-component default at the origin.
     q_bodies: Query<(Entity, &UsdPrimPath), (With<RigidBody>, With<Position>)>,
-    // Avian owns the composed mass properties. USD mass/inertia overrides and
-    // collider/density-derived values both arrive here after its prepare pass;
-    // the drive resolver below uses this query only when USD did not author a
-    // generalized inertia explicitly.
-    q_mass_properties: Query<(
-        &RigidBody,
-        Option<&ShouldBeDynamic>,
-        Option<&ComputedMass>,
-        Option<&ComputedAngularInertia>,
-        Option<&ComputedCenterOfMass>,
-    )>,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&lunco_usd_avian_core::BridgeShadow>,
@@ -1917,7 +1644,6 @@ fn build_usd_physics_joints(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     q_instance_projection: Query<&UsdInstanceProjection>,
     q_instance_member: Query<&UsdInstanceMember>,
-    q_pose: Query<(&Position, &Rotation)>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut resolution: Local<PendingUsdJointResolutionState>,
@@ -2084,48 +1810,12 @@ fn build_usd_physics_joints(
             continue;
         }
 
-        // Snapshot poses before the seating write below. They are also the
-        // world-frame data needed for a live angular inertia calculation. A
-        // world/static endpoint has no finite mass properties and contributes
-        // zero inverse inertia to the effective coordinate.
-        let drive_pose0 =
-            body0_ent.and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (p.0, r.0)));
-        let drive_pose1 =
-            body1_ent.and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (p.0, r.0)));
         let resolved_drive_model = match pending.drive {
             None => None,
-            Some(drive) => match resolve_joint_drive_motor_model(
-                drive,
-                pending,
-                body0_ent,
-                body1_ent,
-                drive_pose0,
-                drive_pose1,
-                &q_mass_properties,
-            ) {
-                ResolvedJointDrive::Ready(model) => Some(model),
-                ResolvedJointDrive::Waiting => {
-                    // USD permits mass/inertia to be computed from attached
-                    // colliders. Keep the joint pending until Avian publishes
-                    // the composed properties for the projected body.
-                    report_pending_usd_joint_wait(
-                        &mut resolution.waits,
-                        joint_entity,
-                        &joint_prim_path.path,
-                        PendingUsdJointWait::ComputedDriveInertia,
-                        || {
-                            format!(
-                                "computed joint-drive mass/inertia (body0='{}', body1='{}')",
-                                pending.body0_path, pending.body1_path
-                            )
-                        },
-                    );
-                    continue;
-                }
-                ResolvedJointDrive::Invalid(error) => {
-                    let detail = format!(
-                        "standard USD force drive could not be realized from authored or computed generalized inertia: {error:?}; ensure participating bodies have valid mass properties or attached colliders"
-                    );
+            Some(drive) => match drive.motor_model() {
+                Ok(model) => Some(model),
+                Err(error) => {
+                    let detail = format!("standard USD drive has invalid parameters: {error:?}");
                     error!(
                         "USD physics joint {} rejected its drive: {detail}",
                         joint_prim_path.path
@@ -2189,7 +1879,7 @@ fn build_usd_physics_joints(
                     enabled: d.is_active(),
                     target_position: d.target_position.unwrap_or(0.0),
                     target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                    max_force: d.max_force.unwrap_or(avian3d::math::Scalar::MAX),
                     motor_model: resolved_drive_model.expect("resolved USD prismatic drive motor"),
                 });
                 lunco_usd_avian_joints::attach_prismatic_joint(
@@ -2214,7 +1904,7 @@ fn build_usd_physics_joints(
                     enabled: d.is_active(),
                     target_position: d.target_position.unwrap_or(0.0),
                     target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                    max_torque: d.max_force.unwrap_or(avian3d::math::Scalar::MAX),
                     motor_model: resolved_drive_model.expect("resolved USD revolute drive motor"),
                 });
                 lunco_usd_avian_joints::attach_revolute_joint(
@@ -3054,7 +2744,7 @@ def PhysicsRevoluteJoint "Hinge" (
     }
 
     #[test]
-    fn angular_force_drive_uses_authored_effective_inertia() {
+    fn angular_force_drive_preserves_dimensional_coefficients() {
         let source = "#usda 1.0\n\
 (\n\
     metersPerUnit = 1\n\
@@ -3084,12 +2774,10 @@ def PhysicsRevoluteJoint \"Hinge\" ( prepend apiSchemas = [\"PhysicsDriveAPI:ang
         let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
             .expect("angular force drive reads");
         let drive = joint.drive.expect("drive is authored");
-        let expected_inertia = 1.0 / (1.0 / 110.0 + 1.0 / 5.0);
-        assert!((drive.generalized_inertia.unwrap() - expected_inertia).abs() < 1e-9);
-        assert!(matches!(
-            drive.motor_model(),
-            Ok(MotorModel::SpringDamper { .. })
-        ));
+        assert!(
+            matches!(drive.motor_model(),Ok(MotorModel::ForceBased{stiffness,damping})
+            if (stiffness-300.0f64.to_degrees()).abs()<1e-9 && (damping-30.0f64.to_degrees()).abs()<1e-9)
+        );
     }
 
     /// Where a raked joint's axis actually POINTS, from the authoring a landing
@@ -3868,7 +3556,9 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let leg = SdfPath::new("/Rig/Leg").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &leg).expect("valid transforms");
+        let pieces = collect_child_colliders_from_usd(&view, &leg)
+            .expect("valid transforms")
+            .shapes;
         assert_eq!(
             pieces.len(),
             1,
@@ -3919,7 +3609,9 @@ def Xform "Body" (prepend apiSchemas = "PhysicsRigidBodyAPI")
             &live as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
             asset.projection_plan.as_ref() as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
         ] {
-            let shapes = collect_child_colliders_from_usd(reader, &root).unwrap();
+            let shapes = collect_child_colliders_from_usd(reader, &root)
+                .unwrap()
+                .shapes;
             assert_eq!(
                 shapes.len(),
                 1,
@@ -3968,7 +3660,9 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let hull = SdfPath::new("/Rig/Hull").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &hull).expect("valid transforms");
+        let pieces = collect_child_colliders_from_usd(&view, &hull)
+            .expect("valid transforms")
+            .shapes;
         assert_eq!(
             pieces.len(),
             1,
@@ -4034,6 +3728,7 @@ def Xform "Rig"
         assert!(
             collect_child_colliders_from_usd(&view, &lander)
                 .expect("valid transforms")
+                .shapes
                 .is_empty()
         );
         assert!(matches!(
@@ -4108,6 +3803,12 @@ def Cube "Part" (
         double3 xformOp:translate = (0, 2, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
+    def Cube "BaseCap" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
 }
 "#;
         let recipe = StageRecipe::new(
@@ -4122,15 +3823,25 @@ def Cube "Part" (
         let assembly = SdfPath::new("/Scene/Assembly").unwrap();
         let live_view = live.view();
         assert!(live_view.has_prim(&SdfPath::new("/Scene/Assembly/EndCap").unwrap()));
-        let live_shapes = collect_child_colliders_from_usd(&live_view, &assembly)
+        let live_parts = collect_child_colliders_from_usd(&live_view, &assembly)
             .expect("live composed reference has valid collision transforms");
         assert_eq!(
+            live_parts.source_paths,
+            [
+                "/Scene/Assembly",
+                "/Scene/Assembly/BaseCap",
+                "/Scene/Assembly/EndCap"
+            ]
+        );
+        let live_shapes = live_parts.shapes;
+        assert_eq!(
             live_shapes.len(),
-            2,
+            3,
             "live composition must keep root and child shapes"
         );
         assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(live_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe::new(
             "child.usda",
@@ -4143,15 +3854,25 @@ def Cube "Part" (
             .expect("remap referenced body plan");
         let instance_root = SdfPath::new("/Scene/PreparedAssembly").unwrap();
         assert!(instance.has_prim(&SdfPath::new("/Scene/PreparedAssembly/EndCap").unwrap()));
-        let prepared_shapes = collect_child_colliders_from_usd(&instance, &instance_root)
+        let prepared_parts = collect_child_colliders_from_usd(&instance, &instance_root)
             .expect("prepared reference has valid collision transforms");
         assert_eq!(
+            prepared_parts.source_paths,
+            [
+                "/Scene/PreparedAssembly",
+                "/Scene/PreparedAssembly/BaseCap",
+                "/Scene/PreparedAssembly/EndCap"
+            ]
+        );
+        let prepared_shapes = prepared_parts.shapes;
+        assert_eq!(
             prepared_shapes.len(),
-            2,
+            3,
             "prepared composition must keep root and child shapes"
         );
         assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(prepared_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

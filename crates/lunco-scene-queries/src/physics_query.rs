@@ -144,11 +144,25 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             ));
         };
         let joint_graph_edges = joint_graph.graph().edge_count();
+        let continuous = world
+            .get_resource::<lunco_physics::ContinuousCollisionDiagnostics>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "PhysicsPerformance: continuous collision diagnostics are not installed",
+                )
+            })?;
 
         Ok(Some(api_value!({
             "step_number": timing.step_number,
             "step_time_ms": timing.step_time.as_secs_f64() * 1000.0,
             "step_time_samples_ms": step_time_samples_ms,
+            "continuous_solve_time_ms": continuous.solve_time.as_secs_f64()*1000.0,
+            "continuous_sweep_time_ms": continuous.sweep_time.as_secs_f64()*1000.0,
+            "continuous_joint_time_ms": continuous.joint_time.as_secs_f64()*1000.0,
+            "continuous_substeps": continuous.substeps,
+            "continuous_sweep_queries": continuous.sweep_queries,
+            "continuous_position_iterations": continuous.position_iterations,
             "entities": entities,
             "bodies": bodies,
             "dynamic_bodies": dynamic,
@@ -404,6 +418,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "collider_source_paths": if collider {world.get::<lunco_usd_avian_contracts::UsdColliderSources>(entity).map(|sources|sources.0.clone())} else {None},
             "collider_local_bounds": collider_local_bounds,
             "collider_disabled": collider_disabled,
             "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),

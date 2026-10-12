@@ -1387,6 +1387,84 @@ fn set_relationship_overwrite_inverts_to_typed_op() {
     );
 }
 
+#[test]
+fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
+    let source =
+        "#usda 1.0\ndef Xform \"World\" {\n prepend rel link = </World>\n double scalar = 1.0\n}\n";
+    let mut doc = UsdDocument::new(DocumentId::new(144), source);
+    assert_eq!(doc.parse_error(), None);
+    let remove = |name: &str| UsdOp::RemoveRelationship {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        name: name.into(),
+    };
+    let property = SdfPath::new("/World.link").unwrap();
+    let prior = doc
+        .data()
+        .field(&property, sdf::FieldKey::TargetPaths.as_str())
+        .cloned();
+    let inverse = doc.apply(remove("link")).unwrap();
+    assert!(doc.data().spec(&property).is_none());
+    assert!(matches!(&inverse, UsdOp::RestoreProperty { .. }));
+    // An unrelated edit after removal must survive the local undo.
+    doc.apply(UsdOp::SetAttribute {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        name: "scalar".into(),
+        type_name: "double".into(),
+        value: "2.0".into(),
+    })
+    .unwrap();
+    let redo = doc.apply(inverse).unwrap();
+    assert!(matches!(&redo, UsdOp::RemoveRelationship { .. }));
+    assert_eq!(
+        doc.data()
+            .prim_attribute_value::<f64>(&SdfPath::new("/World").unwrap(), "scalar"),
+        Some(2.0)
+    );
+    let restored_source = doc.source();
+    assert_eq!(
+        doc.data()
+            .field(&property, sdf::FieldKey::TargetPaths.as_str())
+            .cloned(),
+        prior
+    );
+    let generation = doc.generation();
+    assert!(matches!(
+        doc.apply(remove("scalar")),
+        Err(DocumentError::ValidationFailed(_))
+    ));
+    assert_eq!(doc.generation(), generation);
+    assert_eq!(doc.source(), restored_source);
+    doc.apply(remove("absent")).unwrap();
+    assert_eq!(doc.generation(), generation);
+    doc.apply(UsdOp::SetRelationship {
+        edit_target: LayerId::runtime(),
+        path: "/World".into(),
+        name: "link".into(),
+        targets: vec![],
+    })
+    .unwrap();
+    let runtime_before = doc.layer_source(TargetLayer::Runtime);
+    let inverse = doc
+        .apply(UsdOp::RemoveRelationship {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            name: "link".into(),
+        })
+        .unwrap();
+    assert!(doc.runtime_data().spec(&property).is_none());
+    assert_eq!(
+        doc.data()
+            .field(&property, sdf::FieldKey::TargetPaths.as_str())
+            .cloned(),
+        prior
+    );
+    doc.apply(inverse).unwrap();
+    assert_eq!(doc.layer_source(TargetLayer::Runtime), runtime_before);
+    assert_eq!(doc.source(), restored_source);
+}
+
 /// The `SetRelationship` invariants, for the attribute-connection twin.
 #[test]
 fn set_connection_overwrite_inverts_to_typed_op() {

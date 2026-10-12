@@ -1,0 +1,134 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def Sphere "A" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (2.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+    }
+    def Sphere "B" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (2400.0, 0.0, 0.0)
+    }
+    def Sphere "Pivot" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (0.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:angularVelocity = (0.0, 5400.0, 0.0)
+    }
+    def Sphere "Link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (1.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "Wall" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.0, 0.0, 0.0)
+        double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Sphere "ArcObstacle" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double radius = 0.15
+        double3 xformOp:translate = (0.70710678, 3.0, -0.70710678)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PhysicsFixedJoint "Attachment"
+    {
+        custom rel physics:body0 = </World/Pivot>
+        custom rel physics:body1 = </World/Link>
+        point3f physics:localPos0 = (1.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+    def Scope "Observer" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/continuous_contacts.rhai@
+    }
+    def DistantLight "Sun"
+    {
+    }
+    def Sphere "Touching" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+        double3 xformOp:translate = (2.4, 0.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "TouchingWall" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.0, 0.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        double3 xformOp:scale = (1.0, 10.0, 10.0)
+    }
+    def Sphere "Overlapping" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+        double3 xformOp:translate = (2.45, 0.0, 30.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "OverlappingWall" (
+        prepend apiSchemas = "PhysicsCollisionAPI"
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.0, 0.0, 30.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        double3 xformOp:scale = (1.0, 10.0, 10.0)
+    }
+}

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "third_party/openusd",
+    "third_party/glam",
     "crates/lunco-core",
     "crates/lunco-runtime-context",
     "crates/lunco-geometry-core",
@@ -247,6 +248,12 @@ default-members = [
 resolver = "2"
 
 [patch.crates-io]
+# Native dimensional motor integration; see third_party/avian3d/LUNCOSIM-PROVENANCE.md.
+avian3d = { path = "third_party/avian3d" }
+# Native GJK stall classification and scalar determinism; see the vendor provenance.
+parry3d-f64 = { path = "third_party/parry3d-f64" }
+# Scalar aligned-mask serialization for Bevy reflection; see vendor provenance.
+glam = { path = "third_party/glam" }
 # Pinned maintained OpenUSD source with the canonical scalar-asset identifier
 # annotation documented in third_party/openusd/LUNCOSIM-PROVENANCE.md.
 openusd = { path = "third_party/openusd" }
@@ -609,6 +616,19 @@ debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
+opt-level = 3
+
+# Workspace math owners instantiate the native collision and joint kernels.
+# Cargo's dependency wildcard excludes workspace members; retain optimized
+# code generation here along with the development profile's invariant checks.
+[profile.dev.package."glam:0.32.1"]
+opt-level = 3
+
+[profile.dev.package.lunco-physics]
+opt-level = 3
+
+# This installer monomorphizes native physics systems with the USD pair hook.
+[profile.dev.package.lunco-luncosim-simulation]
 opt-level = 3
 
 # Keep Avian's overflow checks enabled in development. Physics teardown is

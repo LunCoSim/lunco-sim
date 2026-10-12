@@ -273,6 +273,9 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                     time.is_paused(),
                 )
             });
+        let physics_substep_dt = world
+            .get_resource::<Time<lunco_physics::Substeps>>()
+            .map(|time| time.delta_secs_f64());
         let physics_hold_reasons = world
             .get_resource::<lunco_physics::PhysicsHolds>()
             .map(|holds| holds.reasons().collect::<Vec<_>>());
@@ -375,6 +378,10 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             (
                 "physics_dt_s".to_owned(),
                 b.float(physics_snapshot.map_or(0.0, |(delta, _, _)| delta)),
+            ),
+            (
+                "physics_substep_dt_s".to_owned(),
+                physics_substep_dt.map_or_else(|| b.unit(), |delta| b.float(delta)),
             ),
             (
                 "physics_elapsed_s".to_owned(),

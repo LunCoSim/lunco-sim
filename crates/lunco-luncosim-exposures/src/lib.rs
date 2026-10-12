@@ -673,6 +673,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::ScriptPreparation => {
                         "ScriptPreparation"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::ScriptSourcePreparation => {
+                        "ScriptSourcePreparation"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::TwinPolicyPreparation => {
                         "TwinPolicyPreparation"
                     }

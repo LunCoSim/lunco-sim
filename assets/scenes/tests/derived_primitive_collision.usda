@@ -1,0 +1,50 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def Xform "Body" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 1.0
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "Visual"
+        {
+            double size = 1.0
+            uniform token[] xformOpOrder = []
+        }
+        def Cube "Proxy" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoDerivedGeometryAPI"]
+        )
+        {
+            double size = 1.0
+            uniform token[] xformOpOrder = []
+            uniform token purpose = "proxy"
+            token visibility = "invisible"
+            custom rel lunco:derived:source = </World/Body/Visual>
+        }
+    }
+    def Scope "Observer" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/derived_primitive_collision.rhai@
+    }
+    def DistantLight "Sun"
+    {
+    }
+}

@@ -858,6 +858,22 @@ struct ScenarioPreparationReservation {
 }
 
 impl ScenarioPreparationAdmissions {
+    /// Hold authoritative time while an admitted authored source and its
+    /// imports load, before its document identity exists. The source owner
+    /// retains this exact key through attachment, replacement or retirement.
+    pub fn acquire_source_preparation(
+        &mut self,
+        source: &bevy::asset::AssetPath<'static>,
+        progress: &mut lunco_core_runtime::SimulationProgress,
+    ) -> lunco_core_runtime::SimulationProgressKey {
+        let key = lunco_core_runtime::SimulationProgressKey {
+            owner: lunco_core_runtime::SimulationProgressOwner::ScriptSourcePreparation,
+            ..self.allocate_key()
+        };
+        progress.acquire(key, format!("Loading authored scenario source {source}"));
+        key
+    }
+
     /// Hold an authored scenario's source admission before its document exists.
     /// The source owner cancels removed inputs; document admission takes the key.
     pub fn reserve_source(

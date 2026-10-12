@@ -71,14 +71,9 @@ or an RCS thruster all need **body-frame force** and **torque**.
   `apply_torque` (avian does the attitude rotation — no manual quat math).
   `propagate.rs` unchanged. Compiles clean.
 - Unlocks gimbaled thrust, thrusters, reaction wheels, any body-frame actuation.
-- **Verified end-to-end** via `Lander.mo` + `lander_ops.usda` on the headless
-  `luncosim-server`: lander fell from 12 m, engine arrested it to a soft hover at
-  the 6 m set-point — `thrust ≈ 14716 N ≈ mass·g`, `vy ≈ 0`, controller `a_cmd ≈ g`.
-- Booting the lean headless server also required fixing pre-existing headless-safety
-  bugs (render-gated resources held non-optionally by CPU systems): `WorkspaceResource`
-  made optional in `lunco-networking` tutor systems; `Assets<ShaderMaterial>` store
-  `init_asset`'d in `TerrainSurfacePlugin`. Use the `luncosim-server` bin for headless,
-  not `luncosim --no-ui` (the latter keeps `ui` systems compiled without a GPU).
+- **Verification:** `Lander.mo` + `lander_ops.usda` exercise body-frame thrust.
+  Use the production `luncosim --no-ui --api <free-port>` for headless diagnostics
+  and `luncosim test` for authored verdicts.
 
 ### G1b — Attitude + body-rate output ports  **[DONE]**
 The rigid-body port group exposed only the *translational* half of state
@@ -168,11 +163,12 @@ joint, so this is a Rust **soft holonomic coupling**.
   (`drive:angular:physics:stiffness`/`damping`/`targetPosition`) → `PendingDifferential` →
   `resolve_differential_coupling` (deferred, matches prim-paths → entities, gated
   on `With<Position>`, same pattern as USD joints) → `DifferentialCoupling`
-  (`lunco-mobility`). Reads each rocker's chassis-frame pitch (swing-twist about the
-  hinge axis) and applies a PD torque enforcing `θ_a + θ_b → rest_sum`, equal on
+  (`lunco-mobility`). Reads each rocker's native hinge coordinate and applies
+  a PD torque enforcing `θ_a + θ_b → rest_sum`, equal on
   each rocker, `−2τ` reaction on the chassis (momentum-conserving). Idle unless a
   `DifferentialCoupling` exists, so it's free for every other vehicle.
-- **Scalar PD law** (`angle_about_axis`, `differential_torque`) is unit-tested.
+- **Scalar drive math** is unit-tested; hinge coordinates share the native
+  signed `atan2` owner with joint motors and co-simulation.
 - **Verified live** on `differential_rig.usda` — a fixed base, a front-heavy
   rocker A + a balanced rocker B on lateral revolutes. A/B via the hinge `angle`
   ports: coupling OFF → A free-falls to the pendulum bottom (`+3.06`), B untouched
@@ -249,33 +245,30 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   on the joint's port overrides the target per tick. The port pair is the runtime
   face of `PhysxJointStateAPI:{linear,angular} physics:position` (out) +
   `PhysicsDriveAPI` `targetPosition` (in).
-- **`physics:stiffness`/`physics:damping` retain their authored SI law**
-  (`force = k * positionError + c * velocityError`), while the runtime chooses a
-  stable realization. A force-type linear drive with positive authored mass is
-  converted to Avian's implicit `MotorModel::SpringDamper` using the equivalent
-  frequency and damping ratio; this is a numerical realization change, not a
-  second spring or a changed physical coefficient. Acceleration drives map to
-  `AccelerationBased` because their response is intentionally mass-normalized.
-  Standard `Physics*Joint` angular drives now use the same implicit lowering when
-  both bodies author a usable effective hinge inertia, or when Avian derives it
-  from the participating bodies' computed mass properties and collider trees. A
-  stiffness-bearing force drive is never lowered to an uncertified explicit
-  motor. A drive with neither coefficient is
-  a positioner, not a spring, and
-  keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
-  throughout. Native `angle` and `displacement` port commands enable the motor
-  and set its position target and zero velocity target, preserving its configured
-  motor model and force/torque limit, including an explicitly zero limit.
-  Wheels are unaffected: their revolute joints
-  are built in `lunco-mobility`, not the authored-joint path, so the G6
-  `drive:angular:maxForce` wheelie cannot recur here.
+- **`physics:stiffness`/`physics:damping` retain their authored SI law.**
+  Force and acceleration drives keep their dimensional native motor models.
+  The pinned Avian solver integrates both implicitly per substep using its
+  current coordinate effective inertia, both endpoints, anchor velocities and
+  force/torque saturation. It does not warm-start the closed-form motor update
+  with a previous tick's physical impulse. Omitted gains have standard USD zero
+  defaults; a target without gains does not create an actuator. Native `angle`
+  and `displacement` commands preserve gains and limits, including zero force.
+  Revolute angle measurements use the native signed `atan2` coordinate in f64;
+  the motor, co-simulation, mobility and joint panel share that owner.
+  Joint projection and admission topology share the reader's runtime-enabled
+  predicate. Disabled and lint-only joints remain authored facts without
+  holding dynamic-body admission for a constraint that will not be created.
+  The prismatic `force` port reads the completed net native force on body2 along
+  the slider axis, including correctly signed drive and travel-stop reactions;
+  it does not reconstruct an unsolved spring force. Sleeping islands retain
+  their last completed native reaction. Disabled joints or endpoints clear
+  it; waking resumes native writeback. `prismatic_spring` verifies both load
+  retention and disabling.
 - **Proof:** `assets/scenes/tests/prismatic_drive.usda` — a standard
   `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).
-  **Verified live** on the headless `luncosim-server`: (A) the USD load-time drive
-  holds at `-1.5276` (target `-1.5`; ~0.027 m droop = spring-damper steady-state
-  under load); (B) `SetPorts displacement -0.5` → `-0.5276`; (C) `+0.3` → `+0.2716`;
-  (D) `-5.0` clamps at `-3.0000` (authored `limitLower`). Projection math
-  unit-tested (`lunco-cosim` `joint::tests`).
+  Its production `PRISMATIC_DRIVE` gate checks the authored target and commanded
+  displacement under gravity. `native_force_drives.usda` checks the dimensional
+  implicit law, both-endpoint inertia, damping, zero caps/gains and stop reactions.
 - **Gotcha (cost a debug loop):** UsdPhysics/Omniverse authors physics scalars as
   `float`, so a strict `scalar::<f64>` read silently returns `None` — the drive and
   joint limits fell straight through before this was fixed. This is now handled
@@ -442,3 +435,8 @@ which sweeps translation and rotation against collision geometry. Omitted or
 false flags preserve discrete collision; disabled and kinematic bodies do not
 receive the sweep component. Malformed flag types reject body projection.
 This is numerical collision policy, independent of the body's domain role.
+
+Native joint damping conserves angular momentum through effective inverse
+inertia and keeps kinematic velocities immutable. It consumes the runtime's
+stable joint order. USD endpoints that alias the same body fail projection and
+lint; generic synthesized-joint admission enforces the same invariant.

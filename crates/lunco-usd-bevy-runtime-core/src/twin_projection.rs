@@ -3646,8 +3646,9 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
 }
 
 /// Replay one **incremental** op's typed delta onto the scene's live
-/// `CanonicalStage` — author-once: the value comes straight from the op, never
-/// re-read from `composed`. Firing the openusd sink lets
+/// `CanonicalStage` — values come straight from typed ops; property removal projects the
+/// document’s newly resolved opinion because the live root combines its layers.
+/// Firing the openusd sink lets
 /// [`project_stage_changes`](crate::live_consume::project_stage_changes) reconcile
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
@@ -3705,7 +3706,7 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             UsdOp::SetTranslate { path, .. }
             | UsdOp::RemoveXformOp { path, .. }
             | UsdOp::RemoveAttribute { path, .. }
-            | UsdOp::RestoreAttribute { path, .. }
+            | UsdOp::RestoreProperty { path, .. }
             | UsdOp::RestoreXformOp { path, .. }
             | UsdOp::SetRotate { path, .. }
             | UsdOp::SetScale { path, .. }
@@ -3717,6 +3718,7 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             | UsdOp::SetTimeSample { path, .. }
             | UsdOp::RemoveTimeSample { path, .. }
             | UsdOp::SetRelationship { path, .. }
+            | UsdOp::RemoveRelationship { path, .. }
             | UsdOp::SetConnection { path, .. }
             | UsdOp::SetPrimDocumentation { path, .. }
             | UsdOp::SetPrimKind { path, .. }
@@ -3871,6 +3873,28 @@ fn report_instance_promotion_failure(
     error!("[usd-live] referenced instance promotion {subject} failed: {detail}");
 }
 
+fn document_projection_source(
+    world: &World,
+    scene_id: AssetId<UsdStageAsset>,
+) -> Result<Arc<openusd::sdf::Data>, String> {
+    let document = world
+        .get_resource::<DocBackedTwinScenes>()
+        .zip(world.get_resource::<AssetServer>())
+        .and_then(|(backed, assets)| scene_document_for(backed, assets, scene_id))
+        .and_then(|doc| {
+            world
+                .get_resource::<DocumentRegistry<UsdDocument>>()?
+                .host(doc)
+        })
+        .ok_or_else(|| "live property projection has no authoritative document".to_owned())?;
+    if let Some(error) = document.document().parse_error() {
+        return Err(format!(
+            "live property projection has invalid document source: {error}"
+        ));
+    }
+    Ok(document.document().composed_arc())
+}
+
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     let _span = bevy::log::info_span!("usd_twin_projection_apply_incremental_op").entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
@@ -3893,11 +3917,12 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         | UsdOp::RemoveXformOp { path, .. }
         | UsdOp::RestoreXformOp { path, .. }
         | UsdOp::RemoveAttribute { path, .. }
-        | UsdOp::RestoreAttribute { path, .. }
+        | UsdOp::RestoreProperty { path, .. }
         | UsdOp::SetRotate { path, .. }
         | UsdOp::SetScale { path, .. }
         | UsdOp::SetAttribute { path, .. }
         | UsdOp::SetRelationship { path, .. }
+        | UsdOp::RemoveRelationship { path, .. }
         | UsdOp::SetConnection { path, .. }
         | UsdOp::SetApiSchemas { path, .. }
         | UsdOp::SetPrimOrder { path, .. }
@@ -4102,10 +4127,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let removed = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
-                .map(|stage| stage.projector().remove_attribute(&sp, name));
+                .map(|stage| {
+                    let source = document_projection_source(world, scene_id)?;
+                    stage
+                        .projector()
+                        .reconcile_document_property(&sp, name, &source)
+                        .map_err(|error| error.to_string())
+                });
             match removed {
                 Some(Ok(())) => refresh_prim_subtree(world, scene_id, path),
-                Some(Err(error)) => warn!("[twin] remove attribute {path}.{name}: {error}"),
+                Some(Err(error)) => report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("remove attribute {path}.{name}: {error}"),
+                ),
                 None => {}
             }
         }
@@ -4259,13 +4294,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 }
             }
         }
-        UsdOp::RestoreAttribute {
-            path,
-            name,
-            snapshot_usda,
-            sibling_order,
-            ..
-        } => {
+        UsdOp::RestoreProperty { path, name, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
@@ -4273,16 +4302,19 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
                 .map(|stage| {
-                    stage.projector().restore_attribute_subtree(
-                        &sp,
-                        name,
-                        snapshot_usda,
-                        sibling_order,
-                    )
+                    let source = document_projection_source(world, scene_id)?;
+                    stage
+                        .projector()
+                        .reconcile_document_property(&sp, name, &source)
+                        .map_err(|error| error.to_string())
                 });
             match restored {
-                Some(Ok(())) => refresh_prim_subtree(world, scene_id, path),
-                Some(Err(error)) => warn!("[twin] restore attribute {path}.{name}: {error}"),
+                Some(Ok(())) => refresh_relationship_dependents(world, scene_id, path, name),
+                Some(Err(error)) => report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("restore property {path}.{name}: {error}"),
+                ),
                 None => {}
             }
         }
@@ -4327,6 +4359,30 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // extractor tag + plan it. Steady-state keyframing stays refresh-free.
             if authored && !prim_entity_is_animated(world, scene_id, path) {
                 refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        UsdOp::RemoveRelationship { path, name, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let removed = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+                .map(|stage| {
+                    let source = document_projection_source(world, scene_id)?;
+                    stage
+                        .projector()
+                        .reconcile_document_property(&sp, name, &source)
+                        .map_err(|error| error.to_string())
+                });
+            match removed {
+                Some(Ok(())) => refresh_relationship_dependents(world, scene_id, path, name),
+                Some(Err(error)) => report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("remove relationship {path}.{name}: {error}"),
+                ),
+                None => {}
             }
         }
         UsdOp::SetRelationship {

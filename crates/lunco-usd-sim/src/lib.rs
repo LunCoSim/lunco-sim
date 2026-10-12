@@ -1984,6 +1984,9 @@ fn collect_joint_scan_read(
             continue;
         };
         topology.source_paths.insert(path.as_str().to_owned());
+        if !lunco_usd_avian_reader::joint::is_runtime_joint_enabled(reader, path) {
+            continue;
+        }
         let body0_target = reader.rel_target(path, "physics:body0");
         let body1_target = reader.rel_target(path, "physics:body1");
         let resolve_body = |target: Option<&String>| {

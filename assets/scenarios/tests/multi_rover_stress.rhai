@@ -407,10 +407,21 @@ fn modelica_reference_failure(profile, kind, tick, identity, variables) {
     fields.sort();
     let expected_fields = expected.value.split(";");
     if fields.len() != expected_fields.len() {
+        let expected_names = [];
+        for row in expected_fields { expected_names.push(row.split("=")[0]); }
+        let added = [];
+        let removed = [];
+        for field in fields {
+            if !expected_names.contains(field) { added.push(field); }
+        }
+        for field in expected_names {
+            if !fields.contains(field) { removed.push(field); }
+        }
         return "Modelica variable count differs for tick " + tick.to_string()
             + " identity " + identity + ": expected "
             + expected_fields.len().to_string() + " actual "
-            + fields.len().to_string();
+            + fields.len().to_string() + "; added " + added.to_string()
+            + "; removed " + removed.to_string();
     }
     for i in 0..fields.len() {
         let field = fields[i];

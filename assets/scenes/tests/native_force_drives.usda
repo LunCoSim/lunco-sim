@@ -1,0 +1,336 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1000.0
+    }
+    def Cube "FiniteHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+    }
+    def Cube "FiniteBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+    }
+    def PhysicsPrismaticJoint "Finite" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/FiniteHost>
+        custom rel physics:body1 = </World/FiniteBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:targetPosition = 0.10000000149011612
+        float drive:linear:physics:stiffness = 1000.0
+        float drive:linear:physics:damping = 100.0
+    }
+    def Cube "ComputedHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+        bool physics:kinematicEnabled = true
+    }
+    def Cube "ComputedBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PhysicsPrismaticJoint "Computed" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/ComputedHost>
+        custom rel physics:body1 = </World/ComputedBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:targetPosition = 0.10000000149011612
+        float drive:linear:physics:maxForce = inf
+        float drive:linear:physics:stiffness = 1000.0
+        float drive:linear:physics:damping = 100.0
+    }
+    def Cube "DampingHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 4.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+    }
+    def Cube "DampingBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 4.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+        vector3f physics:velocity = (1.0, 0.0, 0.0)
+    }
+    def PhysicsPrismaticJoint "Damping" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/DampingHost>
+        custom rel physics:body1 = </World/DampingBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 1000000000.0
+        float drive:linear:physics:stiffness = 0.0
+        float drive:linear:physics:damping = 100.0
+    }
+    def Cube "ZeroCapHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+    }
+    def Cube "ZeroCapBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+    }
+    def PhysicsPrismaticJoint "ZeroCap" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/ZeroCapHost>
+        custom rel physics:body1 = </World/ZeroCapBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:targetPosition = 0.10000000149011612
+        float drive:linear:physics:maxForce = 0.0
+        float drive:linear:physics:stiffness = 1000.0
+        float drive:linear:physics:damping = 100.0
+    }
+    def Cube "ZeroGainsHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 8.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+    }
+    def Cube "ZeroGainsBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        double3 xformOp:translate = (0.0, 8.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+    }
+    def PhysicsPrismaticJoint "ZeroGains" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/ZeroGainsHost>
+        custom rel physics:body1 = </World/ZeroGainsBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:targetPosition = 0.10000000149011612
+        float drive:linear:physics:maxForce = 1000000000.0
+    }
+    def Sphere "AngularHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        double3 xformOp:translate = (0.0, 10.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+    }
+    def Sphere "AngularBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        double3 xformOp:translate = (0.0, 10.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+    }
+    def PhysicsRevoluteJoint "Angular" (
+        prepend apiSchemas = "PhysicsDriveAPI:angular"
+    )
+    {
+        custom rel physics:body0 = </World/AngularHost>
+        custom rel physics:body1 = </World/AngularBob>
+        uniform token physics:axis = "Y"
+        bool physics:collisionEnabled = false
+        float drive:angular:physics:targetPosition = 10.0
+        float drive:angular:physics:maxForce = 1000000000.0
+        float drive:angular:physics:stiffness = 10.0
+        float drive:angular:physics:damping = 2.0
+    }
+    def Scope "Observer" (
+        prepend apiSchemas = "LunCoProgramAPI"
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/native_force_drives.rhai@
+    }
+    def Cube "StopHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 10.0
+        double3 xformOp:translate = (0.0, 12.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "StopBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 2.0
+        double3 xformOp:translate = (0.0, 12.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PhysicsPrismaticJoint "Stop" (
+        prepend apiSchemas = "PhysicsDriveAPI:linear"
+    )
+    {
+        custom rel physics:body0 = </World/StopHost>
+        custom rel physics:body1 = </World/StopBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float drive:linear:physics:stiffness = 1000.0
+        float drive:linear:physics:damping = 100.0
+        float drive:linear:physics:targetPosition = 0.10000000149011612
+        float drive:linear:physics:maxForce = 1000000000.0
+        float physics:lowerLimit = -0.5
+        float physics:upperLimit = 0.019999999552965164
+    }
+    def Sphere "DampedHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        float physics:mass = 10.0
+        double3 xformOp:translate = (0.0, 14.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Sphere "DampedBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        float physics:mass = 2.0
+        double3 xformOp:translate = (0.0, 14.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:angularVelocity = (0.0, 30.0, 0.0)
+    }
+    def PhysicsRevoluteJoint "Damped" (
+        prepend apiSchemas = "LunCoJointDampingAPI"
+    )
+    {
+        custom rel physics:body0 = </World/DampedHost>
+        custom rel physics:body1 = </World/DampedBob>
+        uniform token physics:axis = "Y"
+        bool physics:collisionEnabled = false
+        float lunco:jointDamping:angular = 20.0
+    }
+    def Cube "KinematicDampedHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 10.0
+        double3 xformOp:translate = (0.0, 16.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:kinematicEnabled = true
+        vector3f physics:velocity = (0.0, 0.0, 0.0)
+    }
+    def Cube "KinematicDampedBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.1
+        float physics:mass = 2.0
+        double3 xformOp:translate = (0.0, 16.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1.0, 0.0, 0.0)
+    }
+    def PhysicsPrismaticJoint "KinematicDamped" (
+        prepend apiSchemas = "LunCoJointDampingAPI"
+    )
+    {
+        custom rel physics:body0 = </World/KinematicDampedHost>
+        custom rel physics:body1 = </World/KinematicDampedBob>
+        uniform token physics:axis = "X"
+        bool physics:collisionEnabled = false
+        float lunco:jointDamping:linear = 20.0
+    }
+    def Sphere "KinematicSpinHost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        float physics:mass = 10.0
+        double3 xformOp:translate = (0.0, 18.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:kinematicEnabled = true
+        vector3f physics:angularVelocity = (0.0, 0.0, 0.0)
+    }
+    def Sphere "KinematicSpinBob" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.2
+        float physics:mass = 2.0
+        double3 xformOp:translate = (0.0, 18.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:angularVelocity = (0.0, 30.0, 0.0)
+    }
+    def PhysicsRevoluteJoint "KinematicSpin" (
+        prepend apiSchemas = "LunCoJointDampingAPI"
+    )
+    {
+        custom rel physics:body0 = </World/KinematicSpinHost>
+        custom rel physics:body1 = </World/KinematicSpinBob>
+        uniform token physics:axis = "Y"
+        bool physics:collisionEnabled = false
+        float lunco:jointDamping:angular = 20.0
+    }
+}

@@ -1,3 +1,4 @@
+const TEST_KIND = "headless";
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
        query_reads: ["ListOpenDocuments"], required_inputs: [] }

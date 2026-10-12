@@ -87,12 +87,24 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    evidence (name, measured value, units, criterion, source revision, and
    pass/fail) from Rhai.
 
-For support-gated motion, distinguish authored geometry from runtime state:
-`QueryPhysicsState.support_footprint_count` is only the number of declared
-probes, while `support_contact_count` is the latest evaluated contact count
-and `support_sample_tick` proves freshness. Treat a missing (`null`) contact
-count as unavailable evidence and fail the check; never infer contact from a
-non-empty footprint.
+   For support-gated motion, distinguish authored geometry from runtime state:
+   `QueryPhysicsState.support_footprint_count` is only the number of declared
+   probes, while `support_contact_count` is the latest evaluated contact count
+   and `support_sample_tick` proves freshness. Treat a missing (`null`) contact
+   count as unavailable evidence and fail the check; never infer contact from a
+   non-empty footprint.
+
+   For collider acceptance, read `QueryPhysicsState.collider_present` and
+   `collider_source_paths` after admission. Authored `PhysicsCollisionAPI` and
+   geometry queries alone do not prove that the intended live body contains a
+   shape. Declare each queried body in `entity_reads`. Use
+   `contact_debug(body, other)` for exact narrow-phase pair evidence, including
+   the other body's wheel hierarchy; terrain contacts cannot establish rover-leg
+   contact. For compound hardware, read `contact_debug(...).parts` and require
+   `source1` or `source2` to name an admitted source, with a real applied
+   `normal_impulse`. The enclosing body's response alone cannot identify its
+   contacting member. Observe impact ticks without gaps, assert native penetration and
+   geometric clearance, and verify final support on every required pad.
 5. For visual requirements, define the camera, lighting/time contract,
    reference artifact, measurable geometry/placement rubric, and capture
    window. A screenshot is evidence only when the observer records the exact

@@ -1497,7 +1497,7 @@ production contract is exercised by
 |---|---|
 | `ScriptStatus { target }` | *Is it healthy?* — compile/runtime diagnostics (state, ok, located errors) |
 | `ScriptInspect { target }` | *What is it doing?* — live `this` state, defined hooks, generation, paused/running, plus the status block |
-| `ScriptingCatalog` | the full callable surface in one doc: `verbs`, `hooks`, `prelude`, `tools`, `commands`, `queries` — the authoring/discovery source of truth |
+| `ScriptingCatalog` | the full callable surface for external authoring clients; Rhai discovery uses bounded `ScriptComplete { prefix, limit }` over the same owner |
 
 ## K. Debugging, Diagnostics & Error Handling
 

@@ -352,13 +352,22 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Remove one locally-authored property opinion from the live stage and
-    /// reveal any weaker composed value. The document layer remains the
-    /// authority; this is only the incremental projection of `RemoveAttribute`.
-    pub(crate) fn remove_attribute(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
-        self.stage
-            .remove_property(format!("{path}.{name}"))
-            .map_err(|error| anyhow::anyhow!("remove attribute {path}.{name}: {error}"))?;
+    /// Project the document's resolved property after a layer opinion changes.
+    /// The live root combines document layers, so removing its flattened spec
+    /// directly would discard a weaker document-layer value too.
+    pub(crate) fn reconcile_document_property(
+        &self,
+        path: &SdfPath,
+        name: &str,
+        source: &openusd::sdf::Data,
+    ) -> anyhow::Result<()> {
+        let property = path.append_property(name)?;
+        self.patch_layer(
+            &self.scene_layer,
+            source,
+            &[property],
+            &[(path.clone(), "propertyChildren".to_owned())],
+        )?;
         Ok(())
     }
 
@@ -383,31 +392,6 @@ impl CanonicalStage {
                 Ok(())
             })
             .map_err(|error| anyhow::anyhow!("restore prim subtree at {path}: {error}"))?;
-        Ok(())
-    }
-
-    /// Restore a local attribute subtree through one root-layer transaction.
-    pub(crate) fn restore_attribute_subtree(
-        &self,
-        path: &SdfPath,
-        name: &str,
-        snapshot_usda: &str,
-        sibling_order: &[String],
-    ) -> anyhow::Result<()> {
-        let plan = lunco_usd_authoring::author::prepare_attribute_subtree_restore(
-            self.stage.root_layer().data(),
-            path,
-            name,
-            snapshot_usda,
-            sibling_order,
-        )
-        .map_err(|error| anyhow::anyhow!("prepare attribute restore at {path}.{name}: {error}"))?;
-        self.stage
-            .batch_edit(&[self.scene_layer.as_str()], |edits| {
-                lunco_usd_authoring::author::apply_snapshot_restore(edits[0].data_mut(), plan);
-                Ok(())
-            })
-            .map_err(|error| anyhow::anyhow!("restore attribute {path}.{name}: {error}"))?;
         Ok(())
     }
 
@@ -1157,9 +1141,14 @@ impl StageProjector<'_> {
         self.0.remove_xform_op(path, name)
     }
 
-    /// Replay a `RemoveAttribute` history operation.
-    pub fn remove_attribute(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
-        self.0.remove_attribute(path, name)
+    /// Replay an attribute or relationship removal history operation.
+    pub fn reconcile_document_property(
+        &self,
+        path: &SdfPath,
+        name: &str,
+        source: &openusd::sdf::Data,
+    ) -> anyhow::Result<()> {
+        self.0.reconcile_document_property(path, name, source)
     }
 
     /// Replay a `RestorePrim` history operation.
@@ -1171,18 +1160,6 @@ impl StageProjector<'_> {
     ) -> anyhow::Result<()> {
         self.0
             .restore_prim_subtree(path, snapshot_usda, sibling_order)
-    }
-
-    /// Replay a `RestoreAttribute` history operation.
-    pub fn restore_attribute_subtree(
-        &self,
-        path: &SdfPath,
-        name: &str,
-        snapshot_usda: &str,
-        sibling_order: &[String],
-    ) -> anyhow::Result<()> {
-        self.0
-            .restore_attribute_subtree(path, name, snapshot_usda, sibling_order)
     }
 
     /// Replay a `RestoreXformOp` history op.
@@ -2113,6 +2090,58 @@ mod authoring_tests {
                 .collect::<Vec<_>>(),
             ["P0", "P1", "P2"].map(str::to_owned)
         );
+    }
+
+    #[test]
+    fn property_removal_projects_revealed_document_opinions() {
+        let combined = "#usda 1.0\ndef Xform \"World\" { double value = 2 rel link = </World/Strong> }\ndef Xform \"Unrelated\" {}\n";
+        let mut stage =
+            CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", combined)).unwrap();
+        let world = SdfPath::new("/World").unwrap();
+        let revealed=lunco_usd_compose::parse_usda("#usda 1.0\ndef Xform \"World\" { double value = 1 rel link = </World/Weak> }\ndef Xform \"Unrelated\" {}\n").unwrap();
+        for name in ["value", "link"] {
+            stage
+                .projector()
+                .reconcile_document_property(&world, name, &revealed)
+                .unwrap();
+        }
+        assert_eq!(stage.view().value::<f64>(&world, "value"), Some(1.0));
+        assert_eq!(
+            stage.view().rel_targets(&world, "link"),
+            vec![SdfPath::new("/World/Weak").unwrap()]
+        );
+        let empty = lunco_usd_compose::parse_usda(
+            "#usda 1.0\ndef Xform \"World\" {}\ndef Xform \"Unrelated\" {}\n",
+        )
+        .unwrap();
+        for name in ["value", "link"] {
+            stage
+                .projector()
+                .reconcile_document_property(&world, name, &empty)
+                .unwrap();
+        }
+        assert_eq!(stage.view().value::<f64>(&world, "value"), None);
+        assert!(stage.view().rel_targets(&world, "link").is_empty());
+        let restored = lunco_usd_compose::parse_usda(combined).unwrap();
+        for name in ["value", "link"] {
+            stage
+                .projector()
+                .reconcile_document_property(&world, name, &restored)
+                .unwrap();
+        }
+        assert_eq!(stage.view().value::<f64>(&world, "value"), Some(2.0));
+        assert_eq!(
+            stage.view().rel_targets(&world, "link"),
+            vec![SdfPath::new("/World/Strong").unwrap()]
+        );
+        assert!(stage.view().has_prim(&SdfPath::new("/Unrelated").unwrap()));
+        assert!(stage.drain_changes().iter().all(|change| {
+            change
+                .resynced
+                .iter()
+                .chain(&change.info_only)
+                .all(|path| !path.to_string().starts_with("/Unrelated"))
+        }));
     }
 
     #[test]

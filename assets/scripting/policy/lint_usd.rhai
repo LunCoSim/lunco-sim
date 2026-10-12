@@ -30,7 +30,7 @@
 //       exist because a mechanism can be topologically perfect and still wrong:
 //       see `sprung_foot_not_lowest`.
 //
-//   facts.joints[]  #{ path, type, bodies[], missing[] }
+//   facts.joints[]  #{ path, type, bodies[], resolved_bodies[], missing[] }
 //       every `Physics*Joint`. `missing` = targets that are not bodies.
 //
 //   facts.filtered_pairs[]  #{ path, owner, targets[], target_owners[], missing[] }
@@ -109,14 +109,11 @@
 //                   substep_dt }
 //       the authoritative fixed-step contract used by the physics owner.
 //
-//   facts.drives[]  #{ path, joint_type, body0, body1, realization,
-//                      stiffness, damping, max_force, generalized_inertia,
-//                      frequency, damping_ratio }
+//   facts.drives[]  #{ path, joint_type, body0, body1, valid, realization,
+//                      stiffness, damping, max_force }
 //       semantic drive facts produced by the same typed USD→Avian reader as
-//       runtime projection. `realization` is `spring_damper`, `force_based`,
-//       `acceleration_based`, `derived`, or `invalid`; it is not inferred from
-//       the raw schema in policy. `derived` means Avian will obtain the
-//       generalized inertia from the composed body's computed mass properties.
+//       runtime projection. `realization` is `force_based` or
+//       `acceleration_based`; dimensional coefficients remain authoritative.
 //
 //   facts.gear_drives[]  #{ path, valid, realization, ratio, rest_offset,
 //                           target_velocity, stiffness, damping, max_force }
@@ -386,9 +383,15 @@ fn lint_usd(facts) {
     for f in nested_body_no_joint(facts) { out.push(f); }
     for f in nested_link_node(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
+    for j in facts.joints {
+        if j.resolved_bodies.len()==2 && j.resolved_bodies[0]==j.resolved_bodies[1] {
+            out.push(finding("joint-same-body", "error", j.path,
+                "Both joint endpoints resolve to the same rigid body; a constraint requires distinct bodies."));
+        }
+    }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
     for f in mass_outside_any_body(facts) { out.push(f); }
-    for f in conditionally_stable_joint_drive(facts) { out.push(f); }
+    for f in invalid_joint_drive_coefficients(facts) { out.push(f); }
     for f in invalid_gear_drive(facts) { out.push(f); }
     for f in invalid_wheel_attachment_topology(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
@@ -707,76 +710,23 @@ fn telemetry_target_missing_finding(path) {
     )
 }
 
-/// A stiffness-bearing USD force drive is lowered to Avian's implicit
-/// `SpringDamper` model. If USD does not author mass/inertia explicitly, the
-/// bridge derives the generalized inertia from Avian's computed body properties
-/// after colliders and density have been composed. That omission is valid USD
-/// authoring and is not a lint error. Avian's `AccelerationBased` spring
-/// realization remains timestep- and effective-mass-dependent, so it is still
-/// not the production stability contract at the authoritative fixed step.
-///
-/// The fact producer has already resolved USD units, defaults, and the actual
-/// Avian realization. Rhai only applies the authoring policy here; it does not
-/// re-read USD or reproduce solver mathematics. An implicit `SpringDamper`
-/// realization is intentionally silent because Avian documents that model as
-/// unconditionally stable.
-fn conditionally_stable_joint_drive(facts) {
-    let out = [];
+/// The native motor owner integrates dimensional force and acceleration laws
+/// implicitly. Rhai reports invalid authored coefficients from composed facts.
+fn invalid_joint_drive_coefficients(facts) {
+    let out=[];
     for drive in facts.drives {
-        if drive.stiffness == 0.0 && drive.damping == 0.0 { continue; }
-        if drive.stiffness < 0.0 {
-            let m = "has negative stiffness=";
-            m += drive.stiffness;
-            m += " — a negative spring coefficient injects energy and cannot be converted to an implicit SpringDamper. Set stiffness >= 0; adding mass or inertia does not fix this parameter.";
-            out.push(finding("joint-drive-negative-stiffness", "error", drive.path, m));
-            continue;
+        if !drive.valid && !(drive.stiffness<0.0 || drive.damping<0.0) {
+            out.push(finding("joint-drive-invalid-parameters","error",drive.path,
+                "Drive targets and gains must be finite; the force limit must be non-negative, with positive infinity denoting no limit."));
         }
-        if drive.realization == "spring_damper" {
-            if drive.damping_ratio >= 0.0 { continue; }
-            let m = "uses an implicit SpringDamper with a negative damping ratio (";
-            m += drive.damping_ratio;
-            m += ") at the fixed physics step (";
-            m += facts.stage.substep_dt;
-            m += " s) — the authored drive injects energy. Set damping >= 0 so the loader produces a non-negative damping ratio.";
-            out.push(finding("joint-drive-negative-damping", "error", drive.path, m));
-            continue;
+        if drive.stiffness<0.0 {
+            out.push(finding("joint-drive-negative-stiffness","error",drive.path,
+                "Negative stiffness injects energy; author finite stiffness >= 0."));
         }
-
-        // `derived` is the normal OpenUSD/Avian path when mass properties are
-        // omitted and the attached body geometry can supply them. It is already
-        // the same implicit SpringDamper realization at runtime, so no policy
-        // finding is needed here.
-        if drive.realization == "derived" { continue; }
-
-        if drive.damping < 0.0 {
-            let m = "has negative damping=";
-            m += drive.damping;
-            m += " in an explicit motor realization at the fixed physics step (";
-            m += facts.stage.substep_dt;
-            m += " s) — the authored drive injects energy. Set damping >= 0.";
-            out.push(finding("joint-drive-negative-damping", "error", drive.path, m));
-            continue;
+        if drive.damping<0.0 {
+            out.push(finding("joint-drive-negative-damping","error",drive.path,
+                "Negative damping injects energy; author finite damping >= 0."));
         }
-
-        // A pure ForceBased damper has no stiffness-bearing spring to lower;
-        // it remains the exact USD force law because Avian has no implicit
-        // damping-only motor model.
-        if drive.realization == "force_based" && drive.stiffness == 0.0 { continue; }
-
-        let m = "uses Avian's ";
-        m += drive.realization;
-        m += " motor realization with stiffness=";
-        m += drive.stiffness;
-        m += " and damping=";
-        m += drive.damping;
-        m += " at ";
-        m += facts.stage.fixed_hz;
-        m += " Hz / ";
-        m += facts.stage.physics_substeps;
-        m += " substeps (dt=";
-        m += facts.stage.substep_dt;
-        m += " s). This path is conditionally stable and the assembled effective mass/inertia is not certified by the authored facts; it can overshoot, oscillate, or diverge. Author valid mass properties on the driven body and, for angular drives, a usable diagonal inertia/principal-axis tensor. The authoritative USD→Avian mapping will then lower the force drive to the implicit SpringDamper realization. Do not raise substeps to mask this finding.";
-        out.push(finding("conditionally-stable-joint-drive", "error", drive.path, m));
     }
     out
 }

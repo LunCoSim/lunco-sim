@@ -519,6 +519,9 @@ pub enum SimulationProgressOwner {
     ModelicaPreparation,
     /// Rhai parse/import preparation.
     ScriptPreparation,
+    /// Authored scenario source and recursive asset-import loading, before
+    /// the full startup actor set can be compiled and initialized.
+    ScriptSourcePreparation,
     /// Active Twin Rhai policy source preparation.
     TwinPolicyPreparation,
 }

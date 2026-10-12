@@ -2220,74 +2220,23 @@ fn build_world_engine_base(
         bridge_core::with_world(|world| {
             let entity = bridge_core::resolve_entity(world, id as u64)?;
             let snapshot = lunco_physics::contact_debug_snapshot(world, entity)?;
-            let mut map = Map::new();
-            map.insert(
-                "pair_count".into(),
-                Dynamic::from_int(snapshot.pair_count as i64),
-            );
-            map.insert(
-                "touching_pair_count".into(),
-                Dynamic::from_int(snapshot.touching_pair_count as i64),
-            );
-            map.insert(
-                "manifold_count".into(),
-                Dynamic::from_int(snapshot.manifold_count as i64),
-            );
-            map.insert(
-                "max_friction".into(),
-                Dynamic::from_float(snapshot.max_friction),
-            );
-            map.insert(
-                "total_normal_impulse".into(),
-                Dynamic::from_float(snapshot.total_normal_impulse),
-            );
-            map.insert(
-                "normal_impulse_vector".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .normal_impulse_vector
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            map.insert(
-                "max_normal_speed".into(),
-                Dynamic::from_float(snapshot.max_normal_speed),
-            );
-            map.insert(
-                "max_tangent_speed".into(),
-                Dynamic::from_float(snapshot.max_tangent_speed),
-            );
-            map.insert(
-                "max_penetration".into(),
-                Dynamic::from_float(snapshot.max_penetration),
-            );
-            map.insert(
-                "total_warm_start_tangent_impulse".into(),
-                Dynamic::from_float(snapshot.total_warm_start_tangent_impulse),
-            );
-            map.insert(
-                "contact_normal".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .contact_normal
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            map.insert(
-                "contact_point".into(),
-                Dynamic::from_array(
-                    snapshot
-                        .contact_point
-                        .into_iter()
-                        .map(Dynamic::from_float)
-                        .collect(),
-                ),
-            );
-            Some(Dynamic::from_map(map))
+            Some(contact_debug_value(world, snapshot))
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+
+    engine.register_fn("contact_debug", |id: i64, other: i64| -> Dynamic {
+        if id < 0 || other < 0 {
+            return Dynamic::UNIT;
+        }
+        bridge_core::with_world(|world| {
+            let entity = bridge_core::resolve_entity(world, id as u64)?;
+            let other = bridge_core::resolve_entity(world, other as u64)?;
+            Some(contact_debug_value(
+                world,
+                lunco_physics::contact_debug_between(world, entity, other)?,
+            ))
         })
         .flatten()
         .unwrap_or(Dynamic::UNIT)
@@ -3414,22 +3363,26 @@ impl RhaiScenarioRuntime {
         self.prepared_modules.remove(id);
     }
 
-    /// Commit one Bevy-loaded source and its complete literal import graph
-    /// before a runtime owner validates or activates that source.
-    pub fn commit_asset_dependency_closure(
+    /// Commit a complete, published literal import graph before activation.
+    /// Returns false while native loading or main-world publication is pending.
+    /// Pending and invalid graphs leave both runtime registries unchanged.
+    pub fn try_commit_asset_dependency_closure(
         &mut self,
         root: &Handle<crate::source_asset::RhaiSource>,
         assets: &Assets<crate::source_asset::RhaiSource>,
         asset_server: &AssetServer,
-    ) -> Result<(), String> {
-        fn visit(
-            runtime: &mut RhaiScenarioRuntime,
+    ) -> Result<bool, String> {
+        fn collect<'a>(
             handle: &Handle<crate::source_asset::RhaiSource>,
-            assets: &Assets<crate::source_asset::RhaiSource>,
+            assets: &'a Assets<crate::source_asset::RhaiSource>,
             asset_server: &AssetServer,
             visiting: &mut std::collections::BTreeSet<String>,
-            committed: &mut std::collections::BTreeSet<String>,
-        ) -> Result<(), String> {
+            visited: &mut std::collections::BTreeSet<String>,
+            sources: &mut Vec<(String, &'a crate::source_asset::RhaiSource)>,
+        ) -> Result<bool, String> {
+            if !asset_server.is_loaded_with_dependencies(handle) {
+                return Ok(false);
+            }
             let path = asset_server.get_path(handle.id()).ok_or_else(|| {
                 format!(
                     "loaded Rhai source {:?} has no resolved AssetPath",
@@ -3437,19 +3390,18 @@ impl RhaiScenarioRuntime {
                 )
             })?;
             let id = crate::source_asset::canonical_asset_id(&path);
-            if committed.contains(&id) {
-                return Ok(());
+            if visited.contains(&id) {
+                return Ok(true);
             }
             if !visiting.insert(id.clone()) {
                 return Err(format!("Rhai import dependency cycle detected at {id}"));
             }
-            let source = assets
-                .get(handle.id())
-                .ok_or_else(|| format!("loaded Rhai source {id} has no source asset"))?;
+            let Some(source) = assets.get(handle.id()) else {
+                return Ok(false);
+            };
             let mut dependencies = source
                 .dependencies
                 .iter()
-                .cloned()
                 .map(|dependency| {
                     let path = asset_server.get_path(dependency.id()).ok_or_else(|| {
                         format!(
@@ -3462,38 +3414,32 @@ impl RhaiScenarioRuntime {
                 .collect::<Result<Vec<_>, String>>()?;
             dependencies.sort_by(|left, right| left.0.cmp(&right.0));
             for (_, dependency) in dependencies {
-                if !asset_server.is_loaded_with_dependencies(&dependency) {
-                    return Err(format!(
-                        "Rhai dependency closure for {id} is not fully loaded"
-                    ));
+                if !collect(dependency, assets, asset_server, visiting, visited, sources)? {
+                    return Ok(false);
                 }
-                visit(
-                    runtime,
-                    &dependency,
-                    assets,
-                    asset_server,
-                    visiting,
-                    committed,
-                )?;
             }
-            runtime.sources.insert_if_changed(&id, &source.text);
-            runtime.commit_source_asset(&id, &source);
+            sources.push((id.clone(), source));
             visiting.remove(&id);
-            committed.insert(id);
-            Ok(())
+            visited.insert(id);
+            Ok(true)
         }
 
-        if !asset_server.is_loaded_with_dependencies(root) {
-            return Err("Rhai source dependency closure is not fully loaded".to_owned());
-        }
-        visit(
-            self,
+        let mut sources = Vec::new();
+        if !collect(
             root,
             assets,
             asset_server,
             &mut std::collections::BTreeSet::new(),
             &mut std::collections::BTreeSet::new(),
-        )
+            &mut sources,
+        )? {
+            return Ok(false);
+        }
+        for (id, source) in sources {
+            self.sources.insert_if_changed(&id, &source.text);
+            self.commit_source_asset(&id, source);
+        }
+        Ok(true)
     }
 
     pub(crate) fn validate_prepared_tool_library(
@@ -3724,7 +3670,6 @@ pub fn prepare_builtin_rhai_assets(
             continue;
         };
         let dependencies_ready = asset_server.is_loaded_with_dependencies(&handle);
-        let is_tool = matches!(&role, Some(crate::tool_libs::ScriptSourceRole::Tool(_)));
         let needs_imports = matches!(
             &role,
             Some(
@@ -3732,23 +3677,27 @@ pub fn prepare_builtin_rhai_assets(
                     | crate::tool_libs::ScriptSourceRole::Prelude
             )
         );
-        if is_tool && !dependencies_ready {
+        if needs_imports && !dependencies_ready {
             if asset_server
                 .recursive_dependency_load_state(handle.id())
                 .is_failed()
             {
-                error!("[rhai] failed to load dependencies for built-in tool {rel}");
+                error!("[rhai] failed to load dependencies for built-in source {rel}");
             }
             continue;
         }
         if needs_imports && dependencies_ready {
-            if let Err(error) =
-                driver
-                    .runtime
-                    .commit_asset_dependency_closure(&handle, &assets, &asset_server)
-            {
-                error!("[rhai] cannot prepare imports for built-in source {rel}: {error}");
-                continue;
+            match driver.runtime.try_commit_asset_dependency_closure(
+                &handle,
+                &assets,
+                &asset_server,
+            ) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    error!("[rhai] cannot prepare imports for built-in source {rel}: {error}");
+                    continue;
+                }
             }
         } else if !needs_imports {
             sources.insert_if_changed(&lunco_assets_core::engine_asset_uri(&rel), &source.text);
@@ -5979,6 +5928,126 @@ mod tests {
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
     #[test]
+    fn source_closure_commit_waits_for_publication_and_rejects_cycles_atomically() {
+        use crate::source_asset::{RhaiSource, RhaiSourceLoader};
+        use bevy::asset::{
+            AssetApp, AssetPlugin, AssetServer, Assets,
+            io::{
+                AssetSourceBuilder, AssetSourceId,
+                memory::{Dir, MemoryAssetReader},
+            },
+        };
+        use bevy::prelude::{App, MinimalPlugins};
+        use std::{
+            path::Path,
+            time::{Duration, Instant},
+        };
+
+        let files = Dir::default();
+        files.insert_asset_text(
+            Path::new("root.rhai"),
+            "import \"a.rhai\" as a; import \"z.rhai\" as z;",
+        );
+        files.insert_asset_text(Path::new("a.rhai"), "fn value() { 1 }");
+        files.insert_asset_text(Path::new("z.rhai"), "fn value() { 2 }");
+        let mut app = App::new();
+        app.register_asset_source(
+            AssetSourceId::Name(lunco_assets_core::LUNCO_SCHEME.into()),
+            AssetSourceBuilder::new(move || {
+                Box::new(MemoryAssetReader {
+                    root: files.clone(),
+                })
+            }),
+        );
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<RhaiSource>()
+            .init_asset_loader::<RhaiSourceLoader>();
+        app.finish();
+        app.cleanup();
+        let server = app.world().resource::<AssetServer>().clone();
+        let root = server.load::<RhaiSource>("lunco://root.rhai");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            app.update();
+            let assets = app.world().resource::<Assets<RhaiSource>>();
+            if server.is_loaded_with_dependencies(&root) && assets.len() == 3 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "native in-memory source loading timed out: {:?}; assets {}",
+                server.get_load_states(root.id()),
+                assets.len()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let mut assets = app.world_mut().resource_mut::<Assets<RhaiSource>>();
+        // Native load state can lead main-world publication. Remove values
+        // without advancing the asset schedule to reproduce that boundary.
+        let root_source = assets.remove(root.id()).unwrap();
+        assert!(
+            !runtime
+                .try_commit_asset_dependency_closure(&root, &assets, &server)
+                .unwrap()
+        );
+        assets.insert(root.id(), root_source.clone()).unwrap();
+        let missing = root_source
+            .dependencies
+            .iter()
+            .find(|handle| server.get_path(handle.id()).unwrap().path() == Path::new("z.rhai"))
+            .unwrap();
+        let missing_source = assets.remove(missing.id()).unwrap();
+        assert!(server.is_loaded_with_dependencies(&root));
+        assert!(
+            !runtime
+                .try_commit_asset_dependency_closure(&root, &assets, &server)
+                .unwrap()
+        );
+        assert!(
+            runtime.sources.is_empty(),
+            "an earlier sibling must not publish a partial closure"
+        );
+        assert!(
+            runtime
+                .prepared_modules
+                .get("lunco://a.rhai", "fn value() { 1 }")
+                .is_none()
+        );
+        assets.insert(missing.id(), missing_source).unwrap();
+        // A malformed graph is terminal, and must also leave registries intact.
+        assets
+            .get_mut(missing.id())
+            .unwrap()
+            .dependencies
+            .push(root.clone());
+        let error = runtime
+            .try_commit_asset_dependency_closure(&root, &assets, &server)
+            .unwrap_err();
+        assert!(error.contains("dependency cycle"), "{error}");
+        assert!(runtime.sources.is_empty());
+        assets.get_mut(missing.id()).unwrap().dependencies.clear();
+        assert!(
+            runtime
+                .try_commit_asset_dependency_closure(&root, &assets, &server)
+                .unwrap()
+        );
+        assert_eq!(runtime.sources.len(), 3);
+        assert!(
+            runtime
+                .prepared_modules
+                .get("lunco://a.rhai", "fn value() { 1 }")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .prepared_modules
+                .get("lunco://z.rhai", "fn value() { 2 }")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn scenario_state_introspection_preserves_unsigned_api_ids() {
         let id = u64::MAX;
         let state = rhai::Dynamic::from(id);
@@ -7498,4 +7567,103 @@ mod tests {
             .expect("wide unsigned value");
         assert_eq!(wide.clone().try_cast::<u64>(), Some(u64::MAX));
     }
+}
+
+fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnapshot) -> Dynamic {
+    let source = |collider: Entity, part: usize| {
+        lunco_usd_avian_contracts::collider_part_source(world, collider, part)
+            .map_or(Dynamic::UNIT, |path| Dynamic::from(path.to_owned()))
+    };
+    let mut map = Map::new();
+    map.insert(
+        "parts".into(),
+        Dynamic::from_array(
+            snapshot
+                .parts
+                .into_iter()
+                .map(|part| {
+                    let mut item = Map::new();
+                    item.insert("source1".into(), source(part.collider1, part.part1));
+                    item.insert("source2".into(), source(part.collider2, part.part2));
+                    item.insert(
+                        "normal_impulse".into(),
+                        Dynamic::from_float(part.normal_impulse),
+                    );
+                    item.insert("continuous".into(), Dynamic::from_bool(part.continuous));
+                    Dynamic::from_map(item)
+                })
+                .collect(),
+        ),
+    );
+    map.insert(
+        "pair_count".into(),
+        Dynamic::from_int(snapshot.pair_count as i64),
+    );
+    map.insert(
+        "touching_pair_count".into(),
+        Dynamic::from_int(snapshot.touching_pair_count as i64),
+    );
+    map.insert(
+        "manifold_count".into(),
+        Dynamic::from_int(snapshot.manifold_count as i64),
+    );
+    map.insert(
+        "max_friction".into(),
+        Dynamic::from_float(snapshot.max_friction),
+    );
+    map.insert(
+        "total_normal_impulse".into(),
+        Dynamic::from_float(snapshot.total_normal_impulse),
+    );
+    map.insert(
+        "continuous_normal_impulse".into(),
+        Dynamic::from_float(snapshot.continuous_normal_impulse),
+    );
+    map.insert(
+        "normal_impulse_vector".into(),
+        Dynamic::from_array(
+            snapshot
+                .normal_impulse_vector
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    map.insert(
+        "max_normal_speed".into(),
+        Dynamic::from_float(snapshot.max_normal_speed),
+    );
+    map.insert(
+        "max_tangent_speed".into(),
+        Dynamic::from_float(snapshot.max_tangent_speed),
+    );
+    map.insert(
+        "max_penetration".into(),
+        Dynamic::from_float(snapshot.max_penetration),
+    );
+    map.insert(
+        "total_warm_start_tangent_impulse".into(),
+        Dynamic::from_float(snapshot.total_warm_start_tangent_impulse),
+    );
+    map.insert(
+        "contact_normal".into(),
+        Dynamic::from_array(
+            snapshot
+                .contact_normal
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    map.insert(
+        "contact_point".into(),
+        Dynamic::from_array(
+            snapshot
+                .contact_point
+                .into_iter()
+                .map(Dynamic::from_float)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(map)
 }

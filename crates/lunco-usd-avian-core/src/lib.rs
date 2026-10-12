@@ -139,29 +139,6 @@ struct PhysicsFrameContractStatus {
     ready: bool,
 }
 
-fn physics_frame_contract_is_valid(
-    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
-    q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-) -> bool {
-    let Some(active) = active else {
-        return false;
-    };
-    !diagnostics.is_some_and(|diagnostics| {
-        diagnostics
-            .findings
-            .iter()
-            .any(|finding| finding.producer == "usd-avian")
-    }) && q_grids.get(active.0).is_ok()
-        && q_physical.iter().all(|entity| {
-            lunco_spatial::coords::pose_in_grid(entity, active.0, &q_parents, &q_grids, &q_spatial)
-                .is_some()
-        })
-}
-
 fn physics_frame_contract_ready(
     status: Option<Res<PhysicsFrameContractStatus>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
@@ -241,6 +218,7 @@ fn validate_physics_frame_contract(
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut status: ResMut<PhysicsFrameContractStatus>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let mut findings = Vec::new();
     if !q_physical.is_empty() {
@@ -274,13 +252,36 @@ fn validate_physics_frame_contract(
                 ),
             });
         } else {
-            for entity in &q_physical {
-                if lunco_spatial::coords::pose_in_grid(
-                    entity, active.0, &q_parents, &q_grids, &q_spatial,
-                )
-                .is_none()
+            for entity in std::iter::once(active.0).chain(q_physical.iter()) {
+                if let Err(detail) =
+                    validate_physics_render_rotations(entity, None, &q_parents, &q_spatial)
                 {
+                    let subject = format!("physical-entity:{entity:?}");
+                    report_physics_runtime_fault(
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        entity,
+                        subject.clone(),
+                        "avian-backend-pose-invalid",
+                        detail.clone(),
+                    );
                     findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "avian-backend-pose-invalid".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "usd-avian".to_string(),
+                        subject,
+                        message: detail,
+                    });
+                }
+            }
+            if findings.is_empty() {
+                for entity in &q_physical {
+                    if lunco_spatial::coords::pose_in_grid(
+                        entity, active.0, &q_parents, &q_grids, &q_spatial,
+                    )
+                    .is_none()
+                    {
+                        findings.push(lunco_core::RuntimeDiagnostic {
                         code: "physics-frame".to_string(),
                         severity: lunco_core::DiagnosticSeverity::Error,
                         producer: "usd-avian".to_string(),
@@ -290,6 +291,7 @@ fn validate_physics_frame_contract(
                             active.0
                         ),
                     });
+                    }
                 }
             }
         }
@@ -306,30 +308,6 @@ fn validate_physics_frame_contract(
             frame_contract_invalid,
         );
     }
-}
-
-/// Re-evaluate the contract after `Update` has admitted scene entities and
-/// before any fixed-frame bridge or Avian condition is evaluated. The
-/// diagnostic pass runs earlier so it can publish findings and apply the
-/// physics hold; this pass only refreshes the shared gate for the entities now
-/// present in the fixed schedule.
-fn refresh_physics_frame_contract(
-    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
-    q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    mut status: ResMut<PhysicsFrameContractStatus>,
-) {
-    status.ready = physics_frame_contract_is_valid(
-        active,
-        diagnostics,
-        q_physical,
-        q_parents,
-        q_grids,
-        q_spatial,
-    );
 }
 
 impl Plugin for BigSpacePhysicsBridgePlugin {
@@ -366,9 +344,12 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .after(validate_physics_frame_contract)
                 .before(lunco_physics::apply_physics_holds),
         );
+        // Update can admit or reparent physical entities after the lifecycle
+        // pass. The fixed boundary uses the same diagnostic owner: refusing
+        // the frame must publish its hold rather than only close the gate.
         app.add_systems(
             FixedPostUpdate,
-            refresh_physics_frame_contract
+            validate_physics_frame_contract
                 .run_if(physics_frame_contract_inputs_changed)
                 .before(PhysicsBridgeSystems::Read),
         );
@@ -468,6 +449,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
+                .before(PhysicsTransformSystems::Propagate)
                 .before(PhysicsSystems::StepSimulation),
         );
         app.add_systems(
@@ -488,22 +470,18 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .before(PhysicsSystems::Last),
         );
         app.add_systems(
-            PhysicsSchedule,
+            FixedPostUpdate,
             propagate_collider_transforms_rootless
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsTransformSystems::Propagate)
                 .after(PhysicsBridgeSystems::Read)
-                .before(PhysicsStepSystems::First),
+                .before(PhysicsSystems::StepSimulation),
         );
-        // Bridge-owned ColliderTransform propagation. avian's own
-        // `propagate_collider_transforms` only descends from tree roots that
-        // carry a `Transform` — with the canonical (Transform-free) BigSpace
-        // root it is a silent no-op, and `ColliderTransform` (offset AND
-        // scale — `update_collider_scale`'s child branch reads it) would
-        // freeze at spawn values: measured 2026-07-11 as the 4000×-scaled
-        // sandbox Ground collapsing to ~1 m. This system computes every
-        // collider's transform directly from its `ColliderOf` chain instead,
-        // no tree root involved. Same set as avian's pass (which no-ops).
+        // The bridge supplies ColliderTransform in Avian's preparation
+        // schedule, before native scale cooking and mass-property reduction.
+        // Both must consume the current hierarchy before the nested solver
+        // reads its geometry and COM. BigSpace's root has no Transform, so
+        // propagation follows each collider's ancestor chain directly.
     }
 }
 
@@ -739,6 +717,52 @@ fn is_below_active_frame(
     false
 }
 
+/// Reject invalid rigid rotations before any spatial pose composition.
+fn validate_physics_render_rotations(
+    entity: Entity,
+    seed_transform: Option<&Transform>,
+    q_parents: &Query<&ChildOf>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Result<(), String> {
+    // Validate render rotations before spatial composition normalizes them or
+    // uses them as rigid matrices. Normalization must not admit invalid input.
+    use lunco_spatial::coords::{CoordinateError, MAX_SPATIAL_HIERARCHY_DEPTH};
+    let mut ancestor = Some(entity);
+    let mut visited = [Entity::PLACEHOLDER; MAX_SPATIAL_HIERARCHY_DEPTH];
+    for depth in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
+        let Some(current) = ancestor else {
+            break;
+        };
+        if visited[..depth].contains(&current) {
+            return Err(CoordinateError::Cycle { entity: current }.to_string());
+        }
+        visited[depth] = current;
+        let local_transform = if current == entity {
+            seed_transform.or_else(|| q_spatial.get(current).ok().map(|(_, transform)| transform))
+        } else {
+            q_spatial.get(current).ok().map(|(_, transform)| transform)
+        };
+        if let Some(local_transform) = local_transform {
+            if !lunco_physics::avian_backend_rotation_is_valid(local_transform.rotation.as_dquat())
+            {
+                return Err(format!(
+                    "physical hierarchy has a non-unit rotation on {current:?}: {:?}",
+                    local_transform.rotation
+                ));
+            }
+        }
+        ancestor = q_parents.get(current).ok().map(ChildOf::parent);
+    }
+    if ancestor.is_some() {
+        return Err(CoordinateError::DepthExceeded {
+            entity,
+            limit: MAX_SPATIAL_HIERARCHY_DEPTH,
+        }
+        .to_string());
+    }
+    Ok(())
+}
+
 /// Project an authored `(CellCoord, Transform)` into the single Avian frame.
 /// This is shared by initial seeding and external-motion transport so those
 /// two entry points cannot acquire different moving-grid semantics.
@@ -750,8 +774,13 @@ fn seeded_pose_in_active_frame(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-) -> (GridPos, GridRot) {
-    if is_below_active_frame(entity, active_frame, q_parents) {
+) -> Result<(GridPos, GridRot), String> {
+    validate_physics_render_rotations(entity, Some(transform), q_parents, q_spatial)?;
+    let below_active_frame = is_below_active_frame(entity, active_frame, q_parents);
+    if !below_active_frame {
+        validate_physics_render_rotations(active_frame, None, q_parents, q_spatial)?;
+    }
+    let pose = if below_active_frame {
         grid_relative_pose_seeded(
             entity,
             active_frame,
@@ -761,12 +790,6 @@ fn seeded_pose_in_active_frame(
             q_grids,
             q_spatial,
         )
-        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
-        .unwrap_or_else(|| {
-            panic!(
-                "physical entity {entity:?} is below active PhysicsFrame {active_frame:?} but its hierarchy is not a valid BigSpace grid chain"
-            )
-        })
     } else {
         pose_in_grid_seeded(
             entity,
@@ -777,13 +800,11 @@ fn seeded_pose_in_active_frame(
             q_grids,
             q_spatial,
         )
-        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
-        .unwrap_or_else(|| {
-            panic!(
-                "physical entity {entity:?} does not share a BigSpace root with active PhysicsFrame {active_frame:?}"
-            )
-        })
-    }
+    };
+    pose.map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+        .ok_or_else(|| format!(
+            "physical entity {entity:?} has no valid BigSpace pose in active PhysicsFrame {active_frame:?}"
+        ))
 }
 
 /// Validate the state that Avian's collider tree and spatial-query backend
@@ -833,7 +854,7 @@ fn validate_physics_backend_state(
                 format!("entity:{entity:?}"),
                 "avian-backend-pose-invalid",
                 format!(
-                    "body pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    "body pose requires a finite f32-representable position and a unit rotation: position={:?}, rotation={:?}",
                     position.0, rotation.0
                 ),
             );
@@ -948,7 +969,7 @@ fn validate_physics_backend_state(
                 aabb.min, aabb.max
             ),
             None => format!(
-                "collider pose or scale is not finite and f32-representable: position={effective_position:?}, rotation={effective_rotation:?}, scale={scale:?}"
+                "collider pose requires a unit rotation and finite f32-representable position and scale: position={effective_position:?}, rotation={effective_rotation:?}, scale={scale:?}"
             ),
         };
         report_physics_runtime_fault(
@@ -1288,7 +1309,7 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
         // Typed until the component write: the cell chain composes a
         // grid-absolute pose, and avian's `Position`/`Rotation` carry exactly
         // that frame — `.0` at the write IS the frame assertion.
-        let (p, r) = seeded_pose_in_active_frame(
+        let pose = seeded_pose_in_active_frame(
             e,
             active_frame,
             cell,
@@ -1297,6 +1318,21 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             &q_grids,
             &q_spatial,
         );
+        let (p, r) = match pose {
+            Ok(pose) => pose,
+            Err(detail) => {
+                let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+                report_physics_runtime_fault(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    e,
+                    physics_subject(e, name, prim_path),
+                    "avian-backend-pose-invalid",
+                    detail,
+                );
+                continue;
+            }
+        };
         if !lunco_physics::avian_backend_pose_is_valid(p.0, r.0) {
             let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
             report_physics_runtime_fault(
@@ -1306,7 +1342,7 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
                 physics_subject(e, name, prim_path),
                 "avian-backend-pose-invalid",
                 format!(
-                    "authored pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    "authored pose requires a finite f32-representable position and a unit rotation: position={:?}, rotation={:?}",
                     p.0, r.0
                 ),
             );
@@ -1539,7 +1575,7 @@ fn position_to_pose(
                 physics_subject(e, name, prim_path),
                 "avian-backend-pose-invalid",
                 format!(
-                    "solved pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    "solved pose requires a finite f32-representable position and a unit rotation: position={:?}, rotation={:?}",
                     pos.0, rot.0
                 ),
             );
@@ -1739,7 +1775,14 @@ fn propagate_collider_transforms_rootless(
     q_dirty_nodes: Query<Entity, Or<(Changed<Transform>, Changed<ChildOf>, Added<RigidBody>)>>,
     mut removed_tf: RemovedComponents<Transform>,
     mut removed_rb: RemovedComponents<RigidBody>,
-    mut q_colliders: Query<(Entity, &mut ColliderTransform)>,
+    mut q_colliders: Query<(
+        Entity,
+        &mut ColliderTransform,
+        Option<&Name>,
+        Option<&UsdPrimPath>,
+    )>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut path: Local<Vec<Entity>>,
     mut dirty: Local<EntityHashSet>,
 ) {
@@ -1751,18 +1794,23 @@ fn propagate_collider_transforms_rootless(
         dirty.extend(q_dirty_nodes.iter());
     }
 
-    for (e, mut ct) in &mut q_colliders {
-        // Path root → collider (inclusive) — built only when it can matter.
-        let recompute = if all_dirty || ct.is_added() {
-            ancestor_path(e, &q_parents, &mut path);
-            true
-        } else if dirty.is_empty() {
-            false
-        } else {
-            ancestor_path(e, &q_parents, &mut path);
-            path.iter().any(|n| dirty.contains(n))
-        };
-        if !recompute {
+    'collider: for (e, mut ct, name, prim_path) in &mut q_colliders {
+        // Build the collider-to-root path only when it can matter.
+        if !all_dirty && !ct.is_added() && dirty.is_empty() {
+            continue;
+        }
+        if let Err(error) = ancestor_path(e, &q_parents, &mut path) {
+            report_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                e,
+                physics_subject(e, name, prim_path),
+                "avian-collider-topology-invalid",
+                error.to_string(),
+            );
+            continue;
+        }
+        if !all_dirty && !ct.is_added() && !path.iter().any(|n| dirty.contains(n)) {
             continue;
         }
 
@@ -1771,6 +1819,20 @@ fn propagate_collider_transforms_rootless(
             let is_rb = q_rb.contains(n);
             match q_transforms.get(n) {
                 Ok(tf) => {
+                    if !lunco_physics::avian_backend_rotation_is_valid(tf.rotation.as_dquat()) {
+                        report_physics_runtime_fault(
+                            faults.as_deref_mut(),
+                            holds.as_deref_mut(),
+                            e,
+                            physics_subject(e, name, prim_path),
+                            "avian-backend-pose-invalid",
+                            format!(
+                                "collider hierarchy has a non-unit rotation on {n:?}: {:?}",
+                                tf.rotation
+                            ),
+                        );
+                        continue 'collider;
+                    }
                     let nt = ColliderTransform::from(*tf);
                     acc = if is_rb {
                         ColliderTransform {
@@ -1786,8 +1848,8 @@ fn propagate_collider_transforms_rootless(
                         }
                     };
                 }
-                // No Transform (the canonical root): contributes identity,
-                // but a body still resets the frame.
+                // An omitted Transform contributes identity; a body still
+                // resets the frame.
                 Err(_) if is_rb => {
                     acc = ColliderTransform {
                         translation: Vector::ZERO,
@@ -1806,27 +1868,31 @@ fn propagate_collider_transforms_rootless(
 
 /// Write `e`'s ancestor path into `path` as `[e, parent, …, root]`. Caller-owned
 /// buffer: this runs per collider per tick, so the Vec is reused rather than
-/// reallocated. Physical topology errors are fatal; a truncated collider path
-/// would silently put the shape in the wrong frame.
-fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>, path: &mut Vec<Entity>) {
+/// reallocated. Reject invalid topology before composing a collider transform.
+fn ancestor_path(
+    e: Entity,
+    q_parents: &Query<&ChildOf>,
+    path: &mut Vec<Entity>,
+) -> Result<(), lunco_spatial::coords::CoordinateError> {
+    use lunco_spatial::coords::{CoordinateError, MAX_SPATIAL_HIERARCHY_DEPTH};
     path.clear();
     let mut cur = e;
-    path.push(cur);
-    for _ in 0..32 {
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
+        if path.contains(&cur) {
+            return Err(CoordinateError::Cycle { entity: cur });
+        }
+        path.push(cur);
         match q_parents.get(cur) {
             Ok(co) => {
                 cur = co.parent();
-                if path.contains(&cur) {
-                    panic!("collider ancestor hierarchy contains a cycle at {cur:?}");
-                }
-                path.push(cur);
             }
-            Err(_) => return,
+            Err(_) => return Ok(()),
         }
     }
-    if q_parents.get(cur).is_ok() {
-        panic!("collider {e:?} exceeds the 32-node ancestor limit");
-    }
+    Err(CoordinateError::DepthExceeded {
+        entity: e,
+        limit: MAX_SPATIAL_HIERARCHY_DEPTH,
+    })
 }
 
 /// Orient newly discovered authored collider pairs by their composed source
@@ -1876,6 +1942,77 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn collider_preparation_consumes_current_rootless_scale_before_mass_reduction() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            PhysicsPlugins::default(),
+            BigSpacePhysicsBridgePlugin,
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(Gravity::ZERO);
+        let root = app.world_mut().spawn(Grid::default()).id();
+        app.world_mut()
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(root));
+        let group = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_scale(Vec3::splat(2.0)),
+                ChildOf(root),
+            ))
+            .id();
+        let mut collider = Collider::cuboid(1.0, 1.0, 1.0);
+        collider.set_scale(DVec3::splat(3.0), 10);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                collider,
+                Transform::from_scale(Vec3::splat(3.0)),
+                GlobalTransform::from(Transform::from_scale(Vec3::splat(99.0))),
+                ChildOf(group),
+            ))
+            .id();
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(3.0)
+        );
+        assert_eq!(
+            app.world()
+                .get::<ColliderMassProperties>(body)
+                .unwrap()
+                .mass,
+            27.0
+        );
+        app.finish();
+        app.cleanup();
+        app.world_mut().run_schedule(PreUpdate);
+        assert!(app.world().resource::<PhysicsFrameContractStatus>().ready);
+        app.world_mut().run_schedule(FixedPostUpdate);
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(6.0)
+        );
+        assert_eq!(
+            app.world().get::<ComputedMass>(body).unwrap().value(),
+            216.0
+        );
+
+        app.world_mut().get_mut::<Transform>(group).unwrap().scale = Vec3::splat(4.0);
+        app.world_mut().run_schedule(FixedPostUpdate);
+        assert_eq!(
+            app.world().get::<Collider>(body).unwrap().scale(),
+            DVec3::splat(12.0)
+        );
+        assert_eq!(
+            app.world().get::<ComputedMass>(body).unwrap().value(),
+            1728.0
+        );
+    }
 
     #[test]
     fn frame_contract_lifecycle_ticks_reach_each_consumer_without_pose_invalidation() {
@@ -2181,6 +2318,141 @@ mod tests {
                 .any(|finding| finding.code == "physics-frame")
         );
         assert!(!world.resource::<PhysicsFrameContractStatus>().ready);
+    }
+
+    #[test]
+    fn seeded_pose_rejects_invalid_rotations_and_disconnected_hierarchy() {
+        fn read_pose(
+            world: &mut World,
+            body: Entity,
+            frame: Entity,
+        ) -> Result<(GridPos, GridRot), String> {
+            let transform = *world.get::<Transform>(body).unwrap();
+            let cell = world.get::<CellCoord>(body).copied();
+            let mut state: SystemState<(
+                Query<&ChildOf>,
+                Query<&Grid>,
+                Query<(Option<&CellCoord>, &Transform)>,
+            )> = SystemState::new(world);
+            let (parents, grids, spatial) = state.get(world).unwrap();
+            seeded_pose_in_active_frame(
+                body,
+                frame,
+                cell.as_ref(),
+                &transform,
+                &parents,
+                &grids,
+                &spatial,
+            )
+        }
+        let mut world = World::new();
+        let frame = world.spawn(Grid::new(1000.0, 0.0)).id();
+        let parent = world
+            .spawn((Transform::default(), CellCoord::ZERO, ChildOf(frame)))
+            .id();
+        let body = world.spawn((Transform::default(), ChildOf(parent))).id();
+        assert!(read_pose(&mut world, body, frame).is_ok());
+
+        for target in [body, parent] {
+            world.get_mut::<Transform>(target).unwrap().rotation =
+                Quat::from_xyzw(0.0, 0.0, 0.0, 2.0);
+            let error = read_pose(&mut world, body, frame).unwrap_err();
+            assert!(error.contains("non-unit rotation"));
+            assert!(error.contains(&format!("{target:?}")));
+            world.get_mut::<Transform>(target).unwrap().rotation = Quat::IDENTITY;
+        }
+        let disconnected = world.spawn(Transform::default()).id();
+        assert!(
+            read_pose(&mut world, disconnected, frame)
+                .unwrap_err()
+                .contains("no valid BigSpace pose")
+        );
+        let mut deepest = parent;
+        for _ in 0..lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
+            deepest = world.spawn((Transform::default(), ChildOf(deepest))).id();
+        }
+        assert_eq!(
+            read_pose(&mut world, deepest, frame).unwrap_err(),
+            lunco_spatial::coords::CoordinateError::DepthExceeded {
+                entity: deepest,
+                limit: lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH,
+            }
+            .to_string()
+        );
+        world.entity_mut(body).insert(RigidBody::Dynamic);
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        world.init_resource::<PhysicsFrameContractStatus>();
+        world.init_resource::<lunco_core::RuntimeDiagnostics>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        world.get_mut::<Transform>(parent).unwrap().rotation = Quat::from_xyzw(0.0, 0.0, 0.0, 0.0);
+        world
+            .run_system_once(validate_physics_frame_contract)
+            .unwrap();
+        assert!(!world.resource::<PhysicsFrameContractStatus>().ready);
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "avian-backend-pose-invalid"
+        );
+        assert!(
+            world
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE)
+        );
+    }
+
+    #[test]
+    fn collider_preparation_rejects_invalid_rotation_and_hierarchy() {
+        for over_depth in [false, true] {
+            let mut world = World::new();
+            world.init_resource::<lunco_core::RuntimeFaults>();
+            world.init_resource::<lunco_physics::PhysicsHolds>();
+            let mut parent = world.spawn(Grid::new(1000.0, 0.0)).id();
+            if over_depth {
+                for _ in 0..lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
+                    parent = world.spawn((Transform::default(), ChildOf(parent))).id();
+                }
+            }
+            let transform = if over_depth {
+                Transform::default()
+            } else {
+                Transform::from_rotation(Quat::from_xyzw(0.0, 0.0, 0.0, 2.0))
+            };
+            let collider = world
+                .spawn((transform, ColliderTransform::default(), ChildOf(parent)))
+                .id();
+            world
+                .run_system_once(propagate_collider_transforms_rootless)
+                .unwrap();
+            assert_eq!(
+                world.get::<ColliderTransform>(collider).unwrap(),
+                &ColliderTransform::default()
+            );
+            let fault = world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap();
+            assert_eq!(fault.entity, Some(collider));
+            assert_eq!(
+                fault.kind,
+                if over_depth {
+                    "avian-collider-topology-invalid"
+                } else {
+                    "avian-backend-pose-invalid"
+                }
+            );
+            assert!(
+                world
+                    .resource::<lunco_physics::PhysicsHolds>()
+                    .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE)
+            );
+        }
     }
 
     #[test]

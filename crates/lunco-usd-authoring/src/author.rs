@@ -128,25 +128,28 @@ pub fn snapshot_prim_subtree(data: &dyn AbstractData, path: &SdfPath) -> Result<
     data_to_usda(&snapshot)
 }
 
-/// Capture one authored attribute and any Sdf child specs below that property.
-pub fn snapshot_attribute_subtree(
+/// Capture one authored property and any Sdf child specs below that property.
+pub fn snapshot_property_subtree(
     data: &dyn AbstractData,
     path: &SdfPath,
     name: &str,
 ) -> Result<String> {
     let property = path
         .append_property(name)
-        .map_err(|error| anyhow!("attribute snapshot path {path}.{name}: {error}"))?;
-    if data.spec_type(&property) != Some(sdf::SpecType::Attribute) {
+        .map_err(|error| anyhow!("property snapshot path {path}.{name}: {error}"))?;
+    if !matches!(
+        data.spec_type(&property),
+        Some(sdf::SpecType::Attribute | sdf::SpecType::Relationship)
+    ) {
         return Err(anyhow!(
-            "attribute snapshot target {property} is not an authored attribute"
+            "property snapshot target {property} is not an authored property"
         ));
     }
     let wrapper = SdfPath::new("/__lunco_history_snapshot__")
         .map_err(|error| anyhow!("history wrapper path: {error}"))?;
     let wrapper_property = wrapper
         .append_property(name)
-        .map_err(|error| anyhow!("history wrapper attribute {name}: {error}"))?;
+        .map_err(|error| anyhow!("history wrapper property {name}: {error}"))?;
     let mut snapshot = history_snapshot_root()?;
     let mut shell = sdf::SpecData::new(sdf::SpecType::Prim);
     shell.add("specifier", sdf::Value::Specifier(sdf::Specifier::Def));
@@ -160,7 +163,7 @@ pub fn snapshot_attribute_subtree(
         |_| sdf::CopyValue::Copy,
         sdf::should_copy_children,
     )
-    .map_err(|error| anyhow!("copy attribute subtree {property} into history snapshot: {error}"))?;
+    .map_err(|error| anyhow!("copy property subtree {property} into history snapshot: {error}"))?;
     data_to_usda(&snapshot)
 }
 
@@ -237,21 +240,21 @@ pub fn prepare_prim_subtree_restore(
     })
 }
 
-/// Restore an attribute subtree captured by [`snapshot_attribute_subtree`].
-pub fn restore_attribute_subtree(
+/// Restore a property subtree captured by [`snapshot_property_subtree`].
+pub fn restore_property_subtree(
     data: &mut dyn AbstractData,
     path: &SdfPath,
     name: &str,
     snapshot_usda: &str,
     sibling_order: &[String],
 ) -> Result<()> {
-    let plan = prepare_attribute_subtree_restore(data, path, name, snapshot_usda, sibling_order)?;
+    let plan = prepare_property_subtree_restore(data, path, name, snapshot_usda, sibling_order)?;
     apply_snapshot_restore(data, plan);
     Ok(())
 }
 
-/// Validate and prepare an attribute-subtree restore without mutating the layer.
-pub fn prepare_attribute_subtree_restore(
+/// Validate and prepare a property-subtree restore without mutating the layer.
+pub fn prepare_property_subtree_restore(
     data: &dyn AbstractData,
     path: &SdfPath,
     name: &str,
@@ -262,29 +265,30 @@ pub fn prepare_attribute_subtree_restore(
         .map_err(|error| anyhow!("history wrapper path: {error}"))?;
     let wrapper_property = wrapper
         .append_property(name)
-        .map_err(|error| anyhow!("history wrapper attribute {name}: {error}"))?;
+        .map_err(|error| anyhow!("history wrapper property {name}: {error}"))?;
     let property = path
         .append_property(name)
-        .map_err(|error| anyhow!("attribute restore path {path}.{name}: {error}"))?;
+        .map_err(|error| anyhow!("property restore path {path}.{name}: {error}"))?;
     if data.spec_type(&property).is_some() {
         return Err(anyhow!(
-            "cannot restore attribute {property}: a target-layer spec already exists"
+            "cannot restore property {property}: a target-layer spec already exists"
         ));
     }
-    validate_snapshot_order(sibling_order, name, "attribute")?;
+    validate_snapshot_order(sibling_order, name, "property")?;
     let restored_order = merged_child_order(data, path, "propertyChildren", sibling_order, name)?;
     let source = validate_snapshot(snapshot_usda, &wrapper, sdf::SpecType::Prim)?;
-    if source.spec_type(&wrapper_property) != Some(sdf::SpecType::Attribute) {
-        return Err(anyhow!(
-            "attribute snapshot has no attribute spec for {name}"
-        ));
+    if !matches!(
+        source.spec_type(&wrapper_property),
+        Some(sdf::SpecType::Attribute | sdf::SpecType::Relationship)
+    ) {
+        return Err(anyhow!("property snapshot has no property spec for {name}"));
     }
     let mut specs = remapped_snapshot_specs(&source, &wrapper, path)?;
     // The wrapper prim is scaffolding; only the property subtree is restored.
     specs.retain(|(target, _, _)| target != path);
     if specs.iter().all(|(target, _, _)| target != &property) {
         return Err(anyhow!(
-            "attribute snapshot has no property spec for {property}"
+            "property snapshot has no property spec for {property}"
         ));
     }
     ensure_destinations_absent(data, &specs)?;
