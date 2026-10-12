@@ -251,40 +251,6 @@ pub fn string_literal_value(e: &Expression) -> Option<String> {
     }
 }
 
-/// Return ALL non-package classes (qualified) reachable from the
-/// top-level classes, depth-first. Used by the Compile handler to
-/// decide whether to auto-pick (length 0–1) or open a picker modal
-/// (length ≥ 2, task #102). Cheap — walks the already-parsed AST.
-pub fn collect_non_package_classes_qualified(ast: &StoredDefinition) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_non_package_qualified(&ast.classes, "", &mut out);
-    out
-}
-
-fn collect_non_package_qualified(
-    classes: &AstIndexMap<String, ClassDef>,
-    parent: &str,
-    out: &mut Vec<String>,
-) {
-    for (name, class) in classes {
-        let qualified = qualify(parent, name);
-        match class.class_type {
-            // Descend into packages to reach nested runnable classes.
-            ClassType::Package => {
-                collect_non_package_qualified(&class.classes, &qualified, out);
-            }
-            // Only runnable classes end up on the compile picker —
-            // connectors / records / types / functions have no
-            // equations to simulate and would only confuse the user
-            // by appearing as "Compile this" candidates.
-            ClassType::Model | ClassType::Block | ClassType::Class => {
-                out.push(qualified);
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Select a runnable class, checking the current level before nested packages.
 fn find_first_runnable_qualified(
     classes: &AstIndexMap<String, ClassDef>,
