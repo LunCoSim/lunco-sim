@@ -1,5 +1,44 @@
 # High-quality realtime performance handover
 
+## Scenario source admission before simulation startup — 2026-10-12
+
+On integrated normal artifact
+`23e28e5ed46a9947e9737d6d62d7e7ab863e9794db81e55a7fa34a94fbefcf0c`,
+216 exact replay checks, document metadata and scene replacement pass. The
+observation-failure fixture exposes an admission gap: its file-backed Rhai
+source has no simulation hold before a document exists. Modelica reaches the
+terminal fault at tick 18 before `on_start` checks the initial state or declares
+the expected fault. A faster prepared participant can outrun source loading.
+
+The scripting loader now reserves through `ScenarioPreparationAdmissions`
+before awaiting assets. Document admission and compilation consume that same
+key; initialization/startup release it. Pending sources hold actor activation
+so load completion cannot select startup order. Typed path/handle pairs fence
+replacement, and removed inputs/actors release their source reservations.
+Document-only cancellation preserves loader-owned holds. Load, identity,
+import or attachment failure produces `scenario-source-failed` at the owner.
+This is an engine admission invariant, with no new policy hook or clock.
+
+Normal source-admission artifact
+`cf23bc7899663d384aa5bf9ab99112864c4db2afb812f1f0941dc3632a537e6b`
+builds in 2m 45s and is archived with round-trip hash verification. The unchanged
+observation-failure fixture registers its expected fault at global tick zero
+and passes at the intended tick-18 Modelica failure. The authored missing-source
+gate uses `AttachProgram` through the typed USD runtime layer and passes with
+`scenario-source-failed` at tick zero, exiting normally. Its fixture was created,
+saved and inspected through the USD document API; no source USD text was patched.
+
+The focused reservation seam passes one hold across repeated source admission,
+document handoff and cancellation/retirement. Its first invocation without the
+Rhai feature ran zero tests and is not passing evidence; the actual feature-enabled
+test passes. A 72-check exact replay and the 31-check document lifecycle plus
+scene-replacement gate also pass. Owned API ports are released. Artifact,
+source-creation receipts, logs and images are under
+`.lunco/performance-evidence/entity-tree-perf/scenario-source-*`.
+Whole-app uncontended loading, visual-FPS and physics-performance acceptance
+remain open; the source hold preserves initial state instead of admitting time
+during required I/O.
+
 ## Shader-source publication ownership — 2026-10-12
 
 Shader-source reflection is independent of material binding. The render binder

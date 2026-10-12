@@ -845,6 +845,7 @@ struct PendingCompile {
 pub struct ScenarioPreparationAdmissions {
     next_operation_id: u64,
     pending: HashMap<Entity, ScenarioPreparationReservation>,
+    pending_sources: HashMap<Entity, lunco_core_runtime::SimulationProgressKey>,
 }
 
 #[derive(Clone, Copy)]
@@ -857,6 +858,52 @@ struct ScenarioPreparationReservation {
 }
 
 impl ScenarioPreparationAdmissions {
+    /// Hold an authored scenario's source admission before its document exists.
+    /// The source owner cancels removed inputs; document admission takes the key.
+    pub fn reserve_source(
+        &mut self,
+        entity: Entity,
+        progress: &mut lunco_core_runtime::SimulationProgress,
+    ) {
+        let key = match self.pending_sources.get(&entity) {
+            Some(key) => *key,
+            None => {
+                let key = self.allocate_key();
+                self.pending_sources.insert(entity, key);
+                key
+            }
+        };
+        progress.acquire(
+            key,
+            format!("Loading authored scenario source for {entity:?}"),
+        );
+    }
+
+    pub fn cancel_source(
+        &mut self,
+        entity: Entity,
+        progress: &mut lunco_core_runtime::SimulationProgress,
+    ) {
+        if let Some(key) = self.pending_sources.remove(&entity) {
+            progress.release(key);
+        }
+    }
+
+    /// Retire sources whose actor or admitted input has left the loader's scope.
+    pub fn retain_sources(
+        &mut self,
+        mut keep: impl FnMut(Entity) -> bool,
+        progress: &mut lunco_core_runtime::SimulationProgress,
+    ) {
+        self.pending_sources.retain(|entity, key| {
+            if keep(*entity) {
+                return true;
+            }
+            progress.release(*key);
+            false
+        });
+    }
+
     /// Reserve simulation admission for an accepted scenario revision.
     pub fn reserve(
         &mut self,
@@ -867,7 +914,10 @@ impl ScenarioPreparationAdmissions {
         scene_generation: u64,
         progress: &mut lunco_core_runtime::SimulationProgress,
     ) -> lunco_core_runtime::SimulationProgressKey {
-        let key = self.allocate_key();
+        let key = self
+            .pending_sources
+            .remove(&entity)
+            .unwrap_or_else(|| self.allocate_key());
         progress.acquire(
             key,
             format!("Preparing Rhai scenario document {document_id} generation {generation}"),
@@ -909,7 +959,10 @@ impl ScenarioPreparationAdmissions {
             }
         }
 
-        let key = self.allocate_key();
+        let key = self
+            .pending_sources
+            .remove(&entity)
+            .unwrap_or_else(|| self.allocate_key());
         if let Some(progress) = progress.as_deref_mut() {
             progress.acquire(
                 key,
@@ -947,7 +1000,10 @@ impl ScenarioPreparationAdmissions {
         }
     }
 
-    fn cancel_all(&mut self, mut progress: Option<&mut lunco_core_runtime::SimulationProgress>) {
+    fn cancel_all_documents(
+        &mut self,
+        mut progress: Option<&mut lunco_core_runtime::SimulationProgress>,
+    ) {
         for (_, reservation) in self.pending.drain() {
             if let Some(progress) = progress.as_deref_mut() {
                 progress.release(reservation.key);
@@ -1143,8 +1199,11 @@ fn external_progress_is_held(progress: &lunco_core_runtime::SimulationProgress) 
 
 fn scenario_startup_is_blocked(world: &World) -> bool {
     world
-        .get_resource::<lunco_time::SceneTimeState>()
-        .is_some_and(|state| !state.is_ready())
+        .get_resource::<ScenarioPreparationAdmissions>()
+        .is_some_and(|admissions| !admissions.pending_sources.is_empty())
+        || world
+            .get_resource::<lunco_time::SceneTimeState>()
+            .is_some_and(|state| !state.is_ready())
         || world
             .get_resource::<lunco_readiness::ReadinessState>()
             .is_some_and(|state| state.world_hold || !state.held_entities.is_empty())
@@ -1678,7 +1737,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
                 let mut progress =
                     world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
-                admissions.cancel_all(progress.as_deref_mut());
+                admissions.cancel_all_documents(progress.as_deref_mut());
             },
         );
         if !world.contains_resource::<Self>() {
@@ -3611,6 +3670,42 @@ pub fn collect_script_events(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_admission_retains_one_hold_through_document_handoff_and_retirement() {
+        use super::*;
+        let mut world = World::new();
+        let actor = world.spawn_empty().id();
+        let removed = world.spawn_empty().id();
+        let mut admissions = ScenarioPreparationAdmissions::default();
+        let mut progress = lunco_core_runtime::SimulationProgress::default();
+        admissions.reserve_source(actor, &mut progress);
+        let source_key = progress.blockers().next().unwrap().key;
+        admissions.reserve_source(actor, &mut progress);
+        assert_eq!(progress.blockers().count(), 1);
+        admissions.cancel_all_documents(Some(&mut progress));
+        assert!(progress.is_held());
+        let document_key = admissions.reserve(actor, 42, 1, 0, 2, &mut progress);
+        assert_eq!(source_key, document_key);
+        admissions.cancel_source(actor, &mut progress);
+        assert!(progress.is_held());
+        assert_eq!(
+            admissions.admit_compile(actor, 42, 1, 0, 2, Some(&mut progress)),
+            source_key
+        );
+        assert!(progress.release(source_key));
+        admissions.reserve_source(removed, &mut progress);
+        admissions.retain_sources(|entity| entity == actor, &mut progress);
+        assert!(!progress.is_held());
+        admissions.reserve_source(actor, &mut progress);
+        let key = progress.blockers().next().unwrap().key;
+        assert_eq!(
+            admissions.admit_compile(actor, 42, 2, 0, 2, Some(&mut progress)),
+            key
+        );
+        assert!(progress.release(key));
+        assert!(admissions.pending_sources.is_empty());
+    }
+
     use super::{SCRIPT_EVENT_INBOX_CAPACITY, ScriptEventInbox, external_progress_is_held};
     use bevy::prelude::App;
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};

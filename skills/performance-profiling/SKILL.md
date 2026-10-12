@@ -463,8 +463,16 @@ Rhai verdicts. Separate initialization from settled frame costs and worker time 
 capture/commit time. Use `workbench_panel_render` child zones inside `render_workbench` to
 attribute painting and visible-row index costs independently of descriptor work.
 
-For startup asset graphs, separate asynchronous source reads from discovery,
-composition, and UI/physics admission. Read all known dependencies in each
+For startup asset graphs, separate asynchronous source reads, discovery,
+composition, and UI/physics admission. Include the file-backed scenario source
+wait before its document exists.
+The scripting owner retains one preparation key from asset admission through
+compilation and `on_start`; a faster solver must not admit ticks during that
+asset wait. Use the unchanged `modelica_observation_failure` production scene
+to verify its checked initial observation and `expect_runtime_fault` registration
+at global tick zero. Loader cancellation must release only its own pending key;
+document handoff must preserve it until activation.
+Read all known dependencies in each
 breadth-first frontier through bounded batches, then merge results in stable
 authored order; this avoids serializing independent branches behind one parent
 at a time. Preserve the source-change reload graph when using child load

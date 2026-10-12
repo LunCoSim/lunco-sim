@@ -243,6 +243,15 @@ ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
 until `on_start` completes. A fresh process therefore starts `on_start` at
 `SimTick=0` and admits its first `on_tick` at `SimTick=1`, without advancing a
 physics or Modelica step during scene admission.
+File-backed scene scenarios reserve `ScriptPreparation` when their typed asset
+path enters the loader, before a script document exists. The same key passes
+through document admission and compilation to `on_start`; document-only
+cancellation cannot release a source still owned by the loader. Pending sources
+also hold startup activation so asset completion order cannot choose which
+actor initializes first. The loader retains the admitted path with its handle,
+replaces superseded inputs, and retires removed actors/inputs. Load, identity,
+import-closure or attachment failure raises `scenario-source-failed` at the
+scripting owner. UI and asset work continue while authoritative time is held.
 The preparation pass borrows canonical script documents while checking revision
 and eligibility. It copies source and asset identity only when an actual compile
 or capacity retry is admitted; unchanged actors do not copy their source per

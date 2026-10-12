@@ -1031,6 +1031,9 @@ pub fn attach_embedded_scenarios(
     asset_server: Option<Res<AssetServer>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut commands: Commands,
 ) {
     for (entity, embedded, asset_id, prim_path) in q.iter() {
@@ -1042,12 +1045,21 @@ pub fn attach_embedded_scenarios(
             {
                 Some(path) => Some(path.to_string()),
                 None => {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "scenario-source-failed",
+                            None,
+                            format!("{entity:?}"),
+                            "Cannot resolve the authored scenario's USD stage identity",
+                        );
+                    }
                     error!(
                         "[rhai] cannot resolve USD stage identity for embedded scenario {entity:?}"
                     );
                     commands
                         .entity(entity)
                         .remove::<lunco_core::EmbeddedScenarioSource>();
+                    admissions.cancel_source(entity, &mut progress);
                     continue;
                 }
             },
@@ -1061,10 +1073,19 @@ pub fn attach_embedded_scenarios(
         ) {
             Ok(owner) => owner,
             Err(error) => {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "scenario-source-failed",
+                        None,
+                        format!("{entity:?}"),
+                        &error,
+                    );
+                }
                 error!("[rhai] embedded scenario ownership rejected for {entity:?}: {error}");
                 commands
                     .entity(entity)
                     .remove::<lunco_core::EmbeddedScenarioSource>();
+                admissions.cancel_source(entity, &mut progress);
                 continue;
             }
         };
@@ -1091,7 +1112,16 @@ pub fn attach_embedded_scenarios(
                     .remove::<lunco_core::EmbeddedScenarioSource>();
             }
             Err(error) => {
-                error!("[rhai] embedded scenario attach rejected for {entity:?}: {error}")
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "scenario-source-failed",
+                        None,
+                        format!("{entity:?}"),
+                        &error,
+                    );
+                }
+                error!("[rhai] embedded scenario attach rejected for {entity:?}: {error}");
+                admissions.cancel_source(entity, &mut progress);
             }
         }
         commands.entity(entity).remove::<ScenarioAssetId>();
@@ -1148,6 +1178,11 @@ pub fn resolve_embedded_scenario_paths(
         (Entity, &lunco_core::EmbeddedScenarioPath),
         Without<lunco_core::EmbeddedScenarioSource>,
     >,
+    source_owners: Query<(
+        Option<&lunco_core::EmbeddedScenarioPath>,
+        Option<&lunco_core::EmbeddedScenarioSource>,
+        Option<&ScriptedModel>,
+    )>,
     sources: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
     mut driver: ResMut<
@@ -1158,17 +1193,47 @@ pub fn resolve_embedded_scenario_paths(
     mut pending: Local<
         std::collections::HashMap<
             Entity,
-            Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+            (
+                bevy::asset::AssetPath<'static>,
+                Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+            ),
         >,
     >,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut removed: RemovedComponents<lunco_core::EmbeddedScenarioPath>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut commands: Commands,
 ) {
     for entity in removed.read() {
-        pending.remove(&entity);
+        if pending.remove(&entity).is_some() {
+            admissions.cancel_source(entity, &mut progress);
+        }
     }
+    admissions.retain_sources(
+        |entity| {
+            source_owners
+                .get(entity)
+                .is_ok_and(|(path, source, model)| {
+                    path.is_some()
+                        || source.is_some()
+                        || model.is_some_and(|model| {
+                            model.language == Some(ScriptLanguage::Rhai)
+                                && model.document_id.is_some()
+                        })
+                })
+        },
+        &mut progress,
+    );
     for (entity, path) in q.iter() {
-        let handle = pending.entry(entity).or_insert_with(|| {
+        admissions.reserve_source(entity, &mut progress);
+        if pending
+            .get(&entity)
+            .is_some_and(|(input, _)| input != &path.0)
+        {
+            pending.remove(&entity);
+        }
+        let (_, handle) = pending.entry(entity).or_insert_with(|| {
             // Projection has already admitted and resolved the typed load path.
             // Keep filesystem characters and asset labels separate through load.
             let uri = path.0.clone();
@@ -1176,13 +1241,17 @@ pub fn resolve_embedded_scenario_paths(
                 "[scripting] loading scenario script `{}` for {entity:?} as `{uri}`",
                 path.0,
             );
-            asset_server.load(uri)
+            (uri.clone(), asset_server.load(uri))
         });
         let root_failed = asset_server.load_state(&*handle).is_failed();
         let dependencies_failed = asset_server
             .recursive_dependency_load_state(&*handle)
             .is_failed();
         if root_failed || dependencies_failed {
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise("scenario-source-failed", None, path.0.to_string(),
+                    format!("Authored scenario asset failed: root_failed={root_failed}, dependencies_failed={dependencies_failed}"));
+            }
             warn!(
                 "[scripting] failed to load scenario `{}` via AssetServer (root_failed={root_failed}, dependencies_failed={dependencies_failed})",
                 path.0,
@@ -1192,6 +1261,7 @@ pub fn resolve_embedded_scenario_paths(
                 .remove::<lunco_core::EmbeddedScenarioPath>()
                 .remove::<ScenarioAssetHandle>();
             pending.remove(&entity);
+            admissions.cancel_source(entity, &mut progress);
             continue;
         }
         // `RhaiSource` declares its imports as Bevy dependencies. The source
@@ -1221,6 +1291,14 @@ pub fn resolve_embedded_scenario_paths(
                 .get_path(&*handle)
                 .map(|path| lunco_scripting_rhai_world::source_asset::canonical_asset_id(&path))
             else {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "scenario-source-failed",
+                        None,
+                        path.0.to_string(),
+                        "Loaded scenario asset has no resolved asset identity",
+                    );
+                }
                 error!(
                     "[rhai] loaded script asset {:?} has no resolved AssetPath — cannot \
                      establish its identity, so it is NOT compiled (a guessed id would \
@@ -1229,6 +1307,7 @@ pub fn resolve_embedded_scenario_paths(
                     path.0
                 );
                 pending.remove(&entity);
+                admissions.cancel_source(entity, &mut progress);
                 commands
                     .entity(entity)
                     .remove::<lunco_core::EmbeddedScenarioPath>()
@@ -1240,11 +1319,15 @@ pub fn resolve_embedded_scenario_paths(
                     .runtime
                     .commit_asset_dependency_closure(handle, &sources, &asset_server)
             {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise("scenario-source-failed", None, path.0.to_string(), &error);
+                }
                 error!(
                     "[rhai] loaded script asset `{}` has an invalid import closure: {error}",
                     path.0
                 );
                 pending.remove(&entity);
+                admissions.cancel_source(entity, &mut progress);
                 commands
                     .entity(entity)
                     .remove::<lunco_core::EmbeddedScenarioPath>()
