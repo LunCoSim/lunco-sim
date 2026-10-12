@@ -461,9 +461,7 @@ fn collect_output_names_from_classes(
 ) {
     for class in classes.values() {
         for component in class.components.values() {
-            if matches!(component.causality, Causality::Output(_))
-                || is_output_connector_type(&component.type_name.to_string())
-            {
+            if matches!(component.causality, Causality::Output(_)) {
                 names.insert(component.name.clone());
             }
         }
@@ -712,7 +710,9 @@ pub struct TypedComponent {
     pub name: String,
     /// Declared Modelica type name.
     pub type_name: String,
-    /// Whether this component declaration carries array dimensions.
+    /// Resolved primitive type, absent for aggregate declarations.
+    pub scalar_type: Option<rumoca_core::PredefinedComponentType>,
+    /// Whether this component or its resolved type carries array dimensions.
     pub has_array_dimensions: bool,
     /// Optional `unit` modification.
     pub unit: Option<String>,
@@ -726,64 +726,6 @@ pub struct TypedComponent {
     pub max: Option<f64>,
 }
 
-/// Extract direct input components with their authoring metadata.
-pub fn extract_typed_inputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
-    typed_components_filtered(class, |c| {
-        matches!(c.causality, Causality::Input(_))
-            || is_input_connector_type(&c.type_name.to_string())
-    })
-}
-
-/// Extract direct parameter components with their authoring metadata.
-pub fn extract_typed_parameters_for_class(class: &ClassDef) -> Vec<TypedComponent> {
-    typed_components_filtered(class, |c| {
-        matches!(c.variability, Variability::Parameter(_))
-    })
-}
-
-/// Extract direct output components with their authoring metadata.
-pub fn extract_typed_outputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
-    typed_components_filtered(class, |c| {
-        matches!(c.causality, Causality::Output(_))
-            || is_output_connector_type(&c.type_name.to_string())
-    })
-}
-
-/// Whether `type_name` looks like a source-library "RealInput / IntegerInput /
-/// BooleanInput / StringInput" connector class (cf. MLS Annex E.3 +
-/// `Modelica.Blocks.Interfaces`). Components declared with these
-/// types behave as **inputs** at the API surface even though the
-/// `input` keyword lives inside the connector definition rather than
-/// on the component itself, so the bare causality check misses them.
-///
-/// Matches by short-name suffix (`*RealInput`, `*RealInput[N]` for
-/// arrays). Returns `true` for the four primitive variants and for
-/// any user type that happens to end in `Input` — false-positives
-/// here are preferable to the false-negatives (silently missing
-/// `valve` on AnnotatedRocketStage etc.).
-fn is_input_connector_type(type_name: &str) -> bool {
-    // Strip array brackets if any, then split on `.` and inspect the
-    // tail. `Modelica.Blocks.Interfaces.RealInput` and bare
-    // `RealInput` both resolve to the short name `RealInput`.
-    let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = rumoca_core::top_level_last_segment(bare);
-    matches!(
-        short,
-        "RealInput" | "IntegerInput" | "BooleanInput" | "StringInput"
-    ) || short.ends_with("Input")
-}
-
-/// Symmetric counterpart of [`is_input_connector_type`] for output
-/// connectors — see that doc for the rationale.
-fn is_output_connector_type(type_name: &str) -> bool {
-    let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = rumoca_core::top_level_last_segment(bare);
-    matches!(
-        short,
-        "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"
-    ) || short.ends_with("Output")
-}
-
 /// Read the unit value decoded by Rumoca, when authored as a string literal.
 fn unit_of_component(comp: &rumoca_ir_ast::Component) -> Option<String> {
     comp.modifications
@@ -791,28 +733,29 @@ fn unit_of_component(comp: &rumoca_ir_ast::Component) -> Option<String> {
         .and_then(string_literal_value)
 }
 
-fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
-where
-    F: Fn(&rumoca_ir_ast::Component) -> bool,
-{
-    class
-        .components
-        .values()
-        .filter(|c| want(c))
-        .map(|c| TypedComponent {
-            name: c.name.clone(),
-            type_name: c.type_name.to_string(),
-            has_array_dimensions: !c.shape.is_empty() || !c.shape_expr.is_empty(),
-            unit: unit_of_component(c),
-            default: c
-                .binding
-                .as_ref()
-                .map_or_else(|| numeric_of(&c.start), numeric_of),
-            description: description_from_tokens(&c.description).unwrap_or_default(),
-            min: c.modifications.get("min").and_then(numeric_of),
-            max: c.modifications.get("max").and_then(numeric_of),
-        })
-        .collect()
+/// Project one resolved declaration into the authoring metadata ABI.
+/// The session supplies type facts; expressions and locations remain authored.
+pub fn component_metadata(
+    component: &rumoca_ir_ast::Component,
+    scalar_type: Option<rumoca_core::PredefinedComponentType>,
+    has_type_dimensions: bool,
+) -> TypedComponent {
+    TypedComponent {
+        name: component.name.clone(),
+        type_name: component.type_name.to_string(),
+        scalar_type,
+        has_array_dimensions: has_type_dimensions
+            || !component.shape.is_empty()
+            || !component.shape_expr.is_empty(),
+        unit: unit_of_component(component),
+        default: component
+            .binding
+            .as_ref()
+            .map_or_else(|| numeric_of(&component.start), numeric_of),
+        description: description_from_tokens(&component.description).unwrap_or_default(),
+        min: component.modifications.get("min").and_then(numeric_of),
+        max: component.modifications.get("max").and_then(numeric_of),
+    }
 }
 
 /// Compute a simple hash of the source content for change detection.
@@ -870,7 +813,15 @@ end Metadata;"#;
             Some("\"Case\" temperature\\n")
         );
         assert!(string_literal_value(class.components["gain"].binding.as_ref().unwrap()).is_none());
-        assert_eq!(extract_typed_inputs_for_class(class)[0].default, None);
+        assert_eq!(
+            component_metadata(
+                &class.components["drive"],
+                Some(rumoca_core::PredefinedComponentType::Real),
+                false
+            )
+            .default,
+            None
+        );
     }
 
     #[test]

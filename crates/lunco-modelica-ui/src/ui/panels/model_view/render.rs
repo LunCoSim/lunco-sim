@@ -71,17 +71,18 @@ pub(crate) fn on_fast_run_setup_requested(
                 .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
                 .unwrap_or(0);
-            let detected = world
-                .get_resource::<ModelicaDocuments>()
-                .and_then(|r| r.host(doc))
-                .and_then(|h| {
-                    h.document()
-                        .syntax()
-                        .ast()
-                        .get_class_by_qualified_name(&model_ref.0)
-                        .map(lunco_modelica_runner::detect_top_level_inputs)
-                })
-                .unwrap_or_default();
+            let Some(members) = world
+                .get_resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
+                .and_then(|handle| handle.try_lock())
+                .and_then(|mut engine| engine.inherited_members_typed(&model_ref.0))
+            else {
+                world.trigger(lunco_core::RuntimeError {
+                    name: "experiment-admission-failed".to_owned(),
+                    message: "Class type metadata is not resolved".to_owned(),
+                });
+                return;
+            };
+            let detected = lunco_modelica_runner::input_rows(&members);
             let prefilled = world
                 .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
@@ -103,6 +104,7 @@ pub(crate) fn on_fast_run_setup_requested(
                     crate::ui::commands::FastRunInput {
                         name: d.name,
                         type_name: d.type_name,
+                        scalar_type: d.scalar_type,
                         value_text,
                     }
                 })

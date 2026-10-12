@@ -146,6 +146,7 @@ pub struct FastRunSetupEntry {
 pub struct FastRunInput {
     pub name: String,
     pub type_name: String,
+    pub scalar_type: Option<lunco_modelica_ast::PredefinedComponentType>,
     /// User input as text, parsed on Run. An empty field retains a checked
     /// declaration default; an unbound input requires an explicit value.
     pub value_text: String,
@@ -373,8 +374,7 @@ pub(crate) fn render_fast_run_setup(
                     ui.end_row();
                 });
 
-            // Inputs — substitute input declarations with parameter
-            // values so the simulator sees something other than zero.
+            // Run inputs enter checked simulation preparation.
             if !entry.inputs.is_empty() {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Inputs").strong());
@@ -388,14 +388,14 @@ pub(crate) fn render_fast_run_setup(
                         for inp in entry.inputs.iter_mut() {
                             ui.label(&inp.type_name);
                             ui.label(&inp.name);
-                            ui.add(
+                            ui.add_enabled(
+                                inp.scalar_type.is_some(),
                                 lunco_workbench_widgets::text_editor::singleline(&mut inp.value_text)
                                     .desired_width(100.0),
                             )
                             .on_hover_text(
-                                "Leave empty to use Modelica default (0). \
-                                 The value is substituted into the source as a \
-                                 parameter before compile.",
+                                "Empty text retains the checked declaration default. \
+                                 Overrides require numeric or Boolean scalars.",
                             );
                             ui.end_row();
                         }
@@ -458,10 +458,7 @@ pub(crate) fn render_fast_run_setup(
         };
         // Persist edited bounds + inputs into the draft so
         // FastRunActiveModel picks them up. Overrides untouched.
-        let draft = drafts.entry(entry.doc, entry.model_ref.clone());
-        draft.bounds_override = Some(entry.bounds);
-        // Parse input text → ParamValue. Empty fields are dropped
-        // (= leave as Modelica `input`, default 0).
+        // Validate every edited value before changing the draft.
         let mut new_inputs: std::collections::BTreeMap<
             lunco_experiments::ParamPath,
             lunco_experiments::ParamValue,
@@ -471,29 +468,22 @@ pub(crate) fn render_fast_run_setup(
             if txt.is_empty() {
                 continue;
             }
-            let v = match inp.type_name.as_str() {
-                "Real" => txt
-                    .parse::<f64>()
-                    .ok()
-                    .map(lunco_experiments::ParamValue::Real),
-                "Integer" | "Int" => txt
-                    .parse::<i64>()
-                    .ok()
-                    .map(lunco_experiments::ParamValue::Int),
-                "Boolean" | "Bool" => match txt {
-                    "true" => Some(lunco_experiments::ParamValue::Bool(true)),
-                    "false" => Some(lunco_experiments::ParamValue::Bool(false)),
-                    _ => None,
-                },
-                _ => txt
-                    .parse::<f64>()
-                    .ok()
-                    .map(lunco_experiments::ParamValue::Real),
-            };
-            if let Some(v) = v {
-                new_inputs.insert(lunco_experiments::ParamPath(inp.name.clone()), v);
+            match lunco_modelica_runner::parse_scalar_run_value(inp.scalar_type, txt) {
+                Ok(Some(value)) => {
+                    new_inputs.insert(lunco_experiments::ParamPath(inp.name.clone()), value);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    commands.trigger(lunco_core::RuntimeError {
+                        name: "experiment-admission-failed".to_owned(),
+                        message: format!("{}: {error}", inp.name),
+                    });
+                    return;
+                }
             }
         }
+        let draft = drafts.entry(entry.doc, entry.model_ref.clone());
+        draft.bounds_override = Some(entry.bounds);
         draft.inputs = new_inputs;
         // Pass the chosen class explicitly so dispatch skips the
         // disambiguation modal — the dropdown above already resolved it.

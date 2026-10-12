@@ -48,6 +48,7 @@ pub struct InheritedMember {
     pub variability: InheritedVariability,
     pub causality: InheritedCausality,
     pub default_value: Option<String>,
+    pub metadata: lunco_modelica_ast::ast_extract::TypedComponent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -564,8 +565,9 @@ impl ModelicaEngine {
         let members = self.session.class_component_declarations_query(qualified)?;
         Some(
             members
-                .into_iter()
-                .map(|(_declaring, type_name, component)| {
+                .iter()
+                .map(|member| {
+                    let component = &member.component;
                     let default_value = component
                         .binding
                         .as_ref()
@@ -576,11 +578,16 @@ impl ModelicaEngine {
                                 .then(|| component.start.to_string())
                         });
                     InheritedMember {
-                        name: component.name,
-                        type_name,
+                        name: component.name.clone(),
+                        type_name: member.type_name.clone(),
                         variability: map_variability_inherited(&component.variability),
-                        causality: map_causality_inherited(&component.causality),
+                        causality: map_causality_inherited(&member.effective_causality),
                         default_value,
+                        metadata: lunco_modelica_ast::ast_extract::component_metadata(
+                            component,
+                            member.scalar_type,
+                            member.has_type_dimensions,
+                        ),
                     }
                 })
                 .collect(),

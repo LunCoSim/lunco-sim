@@ -16,7 +16,9 @@ pub mod source_memo;
 
 /// Rumoca's parsed declaration classifications, exposed by the Modelica AST
 /// boundary for runtime and authoring projections.
-pub use rumoca_core::{Causality, ClassType, OpBinary, OpUnary, Span, Token, Variability};
+pub use rumoca_core::{
+    Causality, ClassType, OpBinary, OpUnary, PredefinedComponentType, Span, Token, Variability,
+};
 /// Rumoca's parsed definition tree consumed by AST/fact extractors.
 pub use rumoca_ir_ast::StoredDefinition;
 
