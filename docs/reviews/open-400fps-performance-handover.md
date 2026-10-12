@@ -9088,3 +9088,21 @@ Evidence is under `.lunco/performance-evidence/entity-tree-perf/` with prefixes
 concurrent workloads. Owned apps and collectors exit zero, API 4202 and Tracy
 8087 are closed. Clean overall loading, visual FPS and physics FPS acceptance
 remains open.
+
+
+The integration preserves main `41512e5d1` and its existing Rumoca
+`e9b58b63c4d4a3e7adc0db247af11bf718745580` dependency and native Editor-query
+changes. After task-owned package cleanup and checkout `cargo clean`, the
+combined tree rebuilds without warnings in 3m 42s using normal sccache and `-j 4`.
+The fresh normal artifact is
+`55a9ae6ba87b3d64c351b7b5cefb2e09ad0b3a8e2e0180a9154de90e0b9f3407`.
+It repeats all four mechanism tests, 8/8 solar checks with six identical
+observation rows, the expected invalid-probe fault, and 72/72 exact replay checks.
+The final Summer run advances 633 physics steps, passes nine settled terrain
+quality checkpoints and creates the 598 rocks once. Its frame p50/p99 are
+50.807/97.915 ms with two other tutorials simulator sessions active; these
+cannot be compared as a clean speedup to the earlier one-session observations.
+The inspected final image retains terrain, rocks and shadows. The authored
+Twin remains clean, the owned app exits zero and API 4202 is released.
+The integrated acceptance receipt and verified compressed executable are retained
+with prefix `solar-exact-reuse-integrated` beside the earlier evidence.
