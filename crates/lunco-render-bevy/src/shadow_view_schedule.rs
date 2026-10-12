@@ -1,29 +1,113 @@
-//! Admit shadow-root stages and instrument native shadow passes when profiling.
+//! Route local shadow roots through native preparation and shared shadow passes.
 
 use bevy::{
     core_pipeline::{
-        Core3d, Core3dSystems, mip_generation::experimental::depth::early_downsample_depth,
+        Core3d, Core3dSystems,
+        mip_generation::experimental::depth::early_downsample_depth,
+        prepass::{DeferredPrepass, DepthPrepass, MotionVectorPrepass, NormalPrepass},
+        schedule::RootNonCameraView,
     },
     ecs::{
-        schedule::{IntoSystemSet, Schedule, ScheduleCleanupPolicy, SystemSet},
+        schedule::{
+            IntoSystemSet, Schedule, ScheduleBuildSettings, ScheduleCleanupPolicy, ScheduleLabel,
+            SingleThreadedExecutor, SystemSet, common_conditions::any_match_filter,
+        },
         system::ScheduleSystem,
         world::World,
     },
     pbr::{
-        EARLY_SHADOW_PASS, LATE_SHADOW_PASS, LightEntity, Shadow, ShadowView, ViewLightEntities,
-        early_prepass_build_indirect_parameters, late_prepass_build_indirect_parameters,
-        main_build_indirect_parameters, per_view_shadow_pass, shared_shadow_pass,
+        EARLY_SHADOW_PASS, GpuMeshPreprocessPlugin, LATE_SHADOW_PASS, LightEntity,
+        PreprocessBindGroups, Shadow, ShadowView, SkipGpuPreprocess, ViewLightEntities,
+        clear_indirect_parameters_metadata, early_gpu_preprocess,
+        early_prepass_build_indirect_parameters, late_gpu_preprocess,
+        late_prepass_build_indirect_parameters, main_build_indirect_parameters,
+        per_view_shadow_pass, prepare_lights, shared_shadow_pass, unpack_bins,
     },
-    prelude::{App, Entity, Has, IntoScheduleConfigs, IntoSystem, Query, Res, With},
+    prelude::{App, Entity, Has, IntoScheduleConfigs, IntoSystem, Or, Query, Res, With, Without},
     render::{
-        RenderApp,
+        Render, RenderApp, RenderSystems,
+        batching::gpu_preprocessing::GpuPreprocessingSupport,
         diagnostic::{DiagnosticsRecorder, RecordDiagnostics, RenderDiagnosticsPlugin},
         occlusion_culling::OcclusionCulling,
         render_phase::ViewBinnedRenderPhases,
-        renderer::{CurrentView, RenderContext, ViewQuery},
-        view::ExtractedView,
+        renderer::{RenderContext, ViewQuery},
+        view::{ExtractedView, NoIndirectDrawing},
     },
 };
+
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+struct SharedShadowView;
+
+// The native indirect-preparation admission is global across render views.
+type IndirectPrepassView = (
+    With<PreprocessBindGroups>,
+    Without<SkipGpuPreprocess>,
+    Without<NoIndirectDrawing>,
+    Or<(
+        With<DepthPrepass>,
+        With<NormalPrepass>,
+        With<MotionVectorPrepass>,
+        With<DeferredPrepass>,
+        With<ShadowView>,
+    )>,
+);
+
+/// Use the native plugin's configuration and device admission for GPU passes.
+pub(super) fn finish(app: &mut App) {
+    let gpu_preprocessing_requested = app
+        .get_added_plugins::<GpuMeshPreprocessPlugin>()
+        .iter()
+        .any(|plugin| plugin.use_gpu_instance_buffer_builder);
+    let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+        return;
+    };
+    let gpu_preprocessing = gpu_preprocessing_requested
+        && render_app
+            .world()
+            .resource::<GpuPreprocessingSupport>()
+            .is_available();
+    render_app.add_schedule(shared_shadow_schedule(gpu_preprocessing));
+    install_diagnostics(app);
+}
+
+fn shared_shadow_schedule(gpu_preprocessing: bool) -> Schedule {
+    let mut schedule = Schedule::new(SharedShadowView);
+    // Every native stage depends on the preceding stage; no work can overlap.
+    schedule.set_executor(SingleThreadedExecutor::new());
+    schedule.set_build_settings(ScheduleBuildSettings {
+        auto_insert_apply_deferred: false,
+        ..Default::default()
+    });
+    schedule.add_systems((
+        shared_shadow_pass::<EARLY_SHADOW_PASS>
+            .after(early_prepass_build_indirect_parameters)
+            .before(late_gpu_preprocess)
+            .before(shared_shadow_pass::<LATE_SHADOW_PASS>),
+        shared_shadow_pass::<LATE_SHADOW_PASS>.after(late_prepass_build_indirect_parameters),
+    ));
+    if gpu_preprocessing {
+        schedule.add_systems((
+            (
+                clear_indirect_parameters_metadata,
+                unpack_bins,
+                early_gpu_preprocess,
+                early_prepass_build_indirect_parameters
+                    .run_if(any_match_filter::<IndirectPrepassView>),
+            )
+                .chain()
+                .before(shared_shadow_pass::<EARLY_SHADOW_PASS>),
+            (
+                late_gpu_preprocess,
+                late_prepass_build_indirect_parameters
+                    .run_if(any_match_filter::<(IndirectPrepassView, With<OcclusionCulling>)>),
+            )
+                .chain()
+                .after(shared_shadow_pass::<EARLY_SHADOW_PASS>)
+                .before(shared_shadow_pass::<LATE_SHADOW_PASS>),
+        ));
+    }
+    schedule
+}
 
 /// Replace a pass with a pipe containing its native delegate and dependency set.
 fn replace_shadow_pass<M, N>(
@@ -41,7 +125,7 @@ fn replace_shadow_pass<M, N>(
 }
 
 /// Install after native plugins have built their complete render schedule.
-pub(super) fn install_diagnostics(app: &mut App) {
+fn install_diagnostics(app: &mut App) {
     if !app.is_plugin_added::<RenderDiagnosticsPlugin>() {
         return;
     }
@@ -54,28 +138,6 @@ pub(super) fn install_diagnostics(app: &mut App) {
         .schedule_scope(Core3d, |world, schedule| {
             // Native system-local edges are removed with the system. Reapply PBR's
             // shadow-pass contract as well as retaining its implicit delegate sets.
-            replace_shadow_pass(
-                world,
-                schedule,
-                shared_shadow_pass::<EARLY_SHADOW_PASS>,
-                begin_shared_shadow_span::<EARLY_SHADOW_PASS>
-                    .pipe(shared_shadow_pass::<EARLY_SHADOW_PASS>)
-                    .pipe(end_shadow_span::<true, EARLY_SHADOW_PASS>)
-                    .after(early_prepass_build_indirect_parameters)
-                    .before(early_downsample_depth)
-                    .before(shared_shadow_pass::<LATE_SHADOW_PASS>),
-            );
-            replace_shadow_pass(
-                world,
-                schedule,
-                shared_shadow_pass::<LATE_SHADOW_PASS>,
-                begin_shared_shadow_span::<LATE_SHADOW_PASS>
-                    .pipe(shared_shadow_pass::<LATE_SHADOW_PASS>)
-                    .pipe(end_shadow_span::<true, LATE_SHADOW_PASS>)
-                    .after(late_prepass_build_indirect_parameters)
-                    .before(main_build_indirect_parameters)
-                    .before(Core3dSystems::MainPass),
-            );
             replace_shadow_pass(
                 world,
                 schedule,
@@ -99,13 +161,42 @@ pub(super) fn install_diagnostics(app: &mut App) {
                     .before(Core3dSystems::MainPass),
             );
         });
+    for label in [Core3d.intern(), SharedShadowView.intern()] {
+        render_app
+            .world_mut()
+            .schedule_scope(label, |world, schedule| {
+                replace_shadow_pass(
+                    world,
+                    schedule,
+                    shared_shadow_pass::<EARLY_SHADOW_PASS>,
+                    begin_shared_shadow_span::<EARLY_SHADOW_PASS>
+                        .pipe(shared_shadow_pass::<EARLY_SHADOW_PASS>)
+                        .pipe(end_shadow_span::<true, EARLY_SHADOW_PASS>)
+                        .after(early_prepass_build_indirect_parameters)
+                        .before(early_downsample_depth)
+                        .before(late_gpu_preprocess)
+                        .before(shared_shadow_pass::<LATE_SHADOW_PASS>),
+                );
+                replace_shadow_pass(
+                    world,
+                    schedule,
+                    shared_shadow_pass::<LATE_SHADOW_PASS>,
+                    begin_shared_shadow_span::<LATE_SHADOW_PASS>
+                        .pipe(shared_shadow_pass::<LATE_SHADOW_PASS>)
+                        .pipe(end_shadow_span::<true, LATE_SHADOW_PASS>)
+                        .after(late_prepass_build_indirect_parameters)
+                        .before(main_build_indirect_parameters)
+                        .before(Core3dSystems::MainPass),
+                );
+            });
+    }
 }
 
 /// Validate every native parameter before opening a shared shadow span.
 fn begin_shared_shadow_span<const IS_LATE: bool>(
     _world: &World,
-    _view: ViewQuery<(Entity, &ShadowView, &ExtractedView, Has<OcclusionCulling>)>,
-    _phases: Res<ViewBinnedRenderPhases<Shadow>>,
+    view: ViewQuery<(Entity, &ShadowView, &ExtractedView, Has<OcclusionCulling>)>,
+    phases: Res<ViewBinnedRenderPhases<Shadow>>,
     mut ctx: RenderContext,
     recorder: Res<DiagnosticsRecorder>,
 ) {
@@ -115,6 +206,27 @@ fn begin_shared_shadow_span<const IS_LATE: bool>(
         "lunco_shadow_shared_early"
     };
     recorder.begin_time_span(ctx.command_encoder(), name.into());
+    if !IS_LATE {
+        let (entity, shadow, view, _) = view.into_inner();
+        let phase = phases.get(&view.retained_view_entity);
+        let _span = bevy::log::info_span!(
+            "lunco_shadow_view_work",
+            pass = %shadow.pass_name,
+            view = entity.to_bits(),
+            width = view.viewport.z,
+            height = view.viewport.w,
+            phase_empty = ?phase.map(|phase| phase.is_empty()),
+            multidraw_sets = ?phase.map(|phase| phase.multidrawable_meshes.len()),
+            batchable_bins = ?phase.map(|phase| phase.batchable_meshes.len()),
+            unbatchable_bins = ?phase.map(|phase| phase.unbatchable_meshes.len()),
+            non_mesh_bins = ?phase.map(|phase| phase.non_mesh_items.len()),
+        )
+        .entered();
+        recorder.begin_time_span(
+            ctx.command_encoder(),
+            format!("lunco_light_depth/{}", shadow.pass_name).into(),
+        );
+    }
 }
 
 /// Validate every native parameter before opening a camera shadow span.
@@ -140,6 +252,9 @@ fn end_shadow_span<const SHARED: bool, const IS_LATE: bool>(
     mut ctx: RenderContext,
     recorder: Res<DiagnosticsRecorder>,
 ) {
+    if SHARED && !IS_LATE {
+        recorder.end_time_span(ctx.command_encoder());
+    }
     recorder.end_time_span(ctx.command_encoder());
 }
 
@@ -148,23 +263,22 @@ pub(super) fn build(app: &mut App) {
         return;
     };
 
-    render_app.configure_sets(
-        Core3d,
-        (
-            Core3dSystems::Prepass,
-            Core3dSystems::MainPass,
-            Core3dSystems::EarlyPostProcess,
-            Core3dSystems::PostProcess,
-        )
-            .run_if(current_root_uses_camera_pipeline),
+    render_app.add_systems(
+        Render,
+        route_shared_shadow_views
+            .in_set(RenderSystems::PrepareViews)
+            .after(prepare_lights),
     );
 }
 
-fn current_root_uses_camera_pipeline(
-    current_view: Res<CurrentView>,
-    shadow_views: Query<(), With<LightEntity>>,
-) -> bool {
-    shadow_views.get(current_view.0).is_err()
+fn route_shared_shadow_views(mut roots: Query<(&mut RootNonCameraView, &LightEntity)>) {
+    for (mut root, light) in &mut roots {
+        if root.0 == Core3d.intern()
+            && matches!(light, LightEntity::Point { .. } | LightEntity::Spot { .. })
+        {
+            root.0 = SharedShadowView.intern();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,13 +288,110 @@ mod tests {
     use bevy::{
         pbr::LightEntity,
         prelude::{
-            App, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Res, ResMut,
-            Resource, Update, World,
+            App, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Res, Resource,
+            Update, World,
         },
         render::renderer::{CurrentView, ViewQuery},
     };
 
-    use super::{current_root_uses_camera_pipeline, replace_shadow_pass};
+    use super::{SharedShadowView, replace_shadow_pass, shared_shadow_schedule};
+
+    #[test]
+    fn shared_schedule_retains_native_gpu_admission_and_final_buffer_flush() {
+        for (gpu_preprocessing, systems) in [(false, 2), (true, 8)] {
+            let schedule = shared_shadow_schedule(gpu_preprocessing);
+            assert_eq!(schedule.systems_len(), systems);
+            assert!(!schedule.get_build_settings().auto_insert_apply_deferred);
+        }
+    }
+
+    #[test]
+    fn native_local_shadow_roots_use_shared_schedule() {
+        use bevy::{
+            app::SubApp,
+            core_pipeline::{Core3d, schedule::RootNonCameraView},
+            ecs::schedule::{Schedule, ScheduleLabel},
+            render::{Render, RenderApp},
+        };
+
+        let mut app = App::new();
+        let mut render_app = SubApp::new();
+        render_app.add_schedule(Schedule::new(Render));
+        let light = Entity::PLACEHOLDER;
+        let point = render_app
+            .world_mut()
+            .spawn((
+                RootNonCameraView(Core3d.intern()),
+                LightEntity::Point {
+                    light_entity: light,
+                    face_index: 0,
+                },
+            ))
+            .id();
+        let spot = render_app
+            .world_mut()
+            .spawn((
+                RootNonCameraView(Core3d.intern()),
+                LightEntity::Spot {
+                    light_entity: light,
+                },
+            ))
+            .id();
+        let custom = render_app
+            .world_mut()
+            .spawn((
+                RootNonCameraView(Update.intern()),
+                LightEntity::Spot {
+                    light_entity: light,
+                },
+            ))
+            .id();
+        let other = render_app
+            .world_mut()
+            .spawn(RootNonCameraView(Core3d.intern()))
+            .id();
+        let directional = render_app
+            .world_mut()
+            .spawn((
+                RootNonCameraView(Core3d.intern()),
+                LightEntity::Directional {
+                    light_entity: light,
+                    cascade_index: 0,
+                },
+            ))
+            .id();
+        app.insert_sub_app(RenderApp, render_app);
+        super::build(&mut app);
+        let world = app.sub_app_mut(RenderApp).world_mut();
+        world.run_schedule(Render);
+        for entity in [point, spot] {
+            assert_eq!(
+                world.get::<RootNonCameraView>(entity).unwrap().0,
+                SharedShadowView.intern()
+            );
+        }
+        assert_eq!(
+            world.get::<RootNonCameraView>(custom).unwrap().0,
+            Update.intern()
+        );
+        assert_eq!(
+            world.get::<RootNonCameraView>(other).unwrap().0,
+            Core3d.intern()
+        );
+        assert_eq!(
+            world.get::<RootNonCameraView>(directional).unwrap().0,
+            Core3d.intern()
+        );
+
+        world
+            .entity_mut(point)
+            .insert(RootNonCameraView(Core3d.intern()));
+        world.run_schedule(Render);
+        assert_eq!(
+            world.get::<RootNonCameraView>(point).unwrap().0,
+            SharedShadowView.intern()
+        );
+    }
 
     #[derive(Component)]
     struct TestShadowView;
@@ -233,12 +444,35 @@ mod tests {
 
     #[test]
     fn shadow_instrumentation_preserves_native_dependencies_and_buffer_order() {
-        assert_shadow_schedule(false);
-        assert_shadow_schedule(true);
+        for native_owned_edges in [false, true] {
+            for auto_insert_apply_deferred in [false, true] {
+                for single_threaded in [false, true] {
+                    assert_shadow_schedule(
+                        native_owned_edges,
+                        auto_insert_apply_deferred,
+                        single_threaded,
+                    );
+                }
+            }
+        }
     }
 
-    fn assert_shadow_schedule(native_owned_edges: bool) {
+    fn assert_shadow_schedule(
+        native_owned_edges: bool,
+        auto_insert_apply_deferred: bool,
+        single_threaded: bool,
+    ) {
+        use bevy::ecs::schedule::{ScheduleBuildSettings, SingleThreadedExecutor};
         let mut app = App::new();
+        app.edit_schedule(Update, |schedule| {
+            schedule.set_build_settings(ScheduleBuildSettings {
+                auto_insert_apply_deferred,
+                ..Default::default()
+            });
+            if single_threaded {
+                schedule.set_executor(SingleThreadedExecutor::new());
+            }
+        });
         app.init_resource::<ShadowRecords>();
         let shadow = app.world_mut().spawn(TestShadowView).id();
         let other = app.world_mut().spawn_empty().id();
@@ -278,8 +512,7 @@ mod tests {
         app.update();
 
         let records = app.world().resource::<ShadowRecords>().0.lock().unwrap();
-        assert_eq!(
-            records.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        let expected = if auto_insert_apply_deferred {
             [
                 "before",
                 "begin",
@@ -288,8 +521,23 @@ mod tests {
                 "begin_buffer",
                 "native_buffer",
                 "end_buffer",
-                "after"
+                "after",
             ]
+        } else {
+            [
+                "before",
+                "begin",
+                "native",
+                "end",
+                "after",
+                "begin_buffer",
+                "native_buffer",
+                "end_buffer",
+            ]
+        };
+        assert_eq!(
+            records.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            expected
         );
         assert_eq!(records[1].1, records[2].1);
         assert_eq!(records[2].1, records[3].1);
@@ -308,43 +556,5 @@ mod tests {
             records.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
             ["before", "after"]
         );
-    }
-
-    #[derive(Resource, Default)]
-    struct CameraPipelineRuns(usize);
-
-    fn count_camera_pipeline(mut runs: ResMut<CameraPipelineRuns>) {
-        runs.0 += 1;
-    }
-
-    #[test]
-    fn camera_stages_are_skipped_only_for_light_shadow_roots() {
-        let mut app = App::new();
-        app.init_resource::<CameraPipelineRuns>();
-
-        let camera = app.world_mut().spawn_empty().id();
-        let other_root = app.world_mut().spawn_empty().id();
-        let shadow_root = app
-            .world_mut()
-            .spawn(LightEntity::Spot {
-                light_entity: Entity::PLACEHOLDER,
-            })
-            .id();
-        app.insert_resource(CurrentView(camera));
-        app.add_systems(
-            Update,
-            count_camera_pipeline.run_if(current_root_uses_camera_pipeline),
-        );
-
-        app.update();
-        assert_eq!(app.world().resource::<CameraPipelineRuns>().0, 1);
-
-        app.insert_resource(CurrentView(shadow_root));
-        app.update();
-        assert_eq!(app.world().resource::<CameraPipelineRuns>().0, 1);
-
-        app.insert_resource(CurrentView(other_root));
-        app.update();
-        assert_eq!(app.world().resource::<CameraPipelineRuns>().0, 2);
     }
 }

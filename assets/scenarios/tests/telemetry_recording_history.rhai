@@ -70,6 +70,13 @@ fn on_tick(me, ctx) {
                                    item.channel.description != () && item.channel.description != "",
                     "physics mass keeps its USD group and description"));
             }
+            if label == "Modelica" {
+                checks.push(t_true(item.channel.provenance == "modelica" &&
+                                   item.channel.model_class != () && item.channel.model_class != "" &&
+                                   item.channel.model_variable != () && item.channel.model_variable != "" &&
+                                   item.channel.source_asset != () && item.channel.source_asset != "",
+                    "Modelica history keeps its published owner metadata"));
+            }
         }
     }
     // An absent identity must not manufacture retained samples.

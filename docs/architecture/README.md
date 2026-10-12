@@ -60,7 +60,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`24-domain-sysml.md`](24-domain-sysml.md) | SysML; see the [Griffin SysML/IR migration review](../reviews/open-griffin-sysml-ir-migration.md) for the current model gap and implementation order |
 | [`25-experiments.md`](25-experiments.md) · [`27-target-resolution.md`](27-target-resolution.md) | Batch runs, sweeps, and how a run resolves its target |
 | [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) | The **realtime-safe** promise: which programs may drive predicted physics |
-| [`29-rumoca-workarounds.md`](29-rumoca-workarounds.md) | Confirmed rumoca bugs we work around, the probe that retires each one, and the chokepoint that must not be bypassed |
+| [`29-rumoca-runtime-contracts.md`](29-rumoca-runtime-contracts.md) | Rumoca compilation, checked FMI preparation, solver clocks, cancellation, output admission, and persistence |
 
 ## Infrastructure (30–39)
 

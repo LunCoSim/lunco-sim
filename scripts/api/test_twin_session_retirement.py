@@ -63,8 +63,16 @@ def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTw
         manifest = tomllib.loads((root / "twin.toml").read_text(encoding="utf-8"))
         path = root / manifest["usd"]["default_scene"]
     print(f"Switch route: {command}, path={path}", flush=True)
+    retired_authority = execute(session, "RunRhai", code="print(twin_name());")["stdout"].strip()
     execute(session, command, path=path.as_uri() if file_uri else str(path))
-    return wait_for_twin(session, root, previous_ids)
+    ids = wait_for_twin(session, root, previous_ids)
+    authority = execute(session, "RunRhai", code="print(twin_name());")["stdout"].strip()
+    def source_terminal():
+        analysis = execute(session, "AnalyzeSysml", path="twin://" + authority, tables=[])
+        return not any("preparing asynchronously" in error for error in analysis.get("errors", []))
+    wait_for(session, source_terminal, "replacement SysML source preparation")
+    verdict("verify_twin_source_scope", retired_authority)
+    return ids
 
 
 def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:

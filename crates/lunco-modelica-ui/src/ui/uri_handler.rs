@@ -89,7 +89,7 @@ impl UriHandler for ModelicaUriHandler {
 fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
     let library_root = lunco_modelica_library::source_library::source_library_cache_dir();
     let mut path: PathBuf = library_root;
-    for segment in class_dotted.split('.') {
+    for segment in rumoca_core::qualified_name_segments(class_dotted) {
         if segment.is_empty() {
             return UriResolution::NotHandled;
         }

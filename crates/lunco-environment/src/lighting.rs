@@ -46,6 +46,8 @@ use bevy::prelude::*;
 /// sandbox) `insert_resource`s its own studio values before plugins are added.
 #[derive(Debug, Clone, Copy, PartialEq, Resource)]
 pub struct LunarSun {
+    /// Direct-normal solar irradiance at one astronomical unit, W/m².
+    pub irradiance_w_m2: f64,
     /// Direct solar illuminance on a surface facing the Sun, **lux**.
     /// ~128 000 lx on the airless Moon (vs ~100 000 lx through Earth's
     /// atmosphere). This is the scene's key-light brightness — the **1 AU
@@ -65,6 +67,7 @@ pub struct LunarSun {
 impl Default for LunarSun {
     fn default() -> Self {
         Self {
+            irradiance_w_m2: 1361.0,
             illuminance_lux: 128_000.0,
             // This is the render-free semantic default. Runtime scene setup
             // replaces it with the active Graphics profile before spawning

@@ -27,7 +27,7 @@ pub use runner::pump_wasm_forwarders;
 pub use runner::{
     DEFAULT_TOLERANCE, DetectedInput, DetectedParam, ExperimentDraft, ExperimentDrafts,
     ModelSource, ModelicaRunner, PendingHandles, PendingRun, PlaybackEntities,
-    RunConfigurationError, RunSink, apply_experiment_settings, apply_value_bindings_to_dae,
+    RunConfigurationError, RunSink, apply_experiment_settings, apply_run_values,
     detect_top_level_inputs, detect_top_level_literal_parameters, drain_pending_handles, drive_run,
     stepper_options_from_bounds,
 };
@@ -96,7 +96,14 @@ pub struct ModelicaRunnerPlugin;
 impl Plugin for ModelicaRunnerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_experiments::ExperimentsPlugin);
-        app.insert_resource(ModelicaRunnerResource(Arc::new(ModelicaRunner::new())));
+        let runner = ModelicaRunner::new(
+            #[cfg(not(target_arch = "wasm32"))]
+            app.world()
+                .resource::<lunco_modelica_runtime::ModelicaChannels>()
+                .tx
+                .clone(),
+        );
+        app.insert_resource(ModelicaRunnerResource(Arc::new(runner)));
         app.init_resource::<ExperimentDrafts>();
         app.init_resource::<PendingHandles>();
         app.init_resource::<PlaybackEntities>();
@@ -118,7 +125,6 @@ fn cancel_closed_twin_runs(
     mut pending: ResMut<PendingHandles>,
     mut experiments: ResMut<lunco_experiments::ExperimentRegistry>,
     mut cancelled: MessageWriter<lunco_experiments::RunCancelled>,
-    runner: Option<Res<ModelicaRunnerResource>>,
     artifacts: Option<Res<lunco_experiments::artifact::ArtifactWorkerTransport>>,
 ) {
     cancel_runtime_runs(
@@ -126,7 +132,6 @@ fn cancel_closed_twin_runs(
         &mut pending,
         &mut experiments,
         &mut cancelled,
-        runner.as_deref(),
         artifacts.as_deref(),
     );
 }
@@ -136,7 +141,6 @@ fn cancel_retired_replication_runs(
     mut pending: ResMut<PendingHandles>,
     mut experiments: ResMut<lunco_experiments::ExperimentRegistry>,
     mut cancelled: MessageWriter<lunco_experiments::RunCancelled>,
-    runner: Option<Res<ModelicaRunnerResource>>,
     artifacts: Option<Res<lunco_experiments::artifact::ArtifactWorkerTransport>>,
 ) {
     cancel_runtime_runs(
@@ -144,7 +148,6 @@ fn cancel_retired_replication_runs(
         &mut pending,
         &mut experiments,
         &mut cancelled,
-        runner.as_deref(),
         artifacts.as_deref(),
     );
 }
@@ -154,14 +157,11 @@ fn cancel_runtime_runs(
     pending: &mut PendingHandles,
     experiments: &mut lunco_experiments::ExperimentRegistry,
     cancelled: &mut MessageWriter<lunco_experiments::RunCancelled>,
-    runner: Option<&ModelicaRunnerResource>,
     artifacts: Option<&lunco_experiments::artifact::ArtifactWorkerTransport>,
 ) {
     if let Some(artifacts) = artifacts {
         (artifacts.retire)(owner);
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = runner;
     pending.0.retain(|handle| {
         if !handle.origin.belongs_to_runtime(owner) {
             return true;
@@ -179,12 +179,6 @@ fn cancel_runtime_runs(
         }
         false
     });
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(runner) = runner {
-        if let Err(error) = runner.0.retire_runtime_cache(owner) {
-            bevy::log::error!("{error}");
-        }
-    }
 }
 
 fn cancel_removed_experiment_handles(
@@ -329,11 +323,8 @@ mod tests {
         let id = admitted_run(&mut registry, &mut origins, None, 1);
         registry.set_status(id, RunStatus::Cancelled);
         let (tx, rx) = crossbeam_channel::unbounded();
-        tx.send(RunUpdate::Progress {
-            t_current: 2.0,
-            delta: None,
-        })
-        .expect("buffered progress");
+        tx.send(RunUpdate::Progress { t_current: 2.0 })
+            .expect("buffered progress");
         let flag = Arc::new(AtomicBool::new(false));
         let cancel = flag.clone();
         let pending = PendingRun {

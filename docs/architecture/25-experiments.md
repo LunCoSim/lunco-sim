@@ -18,7 +18,7 @@ Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.
 
 The experiments framework supports:
 
-1. Running a model from `t_start` to `t_end` as fast as possible (batch / "Fast Run"), in addition to the existing realtime-stepped Interactive run.
+1. Running a model from `t_start` to `t_end` as fast as possible through batch "Fast Run" execution. Live co-simulation uses its own persistent participant sessions.
 2. Treating each run as a first-class artifact with its own parameters, bounds, and trajectory.
 3. Comparing trajectories from multiple runs on a shared plot.
 
@@ -33,9 +33,9 @@ Dymola and OMEdit treat results as `.mat` files keyed by model name; comparison 
 ### Why backend-agnostic
 Today the only execution backend is rumoca + diffsol. The crate boundary should not assume that. FMU import, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
 
-### Why DAE-level overrides
-The runner applies scalar parameter and input values to the compiled DAE after
-one clean compile. A sweep therefore reuses the same compiled artifact without
+### Immutable compilation and run values
+The runner admits scalar parameters and inputs through Rumoca simulation options
+after one clean compile. A sweep therefore reuses the same compiled artifact without
 mutating authored source or reflattening every point. Unsupported bindings are
 reported as run errors at the runner boundary.
 
@@ -64,8 +64,8 @@ lunco-modelica-core/
 
 lunco-modelica-runner/
   ModelicaRunner: ExperimentRunner
-  owner-scoped compile-once DAE cache and DAE-level value bindings
-  shared batch/interactive run paths and run-bound resolution
+  bounded scheduling, shared worker compile admission and typed simulation-option overrides
+  shared native/browser batch execution and run-bound resolution
 
 lunco-modelica-worker/
   stateful Modelica worker engine and live co-simulation bridge
@@ -83,8 +83,8 @@ lunco-modelica-execution/src/bin/lunica_worker.rs
   + WireResult::RunUpdate
   MSL/compile readiness gate extended
 
-lunco-twin/, lunco-twin-journal/      unchanged in v1
-lunco-cosim/                          unchanged (Interactive path)
+lunco-twin/, lunco-twin-journal/      Twin ownership and definition journal
+lunco-cosim/                          Live co-simulation lifecycle
 lunco-modelica-ui/                   Modelica experiment adapters and panel
 lunco-viz/                            Shared multi-series trajectory renderer
 lunco-viz-core/                       Render-free visualization identifiers
@@ -127,7 +127,6 @@ pub struct RunBounds {
     pub tolerance: Option<f64>,
     pub solver: Option<SolverId>,        // registered solver demand
     pub h0: Option<f64>,                 // solver initial step hint
-    pub runtime: RuntimeMode,            // Batch (default) or Interactive
 }
 
 pub enum RunStatus {
@@ -135,7 +134,7 @@ pub enum RunStatus {
     Queued,
     Running { t_current: f64 },
     Done { wall_time_ms: u64 },
-    Failed { error: String, partial: bool },
+    Failed { error: String },
     Cancelled,
 }
 
@@ -158,13 +157,19 @@ pub enum ParamValue {
 ```
 
 The registry retains each trajectory through one immutable `Arc<RunResult>`.
-Readers clone the Arc to capture the exact result without copying its series;
-streaming merges use copy-on-write, so an admitted snapshot stays unchanged.
+Readers clone the Arc to capture the exact completed result without copying
+its series. Result storage admits only validated complete trajectories.
+`RunMeta.variable_metadata` retains backend-owned units and descriptions under
+exact series names in an immutable Arc. The Modelica adapter supplies Rumoca's
+checked output metadata with each completed batch result.
+The browser worker build identity includes the experiment's serialized types,
+so stale page/worker pairs fail their handshake before decoding result payloads.
+Graphs and `GetExperimentResult` read these retained facts, including after
+the source document changes. They never infer a run's units from the current draft.
 Complete trajectories enter the registry through `set_complete_result`, which
 validates finite, nondecreasing times, matching series/metadata lengths, finite
 series values, and the configured scalar-value budget. Equal event timestamps
-remain valid. Failed partial trajectories use `set_partial_result`; streaming
-hole padding remains explicit and is not mistaken for a complete result.
+remain valid. Failed runs publish their diagnostic without a trajectory.
 
 `lunco-experiments` owns the persisted Bevy `ExperimentSettings` section
 (`experiments`). Its `result_limits` defaults to 8,000,000 scalar values and
@@ -181,10 +186,12 @@ dimensions against the maintained output-grid iterator, then passes that model
 to `simulate_solve_model`. The scoped solver budget checks every central
 visible-sample append, including additional event samples, and reserves storage
 fallibly before changing column lengths. The recorded time vector shares the
-same boundary. Interactive runs admit their actual state columns and check
-each retained output sample. Budget failure is a terminal Failed update and
+same boundary. Budget failure is a terminal Failed update and
 releases the scheduler slot; nested solves restore the caller's budget.
-
+Completed trajectories retain Rumoca's requested output grid and additional
+event samples, including distinct pre/post values at equal timestamps. The
+adapter moves those columns into the retained result without copying or
+resampling them. Plot presentation may decimate its own view.
 
 Registry: `BTreeMap<TwinId, Vec<Experiment>>` retains at most 20 terminal runs per presentation group, evicting the oldest terminal row. Pending, queued, and running rows are retained. Removal publishes `ExperimentRemoved` so source attribution and plot selections retire together.
 
@@ -226,9 +233,9 @@ pub struct RunHandle {
 }
 
 pub enum RunUpdate {
-    Progress { t_current: f64, delta: Option<RunResult> },
+    Progress { t_current: f64 },
     Completed(RunResult),
-    Failed { error: String, partial: Option<RunResult> },
+    Failed { error: String },
     Cancelled,
 }
 ```
@@ -243,8 +250,7 @@ The horizon must be finite and strictly increasing, and explicit `dt`,
 `tolerance`, and `h0` must be finite and positive. Explicit interval counts
 must be positive and at most the existing `SAMPLE_CAP` of 200,000 intervals
 (200,001 inclusive points). An interval must advance time at the requested
-endpoints. The browser's derived internal solver cadence passes the same
-advancement guard before stepping. Invalid or over-limit requests return the owning diagnostic; the
+endpoints. Invalid or over-limit requests return the owning diagnostic; the
 runner never substitutes or enlarges an explicit interval.
 
 The current AST annotation reader is fallible. `Interval=0` means omitted
@@ -354,13 +360,13 @@ artifact destination. Closing that owner retires its queued work and callbacks;
 late outcomes cannot populate a replacement Twin. A durable write announces a
 new manifest only after Storage reports success.
 
-`lunco-experiments` owns the versioned JSON envelope, decoded scalar validation,
+`lunco-experiments` owns the version 2 JSON envelope, decoded scalar validation,
 and bounded serializer. Neither raw Workspace Twin IDs nor filesystem roots are
 persisted. A compiler-owned CID describes the actual successful strict target
 and participating source contributions before user overlays are cleared.
-Host paths and mount IDs do not contribute. A participating parsed-only library
-without source bytes is explicitly nonpersistable; the valid simulation result
-remains available. Unused libraries do not affect the CID.
+Host paths and mount IDs do not contribute. Parsed library records retain their
+exact source text, so participating library bytes contribute to the CID. Unused
+libraries do not affect it.
 
 Native codec and Storage work run through bounded background admission. Browser
 JSON encoding and decoding run in the existing execution Web Worker. A bounded,
@@ -403,7 +409,7 @@ the same class name from changed source and compare CIDs and values.
 - Diff metrics (RMS, max-error)
 - Solver picker UI
 - Variable include/exclude UI
-- Interactive runs archiving into Experiments
+- Archiving live co-simulation sessions as experiment artifacts
 - Override of inherited / expression-bound / array / record parameters
 
 ## Parallel execution
@@ -411,11 +417,14 @@ the same class name from changed source and compare CIDs and values.
 A sweep runs many points at once, bounded by one scheduler. Two things carry
 most of the win, and both already exist — do not rebuild them.
 
-**Compile once, sweep many.** `lunco-modelica-runner` caches the compiled `Dae`
-keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
-overrides at the DAE level (`apply_value_bindings_to_dae`) rather than reflattening
-per run. A sweep that varies only top-level scalar parameters recompiles
-**zero** times after the first point.
+**Compile once, sweep many.** Native `lunco-modelica-runner` submits typed
+`CompileBatch` requests to the Modelica worker's single Rumoca actor. Batch and
+live compilation share admitted source roots and the bounded compiled-artifact
+cache, keyed by source and library generation. The artifact carries the exact
+participating-source CID captured before user overlays are cleared. The runner
+applies `SimOptions::param_overrides` and `initial_inputs` (`apply_run_values`)
+without mutating the DAE or reflattening per run. Browser batches compile in the
+Modelica Web Worker.
 
 **Per-run demux.** Results route by exact `run_id` and admitted origin — native: one `crossbeam` channel
 per `RunHandle`, drained by `drain_pending_handles`; wasm: the `RUN_SENDERS`
@@ -435,9 +444,10 @@ the lock. On a terminal update `finish_run` frees the slot and re-pumps.
 Cancellation withdraws queued jobs immediately. Each job owns the immutable
 source text, document URI, extras, and exact typed runtime owner captured
 at admission; execution never looks up a mutable class-name source map.
-Compiled DAE entries include that owner; `TwinClosed` removes its entries,
-and cancelled workers cannot republish them after retirement. User overlays
-are released after compilation while admitted application libraries stay installed. The panel shows
+`TwinClosed` cancels the owner's queued and executing runs and unloads its
+source roots through the compiler FIFO. Cancelled runs cannot publish completed
+results. User overlays are released after compilation; immutable cache reuse is
+fenced by source content and library generation. The panel shows
 "⏳ Queued"; the Run button queues rather than disabling.
 
 Native solves install a scoped thread-local cancellation guard backed by the
@@ -479,9 +489,7 @@ pre-initialise rayon's global pool from the app; do not patch rumoca.
   wasm each worker also holds an MSL copy. The 20-run registry cap bounds
   retained results.
 - **Changing the cap at runtime on wasm needs a page reload** to resize the
-  pool — there is no retained MSL bundle to backfill newly installed workers.
+  fixed worker pool. The retained source-library envelope seeds spawned workers.
 
-## Future design considerations
-
-- Determining if interactive runs should produce an experiment entry upon stopping.
-- Journaling experiment definitions as undoable operations in `lunco-twin-journal`.
+Experiment definition edits are recorded by the Modelica journal adapter through
+`lunco-twin-journal`. Live co-simulation retains its separate participant lifecycle.

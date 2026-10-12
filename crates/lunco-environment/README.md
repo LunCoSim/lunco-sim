@@ -9,8 +9,10 @@ resolution for any tagged target, lunar-sky lighting parameters (`LunarSun`,
 `FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked
 horizon terrain self-shadowing (`HorizonShadowPlugin`). Environment probes expose
 f64 gravity values and publish demanded unit direction triplets through ordinary
-co-simulation outputs.
-**Designed to grow into:** atmosphere, solar *radiation* (irradiance/eclipse),
+co-simulation outputs. `SunState` retains direct-normal physical irradiance
+separately from render lux. The terrain-surface owner publishes demanded sampled
+visibility and irradiance; see the [physical illumination contract](../../docs/architecture/terrain-layered-rendering.md).
+**Designed to grow into:** atmosphere, celestial eclipse geometry,
 magnetic field, ambient temperature — anything else that varies with position
 and body.
 
@@ -89,8 +91,13 @@ Gravity vector at an entity's world-space position, in m/s². Computed in
 `FixedUpdate` when gravity, frame, provider, transform, or body-link inputs
 change. Stable ticks return before entity iteration; a global invalidation
 checks all entities. Changed valid values are applied as one deferred batch,
-while unresolved surface links remove stale values. The source is the global
-[`Gravity`](https://docs.rs/lunco-celestial) resource:
+while unresolved surface links remove stale values. In a flat field, steady
+motion does not invalidate gravity: an archetypal query admits only spatial
+entities missing the cached field. Steady surface work selects linked
+consumers and existing fields, excluding unlinked entities with nothing to
+produce or remove. Gravity, frame, provider and link-removal invalidations
+still check all spatial entities. The source is this crate's
+[`Gravity`](src/gravity_types.rs) resource:
 
 - **`Gravity::Flat`** — same vector for all entities (sandbox / single-body)
 - **`Gravity::Surface`** — per-entity vector via `GravityBody` link to a body
@@ -283,7 +290,8 @@ diagnosed rather than replaced with a fabricated environmental value.
 - [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model
-- [ ] **Solar radiation** — `LocalRadiation` irradiance + eclipse occlusion (distinct from the direction bridge above)
+- [x] **Physical solar inputs** — direct-normal irradiance, sampled terrain/selected-proxy visibility, and required cosimulation samples
+- [ ] **Celestial eclipses** — complete body occlusion beyond admitted finite DEM terrain
 - [ ] **Magnetic field** — `LocalMagneticField`, dipole + IGRF models
 - [ ] **Ambient temperature** — for thermal subsystem models (radiator design, electronics cooling)
 

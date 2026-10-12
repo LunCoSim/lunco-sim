@@ -35,9 +35,8 @@ pub(super) fn target_unit_instance(
     target: Option<&str>,
 ) -> Option<String> {
     let target = target.filter(|target| !target.is_empty() && *target != root_model_name)?;
-    let root =
-        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, root_model_name)?;
-    let target_leaf = target.rsplit('.').next().unwrap_or(target);
+    let root = ast.get_class_by_qualified_name(root_model_name)?;
+    let target_leaf = rumoca_core::top_level_last_segment(target);
     let candidates: Vec<String> = root
         .components
         .iter()
@@ -743,7 +742,7 @@ mod tests {
     use super::target_unit_instance;
 
     fn fixture() -> rumoca_compile::parsing::ast::StoredDefinition {
-        lunco_modelica_ast::parse_to_ast(
+        rumoca_phase_parse::parse_to_ast(
             r#"
 model Root
   Unit_One left;
@@ -775,7 +774,7 @@ end Unit_Two;
 
     #[test]
     fn repeated_unit_types_are_not_guessed() {
-        let ast = lunco_modelica_ast::parse_to_ast(
+        let ast = rumoca_phase_parse::parse_to_ast(
             r#"
 model Root
   Unit_One left;

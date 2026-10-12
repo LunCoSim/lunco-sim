@@ -57,7 +57,7 @@ use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 /// We can't use the bare `ModelicaCommand` enum for everything because the
 /// worker also needs out-of-band setup (notably source library handoff: the main app
 /// fetches and decodes the parsed source library bundle, then ships the resulting
-/// `Vec<(uri, StoredDefinition)>` to the worker so the worker's
+/// `Vec<ParsedSourceDocument>` to the worker so the worker's
 /// `GLOBAL_PARSED_SOURCE_BUNDLE` is populated before any compile arrives — without
 /// this the worker's compiles would fail with `unresolved reference
 /// Modelica.*`).
@@ -80,7 +80,7 @@ pub enum WireMessage {
     /// 99 %+ of traffic is this variant.
     Command(ModelicaCommand),
     /// Install the source library bundle as the raw **compressed** `parsed-*.bin.zst`
-    /// bytes (zstd-wrapped bincode of `Vec<(uri, StoredDefinition)>`). The
+    /// bytes (zstd-wrapped bincode of `Vec<ParsedSourceDocument>`). The
     /// worker decompresses + bincode-decodes off the main thread, then signals
     /// readiness with [`WireResult::LibraryReady`].
     ///
@@ -956,7 +956,6 @@ fn handle_worker_error(idx: usize) {
                         abort. The model is too heavy for the browser; try a shorter \
                         StopTime or a looser Tolerance."
                     .to_string(),
-                partial: None,
             },
         );
     }
@@ -1404,7 +1403,6 @@ fn send_run_failure(run_id: lunco_experiments::ExperimentId, error: impl Into<St
         run_id,
         lunco_experiments::RunUpdate::Failed {
             error: error.into(),
-            partial: None,
         },
     );
 }
@@ -1525,6 +1523,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         source.len()
     );
     let cmd = ModelicaCommand::Compile {
+        execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Document,
         entity: bevy::prelude::Entity::PLACEHOLDER,
         session_id: 1,
         model_name: model_name.to_string(),
@@ -1532,6 +1531,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
         parameter_overrides: Vec::new(),
+        initial_inputs: Vec::new(),
         stream: None,
         // A transport smoke-test compile drives no predicted body.
         realtime_safe: false,

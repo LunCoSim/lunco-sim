@@ -13,6 +13,11 @@ use std::num::NonZeroUsize;
 use std::thread::JoinHandle;
 
 pub(super) enum CompilerCompletion {
+    Batch {
+        id: u64,
+        reply: Sender<Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>>,
+        outcome: Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>,
+    },
     Compile {
         id: u64,
         artifact: BackendCompileResult,
@@ -42,6 +47,15 @@ pub(super) struct SourceRootCommit {
 }
 
 enum Request {
+    CompileBatch {
+        id: u64,
+        model_name: String,
+        unit: CompileUnit,
+        doc_uri: String,
+        library_gen: u64,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>>,
+    },
     CompileAsync {
         id: u64,
         model_name: String,
@@ -100,6 +114,30 @@ impl CompilerActor {
                 unit,
                 doc_uri,
                 library_gen,
+            })
+            .map_err(|_| "Rumoca compiler actor is unavailable".to_owned())?;
+        Ok(id)
+    }
+
+    pub(super) fn submit_batch(
+        &mut self,
+        model_name: String,
+        unit: CompileUnit,
+        doc_uri: String,
+        library_gen: u64,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>>,
+    ) -> Result<u64, String> {
+        let id = self.allocate_id()?;
+        self.sender()
+            .send(Request::CompileBatch {
+                id,
+                model_name,
+                unit,
+                doc_uri,
+                library_gen,
+                cancel,
+                reply,
             })
             .map_err(|_| "Rumoca compiler actor is unavailable".to_owned())?;
         Ok(id)
@@ -182,6 +220,46 @@ fn compiler_actor_loop(
 
     while let Ok(request) = rx.recv() {
         match request {
+            Request::CompileBatch {
+                id,
+                model_name,
+                unit,
+                doc_uri,
+                library_gen,
+                cancel,
+                reply,
+            } => {
+                let outcome = if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    Err("batch compilation cancelled".to_owned())
+                } else {
+                    let _cancellation =
+                        rumoca_eval_solve::EvaluationCancellationGuard::install(cancel);
+                    compile_artifact(
+                        &mut compiler,
+                        &mut compiled_artifacts,
+                        &mut terminal_error,
+                        &model_name,
+                        unit,
+                        &doc_uri,
+                        library_gen,
+                    )
+                    .outcome
+                    .map(|artifact| {
+                        lunco_modelica_runtime::ModelicaBatchArtifact {
+                            dae: artifact.compiled.dae.clone(),
+                            source_content: artifact.source_content,
+                        }
+                    })
+                };
+                if results
+                    .send(WorkerPreparationResult::Compiler(
+                        CompilerCompletion::Batch { id, reply, outcome },
+                    ))
+                    .is_err()
+                {
+                    return;
+                }
+            }
             Request::CompileAsync {
                 id,
                 model_name,

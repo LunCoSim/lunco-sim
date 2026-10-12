@@ -325,7 +325,7 @@ impl LibraryLoadPhase {
 /// Artifact codec/version tag shared by the Modelica library packager and
 /// runtime. A mismatch is a packaging error, not a request to use an older
 /// decoder.
-pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-07-14+bincode2";
+pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-0.10.2+bincode2-ast3";
 
 /// Manifest for a source-library bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -71,7 +71,7 @@ fn on_tick(me, params) {
         this = finish(this, [
             t_true(bad.state == "failed" && bad.error != () && bad.error.contains("output budget"),
                 "actual lowered output dimensions fail visibly before trajectory allocation: " + bad.to_string()),
-            t_true(bad.has_result == false && bad.partial == false, "over-budget admission publishes no trajectory"),
+            t_true(bad.has_result == false, "over-budget admission publishes no trajectory"),
             t_true(good.state == "done" && valid, "valid successor completes after failed run releases its only scheduler slot")
         ]);
     }

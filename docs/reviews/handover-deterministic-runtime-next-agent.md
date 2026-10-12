@@ -537,9 +537,9 @@ typed queues before that is safe.
   portable URI and CIDv1 raw/SHA-256 identity before the compiler commit;
   `PreparedSourceRoot::content_closure()` exposes the prepared result. The
   compiler exposes current source content by source-set id; a failed latest
-  admission and parsed-only source bundles return explicit errors. Per-root
-  capture does not yet join the active model document and all compile
-  dependencies. The focused compiler tests cover ordering, exact bytes,
+  admission returns an explicit error. Source-bearing parsed bundles preserve
+  exact source text, and successful strict compilation captures the actual
+  participating document and library files. The focused compiler tests cover ordering, exact bytes,
   root-relative paths, portability errors, and failed latest admission state.
   `cargo test -p lunco-modelica-compiler source_root_content_closure -j 4`
   passed all three focused checks.

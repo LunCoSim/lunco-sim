@@ -62,7 +62,6 @@ impl RunResultLimits {
 
 impl RunResult {
     /// Validate a complete trajectory at its registry/persistence boundary.
-    /// Partial streams retain their explicit NaN hole-padding contract.
     /// Equal event timestamps are valid; time must never run backwards.
     pub fn validate_complete(&self, limits: RunResultLimits) -> Result<(), RunResultError> {
         limits.validate_dimensions(self.series.len(), self.times.len())?;
@@ -75,6 +74,16 @@ impl RunResult {
             return Err(RunResultError(
                 "experiment result sample_count does not match its time vector".into(),
             ));
+        }
+        if let Some(name) = self
+            .meta
+            .variable_metadata
+            .keys()
+            .find(|name| !self.series.contains_key(*name))
+        {
+            return Err(RunResultError(format!(
+                "experiment metadata `{name}` has no corresponding series"
+            )));
         }
         for (index, &time) in self.times.iter().enumerate() {
             if !time.is_finite() {

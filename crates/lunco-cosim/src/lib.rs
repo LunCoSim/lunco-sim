@@ -124,9 +124,11 @@ fn mark_joint_torque_port(
 /// transaction. This is exclusive so a terminal compiler result is visible in
 /// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
 /// and generated-domain projection path has had a chance to publish its ports.
-fn sync_model_endpoint_lifecycle(world: &mut World) {
-    let transitions: Vec<(Entity, EndpointLifecycle)> = world
-        .query_filtered::<(Entity, &SimComponent), Changed<SimComponent>>()
+fn sync_model_endpoint_lifecycle(
+    world: &mut World,
+    models: &mut QueryState<(Entity, &'static SimComponent), Changed<SimComponent>>,
+) {
+    let transitions: Vec<(Entity, EndpointLifecycle)> = models
         .iter(world)
         .map(|(entity, component)| {
             let state = match &component.status {
@@ -173,10 +175,12 @@ fn reset_scene_state(
     mut diagnostics: ResMut<CosimDiagnostics>,
     mut holds: ResMut<PortHolds>,
     mut revision: ResMut<BindingRevision>,
+    mut propagation: ResMut<systems::propagate::PropagationCache>,
 ) {
     *diagnostics = CosimDiagnostics::default();
     holds.clear_all();
     *revision = BindingRevision::default();
+    *propagation = systems::propagate::PropagationCache::default();
 }
 
 impl Plugin for CoSimPlugin {
@@ -206,6 +210,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<lunco_physics::joint::JointTorqueActuator>()
             .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
+            .register_type::<lunco_cosim_core::initialization::PendingInputConnections>()
             .register_type::<RealtimeSafe>()
             .register_type::<lunco_physics::raycast::RaycastObservation>();
 
@@ -216,10 +221,10 @@ impl Plugin for CoSimPlugin {
         // registers them here; wires, the API, the inspector, and scripts all
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
+        app.add_plugins(lunco_physics::assembly::DynamicJointIslandMassPlugin);
         app.init_resource::<lunco_port_core::ports::PortRegistry>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>()
-            .init_resource::<lunco_physics::DynamicJointIslandMasses>()
             .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
@@ -1863,7 +1868,7 @@ fn validate_port_input_writes(
     let global_id = world.get::<GlobalEntityId>(target).copied();
     let mut prepared = Vec::with_capacity(writes.len());
     for (port, value) in writes {
-        match registry.prepare_input_write(world, target, port, *value) {
+        match registry.prepare_input_write(world, target, port.as_str(), *value) {
             Ok(write) => prepared.push(write),
             Err(error) => {
                 if matches!(

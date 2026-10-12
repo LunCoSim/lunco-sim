@@ -103,7 +103,7 @@ fn modelica_clock_state(rovers, capture_values, profile, tick, kind) {
             if current_time != () {
                 model_count += 1;
                 let variables = ();
-                try { variables = get(entity, "ModelicaModel.variables"); }
+    try { variables = get(entity, "ModelicaVariables.values"); }
                 catch (error) { }
                 if variables != () && type_of(variables) == "map" {
                     let fields_count = variables.len();
@@ -573,6 +573,8 @@ fn on_start(me, ctx) {
     } else {
         0
     };
+    print("[multi-rover] compute_threads=" + this.physics_compute_threads
+        + " profile_known=" + this.physics_profile_known);
 
     let group = find_path("/MultiRoverStress/Rovers");
     if group == () || group < 0 {

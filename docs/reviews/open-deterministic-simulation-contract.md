@@ -9,6 +9,24 @@ dependencies, or ECS query order leave the same authoritative state at each
 tick. Stable actor/event/worker submission order is implemented; the whole
 contract remains open.
 
+### Current causal-admission replay evidence (2026-10-11)
+
+The checked initialization path admits finite authored and causal inputs before
+solver construction. USD wiring records sources awaiting native projection and
+publishes participant surfaces before connection rebuilding. The two rover
+drivetrains bind guidance inputs through instance modifiers. Initialized
+Modelica state and subsequent trajectories reflect those inputs and bindings.
+
+Artifact `1ddce2ce4cd15c5ab4f6c6bd6c8760682b277248bd2ec1dd0c435eecd75b78eb`
+matches all selected physics, Modelica, articulated and final rows across
+Compute widths 1/24 for 4/8/20 rovers and all four jitter profiles. The refreshed
+reference records that artifact and authored input digests. With temporary row
+logging removed, the ten production profiles pass 360 Rhai checks, including
+zero-tolerance equality and altered-row rejection. This establishes exact
+same-build replay for these fixtures; it does not establish unchanged trajectory
+against the preceding initialization contract or whole-session/cross-machine
+determinism. See the current performance handover for loading and frame evidence.
+
 ### D4 replay profile coverage (2026-09-29)
 
 The production `multi_rover_stress` Rhai gate checks `on_start` at
@@ -276,10 +294,9 @@ returns sorted CIDv1 raw/SHA-256 identities for exact project source bytes and
 all embedded standard-library files, failing on diagnostics or ambiguous names.
 `PreparedSourceRoot::content_closure()` returns portable per-file CID identities
 for an exact Modelica source root, and `ModelicaCompiler` exposes current source
-content state by source-set identity. Failed latest admissions and parsed-only
-source bundles explicitly report unavailable content; these root closures do
-not yet join the live model document or every source dependency into one compile
-snapshot.
+content state by source-set identity. Failed latest admissions report explicit
+errors. Source-bearing parsed bundles preserve their exact source text, and the
+successful strict compile captures the participating document and library files.
 `RhaiScenarioRuntime::active_content_closure(entity)` returns the exact root,
 source-backed literal imports reachable from the root and authored prelude,
 and authored prelude files captured with that entity's last committed compiled
@@ -305,7 +322,7 @@ worker owns each `LiveStepper`; its adapter exposes observable `SessionState`,
 time, inputs, and reset, but no portable snapshot/restore operation. Rumoca's
 adaptive `SimulationSession` hides its solver backend, and LunCoSim's fixed-step
 session keeps its state vector, parameters, step index, and time origin private.
-`ModelicaModel.variables` and `inputs` are main-thread projections, not a
+`ModelicaVariables.values` and `ModelicaModel.inputs` are main-thread projections, not a
 complete solver checkpoint. Arbitrary-tick replay therefore needs either a
 solver-owned snapshot/restore contract for every enabled backend or a
 genesis-only capture contract that rebuilds all steppers before the first

@@ -47,9 +47,6 @@ pub use diagrams::*;
 
 pub mod log;
 
-pub mod mission_control;
-pub use mission_control::*;
-
 pub mod busy;
 pub mod modal;
 
@@ -81,11 +78,6 @@ impl Plugin for LuncoUiPlugin {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.init_resource::<UiSelection>();
-        // WP-8 view-model for Mission Control — collapses the panel's
-        // per-frame world scans into one change-gated producer.
-        app.init_resource::<mission_control::MissionControlView>()
-            .add_observer(mission_control::on_set_possession_policy)
-            .add_systems(Update, mission_control::populate_mission_control_view);
         // Modal host: single-source-of-truth for dialogs. Panels never
         // call `egui::Window::show` directly; they push to ModalQueue
         // and the host renders the head with `egui::Modal`. Registered

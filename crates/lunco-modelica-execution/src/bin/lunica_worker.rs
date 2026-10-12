@@ -295,7 +295,6 @@ mod wasm {
         bounds: &lunco_experiments::RunBounds,
         result_limits: lunco_experiments::RunResultLimits,
     ) {
-        use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -343,7 +342,6 @@ mod wasm {
                     run_id,
                     lunco_experiments::RunUpdate::Failed {
                         error: format!("compile: {e}"),
-                        partial: None,
                     },
                 );
                 return;
@@ -359,7 +357,6 @@ mod wasm {
                     run_id,
                     lunco_experiments::RunUpdate::Failed {
                         error: format!("compile panic: {msg}"),
-                        partial: None,
                     },
                 );
                 return;
@@ -372,44 +369,21 @@ mod wasm {
             return;
         }
 
-        // Inject run values (experiment inputs + parameter overrides) at the DAE
-        // level — the SINGLE injection path, identical to native. No source
-        // rewriting, so the run's DAE derives from exactly the compiled source.
-        // `dae.dae` is an `Arc<Dae>` (shared compile cache); clone the inner DAE
-        // before mutating, exactly as native `run_inner` does.
-        let mut bindings = inputs.clone();
-        bindings.extend(overrides.clone());
-        let run_dae = if bindings.is_empty() {
-            dae.dae.clone()
-        } else {
-            let mut d = (*dae.dae).clone();
-            if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
-                post_run_update(
-                    scope,
-                    run_id,
-                    lunco_experiments::RunUpdate::Failed {
-                        error: format!("parameter/input binding failed: {reason}"),
-                        partial: None,
-                    },
-                );
-                return;
-            }
-            std::sync::Arc::new(d)
-        };
-
-        // Drive the run through the SHARED `drive_run` — the EXACT same entry
-        // point native (`lunco_modelica_runner`) uses. It honours
-        // `bounds.runtime`: Batch → the budget-admitted dense-output `simulate_solve_model`
-        // solve (robust on stiff models), Interactive → the streamable
-        // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
-        // (postMessage + the cancel registry). The admitted limits and output
-        // grid use the same mechanism on both platforms.
+        // Native and browser hosts share the checked batch solver and output grid.
         let mut sink = WorkerSink {
             scope,
             run_id,
             source_content,
         };
-        lunco_modelica_runner::drive_run(&run_dae, bounds, result_limits, started, &mut sink);
+        lunco_modelica_runner::drive_run(
+            &dae.dae,
+            bounds,
+            inputs,
+            overrides,
+            result_limits,
+            started,
+            &mut sink,
+        );
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -450,31 +424,7 @@ mod wasm {
         }
         fn emit(&mut self, mut update: lunco_experiments::RunUpdate) {
             lunco_experiments::stamp_source_identity(&mut update, &self.source_content);
-            // DIAGNOSTIC: on each streamed Progress, log the worker's wasm linear
-            // memory size. Native runs this exact solve flat at ~905 MB; this
-            // surfaces whether the in-browser worker's memory climbs unbounded
-            // (allocator fragmentation) toward the 4 GiB trap.
-            if let lunco_experiments::RunUpdate::Progress { t_current, .. } = &update {
-                let pages = core::arch::wasm32::memory_size(0);
-                post_log(
-                    self.scope,
-                    format!(
-                        "[mem] sim_t={:.0} wasm_linear={}MB",
-                        t_current,
-                        pages * 64 / 1024
-                    ),
-                );
-            }
             post_run_update(self.scope, self.run_id, update);
-        }
-        fn wall_budget(&self) -> Option<core::time::Duration> {
-            // Generous backstop: a Fast Run that hasn't finished in this long is
-            // almost certainly pathological (e.g. a stiff model over a huge
-            // horizon at a too-tight tolerance). Fail it gracefully so the worker
-            // is freed for the next run instead of grinding indefinitely. A
-            // single runaway solver `step()` that blows the heap before this
-            // fires is caught instead by worker-crash recovery on the main thread.
-            Some(core::time::Duration::from_secs(120))
         }
     }
 
@@ -843,7 +793,7 @@ mod wasm {
                     // diagnostics in one round-trip — matching the single
                     // `SyntaxCache` shape the doc now uses.
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let recovery = lunco_modelica_ast::parse_to_syntax(&source, &uri);
+                        let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
                         // Resolve byte spans → located diagnostics here, where
                         // the source is in hand, so the main thread receives
                         // clickable parse errors (not just debug strings).

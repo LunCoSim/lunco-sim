@@ -37,10 +37,20 @@ def Xform "Rucheyok" (
     float outputs:soc.connect = </Rucheyok/Battery.outputs:soc_out>
     float outputs:battery_drained
     float outputs:battery_drained.connect = </Rucheyok/Battery.outputs:drained>
-    float outputs:solar_power
-    float outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
-    float outputs:solar_incidence
-    float outputs:solar_incidence.connect = </Rucheyok/SolarPanel.outputs:cos_incidence>
+    custom double inputs:irradiance
+    double inputs:irradiance.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_irradiance_w_m2>
+    custom double inputs:sun_visibility
+    double inputs:sun_visibility.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_visibility>
+    custom double inputs:target_mount_x
+    double inputs:target_mount_x.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_x>
+    custom double inputs:target_mount_y
+    double inputs:target_mount_y.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_y>
+    custom double inputs:target_mount_z
+    double inputs:target_mount_z.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_z>
+    custom double outputs:solar_power
+    double outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
+    custom double outputs:solar_incidence
+    double outputs:solar_incidence.connect = </Rucheyok/SolarPanel.outputs:cos_incidence>
     def Camera "FrontCamera" (
         prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
     )
@@ -76,16 +86,15 @@ def Xform "Rucheyok" (
         custom token connectors:p
         token connectors:p.connect = </Rucheyok/Battery.connectors:p>
         custom double inputs:target_mount_x
-        double inputs:target_mount_x.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_x>
+        double inputs:target_mount_x.connect = </Rucheyok.inputs:target_mount_x>
         custom double inputs:target_mount_y
-        double inputs:target_mount_y.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_y>
+        double inputs:target_mount_y.connect = </Rucheyok.inputs:target_mount_y>
         custom double inputs:target_mount_z
-        double inputs:target_mount_z.connect = </Rucheyok/SolarPanel/Environment.outputs:sun_mount_z>
-        def Xform "Environment" (
-            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
-        )
-        {
-        }
+        double inputs:target_mount_z.connect = </Rucheyok.inputs:target_mount_z>
+        custom double inputs:irradiance
+        double inputs:irradiance.connect = </Rucheyok.inputs:irradiance>
+        custom double inputs:sun_visibility
+        double inputs:sun_visibility.connect = </Rucheyok.inputs:sun_visibility>
     }
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>

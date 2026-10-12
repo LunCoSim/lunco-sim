@@ -5,24 +5,19 @@
     metersPerUnit = 1.0
 )
 
-def Xform "World" (
-    prepend apiSchemas = "LunCoEpochAPI"
-)
+def Xform "World"
 {
-    double lunco:time:epochJd = 2451545.0
-    def PhysicsScene "Physics"
+    def Xform "FailureTarget"
     {
-        float physics:gravityMagnitude = 0.0
     }
-    def Scope "Verdict" (
+    def Scope "Witness" (
         prepend apiSchemas = "LunCoProgramAPI"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/scenario_source_failure.rhai@
-        uniform bool lunco:program:realtimeSafe = false
     }
-    def Xform "SourceHost"
+    def DistantLight "Light"
     {
     }
 }

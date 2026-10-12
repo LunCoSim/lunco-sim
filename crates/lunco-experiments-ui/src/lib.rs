@@ -306,10 +306,9 @@ pub fn populate_experiments_view_model(
                     3u8.hash(&mut hasher);
                     wall_time_ms.hash(&mut hasher);
                 }
-                RunStatus::Failed { error, partial } => {
+                RunStatus::Failed { error } => {
                     4u8.hash(&mut hasher);
                     error.hash(&mut hasher);
-                    partial.hash(&mut hasher);
                 }
                 RunStatus::Cancelled => 5u8.hash(&mut hasher),
             }

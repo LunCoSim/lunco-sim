@@ -78,7 +78,7 @@ impl Default for PrettyOptions {
 static OPTIONS: RwLock<Option<PrettyOptions>> = RwLock::new(None);
 
 /// Current formatting options. Falls back to
-/// [`PrettyOptions::default`] (tabs / double-tabs) when nothing has
+/// [`PrettyOptions::default`] (two-space / four-space) when nothing has
 /// been installed yet.
 ///
 /// Designed as a process-wide setting so every op path (ops from the
@@ -307,14 +307,13 @@ pub fn lunco_plot_node_inner(p: &LunCoPlotNodeSpec) -> String {
         "LunCoAnnotations.PlotNode(extent={{{},{}}}, signal=\"{}\"",
         fmt_point(p.x1, p.y1),
         fmt_point(p.x2, p.y2),
-        // Modelica strings: backslash + quote escapes only.
-        p.signal.replace('\\', "\\\\").replace('"', "\\\""),
+        rumoca_core::escape_modelica_string(&p.signal),
     );
     if !p.title.is_empty() {
         let _ = write!(
             s,
             ", title=\"{}\"",
-            p.title.replace('\\', "\\\\").replace('"', "\\\""),
+            rumoca_core::escape_modelica_string(&p.title),
         );
     }
     s.push(')');
@@ -608,10 +607,6 @@ fn fmt_color(c: [u8; 3]) -> String {
     format!("{{{},{},{}}}", c[0], c[1], c[2])
 }
 
-fn escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 /// Render the body of one graphic without surrounding whitespace.
 pub fn graphic_inner(g: &GraphicSpec) -> String {
     match g {
@@ -674,7 +669,7 @@ pub fn graphic_inner(g: &GraphicSpec) -> String {
                 "Text(extent={{{},{}}}, textString=\"{}\", textColor={}, fontSize={})",
                 fmt_point(*x1, *y1),
                 fmt_point(*x2, *y2),
-                escape_string(text),
+                rumoca_core::escape_modelica_string(text),
                 fmt_color(*color),
                 fmt_num(*font_size),
             )
@@ -693,7 +688,11 @@ pub fn class_header(name: &str, kind: ClassKindSpec, description: &str, partial:
     s.push(' ');
     s.push_str(name);
     if !description.is_empty() {
-        let _ = write!(s, " \"{}\"", escape_string(description));
+        let _ = write!(
+            s,
+            " \"{}\"",
+            rumoca_core::escape_modelica_string(description)
+        );
     }
     s
 }
@@ -785,7 +784,11 @@ pub fn variable_decl(decl: &VariableDecl) -> String {
         let _ = write!(s, " = {}", value);
     }
     if !decl.description.is_empty() {
-        let _ = write!(s, " \"{}\"", escape_string(&decl.description));
+        let _ = write!(
+            s,
+            " \"{}\"",
+            rumoca_core::escape_modelica_string(&decl.description)
+        );
     }
     s.push_str(";\n");
     s
@@ -825,6 +828,33 @@ pub fn experiment_inner(start_time: f64, stop_time: f64, tolerance: f64, interva
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_string_nodes_use_rumoca_literal_encoding() {
+        let text = "\"quoted\"\\n\n\t\r\x07\x08\x0c\x0b";
+        let header = class_header("Label", ClassKindSpec::Model, text, false);
+        let source = format!("{header}\nend Label;");
+        let ast =
+            rumoca_phase_parse::parse_to_ast(&source, "label.mo").expect("encoded class parses");
+        assert_eq!(
+            crate::ast_extract::description_from_tokens(&ast.classes["Label"].description),
+            Some(text.to_string())
+        );
+        assert!(!header.contains('\n'));
+        let plot = lunco_plot_node_inner(&LunCoPlotNodeSpec {
+            x1: -10.0,
+            y1: -10.0,
+            x2: 10.0,
+            y2: 10.0,
+            signal: "bus.signal".into(),
+            title: text.into(),
+        });
+        let source = format!("model Label annotation(__LunCo(plotNodes={{{plot}}})); end Label;");
+        let ast =
+            rumoca_phase_parse::parse_to_ast(&source, "plot.mo").expect("encoded plot parses");
+        let plots = crate::annotations::extract_lunco_plot_nodes(&ast.classes["Label"].annotation);
+        assert_eq!(plots[0].title, text);
+    }
 
     #[test]
     fn num_formatter_strips_trailing_zeros_and_integer_point() {
@@ -985,8 +1015,8 @@ mod tests {
         };
         let body = component_decl(&d);
         let source = format!("model M\n{}end M;\n", body);
-        let ast =
-            crate::parse_to_ast(&source, "test.mo").expect("emitted component decl should parse");
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "test.mo")
+            .expect("emitted component decl should parse");
         let class = ast.classes.get("M").expect("class M");
         assert!(
             class.components.contains_key("x"),
@@ -1004,7 +1034,7 @@ mod tests {
         };
         let body = connect_equation(&eq);
         let source = format!("model M\n  Real a;\n  Real b;\nequation\n{}end M;\n", body);
-        let res = crate::parse_to_ast(&source, "test.mo");
+        let res = rumoca_phase_parse::parse_to_ast(&source, "test.mo");
         assert!(res.is_ok(), "connect(...) should parse: {:?}", res.err());
     }
 }

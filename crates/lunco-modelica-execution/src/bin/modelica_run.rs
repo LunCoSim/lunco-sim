@@ -238,61 +238,46 @@ mod native {
         // (`stepper_options_from_bounds`), never hand-rolled here: it is what keeps
         // this headless runner numerically identical to the workbench, and it is the
         // one place that carries the run's real horizon into `SimOptions::t_end`
-        // (the session clamps every advance at it). atol/rtol 1e-1 is loose for
-        // production but matches the workbench default.
+        // for batch execution. The CLI tolerance below is an explicit probe setting.
         let bounds = lunco_experiments::RunBounds {
             t_start: 0.0,
             t_end: opts.duration,
             tolerance: Some(1e-1),
             ..Default::default()
         };
-        let stepper_opts = match lunco_modelica_runner::stepper_options_from_bounds(&bounds) {
+        let mut stepper_opts = match lunco_modelica_runner::stepper_options_from_bounds(&bounds) {
             Ok(o) => o,
             Err(e) => die(&format!("solver selection failed: {e}")),
         };
 
-        let mut stepper =
-            match lunco_modelica_solver::simulation_session::cli(&comp_res.dae, stepper_opts) {
-                Ok(s) => s,
-                Err(e) => die(&format!("stepper init failed: {e:?}")),
-            };
+        stepper_opts.initial_inputs = opts
+            .inputs
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect();
+        stepper_opts.initial_inputs.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // DAE initialization supplies scoped defaults before explicit CLI overrides.
-        let mut applied_inputs: HashMap<String, f64> = HashMap::new();
-        for (name, val) in &opts.inputs {
-            if !stepper.input_names().iter().any(|n| n == name) {
-                eprintln!(
-                    "[modelica_run] WARN --input `{}` is not a known input of {} (known: {:?}); applying anyway",
-                    name,
-                    opts.class,
-                    stepper.input_names(),
-                );
-            }
-            let _ = stepper.set_input(name, *val);
-            applied_inputs.insert(name.clone(), *val);
-        }
-        if !applied_inputs.is_empty() {
-            eprintln!("[modelica_run] inputs: {:?}", applied_inputs);
-        }
+        let mut stepper = match rumoca_sim::SimulationSession::new(&comp_res.dae, stepper_opts) {
+            Ok(s) => s,
+            Err(e) => die(&format!("stepper init failed: {e:?}")),
+        };
 
-        // Decide which variables to record. By default, record everything
-        // the stepper observes at t=0 (matches `collect_stepper_observables`
-        // semantics). User can pin a subset via --record to keep the CSV
-        // narrow. Either way, capture the columns NOW so the CSV header is
-        // stable for the whole run, even if the stepper's reported set
-        // varies frame-to-frame (rumoca occasionally drops a NaN'd var).
+        // Capture the initialized observable surface once for a stable CSV schema.
         let initial_state: Vec<(String, f64)> = stepper
             .state()
             .unwrap_or_else(|e| die(&format!("initial state unreadable: {e:?}")))
             .values
             .into_iter()
-            .filter(|(name, val)| val.is_finite() && name != "time")
+            .filter(|(name, _)| name != "time")
             .collect();
 
         let columns: Vec<String> = match &opts.record {
             Some(explicit) => explicit.clone(),
             None => initial_state.iter().map(|(n, _)| n.clone()).collect(),
         };
+
+        let initial_record =
+            record_values(&initial_state, &columns).unwrap_or_else(|error| die(&error));
 
         if columns.is_empty() {
             die("no variables to record (initial state was empty and no --record given)");
@@ -329,13 +314,8 @@ mod native {
                 writeln!(w).unwrap();
                 // Initial sample (t=0)
                 write!(w, "{:.9}", stepper.time()).unwrap();
-                let init_map: HashMap<&str, f64> = initial_state
-                    .iter()
-                    .map(|(n, v)| (n.as_str(), *v))
-                    .collect();
-                for c in &columns {
-                    let v = init_map.get(c.as_str()).copied().unwrap_or(f64::NAN);
-                    write!(w, ",{}", format_num(v)).unwrap();
+                for value in &initial_record {
+                    write!(w, ",{}", format_num(*value)).unwrap();
                 }
                 writeln!(w).unwrap();
                 Some(w)
@@ -361,11 +341,7 @@ mod native {
             // Sample current state and write to CSV.
             if let Some(w) = csv_writer.as_mut() {
                 let state: Vec<(String, f64)> = match stepper.state() {
-                    Ok(s) => s
-                        .values
-                        .into_iter()
-                        .filter(|(_, v): &(String, f64)| v.is_finite())
-                        .collect(),
+                    Ok(s) => s.values.into_iter().collect(),
                     Err(e) => {
                         step_err = Some(format!(
                             "state unreadable at t={:.6}s: {e:?}",
@@ -374,14 +350,19 @@ mod native {
                         break;
                     }
                 };
-                let map: HashMap<&str, f64> = state
-                    .iter()
-                    .map(|(n, v): &(String, f64)| (n.as_str(), *v))
-                    .collect();
+                let record = match record_values(&state, &columns) {
+                    Ok(record) => record,
+                    Err(error) => {
+                        step_err = Some(format!(
+                            "observation rejected at t={}: {error}",
+                            stepper.time()
+                        ));
+                        break;
+                    }
+                };
                 write!(w, "{:.9}", stepper.time()).unwrap();
-                for c in &columns {
-                    let v = map.get(c.as_str()).copied().unwrap_or(f64::NAN);
-                    write!(w, ",{}", format_num(v)).unwrap();
+                for value in record {
+                    write!(w, ",{}", format_num(value)).unwrap();
                 }
                 writeln!(w).unwrap();
             }
@@ -468,15 +449,28 @@ mod native {
         }
     }
 
-    /// Format a number for CSV output. `NaN`/`Inf` become empty cells —
-    /// most downstream tools (pandas, polars, GNU R) handle empty as NA
-    /// natively, while `nan` / `inf` strings throw type errors.
-    fn format_num(v: f64) -> String {
-        if v.is_finite() {
-            format!("{:.9}", v)
-        } else {
-            String::new()
+    /// Admit complete finite observations at the external CSV boundary.
+    fn record_values(state: &[(String, f64)], columns: &[String]) -> Result<Vec<f64>, String> {
+        if let Some((name, value)) = state.iter().find(|(_, value)| !value.is_finite()) {
+            return Err(format!("observable '{name}' is non-finite: {value}"));
         }
+        let values: HashMap<&str, f64> = state
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
+            .collect();
+        columns
+            .iter()
+            .map(|name| {
+                values
+                    .get(name.as_str())
+                    .copied()
+                    .ok_or_else(|| format!("requested observable '{name}' is absent"))
+            })
+            .collect()
+    }
+
+    fn format_num(v: f64) -> String {
+        format!("{:.9}", v)
     }
 }
 

@@ -75,9 +75,7 @@ impl Default for DiagramNodeId {
 /// Causality classification of a connector port, derived from the
 /// connector class's variable declarations. Drives the port marker
 /// shape (square / triangle / circle) and the wire's arrowhead
-/// behaviour in the canvas renderer — replaces earlier leaf-name
-/// heuristics (`ends_with("Input")`) that only worked for source library's
-/// naming conventions.
+/// behaviour in the canvas renderer. Type names do not determine causality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PortKind {
     /// Connector has exactly one `input` variable and no `flow`

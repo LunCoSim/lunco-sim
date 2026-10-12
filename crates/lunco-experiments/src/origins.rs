@@ -299,20 +299,23 @@ mod tests {
             .import(&mut registry, source(1), conflict.clone())
             .expect_err("Create cannot edit even an unadmitted row");
         assert!(error.contains("creation conflicts"));
-        registry.set_partial_result(
-            id,
-            crate::RunResult {
-                times: vec![0.0],
-                series: Default::default(),
-                meta: crate::RunMeta {
-                    sample_count: 1,
-                    ..Default::default()
+        registry
+            .set_complete_result(
+                id,
+                crate::RunResult {
+                    times: vec![0.0],
+                    series: Default::default(),
+                    meta: crate::RunMeta {
+                        sample_count: 1,
+                        ..Default::default()
+                    },
                 },
-            },
-        );
+                crate::RunResultLimits::default(),
+            )
+            .expect("valid completed fixture");
         registry.set_name(id, "Retained label".into());
         registry.get_mut(id).expect("fixture").color_hint = 7;
-        registry.set_status(id, crate::RunStatus::Cancelled);
+        registry.set_status(id, crate::RunStatus::Done { wall_time_ms: 0 });
         let error = origins
             .import(&mut registry, source(2), exp.clone())
             .expect_err("different document rejected");
@@ -320,7 +323,7 @@ mod tests {
         assert_eq!(origins.get(&id), Some(&source(1)));
         assert!(matches!(
             registry.get(id).expect("retained").status,
-            crate::RunStatus::Cancelled
+            crate::RunStatus::Done { .. }
         ));
         origins
             .import(&mut registry, source(1), exp.clone())

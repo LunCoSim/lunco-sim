@@ -293,35 +293,23 @@ pub(super) fn empty_overlay_class_info(
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    // Locate the class. Prefer an exact name match; fall back to the
-    // first non-package class (matches `extract_model_name`).
-    let class_def = locate_class(&ast_arc, class_name);
+    // Preserve the selected declaration identity in the authoring preview.
+    let class_def = ast_arc.get_class_by_qualified_name(class_name);
     let Some(class) = class_def else {
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    use rumoca_compile::parsing::Causality;
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::Causality;
+    use lunco_modelica_ast::ClassType;
 
     // Painting is never allowed to start an engine inheritance walk. The
     // projection task owns that work off-thread and publishes its memoized
     // result; this overlay only reads a completed cache entry and otherwise
     // uses the class's own authored Icon while the projection is pending.
-    let class_context = match ast_arc.within.as_ref() {
-        Some(within) => {
-            let pkg = within
-                .name
-                .iter()
-                .map(|t| t.text.as_ref())
-                .collect::<Vec<_>>()
-                .join(".");
-            if pkg.is_empty() {
-                class_name.to_string()
-            } else {
-                format!("{pkg}.{class_name}")
-            }
-        }
-        None => class_name.to_string(),
+    let relative = ast_arc.relative_class_name(class_name);
+    let class_context = match ast_arc.within.as_ref().map(ToString::to_string) {
+        Some(package) if !package.is_empty() => format!("{package}.{relative}"),
+        _ => relative.to_owned(),
     };
     let icon = ctx
         .resource::<crate::engine_resource::ModelicaEngineHandle>()
@@ -338,17 +326,13 @@ pub(super) fn empty_overlay_class_info(
         ClassType::Function => Some("function"),
         ClassType::Operator => Some("operator"),
     };
-    let description: Option<String> = class
-        .description
-        .first()
-        .map(|t| t.text.as_ref().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty());
+    let description = lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
 
     let mut params = Vec::new();
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     for (name, comp) in class.components.iter() {
-        use rumoca_compile::parsing::Variability;
+        use lunco_modelica_ast::Variability;
         if matches!(comp.variability, Variability::Parameter(_)) {
             params.push(name.clone());
         }
@@ -360,32 +344,6 @@ pub(super) fn empty_overlay_class_info(
     }
 
     (icon, class_type, description, params, inputs, outputs)
-}
-
-/// Resolve `name` (short or fully-qualified) to a class in `ast`,
-/// falling back to the first non-package class when nothing matches.
-///
-/// Lookup is delegated to `lunco_modelica_index::class_lookup::find_class_by_qualified_name`,
-/// which handles both short names (`"PID"`) and qualified names with
-/// within-clause tolerance (`"Modelica.Blocks.PID"`). The previous
-/// hand-rolled walk only matched literal IndexMap keys, so qualified
-/// input always fell through to the picker silently — the lookup
-/// half of the function was effectively dead. The fallback (first
-/// non-package class) is kept explicit because callers do pass it
-/// `extract_model_name_from_ast`'s output and rely on the picker
-/// when that name isn't structurally findable.
-pub(super) fn locate_class<'a>(
-    ast: &'a rumoca_compile::parsing::ast::StoredDefinition,
-    name: &str,
-) -> Option<&'a rumoca_compile::parsing::ast::ClassDef> {
-    if let Some(c) = lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, name) {
-        return Some(c);
-    }
-    use rumoca_compile::parsing::ClassType;
-    ast.classes
-        .iter()
-        .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
-        .map(|(_, c)| c)
 }
 
 /// Render a row showing a symbol band (e.g. "Parameters: tau, J, c

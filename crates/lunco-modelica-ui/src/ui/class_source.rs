@@ -9,12 +9,10 @@ use bevy::prelude::World;
 use lunco_workspace::{
     DocumentRuntimeOwner, PinnedDocumentRuntimeOwner, ReplicationOwner, Workspace,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) struct ResolvedClassSource {
     pub source: Arc<str>,
-    pub origin_path: Option<PathBuf>,
     pub runtime: DocumentRuntimeOwner,
     pub resident: Option<PinnedDocumentRuntimeOwner>,
 }
@@ -23,7 +21,6 @@ impl ResolvedClassSource {
     pub(crate) fn from_resident(source: Arc<str>, pin: PinnedDocumentRuntimeOwner) -> Self {
         Self {
             source,
-            origin_path: None,
             runtime: pin.runtime.clone(),
             resident: Some(pin),
         }
@@ -78,7 +75,7 @@ impl ClassSourcePlan {
                         path.display()
                     )
                 })?;
-            let (runtime, source, origin_path) = match provider {
+            let (runtime, source) = match provider {
                 lunco_assets_runtime::library::LibrarySource::InMemory(_) => {
                     let bytes = provider.read(&path).ok_or_else(|| {
                         format!("selected library source is unavailable: {}", path.display())
@@ -89,7 +86,7 @@ impl ClassSourcePlan {
                             path.display()
                         )
                     })?;
-                    (DocumentRuntimeOwner::Application, source, None)
+                    (DocumentRuntimeOwner::Application, source)
                 }
                 lunco_assets_runtime::library::LibrarySource::Filesystem(_) => {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -100,7 +97,7 @@ impl ClassSourcePlan {
                                 self.file_admission,
                             )
                             .await?;
-                        (resolved.runtime, source, Some(resolved.path))
+                        (resolved.runtime, source)
                     }
                     #[cfg(target_arch = "wasm32")]
                     {
@@ -113,7 +110,6 @@ impl ClassSourcePlan {
             };
             return Ok(ResolvedClassSource {
                 source: source.into(),
-                origin_path,
                 runtime,
                 resident: None,
             });
@@ -121,14 +117,13 @@ impl ClassSourcePlan {
         if let Some(resident) = self.resident {
             return Ok(resident);
         }
-        let head = lunco_modelica_ast::qualified_name_segments(&self.qualified)
+        let head = rumoca_core::qualified_name_segments(&self.qualified)
             .next()
             .unwrap_or(&self.qualified);
         let source = crate::models::get_model(&format!("{head}.mo"))?
             .ok_or_else(|| format!("class source was not found: {}", self.qualified))?;
         Ok(ResolvedClassSource {
             source: source.into(),
-            origin_path: None,
             runtime: DocumentRuntimeOwner::Application,
             resident: None,
         })
@@ -147,10 +142,9 @@ fn find_resident(
         {
             return None;
         }
-        host.document().strict_ast().and_then(|ast| {
-            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, qualified)
-                .map(|_| document)
-        })
+        host.document()
+            .strict_ast()
+            .and_then(|ast| ast.get_class_by_qualified_name(qualified).map(|_| document))
     })
 }
 
@@ -173,7 +167,7 @@ pub(crate) fn find_open_doc_with_class(
 
 /// Optional bundled-source lookup for canvas and compile enrichment.
 pub(crate) fn bundled_source_for(qualified: &str) -> Option<String> {
-    let head = lunco_modelica_ast::qualified_name_segments(qualified)
+    let head = rumoca_core::qualified_name_segments(qualified)
         .next()
         .unwrap_or(qualified);
     crate::models::get_model(&format!("{head}.mo"))

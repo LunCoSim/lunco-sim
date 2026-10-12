@@ -18,7 +18,7 @@ use lunco_modelica_ast::ast_extract::{
 use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
-    ModelicaSignalProvenance, NoticeLevel,
+    ModelicaSignalProvenance, ModelicaVariables, NoticeLevel,
 };
 use lunco_modelica_runtime::{ModelicaSource, resolve_communication_period_secs};
 use lunco_usd_bevy_core::program::{
@@ -1365,6 +1365,7 @@ fn commit_domain_projection(
                     last_error: Some(message.clone()),
                     ..default()
                 },
+                ModelicaVariables::default(),
                 UsdSourcedCosim,
                 DomainProjectionState { fingerprint },
                 GeneratedModelicaSource {
@@ -1433,7 +1434,7 @@ fn commit_domain_projection(
         model_name: compiled_name.clone(),
         source_uri: doc_uri.clone(),
         parameters: interface.parameters,
-        inputs: interface.inputs,
+        inputs: HashMap::new(),
         communication_period_secs: synthesized.communication_period_secs,
         session_id,
         // The generated source is published below, then linked to its standard
@@ -1474,7 +1475,9 @@ fn commit_domain_projection(
             });
             error!("[domain-projection] {} rejected: {message}", prim.path);
             retire_sim_interface(commands, entity);
-            commands.entity(entity).try_insert(model);
+            commands
+                .entity(entity)
+                .try_insert((model, ModelicaVariables::default()));
             return false;
         }
     };
@@ -1501,6 +1504,7 @@ fn commit_domain_projection(
     retire_sim_interface(commands, entity);
     commands.entity(entity).try_insert((
         model,
+        ModelicaVariables::default(),
         signal_layout,
         UsdSourcedCosim,
         lunco_port_core::PortSurfacePending,
@@ -4588,13 +4592,11 @@ def Scope "Rig"
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));
         assert!(source.contains("Force allocation | 1 actuator(s)"));
-        let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
-        let class = lunco_modelica_index::class_lookup::find_class_by_qualified_name(
-            &ast,
-            "AttitudeActuation",
-        )
-        .expect("generated actuator model");
+        let class = ast
+            .get_class_by_qualified_name("AttitudeActuation")
+            .expect("generated actuator model");
         assert!(lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some());
         assert!(lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some());
     }

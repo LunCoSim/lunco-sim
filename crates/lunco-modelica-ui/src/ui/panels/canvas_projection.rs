@@ -62,7 +62,7 @@ fn resolved_engine_class_entry(
     // kind, inherited connector members, ports, and Diagram graphics. An
     // empty ClassEntry here is not a valid resolved state because it removes
     // standard `flow` metadata from every generated edge.
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
 
     let class_kind = match (&class_def.class_type, class_def.expandable) {
         (ClassType::Connector, true) => lunco_modelica_index::index::ClassKind::ExpandableConnector,
@@ -205,7 +205,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// package as a folder; drill-in into a class lands here with
 /// `target_class = Some(...)` and proceeds normally.
 fn ast_looks_like_package(ast: &rumoca_compile::parsing::ast::StoredDefinition) -> bool {
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     for class in ast.classes.values() {
         if matches!(class.class_type, ClassType::Package) {
             return true;
@@ -276,8 +276,7 @@ pub fn import_model_to_diagram_from_ast(
         None => None,
     };
     if let Some(target) = resolved_target.as_deref() {
-        if lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target).is_none()
-        {
+        if ast.get_class_by_qualified_name(target).is_none() {
             return Err(format!(
                 "target Modelica class '{target}' was not found in the source"
             ));
@@ -433,9 +432,7 @@ pub fn import_model_to_diagram_from_ast(
     if is_source_drill_in {
         // External source classes are self-sufficient on qualified paths.
     } else if let Some(target) = target_class {
-        if let Some(target_class_def) =
-            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-        {
+        if let Some(target_class_def) = ast.get_class_by_qualified_name(target) {
             // Register two scopes for short-name lookup:
             //   1. **Sibling classes inside the target's enclosing
             //      package.** When drilling into
@@ -448,13 +445,8 @@ pub fn import_model_to_diagram_from_ast(
             //   2. **Nested helper classes inside the target itself.**
             //      For composite classes that hold their own helper
             //      types as inner classes.
-            if let Some((parent_path, _)) = target.rsplit_once('.') {
-                if let Some(parent_class_def) =
-                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(
-                        &ast,
-                        parent_path,
-                    )
-                {
+            if let Some((parent_path, _)) = rumoca_core::split_last_top_level(target) {
+                if let Some(parent_class_def) = ast.get_class_by_qualified_name(parent_path) {
                     for (sibling_name, sibling_class) in parent_class_def.classes.iter() {
                         register_local_class(
                             &mut local_classes_by_short,
@@ -472,12 +464,12 @@ pub fn import_model_to_diagram_from_ast(
                 // siblings from the same AST so the root canvas renders the
                 // authored unit icons and double-click can drill into the
                 // exact executable child class.
-                let target_leaf = target.rsplit('.').next().unwrap_or(target);
+                let target_leaf = rumoca_core::top_level_last_segment(target);
                 for (sibling_name, sibling_class) in ast.classes.iter() {
                     if sibling_name != target_leaf
                         && !matches!(
                             sibling_class.class_type,
-                            rumoca_compile::parsing::ClassType::Package
+                            lunco_modelica_ast::ClassType::Package
                         )
                     {
                         register_local_class(
@@ -552,7 +544,7 @@ pub fn import_model_to_diagram_from_ast(
             .join(".");
         if !pkg.is_empty() {
             if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                if let Ok(pkg_ast) = lunco_modelica_ast::parse_to_ast(&bundled, "within-pkg.mo") {
+                if let Ok(pkg_ast) = rumoca_phase_parse::parse_to_ast(&bundled, "within-pkg.mo") {
                     for (_top_name, top_class) in pkg_ast.classes.iter() {
                         for (nested_name, nested_class) in top_class.classes.iter() {
                             register_local_class(
@@ -585,15 +577,9 @@ pub fn import_model_to_diagram_from_ast(
             ast.classes
                 .iter()
                 .find_map(|_| {
-                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-                        .map(|class| {
-                            crate::diagram::collect_inherited_components(
-                                class,
-                                Some(target),
-                                &ast,
-                                0,
-                            )
-                        })
+                    ast.get_class_by_qualified_name(target).map(|class| {
+                        crate::diagram::collect_inherited_components(class, Some(target), &ast, 0)
+                    })
                 })
                 .unwrap_or_default()
         } else {
@@ -610,9 +596,7 @@ pub fn import_model_to_diagram_from_ast(
             // earlier direct-name match handled only single-segment
             // names and silently missed every drill-in into a
             // package-aggregated source.
-            if let Some(target_class_def) =
-                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
-            {
+            if let Some(target_class_def) = ast.get_class_by_qualified_name(target) {
                 for (cname, comp) in target_class_def.components.iter() {
                     map.insert(cname.as_str(), comp);
                 }
@@ -711,7 +695,7 @@ pub fn import_model_to_diagram_from_ast(
             // short-form ref in a source-library example silently dropped at
             // conversion (e.g. CompareSincExpSine projecting 0 nodes).
             if let Some(target) = target_class {
-                let mut parts: Vec<&str> = target.split('.').collect();
+                let mut parts: Vec<&str> = rumoca_core::qualified_name_segments(target).collect();
                 // Drop the leaf (the target class itself) — scope walks
                 // start at its enclosing package.
                 parts.pop();
@@ -942,10 +926,9 @@ pub fn import_model_to_diagram_from_ast(
                 // instead of the class default `J=1`).
                 if let Some(comp) = comp_by_short.get(short_name) {
                     for (k, v) in &comp.modifications {
-                        diagram_node.parameter_values.insert(
-                            k.clone(),
-                            lunco_modelica_ast::ast_extract::format_expression_for_display(v),
-                        );
+                        diagram_node
+                            .parameter_values
+                            .insert(k.clone(), v.to_string());
                     }
                     // `Component X if <cond>` — only dim when the
                     // condition evaluates FALSE against the parent's
@@ -1208,7 +1191,7 @@ fn register_local_class(
         let _ = class_def;
         return;
     }
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     // Walk the class's connector sub-components into `PortDef`s.
     // Without this, locally-defined classes (Tank, Engine, …) have an
     // empty ports list, so wires from `connect()` statements have
@@ -1263,7 +1246,7 @@ fn extract_local_class_ports(
     class_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> Vec<lunco_modelica_index::visual_diagram::PortDef> {
-    use rumoca_compile::parsing::Causality;
+    use lunco_modelica_ast::Causality;
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
         let sub_type = sub.type_name.to_string();
@@ -1357,8 +1340,8 @@ fn classify_connector(
     lunco_modelica_index::visual_diagram::PortKind,
     Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
 ) {
+    use lunco_modelica_ast::Causality;
     use lunco_modelica_index::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_compile::parsing::Causality;
     use rumoca_compile::parsing::ast::Connection;
 
     // Short-form type alias (`connector X = input Real`) — causality
@@ -1474,9 +1457,9 @@ fn eval_condition(
     expr: &rumoca_compile::parsing::ast::Expression,
     params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
-    use rumoca_compile::parsing::OpBinary;
+    use lunco_modelica_ast::OpBinary;
+    use lunco_modelica_ast::OpUnary;
     use rumoca_compile::parsing::ast::Expression;
-    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the
@@ -1525,6 +1508,33 @@ fn eval_condition(
 mod composite_slim_slice_tests {
     use super::*;
 
+    #[test]
+    fn connector_causality_uses_declarations_instead_of_names() {
+        use lunco_modelica_index::visual_diagram::PortKind;
+        let source = "package Facts connector Receiver = input Real; connector Sender = output Real; connector FuelInput Real pressure; flow Real mass; end FuelInput; connector FuelOutput Real pressure; flow Real mass; end FuelOutput; end Facts;";
+        let ast = rumoca_phase_parse::parse_to_ast(source, "connector-facts.mo")
+            .expect("valid declarations");
+        for (name, expected) in [
+            ("Receiver", PortKind::Input),
+            ("Sender", PortKind::Output),
+            ("FuelInput", PortKind::Acausal),
+            ("FuelOutput", PortKind::Acausal),
+        ] {
+            let qualified = format!("Facts.{name}");
+            let class = ast
+                .get_class_by_qualified_name(&qualified)
+                .expect("connector");
+            let (kind, flows) = classify_connector(
+                class,
+                &qualified,
+                &ast,
+                crate::class_cache::ClassLookupMode::Cached,
+            );
+            assert_eq!(kind, expected, "{qualified}");
+            assert_eq!(flows.len(), usize::from(expected == PortKind::Acausal));
+        }
+    }
+
     const COMPOSITE_SOURCE: &str = "\
 // compact composite fixture; the shipped rocket is covered by authored runtime tests
 package CompositeFixture
@@ -1563,15 +1573,15 @@ end CompositeFixture;
     fn composite_slim_slice_projects_component_nodes() {
         let full = COMPOSITE_SOURCE;
         // Reproduce load_library_class's slice: within + RocketStage body.
-        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class =
-            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
-                .expect("RocketStage in package");
-        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
+        let class = ast_full
+            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .expect("RocketStage in package");
+        let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let ast =
-            std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(&slim, "rs_slim.mo").unwrap());
+            std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap());
         let layout = DiagramAutoLayoutSettings::default();
         let diagram = import_model_to_diagram_from_ast(
             ast,
@@ -1610,7 +1620,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            lunco_modelica_ast::parse_to_ast(source, "generated.mo")
+            rumoca_phase_parse::parse_to_ast(source, "generated.mo")
                 .expect("generated source fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1660,7 +1670,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            lunco_modelica_ast::parse_to_ast(source, "generated-placement.mo")
+            rumoca_phase_parse::parse_to_ast(source, "generated-placement.mo")
                 .expect("generated placement fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1699,17 +1709,17 @@ end Unit_One;
         let full = COMPOSITE_SOURCE;
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
-            let ast = std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(src, "x.mo").unwrap());
+            let ast = std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap());
             import_model_to_diagram_from_ast(ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout)
                 .map(|d| d.nodes.len())
                 .unwrap_or(0)
         };
         // slim slice with no target
-        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class =
-            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
-                .unwrap();
-        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
+        let class = ast_full
+            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .unwrap();
+        let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let slim_none = project(&slim, None);

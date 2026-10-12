@@ -167,6 +167,10 @@ fn publish_loaded_scene_stage_outcomes(
     mut events: MessageReader<AssetEvent<UsdStageAsset>>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     mut outcomes: MessageWriter<SceneStageAssetOutcome>,
+    coordinator: Res<SceneTransitionCoordinator>,
+    asset_server: Option<Res<AssetServer>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    mut commands: Commands,
 ) {
     let Some(in_flight) = in_flight else {
         events.read().for_each(drop);
@@ -176,6 +180,38 @@ fn publish_loaded_scene_stage_outcomes(
         if let AssetEvent::LoadedWithDependencies { id } = event
             && *id == in_flight.stage_id
         {
+            if matches!(coordinator.active(), Some(SceneTransition::Restart { .. }))
+                && let (Some(server), Some(backed)) = (asset_server.as_deref(), backed.as_deref())
+                && let Some(path) = server.get_path(*id)
+                && let Some((name, rel)) =
+                    lunco_assets_core::split_twin_rel(&path.path().to_string_lossy())
+                && let Some(doc) = backed.doc_for(name, rel)
+                && let Some(generation) = backed.overlay_synced_generation(doc)
+            {
+                let stage_id = *id;
+                let transition_id = in_flight.transition_id;
+                commands.queue(move |world: &mut World| {
+                    if !world
+                        .get_resource::<SceneLoadInFlight>()
+                        .is_some_and(|load| {
+                            load.transition_id == transition_id && load.stage_id == stage_id
+                        })
+                    {
+                        return;
+                    }
+                    let mut backed =
+                        world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+                    backed.mark_applied(doc, stage_id, generation);
+                    backed.mark_view_applied(doc, stage_id, generation);
+                    crate::live_consume::queue_stage_projection(
+                        world,
+                        doc,
+                        stage_id,
+                        generation,
+                        Vec::new(),
+                    );
+                });
+            }
             outcomes.write(SceneStageAssetOutcome::Loaded {
                 transition_id: in_flight.transition_id,
                 stage_id: *id,
@@ -1133,6 +1169,21 @@ pub fn spawn_scene_root_with_stage(
         .id();
     if let Some(mut state) = world.get_resource_mut::<lunco_core::SceneMountState>() {
         state.register_root(root, primary);
+    }
+    // A restart reuses the asset handle while its fresh prepared stage loads.
+    // Park the root before its Add observer sees the still-cached old asset;
+    // LoadedWithDependencies admits projection of the replacement revision.
+    let awaiting_reload = primary
+        && world
+            .get_resource::<SceneTransitionCoordinator>()
+            .and_then(SceneTransitionCoordinator::active)
+            .is_some_and(|transition| matches!(transition, SceneTransition::Restart { .. }))
+        && world
+            .get_resource::<AssetServer>()
+            .and_then(|server| server.get_path(new_id))
+            .is_some();
+    if awaiting_reload {
+        world.entity_mut(root).insert(UsdSceneAwaitingStage);
     }
     world.entity_mut(root).insert(UsdPrimPath {
         stage_handle: handle,

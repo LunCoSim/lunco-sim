@@ -12,17 +12,8 @@
 //!     and (via [`ModelicaWorkbenchPlugin`]) wires the JS clipboard
 //!     bridge, localStorage autosave, and the off-thread compile worker.
 //!
-//! ## Why this used to be two files
-//!
-//! Desktop and web lived in separate sources (`lunica.rs` + `lunica_web.rs`)
-//! and **drifted**: the web build silently lacked the `WinitSettings`
-//! frame-pacing fix that cured the "UI vanishes on zoom" bug on native,
-//! and the legacy sandbox copy lacked clipboard + autosave. They are
-//! now one `fn main()` with `#[cfg(target_arch = "wasm32")]` branches —
-//! the same unification `crates/lunco-luncosim/src/bin/luncosim.rs` already
-//! uses for its desktop+web entry. wasm-bindgen (`--target web`) runs
-//! `main` automatically when the module loads, so there is no separate
-//! `#[wasm_bindgen(start)]` entry point.
+//! Desktop and browser hosts share one entry point. wasm-bindgen with
+//! `--target web` invokes `main` when the module loads.
 //!
 //! Everything the workbench *is* (panels, clipboard, autosave, worker,
 //! source library) lives in [`ModelicaWorkbenchPlugin`]; this file is just the thin
@@ -59,16 +50,9 @@ fn main() {
     // preload / file load). Our indexer runs on its own bounded pool and
     // is unaffected either way.
     //
-    // We USED to win the pool by racing rumoca to `build_global()`. That
-    // was fragile (lose the race and the cap was silently lost) and it
-    // handed the parse threads rayon's default 2 MB stacks — rumoca sizes
-    // them at 16 MB for deep source library class hierarchies. Since 0.9.20 rumoca
-    // takes the thread count directly and builds the pool itself, so we
-    // just state the policy: leave 2 cores for Bevy (renderer + main),
-    // give the rest to rumoca. On ≤4-core machines cap at 2 — the original
-    // starvation problem dominates there. (rumoca's own default reserves 4
-    // cores but hands ALL cores to a ≤4-core box, which is the case we most
-    // need to protect.) No rayon on wasm.
+    // Rumoca builds its own parser pool with bounded concurrency and 16 MB
+    // stacks. Reserve capacity for Bevy; cap parsing at two threads on small
+    // machines. No Rayon pool is configured on wasm.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let n_cpus = std::thread::available_parallelism()

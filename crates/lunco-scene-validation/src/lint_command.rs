@@ -281,7 +281,7 @@ fn live_runtime_port_collision_facts(
                         lunco_port_core::ports::PortDirection::InOut => "inout",
                     };
                     H::map([
-                        ("source", H::str(owner.metadata.source.clone())),
+                        ("source", H::str(owner.metadata.source.as_ref())),
                         ("direction", H::str(direction)),
                         ("precedence", H::Int(owner.precedence as i64)),
                     ])

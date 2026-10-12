@@ -6,6 +6,7 @@ license.workspace = true
 description = "USD component-network facts and Modelica domain projection"
 
 [dependencies]
+rumoca-phase-parse.workspace = true
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }

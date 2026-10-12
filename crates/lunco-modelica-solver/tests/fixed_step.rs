@@ -1,11 +1,22 @@
 use lunco_experiments::solver::{self, RuntimeProfile, SolverParams, SolverRequest};
-use lunco_modelica_compiler::ModelicaCompiler;
 use lunco_modelica_solver::{
     fixed_step::FixedStepSession,
     simulation_session::{self, LiveStepper},
     solver_backends,
 };
 use rumoca_sim::{SimOptions, SimSolverMode};
+
+fn compile(
+    model: &str,
+    source: &str,
+    uri: &str,
+) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+    let mut session = rumoca_compile::Session::default();
+    session
+        .add_document(uri, source)
+        .map_err(|error| error.to_string())?;
+    session.compile_model_dae_strict_reachable_uncached_with_recovery(model)
+}
 
 fn ramp_model() -> &'static str {
     "model FixedRamp\n  Real x(start=0);\nequation\n  der(x) = 1;\nend FixedRamp;"
@@ -26,11 +37,26 @@ fn options() -> SimOptions {
 }
 
 #[test]
+fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
+    let compiled = compile("Coupled", "model Coupled input Real u = 2; Real x(start=0); output Real y; equation y=3*u+x; der(x)=y; end Coupled;", "coupled.mo").unwrap();
+    let mut session = FixedStepSession::new(&compiled.dae, options()).unwrap();
+    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
+    assert_eq!(session.state().unwrap().values.get("y").copied(), Some(6.0));
+    assert!(session.set_input("u", f64::NAN).is_err());
+    assert!(session.set_input("missing", 1.0).is_err());
+    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
+    session.step(0.01).unwrap();
+    let x = session.state().unwrap().values.get("x").copied().unwrap();
+    assert!((x - 6.0 * (0.01_f64.exp() - 1.0)).abs() < 1.0e-10);
+    assert!(
+        (session.state().unwrap().values.get("y").copied().unwrap() - (6.0 + x)).abs() < 1.0e-10
+    );
+}
+
+#[test]
 fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
-    let mut compiler = ModelicaCompiler::new();
-    let compiled = compiler
-        .compile_str("FixedRamp", ramp_model(), "fixed_ramp.mo")
-        .expect("fixed ramp compiles");
+    let compiled =
+        compile("FixedRamp", ramp_model(), "fixed_ramp.mo").expect("fixed ramp compiles");
     let mut session = FixedStepSession::new(&compiled.dae, options()).expect("fixed session");
 
     for _ in 0..10 {
@@ -38,17 +64,19 @@ fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
     }
 
     assert!((session.time() - 0.1).abs() < 1.0e-14);
-    let x = session.get("x").expect("read x").expect("x is visible");
+    let x = session.state().expect("read state").values["x"];
     assert!((x - 0.1).abs() < 1.0e-12, "x={x}");
     assert!(session.step(0.02).is_err(), "variable dt must be rejected");
+    for invalid_dt in [0.0, -0.01, f64::NAN, f64::INFINITY] {
+        assert!(session.step(invalid_dt).is_err());
+    }
+    assert!((session.time() - 0.1).abs() < 1.0e-14);
 }
 
 #[test]
 fn fixed_rk4_repeats_the_same_operation_sequence() {
-    let mut compiler = ModelicaCompiler::new();
-    let compiled = compiler
-        .compile_str("FixedRamp", ramp_model(), "fixed_ramp.mo")
-        .expect("fixed ramp compiles");
+    let compiled =
+        compile("FixedRamp", ramp_model(), "fixed_ramp.mo").expect("fixed ramp compiles");
     let mut left = FixedStepSession::new(&compiled.dae, options()).expect("left session");
     let mut right = FixedStepSession::new(&compiled.dae, options()).expect("right session");
 
@@ -59,24 +87,15 @@ fn fixed_rk4_repeats_the_same_operation_sequence() {
 
     assert_eq!(left.time().to_bits(), right.time().to_bits());
     assert_eq!(
-        left.get("x")
-            .expect("left x")
-            .expect("left visible")
-            .to_bits(),
-        right
-            .get("x")
-            .expect("right x")
-            .expect("right visible")
-            .to_bits()
+        left.state().expect("left state").values["x"].to_bits(),
+        right.state().expect("right state").values["x"].to_bits()
     );
 }
 
 #[test]
 fn predicted_live_resolution_constructs_the_fixed_backend() {
-    let mut compiler = ModelicaCompiler::new();
-    let compiled = compiler
-        .compile_str("FixedRamp", ramp_model(), "fixed_ramp.mo")
-        .expect("fixed ramp compiles");
+    let compiled =
+        compile("FixedRamp", ramp_model(), "fixed_ramp.mo").expect("fixed ramp compiles");
 
     solver_backends::ensure_builtin_solvers();
     let spec = solver::resolve(&SolverRequest {
@@ -108,7 +127,7 @@ fn predicted_live_resolution_constructs_the_fixed_backend() {
     assert_eq!(stepper.time().to_bits(), 0.01_f64.to_bits());
 }
 
-/// Production acceptance for the predicted/live construction boundary.
+/// Low-level deterministic integration and live backend selection.
 ///
 /// This deliberately drives two independently constructed `LiveStepper`s
 /// through the same changing input schedule and compares every published
@@ -117,9 +136,7 @@ fn predicted_live_resolution_constructs_the_fixed_backend() {
 /// accidentally selecting an adaptive backend.
 #[test]
 fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
-    let mut compiler = ModelicaCompiler::new();
-    let compiled = compiler
-        .compile_str("FixedInputRamp", input_ramp_model(), "fixed_input_ramp.mo")
+    let compiled = compile("FixedInputRamp", input_ramp_model(), "fixed_input_ramp.mo")
         .expect("fixed input ramp compiles");
 
     solver_backends::ensure_builtin_solvers();
@@ -152,6 +169,7 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
     assert!(matches!(&left, LiveStepper::Fixed(_)));
     assert!(matches!(&right, LiveStepper::Fixed(_)));
     assert_eq!(left.input_names(), &["u".to_string()]);
+    assert_eq!(left.state().unwrap().values.get("u").copied(), Some(0.0));
 
     for step in 0..512 {
         let input = ((step % 11) as f64 - 5.0) * 0.125;
@@ -159,6 +177,7 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
         right
             .set_input("u", input)
             .expect("right input is accepted");
+        assert_eq!(left.state().unwrap().values.get("u").copied(), Some(input));
         left.step(0.01).expect("left fixed step");
         right.step(0.01).expect("right fixed step");
 

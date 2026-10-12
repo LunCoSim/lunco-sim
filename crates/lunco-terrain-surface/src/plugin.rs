@@ -46,6 +46,24 @@ impl Plugin for TerrainSurfacePlugin {
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
+        app.init_resource::<crate::SurfaceOcclusionBudget>();
+        app.init_resource::<crate::solar_visibility::VisibilityMemo>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::solar_visibility::clear_solar_visibility,
+        );
+        app.add_systems(
+            FixedUpdate,
+            crate::solar_visibility::publish_sun_visibility
+                .in_set(lunco_environment::EnvironmentSet::Apply)
+                .before(lunco_cosim_core::schedule::CosimSet::Propagate),
+        );
+        app.add_systems(
+            lunco_cosim_core::schedule::InitializationSampling,
+            crate::solar_visibility::publish_sun_visibility
+                .after(lunco_environment::EnvironmentSet::Apply)
+                .run_if(crate::solar_visibility::initialization_sample_ready),
+        );
         // Expose the DEM height field to the API / scripting surface as
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.

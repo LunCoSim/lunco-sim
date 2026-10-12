@@ -208,11 +208,8 @@ model PositionPID3D
   LunCo.Sensors.FrameVectorTransform thrust_axis_transform;
 
 equation
-  // Rumoca's realtime solver reconstructs continuous equations only. Use one
-  // authored transition width for every measured predicate instead of an
-  // equation-level `if`, which would be reconstructed as zero. At the authored
-  // threshold the ramp is already fully true, preserving the inclusive gate
-  // contract; it reaches zero one band beyond the threshold.
+  // Measured predicates use one authored transition width. The ramp is fully
+  // true at its inclusive threshold and reaches zero one band beyond it.
   predicate_band = max(1.0e-9, predicate_transition_band);
 
   // Sensor -> navigation block.

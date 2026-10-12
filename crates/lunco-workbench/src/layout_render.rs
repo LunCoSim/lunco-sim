@@ -718,7 +718,7 @@ pub(super) fn render_layout(
             // (`TimeTransport.mode`, doc 19). The spine maps `Paused` onto
             // `relative_speed = 0`, freezing tick + avian (`Time<Physics>` derives
             // from Virtual) + epoch together — and now stays in sync with the
-            // avatar pause hotkey and the mission-control / celestial panels, which
+            // avatar pause hotkey and the celestial panels, which
             // write the same resource.
             {
                 let paused = world

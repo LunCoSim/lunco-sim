@@ -453,10 +453,6 @@ impl DocumentSessionCodec for UsdSessionCodec {
     fn dock_tab_kind(&self) -> Option<&'static str> {
         Some(USD_PREVIEW_VIEW_PANEL_KIND)
     }
-
-    fn discard_unmapped_dock_tab_kind(&self) -> Option<&'static str> {
-        Some(USD_PREVIEW_VIEW_PANEL_KIND)
-    }
 }
 
 #[cfg(test)]

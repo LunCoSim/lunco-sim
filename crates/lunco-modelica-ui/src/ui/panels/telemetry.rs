@@ -6,12 +6,9 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::ui::workbench_state::WorkbenchState;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 
-/// Per-input metadata snapshot — built once per render from
-/// [`lunco_modelica_index::index::ModelicaIndex`] so the grid loop doesn't reborrow
-/// the document registry per row. Description and bounds resolve via
-/// [`lunco_modelica_index::index::ModelicaIndex::find_component_by_leaf`].
+/// Per-input facts from the installed checked FMI scalar inventory.
 struct InputRow {
     name: String,
     value: f64,
@@ -146,30 +143,20 @@ impl Panel for TelemetryPanel {
                 }
             };
 
-            // Snapshot per-input metadata from the document index so the
-            // inputs grid below can render tooltips and bound-clamped
-            // sliders without reborrowing the registry per row.
             let input_rows: Vec<InputRow> = {
                 let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
-                let registry = ctx.resource::<crate::ui::document_context::ModelicaDocuments>();
-                let index_ref = registry
-                    .and_then(|r| r.host(doc_id))
-                    .map(|h| h.document().index());
+                let metadata = ctx
+                    .get::<ModelicaModel>(entity)
+                    .and_then(|model| model.variable_metadata.as_ref());
                 sorted
                     .into_iter()
                     .map(|(name, value)| {
-                        let entry = index_ref.and_then(|idx| idx.find_component_by_leaf(&name));
+                        let facts = metadata.and_then(|facts| facts.get(&name));
                         InputRow {
-                            description: entry
-                                .map(|e| e.description.clone())
-                                .filter(|s| !s.is_empty()),
-                            min: entry.and_then(|e| {
-                                e.modifications.get("min").and_then(|s| s.parse().ok())
-                            }),
-                            max: entry.and_then(|e| {
-                                e.modifications.get("max").and_then(|s| s.parse().ok())
-                            }),
+                            description: facts.and_then(|facts| facts.description.clone()),
+                            min: facts.and_then(|facts| facts.minimum),
+                            max: facts.and_then(|facts| facts.maximum),
                             name,
                             value,
                         }
@@ -443,8 +430,12 @@ impl Panel for TelemetryPanel {
             .show(ui, |ui| {
                 let (model_vars, model_inputs) = if let Some(e) = entity {
                     if let Some(m) = ctx.get::<ModelicaModel>(e) {
+                        let Some(variables) = ctx.get::<ModelicaVariables>(e) else {
+                            ui.label("Modelica variable state is missing.");
+                            return;
+                        };
                         (
-                            m.variables.keys().cloned().collect::<Vec<_>>(),
+                            variables.values.keys().cloned().collect::<Vec<_>>(),
                             m.inputs.keys().cloned().collect::<Vec<_>>(),
                         )
                     } else {
@@ -486,34 +477,18 @@ impl Panel for TelemetryPanel {
                 let mut all_names: Vec<_> = model_vars;
                 all_names.extend(model_inputs);
                 all_names.extend(exp_vars.iter().cloned());
-                let registry = ctx.resource::<crate::ui::document_context::ModelicaDocuments>();
-                let index_ref = registry
-                    .and_then(|r| r.host(doc_id))
-                    .map(|h| h.document().index());
-
                 all_names.sort();
                 all_names.dedup();
-
-                // Snapshot per-variable descriptions from the document index
-                // up front so the row loop doesn't reborrow the registry per
-                // checkbox.
-                let var_desc: std::collections::HashMap<String, String> = {
-                    if let Some(index) = index_ref {
-                        all_names
-                            .iter()
-                            .filter_map(|n| {
-                                let entry = index.find_component_by_leaf(n)?;
-                                if entry.description.is_empty() {
-                                    None
-                                } else {
-                                    Some((n.clone(), entry.description.clone()))
-                                }
-                            })
-                            .collect()
-                    } else {
-                        std::collections::HashMap::new()
-                    }
-                };
+                let metadata = entity
+                    .and_then(|entity| ctx.get::<ModelicaModel>(entity))
+                    .and_then(|model| model.variable_metadata.as_ref());
+                let var_desc: std::collections::HashMap<String, String> = all_names
+                    .iter()
+                    .filter_map(|name| {
+                        let description = metadata?.get(name)?.description.clone()?;
+                        Some((name.clone(), description))
+                    })
+                    .collect();
 
                 // Group by leading dotted segment for compactness.
                 // Filtering happens before grouping so empty groups don't
@@ -1077,7 +1052,7 @@ fn flatten_class_parameters(
             if cur.is_empty() {
                 break;
             }
-            cur = lunco_modelica_ast::ast_extract::parent_qualified(cur);
+            cur = rumoca_core::parent_scope(cur).unwrap_or("");
         }
         if let Some(w) = index.within_path.as_ref() {
             let q = format!("{w}.{type_name}");

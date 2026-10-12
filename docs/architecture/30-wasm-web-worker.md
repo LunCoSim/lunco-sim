@@ -114,6 +114,13 @@ pub enum WireResult {
 }
 ```
 
+Document parse envelopes carry the spawn generation, recovered AST, and
+located diagnostics. The bridge queues one typed syntax result through the
+Modelica engine's FIFO; the shared generation-checked drain installs the
+document and emits its class changes. Prepared source-library ASTs use the
+same drain. The page still makes the session's owned AST copy at this
+transport boundary; native parse workers make that copy off-thread.
+
 `ModelicaCommand` and `ModelicaResult` derive `Serialize`/`Deserialize`.
 `ModelicaCommand::Compile.stream` is `#[serde(skip)]` because
 `Arc<ArcSwap<SimSnapshot>>` only makes sense in one address space; on
@@ -292,14 +299,14 @@ npm install -g http-server
 If wasm-opt isn't on PATH the build still succeeds — the script logs a
 hint and skips the optimisation pass.
 
-## The wasm32 time problem (rumoca fork)
+## Browser clock ownership
 
 Browser timers require a browser-capable monotonic clock such as
 `web_time::Instant`; executing `std::time::Instant::now()` on
 `wasm32-unknown-unknown` panics even when compilation succeeds. Clock and
 source-root loading implementations remain with their maintained owners.
 Browser builds consume the pinned Rumoca workspace dependencies and the
-checked-in overrides selected by the root manifest and lockfile.
+single immutable dependency revision selected by the root manifest and lockfile.
 
 ## Building & running
 
@@ -386,28 +393,20 @@ features to drop unused renderers would help but is shared with the
 rover/viz bins), and the ~16 MB source-library fetch (non-blocking; status in the
 bottom egui bar).
 
-## Maintaining the rumoca fork
+## Rumoca dependency verification
 
-The fork lives at `LunCoSim/rumoca`; the web build pulls branch
-`wasm-asset-loader` (adds `Session::load_source_root_in_memory` on top of
-`main`). Local dev typically uses a sibling worktree at `../rumoca/` with
-`path = …` deps in `lunco-modelica-compiler/Cargo.toml` and the explicit asset
-provisioning packages (`lunco-assets-download` / `lunco-assets-processing`).
-To update:
-
-```bash
-cd ../rumoca
-git fetch origin
-git checkout wasm-asset-loader
-git rebase origin/main        # replay our diff on top of upstream
-git push --force-with-lease
-```
-
-Verify it's wired in:
+Compilation, tools, and browser simulation consume the same Rumoca 0.10.2
+revision. Prepared execution uses checked FMI components; source-root loading
+uses the maintained compile session. Temporary local dependency paths and
+branch-based dependency pins must not enter a release.
 
 ```bash
 cargo metadata --format-version 1 | jq '.packages[] | select(.name == "rumoca-sim") | .source'
 ```
+
+See [Rumoca runtime contracts](29-rumoca-runtime-contracts.md) for ownership and
+verification. Browser acceptance requires the built worker and its real command
+transport; native compile checks alone do not establish it.
 
 ## Deployment
 

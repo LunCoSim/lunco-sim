@@ -45,7 +45,6 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         app.init_resource::<lunco_scripting::scenario::ScenarioPreparationAdmissions>()
             .add_observer(commands::admit_embedded_source)
             .add_observer(commands::retire_embedded_source)
-            .add_observer(commands::release_embedded_source)
             .add_observer(commands::release_requested_source);
 
         if !app.is_plugin_added::<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin>()

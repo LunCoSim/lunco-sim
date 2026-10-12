@@ -37,8 +37,14 @@ Moon." Environmental state must be **per-entity and position-dependent**.
 
 Providers define the physics model (how does gravity vary with altitude,
 what's the atmospheric density profile, etc.). `Local*` components cache
-the computed value at each entity's current position each `FixedUpdate`.
-Consumers read `Local*` — they don't recompute from position.
+the computed value. Surface gravity responds to changed native positions,
+transforms and body links in `FixedUpdate`. Steady surface work selects linked
+consumers and existing fields that may need cleanup; unlinked spatial entities
+without a field cannot produce an update. A flat field has no position
+dependence: between global invalidations it admits only spatial entities
+missing `LocalGravity`, using an archetypal query. Gravity, frame, provider
+and link-removal invalidations still check all spatial entities. Consumers
+read `Local*` rather than recomputing from position.
 
 ## Lighting — the environmental analog of gravity
 
@@ -252,3 +258,16 @@ per-body projection cache.
 - [`22-domain-cosim.md`](22-domain-cosim.md) — where the injection happens
 - [`../../crates/lunco-celestial/`](../../crates/lunco-celestial/) — celestial bodies and their providers
 - `specs/018-astronomical-environment` — detailed environment spec
+
+Physical solar probes, sampling geometry, optical proxy selection, required
+co-simulation samples and Modelica consumers are defined in
+[the terrain illumination contract](terrain-layered-rendering.md). `SunState`
+keeps physical W/m2 separate from render lux. Fixed lighting uses the authored
+Sun direction and the one-AU physical calibration; celestial lighting applies
+the provider's inverse-square distance at its admitted celestial epoch.
+
+Before co-simulation initialization, `InitializationSampling` reuses the physical
+gravity, direction and solar sample producers without advancing the fixed clock.
+This lets required Modelica inputs be admitted while scene readiness holds that
+clock. Terrain and collider preparation must be admitted before a solar visibility
+sample is published; malformed authored sampling still produces a runtime fault.

@@ -1,18 +1,25 @@
 // Production duplication gate. Use a UI-capable Modelica host with no active
 // Twin, Application/Retain scenario lifetime, distinct root_a/root_b and the
-// API-authored entry_scene present in both roots. No library registration or
-// authored USD mutation is needed. Error telemetry is part of the verdict.
+// API-authored entry_scene present in both roots. The gate admits its saved
+// Modelica package through the Twin source-root command. Error telemetry is
+// part of the verdict.
 import "lunco://scripting/tools/modelica_editor" as editor;
 
 fn simulation_dependencies(me, params) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["ReadActiveTwinContract", "ListOpenDocuments", "GetDocumentSource", "CompileStatus"],
+      query_reads: ["ReadActiveTwinContract", "ListOpenDocuments", "GetDocumentSource", "CompileStatus", "RunStatus", "GetExperimentResult"],
       required_inputs: []}
 }
 fn record(title) {
     let listed = query("ListOpenDocuments", #{});
     if listed == () || listed.open_documents == () { return (); }
     for entry in listed.open_documents { if entry.kind == "modelica" && entry.title == title { return entry; } }
+    ()
+}
+fn document_entry(doc) {
+    let listed = query("ListOpenDocuments", #{});
+    if listed == () || listed.open_documents == () { return (); }
+    for entry in listed.open_documents { if entry.doc_id == doc { return entry; } }
     ()
 }
 fn ready(doc, class) {
@@ -52,13 +59,13 @@ fn on_start(me, params) {
         this = finish(this, ["distinct fixture roots and an API-authored entry_scene are required"]); return;
     }
     let twin = query("ReadActiveTwinContract", #{});
-    if twin == () || twin.open != false { this = finish(this, ["initial Application document scope is required"]); return; }
+    if twin == () || twin.open != false { this = finish(this, ["initial Application document scope is required: " + twin.to_string()]); return; }
     subscribe("modelica-duplicate-failed");
     subscribe("modelica-duplicate-cancelled");
     this.qualified = "DuplicateGateRoot.B.Part";
     this.quoted = "DuplicateGateRoot.B.'Quoted Part'";
-    this.source_a = "package DuplicateGateRoot package A model Part Real fromA; end Part; end A; package B model Part Real fromB; end Part; model 'Quoted Part' Real quotedValue; end 'Quoted Part'; end B; end DuplicateGateRoot;";
-    this.source_b = "package DuplicateGateRoot package A model Part Real successorA; end Part; end A; package B model Part Real successorB; end Part; model 'Quoted Part' Real quotedSuccessor; end 'Quoted Part'; end B; end DuplicateGateRoot;";
+    this.source_a = "package DuplicateGateRoot package A model Part Real fromA; end Part; end A; package B final /* α */ model Part Real fromB; end Part /*tail*/ ; model 'Quoted Part' Real quotedValue; end 'Quoted Part'; end B; end DuplicateGateRoot;";
+    this.source_b = "package DuplicateGateRoot package A model Part Real successorA; end Part; end A; package B final /* α */ model Part Real successorB; end Part /*tail*/ ; model 'Quoted Part' Real quotedSuccessor; end 'Quoted Part'; end B; end DuplicateGateRoot;";
     let app = editor::new_scratch("package DuplicateGateRoot package B model Part Real fromApplication; end Part; end B; end DuplicateGateRoot;", "Duplicate application source");
     if app.ok != true { this = finish(this, [app.to_string()]); return; }
     this.app = app.doc_id; this.docs.push(this.app); this.phase = "application";
@@ -94,9 +101,9 @@ fn on_tick(me, params) {
     }
     if this.phase == "source_a" {
         if !ready(this.a, this.qualified) || !ready(this.a, this.quoted) { return; }
-        let entry = record("Duplicate scoped source A");
+        let entry = document_entry(this.a);
         if entry == () || entry.runtime_context.kind != "local_twin" {
-            this = finish(this, ["A source did not receive its exact Twin owner"]); return;
+            this = finish(this, ["A source did not receive its exact Twin owner: " + entry.to_string()]); return;
         }
         this.expected_owner = entry.runtime_context;
         this.marker = "fromB"; this.forbidden = "fromA";
@@ -108,11 +115,15 @@ fn on_tick(me, params) {
         let entry = record(this.expected_title);
         if entry == () { return; }
         let source = query("GetDocumentSource", #{doc_id: entry.doc_id});
-        if source == () || source.ok != true || !ready(entry.doc_id, this.expected_class) { return; }
+        if source == () || source.source == () || !ready(entry.doc_id, this.expected_title) { return; }
         if entry.runtime_context != this.expected_owner || source.origin.kind != "untitled"
             || !source.source.contains(this.marker) || source.source.contains(this.forbidden)
             || source.source.contains("fromApplication") || !source.source.contains("within DuplicateGateRoot.B;") {
             this = finish(this, ["duplicate published the wrong class bytes, lexical scope or runtime owner: " + source.to_string()]); return;
+        }
+        if (this.marker == "fromB" || this.marker == "successorB")
+            && (!source.source.contains("final /* α */ model ") || !source.source.contains("/*tail*/ ;")) {
+            this = finish(this, ["duplicate lost the complete parser-owned declaration extent: " + source.source]); return;
         }
         this.docs.push(entry.doc_id);
         this.checks.push(t_true(true, "installed exact qualified duplicate " + this.expected_class + " under its admitted owner"));
@@ -166,7 +177,7 @@ fn on_tick(me, params) {
             this = finish(this, ["source-close pending task was not observed; cancellation case unexercised"]); return;
         }
         let installed = query("GetDocumentSource", #{doc_id: pending.doc_id});
-        if installed != () && installed.ok == true {
+        if installed != () && installed.source != () {
             this.docs.push(pending.doc_id);
             this = finish(this, ["source-close copy already installed; pending cancellation case unexercised"]); return;
         }
@@ -180,7 +191,7 @@ fn on_tick(me, params) {
         let error = this.errors[this.cancel_before];
         let installed = query("GetDocumentSource", #{doc_id: this.source_pending});
         if error.name != "modelica-duplicate-cancelled" || record("DuplicateGateRootCopy") != ()
-            || (installed != () && installed.ok == true) {
+            || (installed != () && installed.source != ()) {
             this = finish(this, ["source retirement did not cancel the observed task and release its reservation"]); return;
         }
         this.checks.push(t_true(true, "closing the exact source fenced observed pending task publication and released its namespace"));
@@ -221,7 +232,7 @@ fn on_tick(me, params) {
             // remains live. Retained source must still be owned by A, and an
             // uninstalled reservation cannot survive actual A retirement.
             let source = query("GetDocumentSource", #{doc_id: outgoing.doc_id});
-            if outgoing.runtime_context != this.expected_owner || source == () || source.ok != true
+            if outgoing.runtime_context != this.expected_owner || source == () || source.source == ()
                 || !source.source.contains("fromB") || source.source.contains("successorB") {
                 this = finish(this, ["queued A duplicate retained a dead reservation or was retagged into B"]); return;
             }
@@ -229,7 +240,7 @@ fn on_tick(me, params) {
             editor::close(outgoing.doc_id);
         } else if this.pending != () {
             let source = query("GetDocumentSource", #{doc_id: this.pending});
-            if source != () && source.ok == true {
+            if source != () && source.source != () {
                 this.docs.push(this.pending);
                 this = finish(this, ["outgoing duplicate installed without its admitted metadata"]); return;
             }
@@ -241,7 +252,7 @@ fn on_tick(me, params) {
     }
     if this.phase == "source_b" {
         if !ready(this.b, this.qualified) { return; }
-        let entry = record("Duplicate scoped source B");
+        let entry = document_entry(this.b);
         if entry == () || entry.runtime_context.kind != "local_twin" || entry.runtime_context == this.expected_owner {
             this = finish(this, ["B successor did not receive its distinct exact Twin owner"]); return;
         }
@@ -256,6 +267,93 @@ fn on_tick(me, params) {
                 this = finish(this, ["late outgoing duplicate publication appeared after the valid B successor"]); return;
             }
         }
+        let parent_doc = editor::new_scratch(
+            "package HeaderImports import Alias = HeaderImports.Shared; type Shared = Real; end HeaderImports;",
+            "Duplicate enclosing imports");
+        let child = editor::new_scratch(
+            "within HeaderImports; model Child /*before*/ \"left\" + /*join*/ \"α right\" output Alias answer(unit=\"K\")=3; end Child;",
+            "Duplicate commented description");
+        if parent_doc.ok != true || child.ok != true {
+            this = finish(this, ["import fixture source admission failed"]); return;
+        }
+        this.parent_doc = parent_doc.doc_id; this.child = child.doc_id;
+        this.docs.push(this.parent_doc); this.docs.push(this.child);
+        editor::save_as(this.parent_doc, this.root_b + "/HeaderImports/package.mo");
+        editor::save_as(this.child, this.root_b + "/HeaderImports/Child.mo");
+        this.phase = "saved_imports"; return;
+    }
+    if this.phase == "saved_imports" {
+        let parent_doc = document_entry(this.parent_doc);
+        let child = document_entry(this.child);
+        if parent_doc == () || child == () || parent_doc.origin.kind != "file" || child.origin.kind != "file"
+            || parent_doc.dirty != false || child.dirty != false || !ready(this.child, "Child") { return; }
+        let root_id = "twin:" + this.expected_owner.twin.to_string() + ":Duplicate%20owner%20B:modelica:HeaderImports";
+        let loaded = cmd("LoadTwinModelicaSourceRoot", #{twin_id: this.expected_owner.twin,
+            name: "Duplicate%20owner%20B", id: root_id, path: "HeaderImports"});
+        if loaded == () || loaded.ok != true {
+            this = finish(this, ["authored package root admission failed: " + loaded.to_string()]); return;
+        }
+        this.failure_before = this.errors.len();
+        this.copy_ack = cmd("OpenClass", #{qualified: "HeaderImports.Child", action: #{Duplicate: #{name: "HeaderCopy"}}});
+        this.phase = "import_copy"; return;
+    }
+    if this.phase == "import_copy" {
+        if this.errors.len() > this.failure_before {
+            this = finish(this, ["commented-description duplicate failed: " + this.errors[this.failure_before].to_string()]); return;
+        }
+        let entry = record("HeaderCopy");
+        if entry == () || !ready(entry.doc_id, "HeaderCopy") { return; }
+        this.docs.push(entry.doc_id);
+        this.import_doc = entry.doc_id;
+        let source = query("GetDocumentSource", #{doc_id: entry.doc_id});
+        if source == () || source.source == () { this = finish(this, ["commented-description duplicate has no source"]); return; }
+        this.checks.push(t_true(source.source.contains("model HeaderCopy /*before*/ \"left\" + /*join*/ \"α right\" output Alias answer")
+            && source.source.contains("within HeaderImports;") && entry.runtime_context == this.expected_owner,
+            "duplication preserves the parsed description and original lexical scope"));
+        this.run_ack = cmd("RunExperiment", #{doc_id: entry.doc_id, class: "HeaderImports.HeaderCopy", t_end: 0.02, n_intervals: 2});
+        this.phase = "import_run"; return;
+    }
+    if this.phase == "import_run" {
+        let admitted = ack(this.run_ack);
+        if admitted == () || admitted.status == "pending" { return; }
+        if admitted.ok != true || admitted.data == () || admitted.data.experiment_id == () {
+            this = finish(this, ["lexically scoped duplicate run was rejected: " + admitted.to_string()]); return;
+        }
+        let run = admitted.data.experiment_id;
+        let status = query("RunStatus", #{experiment_id: run});
+        if status == () || status.state == "queued" || status.state == "running" { return; }
+        if status.state != "done" { this = finish(this, ["lexically scoped duplicate run failed: " + status.to_string()]); return; }
+        let result = query("GetExperimentResult", #{experiment_id: run, variables: ["answer"]});
+        if result == () || result.series.answer == () || result.metadata.answer == () {
+            this = finish(this, ["lexically scoped duplicate omitted its output facts"]); return;
+        }
+        let correct = result.series.answer.len() == 3 && result.metadata.answer.unit == "K";
+        for value in result.series.answer { if value != 3.0 { correct = false; } }
+        this.checks.push(t_true(correct, "Rumoca resolves enclosing package imports through the retained within scope"));
+        let source = query("GetDocumentSource", #{doc_id: this.import_doc});
+        let changed = editor::replace_source(this.import_doc,
+            "within HeaderImports; model HeaderCopy output MissingAlias answer=3; end HeaderCopy;", source.generation);
+        if changed.ok != true { this = finish(this, ["negative source replacement failed: " + changed.to_string()]); return; }
+        this.phase = "invalid_import_parse"; return;
+    }
+    if this.phase == "invalid_import_parse" {
+        let source = query("GetDocumentSource", #{doc_id: this.import_doc});
+        if source == () || !source.source.contains("MissingAlias") || !ready(this.import_doc, "HeaderCopy") { return; }
+        this.run_ack = cmd("RunExperiment", #{doc_id: this.import_doc, class: "HeaderImports.HeaderCopy", t_end: 0.02, n_intervals: 2});
+        this.phase = "invalid_import_run"; return;
+    }
+    if this.phase == "invalid_import_run" {
+        let admitted = ack(this.run_ack);
+        if admitted == () || admitted.status == "pending" { return; }
+        if admitted.ok != true || admitted.data == () || admitted.data.experiment_id == () {
+            this = finish(this, ["negative run admission failed: " + admitted.to_string()]); return;
+        }
+        let status = query("RunStatus", #{experiment_id: admitted.data.experiment_id});
+        if status == () || status.state == "queued" || status.state == "running" { return; }
+        this.checks.push(t_true(status.state == "failed" && status.has_result == false
+            && status.error != () && status.error.contains("unresolved type reference")
+            && status.error.contains("MissingAlias"),
+            "Rumoca rejects missing package types without reusing the successful compiled result"));
         this = finish(this, this.checks);
     }
 }

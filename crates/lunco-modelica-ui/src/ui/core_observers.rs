@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_telemetry::TelemetrySettings;
 use lunco_ui::log::LogBuffer;
-use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
+use lunco_viz::{SignalRef, SignalRegistry, VisualizationRegistry};
 
 use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState};
 
@@ -128,15 +128,14 @@ impl From<&LibraryLoadState> for MirrorMemo {
 /// Drain live-sim sample batches ([`lunco_modelica_runtime::SimSampleStream`]) into the viz
 /// `SignalRegistry` — the reactive UI projection of the running simulation.
 ///
-/// This is the plot-aware half of the old `worker::handle_modelica_responses`
-/// viz block; the core handler now only appends UI-agnostic samples. Per batch:
-/// clear history on a fresh compile, push every scalar, attach doc-index
-/// descriptions on compile/param-update, and reset the default graph bindings.
+/// The worker bridge publishes immutable step outputs and detected symbols.
+/// Per batch:
+/// clear bound history on a fresh compile, push recorded scalars, and reset
+/// the default graph bindings. Core telemetry owns checked channel metadata.
 pub fn drain_sim_samples_to_viz(
     mut stream: ResMut<lunco_modelica_runtime::SimSampleStream>,
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
-    doc_registry: Option<Res<crate::ui::document_context::ModelicaDocuments>>,
     telemetry_settings: Option<Res<TelemetrySettings>>,
     owners: Query<Option<&lunco_core::GlobalEntityId>>,
 ) {
@@ -162,7 +161,7 @@ pub fn drain_sim_samples_to_viz(
             .map(|settings| settings.default_deadband)
             .unwrap_or_default();
         if batch.is_new_model {
-            for (name, _) in &batch.samples {
+            for (name, _) in batch.samples() {
                 // Core runtime telemetry owns unbound state retention.  Only
                 // clear a signal here when this UI-created plot binding is
                 // also being refreshed; otherwise a late UI observer would
@@ -172,7 +171,7 @@ pub fn drain_sim_samples_to_viz(
                 }
             }
         }
-        for (name, val) in &batch.samples {
+        for (name, val) in batch.samples() {
             if !recorded.contains(name) {
                 continue;
             }
@@ -188,38 +187,6 @@ pub fn drain_sim_samples_to_viz(
                 sigs.push_scalar(signal, batch.time, *val);
             }
         }
-        // Descriptions from the document index (canonical AST projection),
-        // looked up by leaf name — refreshed on compile-type results.
-        if batch.is_new_model || batch.is_parameter_update {
-            let index_ref = doc_registry
-                .as_deref()
-                .and_then(|r| r.host(batch.document))
-                .map(|h| h.document().index());
-            if let Some(index) = index_ref {
-                for (name, _) in &batch.samples {
-                    if !recorded.contains(name) {
-                        continue;
-                    }
-                    let Some(entry) = index.find_component_by_leaf(name) else {
-                        continue;
-                    };
-                    if entry.description.is_empty() {
-                        continue;
-                    }
-                    sigs.update_meta(
-                        SignalRef::new(batch.entity, name.clone()),
-                        SignalMeta {
-                            description: Some(entry.description.clone()),
-                            unit: None,
-                            provenance: Some("modelica".to_string()),
-                            group_path: None,
-                            exposure: Default::default(),
-                            ..Default::default()
-                        },
-                    );
-                }
-            }
-        }
         // A fresh compile starts the default plot empty (users add signals via
         // the Telemetry panel) — clear any stale bindings from a prior model.
         if batch.is_new_model {
@@ -231,10 +198,7 @@ pub fn drain_sim_samples_to_viz(
         }
     }
 
-    // Auto-binding all documented signals to the default graph on catalog change
-    // was removed: it caused every telemetry/cosim/modelica signal to appear in
-    // the graph on startup, making it unreadable. Users now add signals manually
-    // via the Telemetry panel checkboxes.
+    // Users choose plotted signals through the Telemetry panel checkboxes.
 }
 
 /// Publish lifecycle notices to Recent status; the shared history adapter feeds Console.
@@ -797,7 +761,8 @@ mod tests {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
+                outputs: vec![("solar_power".to_string(), 307.0)].into(),
+                detected_symbols: Vec::new(),
                 is_new_model: false,
                 is_parameter_update: false,
             });
@@ -826,7 +791,8 @@ mod tests {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
+                outputs: vec![("solar_power".to_string(), 307.0)].into(),
+                detected_symbols: Vec::new(),
                 is_new_model: false,
                 is_parameter_update: false,
             });

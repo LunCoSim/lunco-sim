@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 
 #[cfg(feature = "api")]
 use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
@@ -146,8 +146,8 @@ pub struct FastRunSetupEntry {
 pub struct FastRunInput {
     pub name: String,
     pub type_name: String,
-    /// User input as text. Parsed on Run; empty = leave as Modelica
-    /// `input` (default 0) without substitution.
+    /// User input as text, parsed on Run. An empty field retains a checked
+    /// declaration default; an unbound input requires an explicit value.
     pub value_text: String,
 }
 
@@ -357,11 +357,11 @@ pub(crate) fn render_fast_run_setup(
 
                     // Solver picker — mirrors the Experiments-tab Setup so
                     // both surfaces expose the same control. `None` = use
-                    // the annotation / backend default (TR-BDF2).
+                    // the annotation / backend default (BDF).
                     ui.label("Solver")
                         .on_hover_text(
                             "Integration method. Auto picks the backend default \
-                             (TR-BDF2 — event-robust, recommended for stiff \
+                             (BDF — recommended for stiff \
                              multi-day horizons).",
                         );
                     crate::ui::solver_picker::solver_picker(
@@ -676,7 +676,11 @@ pub fn on_compile_model(
     let detected_first_class = candidates.first().cloned();
     let drilled_in_class = model_tabs.drilled_class_for_doc(doc);
     let chosen_via_explicit = if let Some(class) = request.class.as_ref() {
-        match crate::sim_target::resolve_requested_class(class, &candidates) {
+        match crate::sim_target::resolve_requested_class(
+            class,
+            &candidates,
+            document.index().within_path.as_deref(),
+        ) {
             Ok(class) => Some(class),
             Err(error) => {
                 let message = format!(
@@ -1080,7 +1084,7 @@ fn dispatch_experiment(
         // > sole non-package class. Without this, package-wrapped
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
-        let (source, filename, candidates) = {
+        let (source, filename, candidates, within) = {
             let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = match registry.host(doc) {
                 Some(h) => h,
@@ -1089,6 +1093,9 @@ fn dispatch_experiment(
                 }
             };
             let document = host.document();
+            if document.syntax_is_stale() || document.ast_is_stale() {
+                return Err("experiment requires a current parsed Modelica source snapshot".into());
+            }
             // Library classes compile from the loaded session, not a temp
             // overlay — this is what makes a
             // drilled source library example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
@@ -1110,7 +1117,7 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            (source, filename, candidates)
+            (source, filename, candidates, index.within_path.clone())
         };
         // Class resolution precedence:
         //   1. explicit_class on the command — API/agent caller knows exactly.
@@ -1122,21 +1129,8 @@ fn dispatch_experiment(
         //   3. otherwise the shared default: drilled-in pin → tier-ranked
         //      simulation root (`default_simulation_class`), so this API
         //      path can't drift from the Fast Run popup / Setup form.
-        let model_name = match explicit_class {
-            // Resolve the caller-supplied name (qualified OR bare leaf) to the
-            // canonical qualified class via the shared resolver — so e.g.
-            // `RunExperiment{class:"RoverThermalSystem"}` reaches
-            // `LunarRover.RoverThermalSystem` instead of failing deep in the
-            // compiler with "model not found". Shared with `CompileModel`.
-            Some(req) => match crate::sim_target::resolve_requested_class(&req, &candidates) {
-                Ok(qualified) => qualified,
-                Err(e) => {
-                    return Err(format!(
-                        "class `{req}` {e}; candidates: [{}]",
-                        candidates.join(", ")
-                    ));
-                }
-            },
+        let requested_class = match explicit_class {
+            Some(requested) => requested,
             None => {
                 let has_drill = crate::sim_default::drilled_class_for_doc(world, doc).is_some();
                 if !has_drill && candidates.len() > 1 {
@@ -1161,38 +1155,27 @@ fn dispatch_experiment(
             }
         };
 
-        // A duplicated library class (OpenClass with Duplicate → editable copy) is emitted
-        // with a `within P;` header, so rumoca compiles it as `P.<class>`. The
-        // `within` is load-bearing — it gives the copied body the origin
-        // package's import scope (e.g. the `SI` unit alias) — so we can't strip
-        // it. Instead, qualify the run target with `P`: dispatching the bare
-        // leaf fails `model not found` in Instantiate, while `P.<class>`
-        // resolves against the merged session. No-op for top-level scratch
-        // models and for read-only library drills (empty overlay source).
-        let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-            Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
-                format!("{pkg}.{model_name}")
-            }
-            _ => model_name,
-        };
+        let model_name = crate::sim_target::resolve_requested_class(
+            &requested_class,
+            &candidates,
+            within.as_deref(),
+        )
+        .map_err(|error| {
+            format!(
+                "class `{requested_class}` {error}; candidates: [{}]",
+                candidates.join(", ")
+            )
+        })?;
 
-        // A duplicated *nested* class (e.g. `AnnotatedRocketStage.RocketStage`)
-        // is emitted as `within P; <leaf>` — dropping the sibling classes it
-        // refers to (`Tank`, `Valve`, `Engine`, …) that live alongside it in
-        // package P. For a filesystem/source library `within`, P is already on the global
-        // session path so those siblings resolve. But a *bundled* example
-        // package is on no search path: compiling the lone leaf fails
-        // `unresolved type reference: 'Tank'`. Re-attach the whole bundled
-        // package as an extra source so `compile_str_multi` merges the siblings
-        // back into the same `within` scope. source library within-packages are not
-        // bundled (return None here) and are left untouched.
-        let extras: Vec<(String, String)> =
-            match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-                Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
-                    .map(|s| vec![(format!("{pkg}.mo"), s)])
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            };
+        // Bundled package source supplies sibling declarations for editable
+        // copies that retain its lexical scope. Filesystem libraries enter
+        // through the compiler's source-root admission instead.
+        let extras: Vec<(String, String)> = match within.as_deref() {
+            Some(pkg) => crate::ui::class_source::bundled_source_for(pkg)
+                .map(|s| vec![(format!("{pkg}.mo"), s)])
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         // Host-authoritative runs: a networked Client never launches sims
         // locally. The RunExperiment / FastRun command replicates to the host,
@@ -1789,40 +1772,90 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
 }
 
 #[on_command(ResetActiveModel)]
-pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
+pub fn on_reset_active_model(
+    trigger: On<ResetActiveModel>,
+    mut commands: Commands,
+    #[cfg(feature = "api")] active_id: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
+) {
     let raw = trigger.event().doc_id;
+    #[cfg(feature = "api")]
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending_request
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        let Some(entity) = entity_for_doc(world, doc) else {
-            return;
-        };
-        // Snapshot session_id, bump it so stale Step results fence out,
-        // then ship Reset to the worker.
-        let session_id = {
-            let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
-                return;
-            };
-            model.session_id += 1;
-            model.is_stepping = true;
-            model.in_flight_step = None;
-            model.next_step_id = 1;
-            model.current_time = 0.0;
-            // Reset rewinds the world clock this model is coupled to as well
-            // (A3) — otherwise the reset model would immediately owe the
-            // catch-up path every second the pre-reset one had simulated.
-            model.target_time = 0.0;
-            model.last_step_time = 0.0;
-            model.variables.clear();
-            model.session_id
-        };
-        if let Some(channels) = world.get_resource::<lunco_modelica_runtime::ModelicaChannels>() {
-            let _ = channels
-                .tx
-                .send(lunco_modelica_runtime::ModelicaCommand::Reset { entity, session_id });
+        let result = reset_active_model(world, raw);
+        if let Err(message) = &result {
+            bevy::log::warn!("ResetActiveModel rejected: {message}");
         }
+        #[cfg(feature = "api")]
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result.map(|()| Ack::new(OpId::new())),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
     });
+}
+
+fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(), String> {
+    let doc = resolve_doc_or_active(world, raw).ok_or("No Modelica document selected")?;
+    let entity = entity_for_doc(world, doc).ok_or("The document has no runtime participant")?;
+    let model = world
+        .get::<ModelicaModel>(entity)
+        .ok_or("The document has no live Modelica model")?;
+    let session_id = model
+        .session_id
+        .checked_add(1)
+        .ok_or("Modelica session identity exhausted")?;
+    let initial_inputs = model
+        .inputs
+        .iter()
+        .map(|(name, value)| (name.to_owned(), *value))
+        .collect();
+    let channels = world
+        .get_resource::<lunco_modelica_runtime::ModelicaChannels>()
+        .ok_or("Modelica worker transport is unavailable")?
+        .tx
+        .clone();
+    let Some(mut variables) = world.get_mut::<ModelicaVariables>(entity) else {
+        let message = format!("participant {entity:?} has no required variable state");
+        if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+            faults.raise(
+                "modelica-variables-missing",
+                Some(entity),
+                "ModelicaVariables",
+                message.clone(),
+            );
+        }
+        return Err(message);
+    };
+    variables.values.clear();
+    drop(variables);
+    let mut model = world
+        .get_mut::<ModelicaModel>(entity)
+        .expect("validated live participant");
+    model.session_id = session_id;
+    model.is_stepping = true;
+    model.in_flight_step = None;
+    model.next_step_id = 1;
+    model.current_time = 0.0;
+    // Reset rewinds the clock this model is coupled to; it must not owe
+    // catch-up work from the pre-reset communication session.
+    model.target_time = 0.0;
+    model.last_step_time = 0.0;
+    drop(model);
+    channels
+        .send(lunco_modelica_runtime::ModelicaCommand::Reset {
+            entity,
+            session_id,
+            initial_inputs,
+        })
+        .map_err(|error| format!("Modelica reset dispatch failed: {error}"))
 }
 
 // ─── Compile command plugin ────────────────────────────────────────────────
@@ -1843,6 +1876,8 @@ impl Plugin for CompileCommandsPlugin {
         register_all_commands(app);
         #[cfg(feature = "api")]
         app.register_deferred_command::<RunExperiment>();
+        #[cfg(feature = "api")]
+        app.register_deferred_command::<ResetActiveModel>();
     }
 }
 

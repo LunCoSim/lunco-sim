@@ -151,6 +151,9 @@ negative-infinity solve sentinel into per-frame celestial work. Hosts without
 scene lifecycle state retain standalone solve behavior. The Time menu and
 optional sky-clock HUD expose the same rate and seek controls;
 `SetTimeTransport` still controls the separate 0.1×–64× physical transport.
+Both UI surfaces share one seek draft scoped to the installed
+`SceneTimeState.transition_id`. A replacement seeds the draft from its own
+celestial epoch; neither surface accepts a seek while scene time is pending.
 
 Every direction input selects a source by wiring a target id to an
 EnvironmentProbe output triplet. Finite targets use their composed position;

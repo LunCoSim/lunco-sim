@@ -37,6 +37,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input::{
     ButtonState,
+    gestures::PinchGesture,
     keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
     mouse::{MouseButton, MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
     touch::TouchPhase,
@@ -408,6 +409,9 @@ pub enum WindowInputEvent {
     },
     /// Emit a native mouse-wheel event in line units.
     Scroll { x: f32, y: f32 },
+    /// Native trackpad pinch delta: positive magnifies, negative shrinks.
+    /// The UI converts this logarithmic delta to a scale factor with exp().
+    Pinch { delta: f32 },
 }
 
 /// Press/release state used by [`WindowInputEvent`].
@@ -510,6 +514,11 @@ fn validate_window_input(
             finite_position(*delta_x, *delta_y)?;
         }
         WindowInputEvent::Scroll { x, y } => finite_scroll(*x, *y)?,
+        WindowInputEvent::Pinch { delta } => {
+            if !delta.is_finite() || !delta.exp().is_finite() || delta.exp() <= 0.0 {
+                return Err("pinch delta must produce a finite positive zoom factor".into());
+            }
+        }
     }
     Ok(())
 }
@@ -561,6 +570,7 @@ fn emit_pending_window_input(
     mut mouse_button_input: MessageWriter<MouseButtonInput>,
     mut mouse_wheel: MessageWriter<MouseWheel>,
     mut mouse_motion: MessageWriter<MouseMotion>,
+    mut pinch_gesture: MessageWriter<PinchGesture>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -628,6 +638,11 @@ fn emit_pending_window_input(
                 };
                 window_events.write(WindowEvent::MouseMotion(motion));
                 mouse_motion.write(motion);
+            }
+            WindowInputEvent::Pinch { delta } => {
+                let pinch = PinchGesture(*delta);
+                window_events.write(WindowEvent::PinchGesture(pinch));
+                pinch_gesture.write(pinch);
             }
             WindowInputEvent::Scroll { x, y } => {
                 let input = MouseWheel {
@@ -2454,6 +2469,7 @@ mod tests {
         buttons: Vec<MouseButtonInput>,
         scroll: Vec<MouseWheel>,
         motion: Vec<MouseMotion>,
+        pinch: Vec<PinchGesture>,
     }
 
     fn collect_window_input(
@@ -2463,6 +2479,7 @@ mod tests {
         mut buttons: MessageReader<MouseButtonInput>,
         mut scroll: MessageReader<MouseWheel>,
         mut motion: MessageReader<MouseMotion>,
+        mut pinch: MessageReader<PinchGesture>,
         mut observed: ResMut<WindowInputObserved>,
     ) {
         observed.aggregate.extend(aggregate.read().cloned());
@@ -2471,6 +2488,7 @@ mod tests {
         observed.buttons.extend(buttons.read().cloned());
         observed.scroll.extend(scroll.read().cloned());
         observed.motion.extend(motion.read().cloned());
+        observed.pinch.extend(pinch.read().cloned());
     }
 
     #[test]
@@ -2483,6 +2501,7 @@ mod tests {
             .add_message::<MouseButtonInput>()
             .add_message::<MouseWheel>()
             .add_message::<MouseMotion>()
+            .add_message::<PinchGesture>()
             .init_resource::<InputBindingsSettings>()
             .init_resource::<WindowInputObserved>()
             .add_systems(
@@ -2523,6 +2542,9 @@ mod tests {
                 delta_x: 4.0,
                 delta_y: -2.0,
             }));
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::Pinch { delta: 0.2 }));
 
         app.update();
 
@@ -2534,7 +2556,9 @@ mod tests {
         assert_eq!(observed.cursors.len(), 1);
         assert_eq!(observed.cursors[0].position, Vec2::new(12.0, 34.0));
         assert_eq!(observed.scroll.len(), 1);
-        assert_eq!(observed.aggregate.len(), 5);
+        assert_eq!(observed.aggregate.len(), 6);
+        assert_eq!(observed.pinch.len(), 1);
+        assert_eq!(observed.pinch[0].0, 0.2);
         assert_eq!(observed.motion.len(), 1);
         assert_eq!(observed.motion[0].delta, Vec2::new(4.0, -2.0));
         assert_eq!(
@@ -2555,6 +2579,10 @@ mod tests {
         ));
         assert!(matches!(observed.aggregate[3], WindowEvent::MouseWheel(_)));
         assert!(matches!(observed.aggregate[4], WindowEvent::MouseMotion(_)));
+        assert!(matches!(
+            observed.aggregate[5],
+            WindowEvent::PinchGesture(_)
+        ));
     }
 
     #[test]

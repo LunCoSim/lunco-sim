@@ -131,25 +131,11 @@ fn build_registry() -> VisualRegistry {
         let Some(d) = data.downcast_ref::<ConnectionEdgeData>() else {
             return OrthogonalEdgeVisual::default();
         };
-        let leaf = d
-            .connector_type
-            .rsplit('.')
-            .next()
-            .unwrap_or(&d.connector_type)
-            .to_string();
-        // PortKind from rumoca's typed classifier covers most cases,
-        // but short-form connectors (`connector RealInput = input Real`)
-        // currently land as `Acausal` because rumoca attaches the
-        // `input`/`output` keyword to the alias-target, not to the
-        // classifier's `class.causality` slot. Pattern-match the
-        // canonical Modelica signal connector names so the wire still
-        // renders as causal (thicker stroke + arrowhead at input).
-        let causal_by_name = leaf.ends_with("Input") || leaf.ends_with("Output");
         let is_causal = matches!(
             d.kind,
             lunco_modelica_index::visual_diagram::PortKind::Input
                 | lunco_modelica_index::visual_diagram::PortKind::Output,
-        ) || causal_by_name;
+        );
         // Materialise all flow-variable lookup keys once per projection —
         // avoids per-frame formatting and supports connectors with more than
         // one `flow` member (for example a fluid port carrying mass, energy,
@@ -176,7 +162,7 @@ fn build_registry() -> VisualRegistry {
             source_path: d.source_path.clone(),
             target_path: d.target_path.clone(),
             flow_vars: d.flow_vars.clone(),
-            connector_leaf: leaf,
+            connector_leaf: rumoca_core::top_level_last_segment(&d.connector_type).to_owned(),
             flow_lookup_keys,
             smooth_bezier: d.smooth_bezier,
             thickness_scale: d.thickness_scale,

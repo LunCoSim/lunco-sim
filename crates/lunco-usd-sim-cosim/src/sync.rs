@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot};
@@ -18,19 +18,18 @@ use std::collections::HashMap;
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
 ///
-/// A durable worker error wins. Compilation also is not readiness: its result
-/// contains an initial algebraic snapshot, but no live inputs have reached the
-/// solver yet. A model becomes `Running` only after its first successful solver
-/// advance, so load readiness cannot release physics onto zero-valued,
-/// compile-time ports.
-/// One place keeps bind-time insertion and per-tick sync consistent.
+/// A successful checked compile has initialized the solver with admitted
+/// inputs and committed its t=0 observation. Idle is ready for its first tick;
+/// a pending source or solver remains Compiling, and errors are durable.
 pub(crate) fn modelica_status(model: &ModelicaModel) -> SimStatus {
     if let Some(error) = &model.last_error {
         SimStatus::Error(error.clone())
-    } else if !model.is_compiled || model.current_time <= 0.0 {
+    } else if !model.is_compiled {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
+    } else if model.current_time == 0.0 {
+        SimStatus::Idle
     } else {
         SimStatus::Running
     }
@@ -71,33 +70,48 @@ fn upsert_ports<'a>(
 /// outputs remain available to every physics step.
 pub fn sync_modelica_outputs(
     mut q: Query<
-        (&ModelicaModel, &mut SimComponent),
+        (
+            Ref<ModelicaModel>,
+            Ref<ModelicaVariables>,
+            Ref<UsdSourcedCosim>,
+            &mut SimComponent,
+        ),
         (
             With<UsdSourcedCosim>,
             Or<(
                 Changed<ModelicaModel>,
+                Changed<ModelicaVariables>,
                 Added<SimComponent>,
                 Added<UsdSourcedCosim>,
             )>,
         ),
     >,
 ) {
-    for (model, mut comp) in &mut q {
+    for (model, variables, source, mut comp) in &mut q {
+        let publish_outputs =
+            variables.is_changed() || model.is_added() || source.is_added() || comp.is_added();
         let changed = {
             let comp = comp.bypass_change_detection();
-            let mut changed = comp.outputs.upsert_samples(
-                model
-                    .variables
-                    .iter()
-                    .map(|(name, value)| (name.as_str(), value)),
-            );
+            let mut changed = if publish_outputs {
+                let _span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
+                comp.outputs.upsert_samples(
+                    variables
+                        .values
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value)),
+                )
+            } else {
+                false
+            };
+            let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
-                if !comp.inputs.contains_key(k) {
+                if comp.inputs.get(k).is_none() {
                     comp.inputs.insert(k.clone(), *v);
                     changed = true;
                 }
             }
-            let status = modelica_status(model);
+            drop(input_span);
+            let status = modelica_status(&model);
             if comp.status != status {
                 comp.status = status;
                 changed = true;

@@ -49,7 +49,24 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   participant reads/writes through; the cosim engine registers the built-in backends.
   `entity_port_infos` adds the same live values with owner-supplied type, unit,
   bounds, source, authority, and writability for `ReadPorts` and the native
-  Ports panel. Native joint lower `-infinity` and upper `+infinity` limits map
+  Ports panel. `PortMetadata` stores source and authority as `Cow<'static, str>`:
+  static backend labels are borrowed and dynamic labels remain owned. Live write
+  validation still derives and checks current metadata; borrowing text does not
+  cache permissions, bounds, owner identity or topology. API and lint-hook value
+  projection own their output strings, while the Ports panel borrows labels.
+  Live ownership selection retains the winning backend's optional slot from
+  that resolution call. Handle creation, write preparation and batch preflight
+  consume it within the same immutable World boundary. They do not resolve the
+  same winning name twice. This is not a persistent owner cache: precedence,
+  declarations, metadata, values, revision and slot identity remain live at each
+  admission boundary, with unchanged rejection ordering.
+  Avian named discovery derives immutable candidate slots from its authoritative
+  `AVIAN` group/port table, retaining declaration order. Resolution, named
+  declarations and metadata selection share that index and check matching
+  groups' membership live. Full inspection enumerates the table directly.
+  No entity membership, permissions, bounds or numeric samples are cached by
+  this schema index.
+  Native joint lower `-infinity` and upper `+infinity` limits map
   to absent port bounds, preserving unbounded travel. Other nonfinite bounds
   remain invalid metadata and reject writes. Map-backed `SimComponent` values
   use `ScalarPortMap`, which
@@ -73,7 +90,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   Modelica and scripted output copies use `ScalarPortMap::upsert_samples`.
   The destination retains slot hints aligned to the preceding source iteration,
   checks each live slot's layout and exact name, and resolves changed names
-  through its canonical index. Stable copies avoid name hashing and allocation;
+  through its canonical index. The checked mutable slot borrow supplies both
+  name validation and the value update without resolving the handle again.
+  Stable copies avoid name hashing and allocation;
   source reordering, same-size replacement, clear, clone and compaction cannot
   route a value to another name. Only sample/topology changes mark the component
   changed; hint maintenance does not. Modelica's reflected variable map and the
@@ -183,11 +202,22 @@ presentation consumers.
 
 Propagation keeps its accumulator, hold projection, and diagnostic staging
 buffers in the shared `PropagationCache`, so fixed simulation and rollback use
-the same retained storage. A successful target records only its compiled target
-index during the hot pass; it shares the compiled port name when updating the
-once-per-endpoint landed ledger. Live broken/pending snapshots share those
+the same retained storage. A target's first successful write in a compiled
+fabric records its index and publishes to the scene-owned landed ledger. A dense
+publication acknowledgement suppresses further success notifications until
+the fabric rebuilds. Every write and failed-write ledger check remains live.
+`SceneTeardown` clears the propagation cache together with diagnostics, holds
+and binding state, so acknowledgements cannot outlive their ledger. Live
+broken/pending snapshots share those
 compiled names as `Arc<str>` instead of cloning a `String`; warning keys and
 labels are built only on the first terminal fault, not on every failed tick.
+
+CPU trace phases separate `cosim_exchange_topology` (change admission and
+rebuild), `cosim_exchange_accumulate` (source reads and affine summation),
+`cosim_exchange_holds` (hold projection), `cosim_exchange_write` (live target
+validation and application), and `cosim_exchange_diagnostics` (ledger and
+snapshot publication). They are nested within the single propagation owner;
+their time must not be added to that owner's duration.
 
 `RollbackReplay` is an instantaneous simulation invocation driven by recorded
 input frames. Its systems must not use the live `Time<Virtual>` running guard:
@@ -584,28 +614,12 @@ The Run resource is the single source of truth for pause, reset, and rate
 changes. Toolbar, API, and scripts dispatch `TwinCommand`; they do not mutate
 per-entity pause markers or physics time directly.
 
-## Convention: Modelica `output` requirement
+## Modelica public ports
 
-Rumoca (our Modelica runtime) eliminates algebraic variables from the
-solver during DAE preparation unless they're declared as `output`. This is
-a rumoca limitation that has been worked around by convention:
-
-```modelica
-model Balloon
-  input Real height = 0;
-  input Real velocity = 0;
-  Real volume(start = 4.0);
-
-  // ALL observable derived values must be `output`
-  output Real netForce;
-  output Real buoyancy;
-  output Real drag;
-end Balloon;
-```
-
-See [`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crates/lunco-cosim/README.md)
-and [`20-domain-modelica.md`](20-domain-modelica.md) for the full story,
-including planned upstream fixes to the rumoca fork.
+External destinations and sources use Modelica `input` and `output` declarations
+and matching typed USD ports. See the
+[canonical public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
+for scoped initialization and terminal input/output rejection.
 
 ## USD-driven authoring (`lunco_usd_sim_cosim`)
 
@@ -845,3 +859,52 @@ metrics without constructing per-participant rows.
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec
+
+The `InitializationSampling` schedule in `lunco-cosim-core` reuses registered
+physical producers before participant initialization. It does not advance clocks,
+step models, propagate wires, or apply actuators. Environment and terrain producers
+publish their current samples here while the normal fixed clock is held; pending
+physical preparation remains at readiness, and invalid authored samples fault at
+the producer. The celestial link owner refreshes its authored class catalog here
+so nodes created during source projection declare their class ports before
+input admission in the same frame. Participant initialization consumes
+`lunco_cosim_core::initialization::initialization_inputs`.
+This reads the registered causal source backends in propagation order, applies
+SSP affine sums and authored hold priority, and admits only finite current samples.
+Availability belongs to the selected port backend. Native pose and control ports
+can publish while a Modelica participant on the same entity is compiling. The
+Modelica backend withholds its own outputs while compiling or failed, through
+the same session-state guard for named and resolved reads. Input values and
+port topology remain independently available. A failed producer still rejects
+initial admission with its error.
+A declared scalar port can have no sample. Its stable slot accepts the first
+published value without changing port topology; registry reads return unavailable
+until then. Both direct USD programs and generated domain networks use this
+admission before worker dispatch. The USD dispatcher retains a system-local
+`QueryState` for pending sources; Bevy refreshes its archetype cache as new
+entities arrive, so settled updates do not rebuild whole-world query metadata.
+Pending entities still use the same sampling and ordered admission boundary.
+Generated compile intents retain their pinned document owner while waiting and
+reject a retired owner before dispatch.
+The USD lifecycle publishes Modelica participant surfaces before rebuilding
+connections, then admits initial inputs after that wiring transaction commits.
+This gives initialization the complete authored connection set in the update
+that exposes a generated participant.
+When an authored source prim is present but its port surface is preparing,
+the wiring owner publishes `PendingInputConnections` on the sink. A native source
+also remains pending until its `UsdSimProcessed` projection boundary; identity or
+an earlier partial surface does not establish complete native port publication.
+That boundary invalidates wiring so child endpoint indirection is rebuilt.
+Initialization waits for those connections unless an authored hold supplies the input. Wiring
+clears the pending names when it publishes the actual edges. This preserves the
+distinction between an unconnected input and a connection awaiting projection.
+A producer preparing its first sample holds initialization at scene readiness;
+its missing sample never becomes an initial zero. USD source dispatch combines
+these samples with unconnected authored input values and passes the typed
+`ModelicaCommand::Compile.initial_inputs` to Rumoca lowering. Declaration defaults
+remain owned by the checked DAE. Reset captures current admitted inputs before
+rebuilding; source replacements and automatic initialization retain those values.
+Prepared graph identity includes exact initial-input bits.
+Checked Modelica initialization publishes its t=0 observation through this same
+schedule, allowing connected participants to initialize while the fixed clock is
+held. A compiled participant is Idle until its first simulation tick.

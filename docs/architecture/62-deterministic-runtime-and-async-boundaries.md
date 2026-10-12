@@ -62,6 +62,12 @@ The runtime uses these existing cycle families:
 | `Ui` | egui/workbench updates and authored pointer/menu tool hooks | host frame/input cadence; typed tool hooks run after picking in `PreUpdate`, before fixed simulation, while egui paints in `PostUpdate`; foreground context-menu bounds are registered as chrome in `ScenePickGate`, so a popup inside a scene viewport owns its clicks; pointer-move hooks run only for an opted-in document interaction, with samples coalesced as presentation updates |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
+Default API-launched scenarios use the persistent `WorldRoot` as their
+Application host. Script-command admission marks that host authoritative;
+the session's identity admission and entity index supply its stable identity
+before declared simulation queries consume it. Twin scenario hosts use the
+same session mechanism and retain their explicit Twin lifetime.
+
 The USD-to-telemetry bridge samples connected co-simulation event edges only
 while the virtual simulation clock advances. It runs after `SimTickSet` and the
 full `ScriptingSet`, and stamps each event from `MissionClock` at that exact
@@ -125,6 +131,14 @@ also does not register callbacks in arbitrary clocks. Work in another cycle
 belongs to that cycle's owner and uses a typed, owner-scheduled hook or a
 separate script owner with its own state and inbox.
 
+Required-input readiness is checked after `simulation_dependencies` returns.
+That hook declares exact owner keys and discovers live identities without
+reading pending owner facts. Source-selected entity access is committed with
+`track_entity_read`/`track_entity_write` during admitted initialization or
+startup before the first access. Twin SysML keys use the current mount authority
+returned by `twin_name()`.
+
+
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
 itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
 cover reselection has an explicit 30 Hz wall-clock skip boundary, and its
@@ -181,6 +195,13 @@ existing `PhysicsJointDetachRequested` component condition, so idle updates
 also skip the exclusive graph transaction and its world query while detach
 still completes before joint admission.
 
+Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
+`QueryState` for changed `SimComponent` owners. Each pass updates archetype
+membership and reads live status with the same system change ticks, collects
+transitions before structural mutation, then publishes them immediately in
+`Update` before the `PostUpdate` binding transaction. The query cache does not
+retain endpoint values or change binding revision admission.
+
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `SimulationAdmissionSet`. Lifecycle projection creates the ECS
 entities; the identity owner assigns their stable IDs; then the API registry
@@ -223,26 +244,32 @@ Terrain initial-pose support validation also waits for the active root's
 structural and USD simulation projection to settle before checking colliders;
 bounded projection order cannot admit a body while its authored support
 collider is still absent.
-The Rhai runtime acquires `ScriptSourcePreparation` when USD publishes an
-`EmbeddedScenarioPath` or `RunScenarioAsset` admits a file request, before the
-source has a document identity. Each operation uses the scripting admission
-allocator's exact key. Root and recursive imports must be loaded and published
-in main-world `Assets` before the serial attachment pass transfers admission to
-compilation. `lunco-scripting-rhai-world` validates the complete source closure
-before committing either the source registry or prepared AST registry. Native
+USD `EmbeddedScenarioPath` publication immediately reserves one actor-owned
+`ScriptPreparation` hold through `ScenarioPreparationAdmissions`. The same key
+passes through document admission, compilation and `on_start`; document-only
+cancellation cannot release a source still owned by the loader. Pending actor
+sources also block startup activation, so asset completion order cannot choose
+which actor initializes first. Replacement resets the loader's terminal state
+while retaining its actor hold; removal and despawn retire the actor's source
+admission. Independent `RunScenarioAsset` requests use allocator-owned
+`ScriptSourcePreparation` keys until their serial attachment transfers
+admission to compilation; discarding a request releases only its own key.
+
+Root and recursive imports must be loaded and published in main-world `Assets`
+before attachment. `lunco-scripting-rhai-world` validates the complete source
+closure before committing either the source or prepared AST registry. Native
 load completion alone is insufficient; pending publication retains the request
-and its hold. Invalid closures commit neither registry. Built-in preludes and
-Twin tool libraries use that same closure owner. Replacement,
-component removal, and despawn retire only the discarded operation's key.
-An authored source failure emits a structured runtime fault and retains its
-hold until source replacement or retirement; it is not retried every frame.
-All initial sources must finish before any startup actor can initialize, so
-asset completion order cannot choose the startup actor set.
-Rhai compilation, dependency planning, initialization, and `on_start` run in an
-ordered pre-tick lifecycle pass; the scenario's preparation hold remains active
-until `on_start` completes. A fresh process therefore starts `on_start` at
-`SimTick=0` and admits its first `on_tick` at `SimTick=1`, without advancing a
-physics or Modelica step during scene admission.
+and hold. Invalid closures commit neither registry. Built-in preludes and Twin
+tool libraries use that same closure owner. Load, identity or import-closure
+failure raises `scenario-source-failed` at the scripting owner and retains the
+authored input and its admission until replacement or removal. Failed sources
+are terminal for that revision rather than retried every frame.
+
+Rhai compilation, dependency planning, initialization and `on_start` run in an
+ordered pre-tick lifecycle pass; the preparation hold remains active until
+`on_start` completes. A fresh process starts `on_start` at `SimTick=0` and admits
+its first `on_tick` at `SimTick=1`, without advancing physics or Modelica during
+scene admission. UI and asset work continue while authoritative time is held.
 The preparation pass borrows canonical script documents while checking revision
 and eligibility. It copies source and asset identity only when an actual compile
 or capacity retry is admitted; unchanged actors do not copy their source per
@@ -683,7 +710,16 @@ source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
 service, and exposes aggregate queue counters. It can withdraw queued work but
 does not preempt a running task. Owners still validate and commit their typed
-results at their own boundary. Modelica document parsing, inline Rhai roots and
+results at their own boundary. `PostUpdate` starts queued native preparation;
+worker and external-permit completion refill released capacity immediately on
+the existing async-compute pool. Queue selection and slot reservation share
+one short critical section, preserving the global bound and priority service.
+Jobs are spawned after releasing that lock. The queue owns its limits;
+completion guards retain only a weak queue reference. Resource retirement stops refill and
+drops queued captures outside the lock, including captures that own permits.
+Execution can advance between host frames; simulation admission, scope, clock,
+source validation and ordered result commitment remain at the domain owner.
+Modelica document parsing, inline Rhai roots and
 source-matched import misses, Twin SysML source-set analysis, and default USD
 Twin source parsing plus persistent-source serialization use this path. USD
 source parse results are checked against the current asset text before the
@@ -719,13 +755,37 @@ compiler's effective root set and defaults from the remaining contributions.
 If the Modelica channel is temporarily unavailable, unloads remain queued ahead
 of later root installs. Application roots stay installed across Twin closure.
 Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
-and writes run on the bounded solve-preparation pool. The command owner only
-commits the ready solve model. Actor admission is bounded across submitted
-compiles, root installs, and lowerings to the solve-pool worker count plus two
+and writes run on a bounded preparation pool, isolated from the persistent
+scene and document construction/execution owners. The typed compile command
+captures its actor's `ModelicaExecutionDomain`; cached rebuilds preserve it.
+The document dispatcher uses the existing document-actor marker, while USD
+participants admit the scene domain. This partitions execution capacity without
+changing clocks, runtime source attribution or authoritative result ordering.
+Native sessions are constructed, stepped and retired on their assigned thread;
+the command owner receives typed handles and checked observations. One complete
+transaction per initialized entity can execute concurrently within a round, but
+results admit in round order with unchanged communication points and micro-steps.
+Actor admission is bounded across submitted compiles, root installs, lowerings
+and constructions to the largest pool count plus two
 staged operations. This lookahead keeps the serialized Rumoca owner preparing
 later independent programs while the pool lowers existing DAEs, while keeping
 retained compilation state bounded. Solve results still commit in submission
 order.
+
+The native execution host captures `lunco_modelica_worker::worker::ModelicaWorkerLimits`
+before launching its worker. `preparation` and scene `live_execution` each use a typed
+`WorkerThreadBudget`: at most six threads, subtracting two reported CPU threads
+before applying the cap, and retaining one worker on small hosts. The defaults
+include one `document_execution` owner, admitting up to thirteen threads. Hosts can tune
+each budget independently before installing `ModelicaExecutionPlugin`; changes
+after launch do not resize the pools. Zero capacity or unavailable host CPU
+capacity fails visibly before the pools start. Preparation cannot block a
+live mailbox through cache I/O, source parsing or lowering. Document construction
+cannot block a scene mailbox. Construction can share a thread with other sessions
+in its own domain; scene topology admission retains its existing simulation hold.
+Pool capacity does not change clocks, micro-step math
+or authoritative commit order.
+
 Parameter updates, resets, and cache-invalidating Step auto-init are
 continuations on that same FIFO. The command owner keeps servicing other
 entities while Rumoca compiles and the bounded pool lowers immutable DAE data;
@@ -1348,6 +1408,11 @@ The whole-simulation guarantee remains open because:
    bodies; render `Transform` is excluded from initial pose checks and replay
    comparisons. The gate also verifies an
    altered physics row is rejected and emits no trace or result bundle.
+   Reference t=0 state includes the checked causal samples and authored inputs
+   admitted before solver construction. Its provenance identifies the artifact,
+   input digests and paired Compute/jitter validation. A change to that admission
+   contract requires captured current-state evidence and exact paired replay;
+   reference replacement must not weaken tolerance or the negative control.
    `report_verdict` emits the status, check count, and authored failure
    messages in a typed telemetry map. The scene-test runner prints those
    details with its verdict and returns the matching process exit code, so

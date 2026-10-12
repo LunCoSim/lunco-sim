@@ -76,6 +76,20 @@ is **compiled once** and shared across runs (see
 
 ## Architecture at a glance
 
+### Source editor preferences
+
+Word wrap is enabled by default. With wrap disabled, long lines extend to the
+right inside the editor's horizontal scroll area; the first columns stay at
+the panel's left edge. Both scrollbars remain within the editor viewport.
+
+**Settings → Modelica → Text scale** changes only source text (50–300%).
+While the editor is focused or hovered, Ctrl/Cmd +/− changes text size and
+Ctrl/Cmd + 0 resets it. Ctrl/Cmd + mouse wheel and trackpad pinch over the
+editor also zoom text; ordinary wheel/two-finger scrolling still scrolls.
+Text scale, word wrap and auto indent are application-wide preferences shared
+by all Modelica tabs and persisted in the `modelica_code_editor` section of
+the application's `settings.json`, independently of models and Twins.
+
 ### Document as source of truth
 
 `ModelicaDocument` owns:
@@ -204,7 +218,7 @@ roots, Editor documents, or scene composition.
 
 ## Key Dependencies
 
-- `rumoca-session`, `rumoca-phase-parse` — Modelica compilation (LunCoSim/rumoca fork)
+- `rumoca-compile`, `rumoca-phase-parse` — Modelica compilation and parsing (Rumoca 0.10.2)
 - `lunco-workbench` — docking, persistence, panel system
 - `lunco-canvas` — interactive diagram rendering substrate
 - `lunco-viz` — shared line and multi-series trajectory rendering

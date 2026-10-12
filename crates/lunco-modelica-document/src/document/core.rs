@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
-#[cfg(not(target_arch = "wasm32"))]
-use lunco_modelica_ast::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
+#[cfg(not(target_arch = "wasm32"))]
+use rumoca_phase_parse::parse_to_syntax;
 
 use super::ops::{CHANGE_HISTORY_CAPACITY, FreshAst, ModelicaChange, ModelicaOp};
 use lunco_modelica_index::index::ModelicaIndex;
@@ -24,30 +24,23 @@ use lunco_modelica_index::index::ModelicaIndex;
 /// every parse path (file-open, native async, wasm worker) funnels through it.
 pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -> Diagnostic {
     use rumoca_phase_parse::ParseError;
-    match e {
-        ParseError::SyntaxError { message, span, .. } => {
-            // A syntax error carries a span only when the parser could pin one
-            // (`Option<Span>` since rumoca 0.9.20) — an unlocated error stays
-            // unlocated rather than being pinned to a fabricated line 1.
-            let (line, column) = match span {
-                Some(span) => {
-                    let (line, column) = byte_offset_to_line_col(source, span.start.0);
-                    (Some(line), Some(column))
-                }
-                None => (None, None),
-            };
-            Diagnostic::error(message.clone(), line, column)
+    let span = e.span();
+    let (line, column) = if span.is_dummy() {
+        (None, None)
+    } else {
+        let (line, column) = byte_offset_to_line_col(source, span.start.0);
+        (Some(line), Some(column))
+    };
+    let message = match e {
+        ParseError::SyntaxError { message, .. } => message.clone(),
+        ParseError::NoAstProduced { .. } => {
+            "parser produced no AST (empty or unrecoverable source)".into()
         }
-        // No-span variants — render a human description instead of the
-        // raw `{:?}` debug dump (part of the rumoca-diagnostics
-        // migration: "better description of errors").
-        ParseError::NoAstProduced => {
-            Diagnostic::message_only("parser produced no AST (empty or unrecoverable source)")
+        ParseError::IoError { path, message, .. } => {
+            format!("I/O error reading `{path}`: {message}")
         }
-        ParseError::IoError { path, message } => {
-            Diagnostic::message_only(format!("I/O error reading `{path}`: {message}"))
-        }
-    }
+    };
+    Diagnostic::error(message, line, column)
 }
 
 /// Convert a 0-based byte offset into a 1-based (line, column) of
@@ -474,15 +467,9 @@ impl ModelicaDocument {
     /// diff is a no-op (the source structure already matches the index), so no
     /// spurious `ClassAdded`/`Removed` is emitted.
     fn reparse_source_ast(&mut self) {
-        // There is exactly ONE way to turn live source into a SyntaxCache:
-        // `SyntaxCache::from_source`, which parses with error RECOVERY so a
-        // broken class never wipes its healthy siblings. refresh_ast_now MUST
-        // NOT parse the source any other way — the old divergence here was a
-        // strict `parse_to_ast` that returned an empty AST on any error,
-        // silently emptying the class tree (browser/index) while the async
-        // worker path (`from_source` → `install_parse_results`) kept it. Source
-        // library bundle adoption is an engine concern; this document package
-        // intentionally has one local parser path.
+        // Recovering syntax retains healthy declarations and current source
+        // diagnostics. Documents use this same local parser path for edits;
+        // source-library bundle admission belongs to the engine.
         self.syntax = Arc::new(SyntaxCache::from_source(&self.source, self.generation));
         self.rebuild_index();
         self.last_source_edit_at = None;

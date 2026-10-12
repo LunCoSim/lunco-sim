@@ -2448,6 +2448,58 @@ fn document_composition_context(
     Ok((root_id, None, None))
 }
 
+/// Translate only selected variant-owned plans into the composed property namespace.
+fn composed_planned_attribute_types(
+    planned: &HashMap<(String, String), String>,
+    view: &StageView<'_>,
+) -> Result<HashMap<(String, String), String>, String> {
+    let mut composed = planned.clone();
+    for ((owner, name), type_name) in planned {
+        let path = openusd::sdf::Path::new(owner).map_err(|error| error.to_string())?;
+        if !path.contains_prim_variant_selection() {
+            continue;
+        }
+        let mut prim = openusd::sdf::Path::abs_root();
+        let mut selected = true;
+        for component in path.components() {
+            match component {
+                openusd::sdf::PathComponent::Prim(name) => {
+                    prim = prim
+                        .append_path(
+                            openusd::sdf::Path::new(name).map_err(|error| error.to_string())?,
+                        )
+                        .map_err(|error| error.to_string())?;
+                }
+                openusd::sdf::PathComponent::Variant { set, selection } => {
+                    let selections = view
+                        .stage()
+                        .prim(prim.clone())
+                        .variant_sets()
+                        .get_all_variant_selections()
+                        .map_err(|error| error.to_string())?;
+                    selected &= selections
+                        .iter()
+                        .any(|(active_set, active)| active_set == set && active == selection);
+                }
+            }
+        }
+        if selected {
+            let key = (prim.to_string(), name.clone());
+            if composed
+                .get(&key)
+                .is_some_and(|existing| existing != type_name)
+            {
+                return Err(format!(
+                    "conflicting planned types for composed property {}.{}",
+                    key.0, key.1
+                ));
+            }
+            composed.insert(key, type_name.clone());
+        }
+    }
+    Ok(composed)
+}
+
 fn validate_attribute_types_in_view(
     world: &World,
     ops: &[UsdOp],
@@ -2455,6 +2507,7 @@ fn validate_attribute_types_in_view(
     view: &StageView<'_>,
     stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
 ) -> Result<(), String> {
+    let planned_attributes = composed_planned_attribute_types(planned_attributes, view)?;
     for op in ops {
         let (path, name, requested) = match op {
             UsdOp::SetAttribute {
@@ -2517,7 +2570,7 @@ fn validate_attribute_types_in_view(
                 ));
             }
             let Some(source_type) = source_type else {
-                if type_name == "double" && is_direction_probe_output(source_name) {
+                if type_name == "double" && is_environment_probe_output(source_name) {
                     if view.has_api_schema(&source_prim, "LunCoEnvironmentProbeAPI") {
                         continue;
                     }
@@ -2550,14 +2603,13 @@ fn attribute_type_is_replaced(ops: &[UsdOp], path: &str, name: &str) -> bool {
     })
 }
 
-/// A direction probe materializes source-id outputs from authored connection
-/// demand. The output is not a schema property, but its connector grammar and
-/// f64 value type are stable and can be validated before runtime projection.
-fn is_direction_probe_output(property_name: &str) -> bool {
-    property_name
-        .strip_prefix("outputs:")
-        .and_then(lunco_cosim_core::DirectionSourceId::from_mount_connector)
-        .is_some()
+/// Environment probes expose fixed schema outputs plus demanded source-id
+/// direction outputs without needing a local authored attribute declaration.
+fn is_environment_probe_output(name: &str) -> bool {
+    name.strip_prefix("outputs:").is_some_and(|connector| {
+        lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS.contains(&connector)
+            || lunco_cosim_core::DirectionSourceId::from_mount_connector(connector).is_some()
+    })
 }
 
 /// Check the exact dynamic endpoint against the projected registry. A provider
@@ -2678,7 +2730,7 @@ fn validate_authored_attribute_types(
                         &source_prim,
                         "LunCoEnvironmentProbeAPI",
                     )
-                    && is_direction_probe_output(source_name)
+                    && is_environment_probe_output(source_name)
                 {
                     continue;
                 }

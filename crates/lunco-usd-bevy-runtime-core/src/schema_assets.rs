@@ -2,8 +2,8 @@
 //!
 //! The schema registry owns parsing and lookup. This module owns only the Bevy
 //! lifecycle that supplies schema text from the normal USD asset pipeline,
-//! including on wasm. Each source is admitted independently so one damaged
-//! optional module does not prevent valid modules from becoming available; every
+//! including on wasm. Sources commit in requested order; terminal failures
+//! do not prevent valid later modules from becoming available. Every
 //! failed source is reported explicitly. Cross-schema linear-unit validation
 //! waits until every vendored core source has finished loading.
 
@@ -85,7 +85,7 @@ pub(crate) fn request_schema_assets(
     });
 }
 
-/// Register each schema source as soon as its text is available.
+/// Register the available prefix in requested order, independent of I/O completion.
 pub(crate) fn register_ready_schema_assets(
     pending: Option<ResMut<PendingSchemaAssets>>,
     assets: Option<Res<Assets<UsdSourceText>>>,
@@ -131,7 +131,11 @@ pub(crate) fn register_ready_schema_assets(
         {
             error!("[schema] failed to load {module} schema asset");
             failed.insert(id);
+            continue;
         }
+        // Bare-name precedence is an ordered registry write. A later source
+        // being ready does not authorize it to pass this unresolved source.
+        break;
     }
 
     if !*core_linear_units_validated {
@@ -157,4 +161,103 @@ pub(crate) fn register_ready_schema_assets(
 /// source has reached a terminal load state and core unit validation has run.
 pub(crate) fn schema_registration_pending(pending: Option<Res<PendingSchemaAssets>>) -> bool {
     pending.is_some_and(|pending| !pending.complete)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_with_sources(
+        first_source: Option<&str>,
+        later_source: &str,
+    ) -> (App, AssetId<UsdSourceText>, AssetId<UsdSourceText>) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<UsdSourceText>();
+        let (first, later) = {
+            let mut assets = app.world_mut().resource_mut::<Assets<UsdSourceText>>();
+            let first = assets.reserve_handle();
+            if let Some(source) = first_source {
+                assets
+                    .insert(first.id(), UsdSourceText(source.into()))
+                    .unwrap();
+            }
+            let later = assets.add(UsdSourceText(later_source.into()));
+            (first, later)
+        };
+        let ids = (first.id(), later.id());
+        app.insert_resource(PendingSchemaAssets {
+            entries: vec![(true, "first".into(), first), (true, "later".into(), later)],
+            core_sources: Vec::new(),
+            finished: HashSet::new(),
+            failed: HashSet::new(),
+            core_linear_units_validated: false,
+            complete: false,
+        })
+        .add_systems(
+            Update,
+            register_ready_schema_assets.run_if(schema_registration_pending),
+        );
+        (app, ids.0, ids.1)
+    }
+
+    #[test]
+    fn schema_sources_commit_in_requested_order() {
+        let first_source = "#usda 1.0\nclass \"RuntimeSchemaOrderFirst\" { double runtimeSchemaOrder:probe = 1.0 }\n";
+        let later_source = "#usda 1.0\nclass \"RuntimeSchemaOrderLater\" { double runtimeSchemaOrder:probe = 2.0 }\n";
+        let (mut app, first, later) = app_with_sources(None, later_source);
+        app.update();
+        let pending = app.world().resource::<PendingSchemaAssets>();
+        assert!(pending.finished.is_empty() && pending.failed.is_empty() && !pending.complete);
+        assert!(
+            lunco_usd_authoring::schema::SchemaRegistry::global()
+                .read()
+                .unwrap()
+                .property("runtimeSchemaOrder:probe")
+                .is_none()
+        );
+        app.world_mut()
+            .resource_mut::<Assets<UsdSourceText>>()
+            .insert(first, UsdSourceText(first_source.into()))
+            .unwrap();
+        app.update();
+        let pending = app.world().resource::<PendingSchemaAssets>();
+        assert!(
+            pending.finished.contains(&first)
+                && pending.finished.contains(&later)
+                && pending.complete
+        );
+        let registry = lunco_usd_authoring::schema::SchemaRegistry::global()
+            .read()
+            .unwrap();
+        assert_eq!(
+            registry
+                .property("runtimeSchemaOrder:probe")
+                .unwrap()
+                .declared_by,
+            "RuntimeSchemaOrderLater"
+        );
+    }
+
+    #[test]
+    fn rejected_schema_does_not_block_later_source() {
+        let later_source = "#usda 1.0\nclass \"RuntimeSchemaAfterFailure\" { double runtimeSchemaAfterFailure:probe = 2.0 }\n";
+        let (mut app, first, later) = app_with_sources(Some("not USDA"), later_source);
+        app.update();
+        let pending = app.world().resource::<PendingSchemaAssets>();
+        assert!(
+            pending.failed.contains(&first)
+                && pending.finished.contains(&later)
+                && pending.complete
+        );
+        assert_eq!(
+            lunco_usd_authoring::schema::SchemaRegistry::global()
+                .read()
+                .unwrap()
+                .property("runtimeSchemaAfterFailure:probe")
+                .unwrap()
+                .declared_by,
+            "RuntimeSchemaAfterFailure"
+        );
+    }
 }

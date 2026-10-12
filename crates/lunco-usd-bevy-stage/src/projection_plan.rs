@@ -31,6 +31,7 @@ pub struct UsdPrimProjectionPlan {
     /// conversion. `None` means the prim omitted `xformOpOrder`; callers must
     /// preserve an existing ECS spawn pose for that USD identity case.
     pub transform: Option<Transform>,
+    pub transform_matrix_d: Option<bevy::math::DMat4>,
     /// Whether the prim is an authored placeable unit.
     pub selectable: bool,
     /// The composed catalog identity, when authored.
@@ -92,7 +93,7 @@ struct UsdStageProjectionData {
     type_indices: HashMap<String, Vec<usize>>,
     /// Composed applied API schema → prim indices, built with the type index.
     api_schema_indices: HashMap<String, Vec<usize>>,
-    collections: HashMap<(String, String), Vec<String>>,
+    collections: HashMap<(String, String), Result<Vec<String>, String>>,
     prim_indices: HashMap<String, usize>,
     stage_metadata: HashMap<String, Value>,
     time_codes_per_second: f64,
@@ -117,7 +118,7 @@ pub struct UsdStageProjectionPlan {
     namespace: Option<InstanceNamespace>,
     instance_default_prim: Option<String>,
     instance_root_pose: Option<Transform>,
-    instance_root_scale: Option<bevy::math::Vec3>,
+    instance_root_scale: Option<bevy::math::DVec3>,
     instance_root_attributes: HashMap<String, (String, Value)>,
 }
 
@@ -178,6 +179,12 @@ impl UsdStageProjectionPlan {
             let active = reader.is_active(&path);
             let transform = if active {
                 crate::local_transform_at(&reader, &path, 0.0)
+                    .map_err(|error| anyhow!("{path_string}: {error}"))?
+            } else {
+                None
+            };
+            let transform_matrix_d = if active {
+                crate::local_transform_matrix_d_at(&reader, &path, 0.0)
                     .map_err(|error| anyhow!("{path_string}: {error}"))?
             } else {
                 None
@@ -255,12 +262,21 @@ impl UsdStageProjectionPlan {
                         .map(|material| (purpose, material))
                 })
                 .collect();
-            let has_component_collection = attribute_names
+            let collection_names: std::collections::BTreeSet<String> = api_schemas
                 .iter()
-                .any(|name| name.starts_with("collection:components:"));
+                .filter_map(|schema: &String| {
+                    schema.strip_prefix("CollectionAPI:").map(str::to_owned)
+                })
+                .chain(attribute_names.iter().filter_map(|name| {
+                    name.strip_prefix("collection:")
+                        .and_then(|rest| rest.split_once(':'))
+                        .map(|(instance, _)| instance.to_owned())
+                }))
+                .collect();
             let prim = UsdPrimProjectionPlan {
                 path: path_string.clone(),
                 transform,
+                transform_matrix_d,
                 selectable: reader.boolean(&path, "lunco:spawnable").unwrap_or(false),
                 catalog_entry_id: reader
                     .text(&path, "lunco:catalogId")
@@ -296,16 +312,12 @@ impl UsdStageProjectionPlan {
                 }
             }
 
-            if has_component_collection {
-                if let Ok(members) = reader.collection_members(&path, "components") {
-                    data.collections.insert(
-                        (path_string.clone(), "components".to_string()),
-                        members
-                            .into_iter()
-                            .map(|member| member.to_string())
-                            .collect(),
-                    );
-                }
+            for instance in collection_names {
+                let members = reader
+                    .collection_members(&path, &instance)
+                    .map(|members| members.into_iter().map(|p| p.to_string()).collect());
+                data.collections
+                    .insert((path_string.clone(), instance), members);
             }
         }
         for (index, prim) in data.prims.iter().enumerate() {
@@ -550,8 +562,8 @@ impl UsdStageProjectionPlan {
         if scale.iter().any(|component| !component.is_finite()) {
             anyhow::bail!("prepared instance root scale is not finite");
         }
-        let scale = bevy::math::Vec3::new(scale[0] as f32, scale[1] as f32, scale[2] as f32);
-        if !scale.is_finite() {
+        let scale = bevy::math::DVec3::from_array(scale);
+        if !scale.as_vec3().is_finite() {
             anyhow::bail!("prepared instance root scale is outside the render range");
         }
         self.instance_root_scale = Some(scale);
@@ -729,13 +741,15 @@ impl UsdRead for UsdStageProjectionPlan {
             .collections
             .get(&(source_prim.into_owned(), instance_name.to_string()))
             .map(|members| {
-                members
-                    .iter()
-                    .map(|member| self.instance_path(member))
-                    .filter_map(|member| SdfPath::new(&member).ok())
-                    .collect()
+                members.as_ref().map_err(Clone::clone).and_then(|members| {
+                    members
+                        .iter()
+                        .map(|member| self.instance_path(member))
+                        .map(|member| SdfPath::new(&member).map_err(|error| error.to_string()))
+                        .collect()
+                })
             })
-            .ok_or_else(|| format!("collection {instance_name} is not authored on {prim}"))
+            .ok_or_else(|| format!("collection {instance_name} is not authored on {prim}"))?
     }
 
     fn prim_paths(&self) -> Vec<SdfPath> {
@@ -855,6 +869,40 @@ impl UsdRead for UsdStageProjectionPlan {
         prim_plan.attributes.get(name).cloned()
     }
 
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        _time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
+        let plan = self.prim(prim).ok_or_else(|| crate::TransformReadError {
+            prim: prim.to_string(),
+        })?;
+        let mut matrix = plan.transform_matrix_d;
+        if self.is_instance_root(prim) {
+            if let Some(pose) = self.instance_root_pose {
+                let scale = matrix
+                    .map(|m| m.to_scale_rotation_translation().0)
+                    .unwrap_or(bevy::math::DVec3::ONE);
+                matrix = Some(bevy::math::DMat4::from_scale_rotation_translation(
+                    scale,
+                    pose.rotation.as_dquat(),
+                    pose.translation.as_dvec3(),
+                ));
+            }
+            if let Some(scale) = self.instance_root_scale {
+                let (_, rotation, translation) = matrix
+                    .unwrap_or(bevy::math::DMat4::IDENTITY)
+                    .to_scale_rotation_translation();
+                matrix = Some(bevy::math::DMat4::from_scale_rotation_translation(
+                    scale,
+                    rotation,
+                    translation,
+                ));
+            }
+        }
+        Ok(matrix)
+    }
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -866,7 +914,7 @@ impl UsdRead for UsdStageProjectionPlan {
         if self.is_instance_root(prim) {
             let mut transform = self.instance_root_pose.or(prim_plan.transform);
             if let Some(scale) = self.instance_root_scale {
-                transform.get_or_insert(Transform::IDENTITY).scale = scale;
+                transform.get_or_insert(Transform::IDENTITY).scale = scale.as_vec3();
             }
             return Ok(transform);
         }

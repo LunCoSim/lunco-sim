@@ -449,10 +449,7 @@ where
 
 /// Index of the `LunCoAnnotations.PlotNode(signal="…")` arg matching `signal`.
 fn plot_node_arg(source: &str, args: &[Range<usize>], signal: &str) -> Option<usize> {
-    let needle = format!(
-        "signal=\"{}\"",
-        signal.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    let needle = format!("signal=\"{}\"", rumoca_core::escape_modelica_string(signal));
     let squished = |s: &str| s.split_whitespace().collect::<String>();
     args.iter()
         .position(|r| squished(&source[r.clone()]).contains(&squished(&needle)))
@@ -559,9 +556,10 @@ fn nested_array_mut<'a>(
         parts: vec![ComponentRefPart {
             ident: super::util::synth_token(name.to_string()),
             subs: None,
+            def_id: None,
         }],
         span: Span::DUMMY,
-        def_id: None,
+        qualified_display_name: None,
     };
 
     let section_idx = class
@@ -599,7 +597,7 @@ fn nested_array_mut<'a>(
                 target: cref(key),
                 value: Arc::new(Expression::Array {
                     elements: Vec::new(),
-                    is_matrix: false,
+                    kind: rumoca_core::ArrayConstructor::Array,
                     span: Span::DUMMY,
                 }),
                 span: Span::DUMMY,
@@ -614,7 +612,7 @@ fn nested_array_mut<'a>(
     if !matches!(value, Expression::Array { .. }) {
         *value = Expression::Array {
             elements: Vec::new(),
-            is_matrix: false,
+            kind: rumoca_core::ArrayConstructor::Array,
             span: Span::DUMMY,
         };
     }

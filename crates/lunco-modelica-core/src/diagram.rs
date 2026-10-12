@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use lunco_modelica_ast::parse_to_ast;
+//! use rumoca_phase_parse::parse_to_ast;
 //! use lunco_modelica_core::diagram::ModelicaComponentBuilder;
 //!
 //! let ast = parse_to_ast(source, "model.mo").unwrap();
@@ -25,9 +25,8 @@ use lunco_modelica_ast::diagram_model::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
 use lunco_modelica_ast::scope_chain_candidates;
-use lunco_modelica_index::class_lookup::find_class_by_qualified_name;
+use lunco_modelica_ast::{Causality, ClassType, Variability};
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
-use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
 
 /// The type of diagram to generate from a Modelica model.
@@ -69,27 +68,6 @@ impl ModelicaComponentBuilder {
             diagram_type: DiagramType::BlockDiagram,
             target_class: None,
         }
-    }
-
-    /// Create a new builder from raw Modelica source code.
-    ///
-    /// Uses rumoca's error-recovering `parse_to_syntax(...).best_effort()`
-    /// so partial / semantically-invalid sources still produce a
-    /// usable AST. The editor and diagram renderer should never go
-    /// blank just because the user typed a duplicate name, a missing
-    /// semicolon, or a half-finished construct — those are
-    /// diagnostics, not "the file ceased to exist" signals, and they
-    /// should match OMEdit / Dymola's "show everything, flag the
-    /// problem" behaviour.
-    ///
-    /// Returns `None` only if rumoca couldn't even construct a
-    /// recovery tree (i.e. catastrophically broken input). In
-    /// practice `parse_to_syntax` always returns *something*, so the
-    /// `None` branch is defensive.
-    pub fn from_source(source: &str) -> Option<Self> {
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "model.mo");
-        let ast: StoredDefinition = syntax.best_effort().clone();
-        Some(Self::from_ast(std::sync::Arc::new(ast)))
     }
 
     /// Set the diagram type to generate.
@@ -409,8 +387,7 @@ impl ModelicaComponentBuilder {
 
         // Create nodes
         for (qualified_name, class_type) in &all_classes {
-            let short_name = lunco_modelica_ast::ast_extract::short_name(qualified_name);
-            let _parent = qualified_name.rsplit_once('.').map(|(p, _)| p.to_string());
+            let short_name = rumoca_core::top_level_last_segment(qualified_name);
 
             let kind = match class_type {
                 ClassType::Package | ClassType::Class => NodeKind::Subsystem,
@@ -427,7 +404,7 @@ impl ModelicaComponentBuilder {
 
         // Add containment edges
         for (qualified_name, _) in &all_classes {
-            if let Some((parent_name, _child)) = qualified_name.rsplit_once('.') {
+            if let Some((parent_name, _child)) = rumoca_core::split_last_top_level(qualified_name) {
                 if let Some(&parent_id) = name_to_id.get(parent_name) {
                     if let Some(&child_id) = name_to_id.get(qualified_name) {
                         // Find port indices (create if needed)
@@ -487,7 +464,7 @@ impl ModelicaComponentBuilder {
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        find_class_by_qualified_name(&self.ast, name)
+        self.ast.get_class_by_qualified_name(name)
     }
 }
 
@@ -634,7 +611,7 @@ pub fn collect_inherited_components_with(
         let mut found_local: Option<(&ClassDef, String)> = None;
         let mut found_library: Option<(std::sync::Arc<ClassDef>, String)> = None;
         for cand in &candidates {
-            if let Some(base) = find_class_by_qualified_name(ast, cand) {
+            if let Some(base) = ast.get_class_by_qualified_name(cand) {
                 found_local = Some((base, cand.clone()));
                 break;
             }
@@ -715,7 +692,7 @@ fn ports_for_component(
     let mut found_library: Option<std::sync::Arc<ClassDef>> = None;
     let mut hit_qpath: Option<String> = None;
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             found_local = Some(c);
             hit_qpath = Some(cand.clone());
             break;
@@ -736,7 +713,7 @@ fn ports_for_component(
     // single connector instance — expose one port named after the
     // component's own name. Empty for the projection's empty-port
     // fallback to handle (resolved to index 0).
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     if matches!(type_class.class_type, ClassType::Connector) {
         return vec![ComponentPort::output(&comp.name).with_type(&type_ref)];
     }
@@ -772,7 +749,7 @@ fn ports_for_component(
         let sub_type = sub.type_name.to_string();
         // Causality wins when present (input/output declarations are
         // unambiguously ports). Otherwise consult the type's class.
-        use rumoca_compile::parsing::Causality;
+        use lunco_modelica_ast::Causality;
         let is_port = match sub.causality {
             Causality::Input(_) | Causality::Output(_) => true,
             Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, lookup_mode),
@@ -812,7 +789,7 @@ pub fn resolve_class_by_scope_pub(
 ) -> Option<std::sync::Arc<ClassDef>> {
     let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             return Some(std::sync::Arc::new(c.clone()));
         }
         if let Some(arc) = lookup_mode.lookup(cand) {
@@ -841,13 +818,13 @@ fn is_connector_type(
     ast: &StoredDefinition,
     lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> bool {
-    use rumoca_compile::parsing::ClassType;
+    use lunco_modelica_ast::ClassType;
     if type_ref.is_empty() {
         return false;
     }
     let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
     for cand in &candidates {
-        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+        if let Some(c) = ast.get_class_by_qualified_name(cand) {
             return matches!(c.class_type, ClassType::Connector);
         }
         if let Some(arc) = lookup_mode.lookup(cand) {
@@ -1016,6 +993,12 @@ fn collect_class_names(class: &ClassDef, prefix: &str, names: &mut Vec<(String, 
 mod tests {
     use super::*;
 
+    fn source_builder(source: &str) -> ModelicaComponentBuilder {
+        let ast = rumoca_phase_parse::parse_to_ast(source, "diagram-fixture.mo")
+            .expect("valid diagram source fixture");
+        ModelicaComponentBuilder::from_ast(std::sync::Arc::new(ast))
+    }
+
     #[test]
     fn test_block_diagram_rc_circuit() {
         let source = r#"
@@ -1059,7 +1042,7 @@ equation
   p.v - n.v = V;
 end VoltageSource;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::BlockDiagram)
             .target_class("RC_Circuit")
@@ -1096,7 +1079,7 @@ equation
   m * der(v) = -k * x;
 end SpringMass;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder.build();
 
         // SpringMass has no connect() equations, so no edges
@@ -1124,7 +1107,7 @@ model Capacitor
   Pin n;
 end Capacitor;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::ConnectionDiagram)
             .target_class("RC_Circuit")
@@ -1152,7 +1135,7 @@ package MyLib
   end Circuits;
 end MyLib;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder.diagram_type(DiagramType::PackageHierarchy).build();
 
         // Should have MyLib, Components, Resistor, Circuits, RC
@@ -1161,8 +1144,8 @@ end MyLib;
 
     #[test]
     fn test_parse_connect_reference() {
+        use lunco_modelica_ast::{Span, Token as AstToken};
         use rumoca_compile::parsing::ast::ComponentRefPart;
-        use rumoca_compile::parsing::{Span, Token as AstToken};
         use std::sync::Arc;
 
         fn make_ref(parts: &[(&str, &str)]) -> rumoca_compile::parsing::ast::ComponentReference {
@@ -1176,9 +1159,10 @@ end MyLib;
                             ..Default::default()
                         },
                         subs: None,
+                        def_id: None,
                     })
                     .collect(),
-                def_id: None,
+                qualified_display_name: None,
                 span: Span::DUMMY,
             }
         }
@@ -1225,7 +1209,7 @@ block Gain
   RealOutput y;
 end Gain;
 "#;
-        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let builder = source_builder(source);
         let graph = builder
             .diagram_type(DiagramType::BlockDiagram)
             .target_class("PID")
@@ -1263,7 +1247,7 @@ package MyLib
   end C;
 end MyLib;
 "#;
-        let ast = lunco_modelica_ast::parse_to_ast(source, "test.mo").unwrap();
+        let ast = rumoca_phase_parse::parse_to_ast(source, "test.mo").unwrap();
         let names = list_class_names(&ast);
         assert!(names.contains(&"MyLib".to_string()));
         assert!(names.contains(&"MyLib.A".to_string()));

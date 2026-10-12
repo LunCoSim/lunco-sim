@@ -195,6 +195,13 @@ impl Plugin for CelestialPlugin {
             >,
         );
         app.add_systems(PreUpdate, link::refresh_link_class_catalog);
+        // Source projection can create link nodes later in the frame. Publish
+        // their declared class ports before admitting connected Modelica inputs.
+        app.init_schedule(lunco_cosim_core::schedule::InitializationSampling);
+        app.add_systems(
+            lunco_cosim_core::schedule::InitializationSampling,
+            link::refresh_link_class_catalog,
+        );
         app.add_systems(PostUpdate, link::check_link_state_structure);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through
         // Commands and adds no extra command-flush sync point. (An earlier

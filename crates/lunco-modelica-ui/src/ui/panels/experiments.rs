@@ -765,11 +765,11 @@ impl ExperimentsPanel {
             .resource::<crate::ui::document_context::ModelicaDocuments>()
             .and_then(|r| r.host(doc))
             .and_then(|h| {
-                lunco_modelica_ast::ast_extract::find_class_by_short_name(
-                    h.document().syntax().ast(),
-                    lunco_modelica_ast::ast_extract::short_name(&model_name),
-                )
-                .map(lunco_modelica_runner::detect_top_level_inputs)
+                h.document()
+                    .syntax()
+                    .ast()
+                    .get_class_by_qualified_name(&model_name)
+                    .map(lunco_modelica_runner::detect_top_level_inputs)
             })
             .unwrap_or_default();
         let prefilled_inputs: BTreeMap<
@@ -1273,30 +1273,20 @@ impl ExperimentsPanel {
         };
         let document = host.document();
 
-        // Resolve the model class via the same path the Setup section
-        // uses (drilled class → first non-package fallback) so this
-        // section stays visible even when `strict_ast()` returns None
-        // because of a recoverable parse warning.
-        let drilled = crate::ui::context::drilled_class_for_doc(ctx, doc);
-        let first_non_pkg = document
-            .index()
-            .classes
-            .values()
-            .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
-            .map(|c| c.name.clone());
-        let Some(model_name) = drilled.or(first_non_pkg) else {
+        // Use the same selected class as the experiment setup surface.
+        let Some(model_name) = crate::ui::context::default_simulation_class(ctx, doc) else {
             return;
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
         // Parameters come from the parsed AST of the resolved model class
         // (no per-frame source regex — WP-8 / CQ-205).
-        let detected = lunco_modelica_ast::ast_extract::find_class_by_short_name(
-            document.syntax().ast(),
-            lunco_modelica_ast::ast_extract::short_name(&model_name),
-        )
-        .map(lunco_modelica_runner::detect_top_level_literal_parameters)
-        .unwrap_or_default();
+        let detected = document
+            .syntax()
+            .ast()
+            .get_class_by_qualified_name(&model_name)
+            .map(lunco_modelica_runner::detect_top_level_literal_parameters)
+            .unwrap_or_default();
         if detected.is_empty() {
             return;
         }
@@ -1650,9 +1640,6 @@ fn render_experiments_plot_inner(
             .map(|st| st.color_by_run)
             .unwrap_or(false);
 
-        // Build var -> unit map from the active doc index.
-        let units: std::collections::HashMap<String, String> = active_doc_units(ctx, &picked_vars);
-
         let mut series: Vec<MultiSeriesLine> = Vec::new();
         let mut total_runs = 0usize;
         let mut visible_runs = 0usize;
@@ -1694,7 +1681,11 @@ fn render_experiments_plot_inner(
                     else {
                         continue;
                     };
-                    let unit = units.get(var).cloned();
+                    let unit = exp
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.meta.variable_metadata.get(var))
+                        .and_then(|metadata| metadata.unit.clone());
                     // Track shared-unit-across-series for the y-axis
                     // label; flip to None on first mismatch.
                     if !shared_unit_init {
@@ -2341,6 +2332,7 @@ fn load_run_into_draft(
     let class = lunco_modelica_core::sim_target::resolve_requested_class(
         &model_ref.0,
         &host.document().index().simulation_candidates(),
+        host.document().index().within_path.as_deref(),
     )
     .map_err(|error| format!("experiment {id:?} target `{}` {error}", model_ref.0))?;
     let model_ref = lunco_experiments::ModelRef(class);
@@ -2352,47 +2344,6 @@ fn load_run_into_draft(
     entry.inputs = inputs;
     entry.overrides = overrides;
     Ok((source.document, model_ref))
-}
-
-/// Build a `var_path -> unit` map for whatever the picker has
-/// selected, by querying the active document's component index.
-/// Walks `picked_vars` directly so the cost stays O(picks) instead
-/// of O(all-components-in-the-model).
-///
-/// Uses [`ModelicaIndex::find_component_by_leaf`] so dotted paths
-/// like `engine.thrust` resolve to a component declared somewhere
-/// in the model with leaf name `thrust`. First match wins on
-/// collisions across classes — same trade-off the rest of the UI
-/// already makes.
-fn active_doc_units(
-    ctx: &lunco_workbench_core::PanelCtx,
-    picked: &std::collections::BTreeSet<String>,
-) -> std::collections::HashMap<String, String> {
-    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let Some(doc) = ctx
-        .resource::<lunco_workspace::WorkspaceResource>()
-        .and_then(|ws| ws.active_document)
-    else {
-        return out;
-    };
-    let Some(registry) = ctx.resource::<crate::ui::document_context::ModelicaDocuments>() else {
-        return out;
-    };
-    let Some(host) = registry.host(doc) else {
-        return out;
-    };
-    let document = host.document();
-    let index = document.index();
-    for var in picked {
-        if let Some(entry) = index.find_component_by_leaf(var) {
-            if let Some(unit) = entry.modifications.get("unit") {
-                if !unit.is_empty() {
-                    out.insert(var.clone(), unit.clone());
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Aggregate counters returned by [`render_experiments_plot`] so the

@@ -347,8 +347,8 @@ pub fn port_metadata_to_api_value(metadata: &lunco_port_core::ports::PortMetadat
             coordinate_frame_to_api_value(metadata.frame.as_ref()),
         ),
         ("range", range),
-        ("source", ApiValue::str(metadata.source.clone())),
-        ("authority", ApiValue::str(metadata.authority.clone())),
+        ("source", ApiValue::str(metadata.source.as_ref())),
+        ("authority", ApiValue::str(metadata.authority.as_ref())),
         ("writable", ApiValue::Bool(metadata.writable)),
     ])
 }
@@ -513,8 +513,8 @@ impl ApiQueryProvider for ReadPortsProvider {
                 format!("ReadPorts: no entity for api_id {api_id}"),
             ));
         };
-        // `PortRegistry` is `Clone` (a Vec of `'static` backends), so clone it out
-        // before collecting owner metadata and live samples from `&World`.
+        // Share the registry snapshot before collecting owner metadata and
+        // live samples from `&World`.
         let Some(registry) = world
             .get_resource::<lunco_port_core::ports::PortRegistry>()
             .cloned()

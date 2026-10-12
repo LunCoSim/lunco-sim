@@ -459,7 +459,7 @@ fn on_run_scenario(
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root)?;
+    let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root, &mut commands)?;
     let twin_owner = resolve_scenario_twin_owner(workspace.as_deref(), None, None, false)?;
     let parameters_revision = q_existing
         .get(target)
@@ -535,7 +535,9 @@ fn on_run_scenario_asset(
         Some(scene)
     };
     let target = match (cmd.target, owner_twin) {
-        (Some(requested), _) => resolve_scenario_target(Some(requested), &entities, &world_root)?,
+        (Some(requested), _) => {
+            resolve_scenario_target(Some(requested), &entities, &world_root, &mut commands)?
+        }
         (None, Some(owner)) => twin_hosts
             .iter()
             .find(|(_, host)| host.0 == owner.twin)
@@ -552,7 +554,7 @@ fn on_run_scenario_asset(
                     ))
                     .id()
             }),
-        (None, None) => resolve_scenario_target(None, &entities, &world_root)?,
+        (None, None) => resolve_scenario_target(None, &entities, &world_root, &mut commands)?,
     };
     let source_preparation = admissions.acquire_source_preparation(&path, &mut progress);
     let handle = asset_server.load::<lunco_scripting_rhai_world::source_asset::RhaiSource>(path);
@@ -691,6 +693,7 @@ fn resolve_scenario_target(
     requested: Option<Entity>,
     entities: &Query<Entity>,
     world_root: &Query<Entity, With<lunco_spatial::WorldRoot>>,
+    commands: &mut Commands,
 ) -> Result<Entity, String> {
     if let Some(requested) = requested {
         if requested != Entity::PLACEHOLDER {
@@ -700,10 +703,16 @@ fn resolve_scenario_target(
             return Err(format!("scenario target {requested:?} does not exist"));
         }
     }
-    world_root
+    let target = world_root
         .iter()
         .next()
-        .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())
+        .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())?;
+    // The session owner admits runtime-instance identity before lifecycle
+    // execution, allowing this persistent Application host's declared queries.
+    commands
+        .entity(target)
+        .try_insert(lunco_core::Provenance::Authoritative);
+    Ok(target)
 }
 
 /// Register a rhai source as a `ScriptDocument` and attach a `ScriptedModel` to
@@ -1083,6 +1092,9 @@ pub fn attach_embedded_scenarios(
     asset_server: Option<Res<AssetServer>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut commands: Commands,
 ) {
     for (entity, embedded, asset_id, prim_path) in q.iter() {
@@ -1094,12 +1106,21 @@ pub fn attach_embedded_scenarios(
             {
                 Some(path) => Some(path.to_string()),
                 None => {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "scenario-source-failed",
+                            None,
+                            format!("{entity:?}"),
+                            "Cannot resolve the authored scenario's USD stage identity",
+                        );
+                    }
                     error!(
                         "[rhai] cannot resolve USD stage identity for embedded scenario {entity:?}"
                     );
                     commands
                         .entity(entity)
                         .remove::<lunco_core::EmbeddedScenarioSource>();
+                    admissions.cancel_source(entity, &mut progress);
                     continue;
                 }
             },
@@ -1113,10 +1134,19 @@ pub fn attach_embedded_scenarios(
         ) {
             Ok(owner) => owner,
             Err(error) => {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "scenario-source-failed",
+                        None,
+                        format!("{entity:?}"),
+                        &error,
+                    );
+                }
                 error!("[rhai] embedded scenario ownership rejected for {entity:?}: {error}");
                 commands
                     .entity(entity)
                     .remove::<lunco_core::EmbeddedScenarioSource>();
+                admissions.cancel_source(entity, &mut progress);
                 continue;
             }
         };
@@ -1143,7 +1173,16 @@ pub fn attach_embedded_scenarios(
                     .remove::<lunco_core::EmbeddedScenarioSource>();
             }
             Err(error) => {
-                error!("[rhai] embedded scenario attach rejected for {entity:?}: {error}")
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "scenario-source-failed",
+                        None,
+                        format!("{entity:?}"),
+                        &error,
+                    );
+                }
+                error!("[rhai] embedded scenario attach rejected for {entity:?}: {error}");
+                admissions.cancel_source(entity, &mut progress);
             }
         }
         commands.entity(entity).remove::<ScenarioAssetId>();
@@ -1191,7 +1230,6 @@ pub struct ScenarioAssetHandle(pub Handle<lunco_scripting_rhai_world::source_ass
 #[cfg(feature = "rhai")]
 #[derive(Component)]
 pub struct EmbeddedSourcePreparation {
-    key: lunco_core_runtime::SimulationProgressKey,
     failed: bool,
 }
 
@@ -1201,40 +1239,37 @@ pub struct EmbeddedSourcePreparation {
 #[cfg(feature = "rhai")]
 pub fn admit_embedded_source(
     event: On<Insert, lunco_core::EmbeddedScenarioPath>,
-    paths: Query<&lunco_core::EmbeddedScenarioPath>,
-    mut admissions: ResMut<lunco_scripting::scenario::ScenarioPreparationAdmissions>,
+    mut preparations: Query<&mut EmbeddedSourcePreparation>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) {
-    let path = paths
-        .get(event.entity)
-        .expect("inserted source path exists");
-    let key = admissions.acquire_source_preparation(&path.0, &mut progress);
-    commands
-        .entity(event.entity)
-        .insert(EmbeddedSourcePreparation { key, failed: false });
+    admissions.reserve_source(event.entity, &mut progress);
+    if let Ok(mut preparation) = preparations.get_mut(event.entity) {
+        preparation.failed = false;
+    } else {
+        commands
+            .entity(event.entity)
+            .insert(EmbeddedSourcePreparation { failed: false });
+    }
 }
 
 #[cfg(feature = "rhai")]
 pub fn retire_embedded_source(
     event: On<Remove, lunco_core::EmbeddedScenarioPath>,
+    sources: Query<(), With<lunco_core::EmbeddedScenarioSource>>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) {
+    // Successful resolution installs the source before removing its path.
+    // Keep that actor's hold for the document/compilation handoff.
+    if !sources.contains(event.entity) {
+        admissions.cancel_source(event.entity, &mut progress);
+    }
     commands
         .entity(event.entity)
         .try_remove::<EmbeddedSourcePreparation>();
-}
-
-#[cfg(feature = "rhai")]
-pub fn release_embedded_source(
-    event: On<Discard, EmbeddedSourcePreparation>,
-    preparations: Query<&EmbeddedSourcePreparation>,
-    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
-) {
-    let preparation = preparations
-        .get(event.entity)
-        .expect("discarded source preparation exists");
-    progress.release(preparation.key);
 }
 
 /// Resolve USD `info:sourceAsset` and its recursive imports through the native
@@ -1249,6 +1284,13 @@ pub fn resolve_embedded_scenario_paths(
         ),
         Without<lunco_core::EmbeddedScenarioSource>,
     >,
+    source_owners: Query<(
+        Option<&lunco_core::EmbeddedScenarioPath>,
+        Option<&lunco_core::EmbeddedScenarioSource>,
+        Option<&ScriptedModel>,
+    )>,
+    mut admissions: ResMut<ScenarioPreparationAdmissions>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     sources: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
     mut driver: ResMut<
@@ -1269,6 +1311,21 @@ pub fn resolve_embedded_scenario_paths(
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
+    admissions.retain_sources(
+        |entity| {
+            source_owners
+                .get(entity)
+                .is_ok_and(|(path, source, model)| {
+                    path.is_some()
+                        || source.is_some()
+                        || model.is_some_and(|model| {
+                            model.language == Some(ScriptLanguage::Rhai)
+                                && model.document_id.is_some()
+                        })
+                })
+        },
+        &mut progress,
+    );
     for entity in removed.read() {
         pending.remove(&entity);
     }
@@ -1276,6 +1333,7 @@ pub fn resolve_embedded_scenario_paths(
         if preparation.failed {
             continue;
         }
+        admissions.reserve_source(entity, &mut progress);
         if pending
             .get(&entity)
             .is_some_and(|(source, _)| *source != path.0)
@@ -1298,7 +1356,7 @@ pub fn resolve_embedded_scenario_paths(
             .is_failed();
         if root_failed || dependencies_failed {
             preparation.failed = true;
-            faults.raise("scenario-source-load-failed", Some(entity), "authored scenario source",
+            faults.raise("scenario-source-failed", Some(entity), "authored scenario source",
                 format!("failed to load {} and its imports (root_failed={root_failed}, dependencies_failed={dependencies_failed})", path.0));
             pending.remove(&entity);
             continue;
@@ -1341,7 +1399,7 @@ pub fn resolve_embedded_scenario_paths(
                 );
                 preparation.failed = true;
                 faults.raise(
-                    "scenario-source-identity-invalid",
+                    "scenario-source-failed",
                     Some(entity),
                     "authored scenario source",
                     format!("loaded source {} has no native asset identity", path.0),
@@ -1363,7 +1421,7 @@ pub fn resolve_embedded_scenario_paths(
                     );
                     preparation.failed = true;
                     faults.raise(
-                        "scenario-source-imports-invalid",
+                        "scenario-source-failed",
                         Some(entity),
                         "authored scenario source",
                         format!("source {} has an invalid import closure: {error}", path.0),
@@ -1949,7 +2007,6 @@ mod tests {
             .init_resource::<lunco_core::CommandResults>()
             .add_observer(super::admit_embedded_source)
             .add_observer(super::retire_embedded_source)
-            .add_observer(super::release_embedded_source)
             .add_observer(super::release_requested_source);
         let source =
             || EmbeddedScenarioPath(bevy::asset::AssetPath::from("twin://fixture/start.rhai"));
@@ -1957,13 +2014,12 @@ mod tests {
         app.world_mut().flush();
         let first_key = app
             .world()
-            .get::<super::EmbeddedSourcePreparation>(first)
+            .resource::<SimulationProgress>()
+            .blockers()
+            .next()
             .unwrap()
             .key;
-        assert_eq!(
-            first_key.owner,
-            SimulationProgressOwner::ScriptSourcePreparation
-        );
+        assert_eq!(first_key.owner, SimulationProgressOwner::ScriptPreparation);
         assert!(
             app.world()
                 .resource::<SimulationProgress>()
@@ -1974,7 +2030,9 @@ mod tests {
         app.world_mut().flush();
         let second_key = app
             .world()
-            .get::<super::EmbeddedSourcePreparation>(second)
+            .resource::<SimulationProgress>()
+            .blockers()
+            .find(|blocker| blocker.key != first_key)
             .unwrap()
             .key;
         assert_ne!(first_key, second_key);
@@ -1993,11 +2051,10 @@ mod tests {
             .world()
             .get::<super::EmbeddedSourcePreparation>(first)
             .unwrap();
-        let replacement_key = replacement.key;
+        let replacement_key = first_key;
         assert!(!replacement.failed);
-        assert_ne!(replacement_key, first_key);
+        assert_eq!(replacement_key, first_key);
         let progress = app.world().resource::<SimulationProgress>();
-        assert!(!progress.contains(first_key));
         assert!(progress.contains(replacement_key));
         assert!(progress.contains(second_key));
         assert_eq!(progress.blockers().count(), 2);

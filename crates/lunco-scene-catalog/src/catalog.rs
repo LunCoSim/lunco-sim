@@ -888,6 +888,7 @@ pub fn on_rescan_shaders(
 pub fn drain_catalog_listing(
     mut scan: ResMut<CatalogScan>,
     settings: Res<lunco_settings::DownloadSettings>,
+    roots: Res<lunco_assets_core::TwinRoots>,
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let mut current = None;
@@ -906,7 +907,7 @@ pub fn drain_catalog_listing(
                 scan.metadata_generation = listing.generation;
                 scan.batch_remaining = 0;
                 scan.staged.clear();
-                start_usd_reads(&assets, &mut scan, &settings, listing.generation);
+                start_usd_reads(&assets, &mut scan, &settings, &roots, listing.generation);
             }
             Err(error) => {
                 error!("CATALOG: Twin registry unavailable during USD scan: {error}");
@@ -954,12 +955,38 @@ pub fn take_program_listing(
 pub async fn read_asset_meta(
     asset: &AssetFile,
     settings: &lunco_settings::DownloadSettings,
+    roots: &lunco_assets_core::TwinRoots,
 ) -> SpawnMeta {
+    #[cfg(target_arch = "wasm32")]
+    let _ = roots;
     match lunco_assets_runtime::asset_read::read_asset_text(asset, settings).await {
         Ok(src) => {
             let mut meta = parse_spawn_meta(&src);
             #[cfg(not(target_arch = "wasm32"))]
             if meta.spawnable {
+                let twin_root = asset
+                    .twin
+                    .as_deref()
+                    .map(|name| {
+                        roots
+                            .root_for(name)
+                            .map_err(|error| error.to_string())
+                            .and_then(|root| {
+                                root.ok_or_else(|| {
+                                    format!("catalog source `{name}` has no live Twin mount")
+                                })
+                            })
+                    })
+                    .transpose();
+                let twin_root = match twin_root {
+                    Ok(root) => root,
+                    Err(error) => {
+                        warn!("CATALOG: {}: {error}", asset.asset_path);
+                        meta.spawnable = false;
+                        meta.read_error = Some(error);
+                        return meta;
+                    }
+                };
                 // The metadata parser answers "did this file opt into the
                 // palette?". Native loadability pre-flight answers whether the
                 // same file will survive the runtime loader. This automatic
@@ -968,6 +995,7 @@ pub async fn read_asset_meta(
                 // requests.
                 let report = lunco_scene_validation::validate::validate_asset_loadability(
                     &asset.abs_path.to_string_lossy(),
+                    twin_root.as_deref(),
                 );
                 if !report.ok {
                     warn!(
@@ -999,6 +1027,7 @@ fn start_usd_reads(
     assets: &[AssetFile],
     scan: &mut CatalogScan,
     settings: &lunco_settings::DownloadSettings,
+    roots: &lunco_assets_core::TwinRoots,
     generation: u64,
 ) -> usize {
     let mut started = 0;
@@ -1010,8 +1039,9 @@ fn start_usd_reads(
         let asset = asset.clone();
         let tx = scan.tx.clone();
         let settings = settings.clone();
+        let roots = roots.clone();
         let fut = async move {
-            let meta = read_asset_meta(&asset, &settings).await;
+            let meta = read_asset_meta(&asset, &settings, &roots).await;
             // Receiver lives in a resource for the app's lifetime; a send error
             // just means shutdown raced us.
             let _ = tx.send(Scanned {
@@ -1151,7 +1181,7 @@ pub fn scan_usd_into_catalog_blocking(
         }
     };
     for asset in assets {
-        let meta = futures_lite::future::block_on(read_asset_meta(&asset, settings));
+        let meta = futures_lite::future::block_on(read_asset_meta(&asset, settings, roots));
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;
         }
@@ -1747,6 +1777,7 @@ def Xform \"BrokenWheel\" (\n\
         let meta = futures_lite::future::block_on(read_asset_meta(
             &asset,
             &lunco_settings::DownloadSettings::default(),
+            &lunco_assets_core::TwinRoots::default(),
         ));
 
         assert!(

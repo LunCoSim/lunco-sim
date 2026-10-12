@@ -197,6 +197,13 @@ filenames containing `#`, `%`, spaces, or Unicode remain filename data. Labels
 are attached explicitly with `AssetPath::with_label`. Scene transition strings
 and canonical recipe keys describe identities and never replace the typed load
 address. Full scene restart retains the asset server's existing typed path.
+The replacement root stays in `UsdSceneAwaitingStage` until the reload publishes
+`LoadedWithDependencies`. A cached stage under the same handle cannot admit
+the new mount before its fresh source closure and native addresses are prepared.
+The active document projector defers source-reset replay during this reload.
+After the matching loaded event, it records the generation serialized into the
+restart overlay and closes its projection cursor only after ECS admission.
+Edits after that serialized generation retain their normal pending suffix.
 
 Composed default `asset` and `asset[]` values retain their contributing layer's
 canonical identifier. The vendored OpenUSD owner uses its existing strongest

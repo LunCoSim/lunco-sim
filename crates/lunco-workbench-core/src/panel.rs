@@ -325,6 +325,11 @@ pub trait InstancePanel: Send + Sync + 'static {
     fn menu_entry(&self) -> Option<InstancePanelMenuEntry> {
         None
     }
+    /// Whether session-allocated ids require a restoration mapping.
+    /// Stable instance ids retain their identity when no mapping is supplied.
+    fn requires_instance_remap(&self) -> bool {
+        false
+    }
     /// Dynamic title for one instance.
     fn title(&self, world: &World, instance: u64) -> String;
     /// Whether the tab can be closed.

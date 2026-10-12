@@ -449,7 +449,8 @@ fn drain_dataset_status(
     mut runtime: ResMut<DatasetRuntime>,
     mut commands: Commands,
 ) {
-    for detail in registry.take_pending_failures() {
+    // Failure delivery leaves dataset catalog change ticks to its producers.
+    for detail in registry.bypass_change_detection().take_pending_failures() {
         commands.trigger(dataset_failed(detail));
     }
 

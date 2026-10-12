@@ -30,8 +30,8 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_modelica_ast::ClassType;
 use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
-use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.

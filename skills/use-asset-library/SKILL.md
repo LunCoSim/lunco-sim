@@ -295,14 +295,12 @@ Three gates, each of which silently does nothing when unmet:
 And `sourceAsset` must be typed **`asset`**, never `string` — only an `asset` is
 visible to the resolver, the reference closure, and packaging.
 
-**Write it branch-free.** rumoca's solver path has no `if`/`when` in equations —
-express clamps as `der(x) = expr` with `max()`/`min()`.
-[`validate-assets`](../validate-assets/SKILL.md) enforces this as an error;
-`assets/models/LunCo/Electrical/Battery.mo` plus the reusable rover electrical
-assemblies are the worked examples. Rhai is event and mission glue only;
-production scenarios must not define `on_tick`. Authored tests may use it for
-bounded state sampling and verdicts. Keep equations in Modelica and ordinary
-progression in task/events.
+Continuous equations belong in Modelica. Rumoca 0.10 compiles conditional
+expressions and events; the selected solver validates its supported model
+contract. Client prediction selects fixed RK4 and requires continuous,
+event-free models. Smooth clamps remain useful when the authored physical law
+requires a transition band. Rhai owns events and mission glue; production
+scenarios use events, while authored tests may sample ticks for verdicts.
 
 ## Regenerate the web manifest
 
@@ -360,7 +358,6 @@ in their own layers. A tutorial only projects metadata from that stage.
 - ❌ Encoding a category in the filename — the category IS the parent folder.
 - ❌ A `LunCoProgramAPI` with no `inputs:`/`outputs:` and expecting it to run.
 - ❌ `info:sourceAsset` typed `string` — must be `asset`.
-- ❌ `if`/`when` in a `.mo` equation section — rumoca is branch-free.
 - ❌ Authoring `inputs:display_color` instead of `primvars:displayColor` — it
   works, and it hides the colour from every other USD consumer.
 - ❌ Adding a Rust struct for a specific vehicle/part/material. It is a file.

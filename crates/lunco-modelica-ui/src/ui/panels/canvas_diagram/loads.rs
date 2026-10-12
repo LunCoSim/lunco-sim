@@ -89,17 +89,12 @@ impl PreparedDuplicate {
         qualified: &str,
         source: crate::ui::class_source::ResolvedClassSource,
     ) -> Result<Self, String> {
-        let imports = match source.origin_path.as_deref() {
-            Some(path) => crate::ui::duplicate::collect_parent_imports(path)?,
-            None => Vec::new(),
-        };
         let spans = crate::ui::duplicate::extract_class_spans_inline(&source.source, qualified);
         let rewritten = crate::ui::duplicate::build_duplicate_source(
             &source.source,
             spans.as_ref(),
             &name,
             Some(qualified),
-            &imports,
         )?;
         let syntax = lunco_modelica_document::SyntaxCache::from_source(&rewritten, 0);
         if syntax.has_errors() {
@@ -566,7 +561,7 @@ pub fn drive_drill_in_loads(
             // instantiated components → Icon view; otherwise Canvas
             // (the user drilled FROM a canvas, expects a canvas).
             let has_components = doc.strict_ast().and_then(|ast| {
-                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, &qualified)
+                ast.get_class_by_qualified_name(&qualified)
                     .map(|c| !c.components.is_empty())
             });
             (path, has_components)
@@ -694,7 +689,7 @@ pub fn drill_into_class(
     // docs, AND bundled demos — through one command instead of the Welcome
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
-    let stem = lunco_modelica_ast::qualified_name_segments(qualified)
+    let stem = rumoca_core::qualified_name_segments(qualified)
         .next()
         .unwrap_or(qualified);
     if crate::models::bundled_models().is_ok_and(|models| {

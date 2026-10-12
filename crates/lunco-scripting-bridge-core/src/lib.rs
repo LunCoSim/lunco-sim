@@ -1615,32 +1615,38 @@ pub fn twin_root() -> String {
     .unwrap_or_default()
 }
 
-/// `twin_name()` — stable `twin://` authority of the ACTIVE Twin, or `""`.
+/// `twin_name()` — current `twin://` mount authority of the active Twin, or `""`.
 ///
 /// This is the URI counterpart to [`twin_root`].  Rhai policy should use this
-/// name when asking a provider to resolve Twin-owned source sets so the same
-/// script works after the project moves to another machine.
+/// name when asking a provider to resolve Twin-owned source sets. The asset
+/// registry assigns a fresh authority after reopening and disambiguates roots
+/// with equal authored names. An active Twin without a live mount is an error.
 #[cfg(feature = "workspace")]
-pub fn twin_name() -> String {
+pub fn twin_name() -> Result<String, String> {
     with_world(|world| {
-        let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
-        let id = workspace.0.active_twin?;
-        let twin = workspace.0.twin(id)?;
-        Some(
-            twin.manifest
-                .as_ref()
-                .map(|manifest| manifest.name.clone())
-                .filter(|name| !name.is_empty())
-                .or_else(|| {
-                    twin.root
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                })
-                .unwrap_or_default(),
-        )
+        let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
+            return Ok(String::new());
+        };
+        let Some(id) = workspace.active_twin else {
+            return Ok(String::new());
+        };
+        let twin = workspace
+            .twin(id)
+            .ok_or_else(|| format!("active Twin {id:?} is absent from the workspace"))?;
+        let roots = world
+            .get_resource::<lunco_assets_core::twin_source::TwinRoots>()
+            .ok_or_else(|| "active Twin has no asset registry".to_owned())?;
+        roots
+            .name_for_root(&twin.root)
+            .map_err(|error| format!("cannot resolve active Twin mount: {error}"))?
+            .ok_or_else(|| {
+                format!(
+                    "active Twin `{}` has no live asset mount",
+                    twin.root.display()
+                )
+            })
     })
-    .flatten()
-    .unwrap_or_default()
+    .unwrap_or_else(|| Err("twin_name() requires a live world".to_owned()))
 }
 
 /// `get_twin_setting("ui.camera_status")` — read a scalar setting from the

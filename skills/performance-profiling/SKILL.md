@@ -24,6 +24,15 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
   from another process is not evidence for the task scene.
+  A zero collector exit does not prove capture integrity. Compare the saved
+  file size with the collector's reported compressed size and require a
+  successful native CSV export before using its zones. A size mismatch,
+  parser failure or stalled export leaves that capture unusable. Inspect the
+  exact owned exporter process before terminating an unsuccessful read; do not
+  restart a still-running export solely because an observation timed out.
+  Check disk space while the owned app is live as well as after it exits.
+  Native capture writing can overlap runtime allocations, and the collector
+  can report success despite a truncated file.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
@@ -45,14 +54,38 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   timestamps around the native shadow passes. Shared events correspond to
   individual point/spot views; camera events include that camera's directional
   cascades. Check all four names and their event counts before attributing total
-  shadow cost. Late spans can contain only timestamp overhead. Retain native
-  dependency ordering, native-parameter admission before begin and render-context
-  buffer order when changing this adapter. Reapply PBR's system-local early/late
+  shadow cost. Late spans can contain only timestamp overhead. Use the
+  early shared child spans `lunco_light_depth/<pass_name>` when attributing
+  individual maps; native exports prefix them with `lunco_shadow_shared_early/`.
+  Do not sum child and parent times. `lunco_shadow_view_work` supplies admitted
+  viewport dimensions, optional phase emptiness and native bin/set counts.
+  This brief CPU snapshot is not pass execution time; bins are not draw counts
+  and stable counts do not prove static caster inputs. Native labels identify
+  current render allocations, not authored lights. Close each child before its
+  parent. Retain native dependency ordering, native-parameter admission before
+  begin and render-context buffer order when changing this adapter. Reapply
+  PBR's system-local early/late
   ordering rules after removing the original system; retaining its implicit
   type set alone preserves only dependencies targeting that set. Check the
   actual shadow image before admitting a capture as performance evidence.
+  `SharedShadowView` uses the native single-threaded executor for its serial
+  eight-system GPU chain or two CPU-mode shadow passes. Attribute its inclusive
+  and self costs separately; frame-level Render and camera Core3d still use
+  their existing executors. Verify native pass inventory and final buffer order
+  before comparing executor costs. This render adapter does not change solver
+  cadence or authoritative simulation ordering.
   Unsupported timestamp features or
   exhausted per-frame queries leave incomplete GPU evidence, not zero cost.
+- For intermittent long frames, export individual CPU zones and correlate them
+  with perspective/window markers. Exclude screenshot delivery, authored test
+  verdicts and perspective transitions from settled statistics. Inclusive
+  render/extraction schedules can contain a native `queue_submit` wait; report
+  the submission boundary separately from owner computation. A long submission
+  span alone does not establish its driver, GPU or scheduling cause. Retain
+  periodic GPU clocks/utilization, CPU pressure and concurrent process evidence,
+  then run the same exact uninstrumented artifact separately. Failure to reproduce
+  an earlier tail in a later run does not prove a fix. Record visible popup/UI
+  state alongside camera and graphics settings.
 
 ## Architecture checks
 
@@ -73,6 +106,18 @@ For continuous-query dispatch, compare the CCD owner's bounded
 scene and ordered inputs. Small batches execute the same kernel directly;
 larger batches join before authoritative correction. Preserve native query
 results and compare complete physics time, including CCD and joints.
+
+When attributing native GPU preprocessing, trace allocation identity rather
+than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges
+per-phase and frame-level buffer cohorts each frame; equal sizes do not mean
+consecutive bindings agree. Native view groups must be present on current
+extracted views. Compare actual buffer identities, binding offsets/ranges,
+layout descriptors, occlusion textures, work modes/counts and bin-job
+parameters, and measure admission overhead and native rebuild frequency.
+Pipeline-cache change ticks alone are unsuitable: native queue processing
+mutably accesses that resource every frame. Preserve native deferred publication
+and every GPU preprocessing/draw pass. See the current handover for the owned
+binding-lifetime captures; they establish no product speedup.
 
 For authored image preparation, trace `lunco-materials` typed
 `PreparedShaderImage` loading: native decoding and owned RGBA8 filtering precede
@@ -108,6 +153,53 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+For loading throughput, compare worker CPU duration with the complete job window
+and idle gaps while preparation is queued. `AsyncWorkAdmission` starts work in
+PostUpdate and refills released slots on completion; its global bound, priority
+service, cancellation and weak queue lifetime remain independent of frame rate.
+Verify refill without another host update and retirement with captured permits,
+then compare settled terrain readiness and replay the authoritative state.
+For physical solar visibility, attribute `publish_sun_visibility` separately
+from native physics. Distinguish terrain enclosure cache misses from actual
+height evaluations: a warm bounds cache can still repeat procedural samples
+at adjacent-cell and refinement endpoints. Ray-local sample reuse must use
+exact f64 coordinate bits and preserve traversal, interval budgets, unavailable
+data and fault behavior. Run the focused certified-occlusion mechanism checks
+and the production terrain solar visibility and invalid-admission gates; compare
+the unchanged solar-power observations and run a separate production Twin window.
+For procedural synthesis, separate noise, population generation and profile
+evaluation. Reuse input-constant preparation at the existing mathematical owner
+before adding a population cache. Preserve cell hashes, f64 operation order and
+draw independence; compare exact point bits as well as production terrain and
+simulation outputs. Keep math diagnostics separate from whole-app acceptance.
+For dataset consent, check `publish_dataset_provisioning_surface` separately
+from its Rhai policy. Diagnostic-outbox drains must not mark registry catalog
+facts changed. Bevy excludes a system's own writes from its next change check;
+trace other writers before attributing repeated work to a publication cursor.
+Preserve real registry/workspace/command edits, policy replacement and interactive-window
+transitions. Run the windowed `dataset_provisioning_surface.rhai` gate with a
+declared missing scope; confirm unrelated dismissal preserves the view and
+active dismissal clears retired properties without requesting a download.
+For the derived scene entity tree, immutable parent insertions use native
+lifecycle messages coalesced by entity at the Update gate. Compare current
+edge values with the cached ancestry; identical replacements must not rebuild.
+Separate change admission from rich candidate reads: the native changed query
+returns only entity identities; indexed candidate reads fetch label/visibility
+data for those identities. Preserve the candidate predicate and mutable metadata
+coverage. Direct mutable component edits must still invalidate the cached tree;
+insertion observers alone cannot detect them.
+Retain mutable-label and scene-boundary checks, removal handling, unnamed
+ancestor invalidation and active-Twin queue retirement. Native renderable
+additions cover marker admission; the metadata query also admits new names.
+Retain the native mutable metadata change query, including edits to unpublished
+worker members. Cover a new name on an already tracked unnamed ancestor.
+Compare indexed membership scans with native
+change filtering in the live owner before changing the scan strategy. Measure
+the complete gate and source observers separately from tree derivation and
+panel paint.
+The gate exposes `entity_tree_gate_named_changes`,
+`entity_tree_gate_removals` and `entity_tree_gate_parent_changes`; compare the
+complete gate as well as these phases, with equal instrumentation and cameras.
 For frame-contract gate costs, distinguish the full connectivity validator from
 its admission/fixed run conditions. The bridge observes native physical and
 hierarchy lifecycle events through one change-ticked resource; each consumer
@@ -116,11 +208,20 @@ despawn and active-frame switch/removal detection without waking on ordinary
 pose values. Validate a disconnected body through the public owner diagnostic
 and stopped solver ticks, then verify a replacement scene resumes physics.
 For link-sweep costs, attribute `celestial_ephemeris_position` separately from
-pair geometry and verdict hooks. The analytic provider's exact-epoch cache also
+pair geometry and verdict hooks. Use `link_collect_endpoints`,
+`link_snapshot_occlusion_inputs`, `link_evaluate_pair`,
+`link_terrain_line_of_sight` and `link_verdict_policy` to distinguish snapshot
+preparation, terrain marching and typed-policy marshalling/execution. Pair
+spans contain terrain and policy spans; do not add inclusive durations.
+The analytic provider's exact-epoch cache also
 shares native EMB/Earth VSOP operands across dependent bodies. Preserve native
 f64 values and formula order; a new epoch bit pattern invalidates final and
 intermediate samples together. Compare public `BodyPosition` results against the
 prior exact artifact at adjacent and revisited epochs before claiming a gain.
+Before increasing epoch retention, record exact body/epoch keys and cache hits.
+Distinguish first evaluations from repeated misses after eviction; extra slots
+cannot save unique sample work. Do not quantize epochs or duplicate a maintained
+analytical formula to create apparent reuse.
 For an exclusive system, check repeated `World::query` construction separately
 from iteration. Retain Bevy's native `QueryState` in the owning system when
 the query shape is stable; read current membership each pass and collect
@@ -128,6 +229,17 @@ identities before structural mutation. Preserve that system's serial schedule
 position and lifecycle ordering. A settled-frame saving also needs live
 add/remove or replacement evidence, since queries must admit newly matched
 archetypes after startup.
+For USD Modelica source dispatch, inspect pending membership before attributing
+its exclusive span to initialization. Empty calls still flush the World. The
+native component/scene-transaction run conditions skip that boundary only when
+there is no admissible source work. Verify deferred source insertion, scene
+holds and replacement, while retaining the wiring/defaults chain, prim-path
+compile order and initialization sampling. A removed idle span proves avoided
+work; it does not by itself prove loading or whole-app FPS gains.
+The co-simulation endpoint lifecycle publisher uses this native exclusive query
+parameter. Validate its same-frame ready transition and run sandbox binding
+acceptance again after scene replacement; keep immediate endpoint insertion and
+the `PostUpdate` binding boundary intact.
 The neutral scenario driver shares its native model query across preparation,
 startup, fixed and visualization passes; preserve fresh model/scope/authority
 reads and stable actor sorting when changing that owner.
@@ -136,10 +248,27 @@ calls. `SignalRegistry::record_scalar_at_rate` admits and appends through one li
 history lookup; preserve backwards-time segments, retention, archived-source
 reactivation and catalog notifications. A registry benchmark isolates that owner,
 but production retention spans and raw physics/frame tails need separate evidence.
-Modelica's channel-limit check reads the live scalar count after append and
-only hashes history identity for admission when the catalog is full. Preserve
+Modelica and physics channel-limit checks read the live scalar count after
+append and only hash history identity for admission when the catalog is full. Preserve
 existing-channel recording above a lowered limit and rejection after history
 removal; a cached producer identity alone does not prove that history exists.
+For dynamic-body admission, compare `activate_dynamic_bodies` with its native
+eligibility gate. Paused or invalid assemblies retain `ShouldBeDynamic` for
+diagnostics but must not wake admission when its query has no eligible bodies.
+Share the exact archetype filter; retain preview-ancestry checks, stable identity
+faults, promotion order and joint holds inside admission. Verify paused poses
+and warnings through `sandbox_ramp_placement.rhai`, plus exact-state replay
+against the unchanged binary. A stale tracked Modelica reference is not passing
+replay evidence; capture a separate baseline and preserve the tracked reference.
+For articulated mass facts, separate `refresh_dynamic_joint_island_masses`
+from its `dynamic_joint_island_mass_rebuild` span. The physics owner retains
+lifecycle invalidation through pauses; native change detection handles mutable
+effective masses and joint endpoints. Normal and rollback exchange read the
+same derived resource at their existing boundaries. Verify live mass edits,
+rejected negative writes and island splitting through `joint_island_mass.rhai`,
+plus exact replay against the unchanged artifact. Quiet steps must not rebuild
+islands; marker removal, body removal and paused lifecycle edits must still
+invalidate them. Preserve native sums and the full-island invalid-mass result.
 For a system that queues many compatible ECS component changes, inspect its
 `system_commands` flush separately from the system body. Collect changed values
 and use the owning crate's existing batch command path where it preserves the
@@ -172,16 +301,61 @@ reduce this preparation cost.
 For Modelica response retention, reuse existing observable-variable keys and
 transfer owned input/output buffers after transaction validation. The accepted
 step and UI stream are separate consumers, so retain one output snapshot for
-the accepted record. Preserve detected-symbol/output precedence and the UI
-stream's output-then-symbol order. Measure this response path separately from
-fixed-step output publication; fewer copies alone do not prove throughput gain.
+the accepted record, shared with the bounded UI queue as an immutable slice.
+Read the UI sequence through `SimSampleBatch::samples`, which chains outputs
+then detected symbols. Verify shared allocation identity, reset isolation,
+stale-result rejection and exact sample order at the low-level seam, plus
+`rocket_engine_observables` through production for the public accepted-step
+reader. Preserve detected-symbol/output precedence. Measure this response path
+separately from fixed-step output publication; fewer copies alone do not prove
+throughput gain.
+For loading, separate prepared-FMI lookup/lowering, live construction and ordered
+publication. `modelica_live_plan_admission` runs on the command owner;
+`modelica_live_construction_job` records queue wait and measures the native session,
+metadata and initial-observation children. `modelica_live_construction_commit`
+measures publication. Preparation and live sessions use separate captured bounded
+worker budgets. Scene and document actors have separate live-owner pools;
+each session retains its construction thread through stepping
+and retirement. Compare concurrent construction intervals and end-to-end
+readiness, not only summed worker time. A round transfers complete input buffers
+once, runs independent participants concurrently, and admits checked results in
+command order. Require exact replay, terminal observation-failure and scene
+replacement evidence before a scheduling gain claim. Keep solver clocks,
+micro-step math, metadata and generation retirement unchanged. The native
+compiler already shares its DAE and source map; additional metadata caches do
+not address dominant native construction cost.
+For mixed loading and live execution, inspect `modelica_live_step_job` queue
+wait and execution separately. Match its construction identity and thread to
+preparation/construction spans before attributing a response-latency rise to
+mailbox blocking; response latency also includes transport and main-thread
+admission. Preserve the fixed-tick backlog and barrier state alongside timings.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
-name on every copy. Preserve reordering, same-size source replacement, target
+name on every copy. Name validation and the bit-exact update share one mutable
+slot borrow; measure that copy separately from solver response admission.
+`modelica_outputs_copy_variables` isolates the variable-map traversal and port
+update; `modelica_outputs_seed_inputs` isolates omitted-input seeding. Both are
+children of fixed-step output publication, so compare their total time with
+that owner over the same settled window. Their call counts are per participant,
+not per simulation tick. The required `ModelicaVariables.values` component owns
+the full native f64 reflected snapshot; `ModelicaModel` owns clocks, inputs,
+parameters and status. Serial worker admission marks the snapshot changed only
+when value bits change. Reflection writes also participate in native detection.
+Added models, USD participant markers and destination components force initial
+publication. Run the production `modelica_variable_projection` and
+`modelica_variables_missing` gates when changing this boundary, plus exact
+state replay and lifecycle resource checks for late results and retirement.
+Preserve reordering, same-size source replacement, target
 edits, clone/clear/compaction retirement and native-bit no-op detection when
 changing that mechanism. Do not infer unchanged source topology from map length
-or cached iteration order. Keep Modelica's reflected variable map and the
-fixed-step publication boundary unchanged, and measure the actual copy owner.
+or cached iteration order. Preserve the full reflected snapshot and fixed-step
+publication boundary, and measure both copying and total owner time; moving work
+to another phase is not sufficient evidence of a throughput gain.
+For port-write metadata, preserve the live validation boundary. `PortMetadata`
+borrows static source/authority text through native `Cow` and owns dynamic text;
+check both representations and content equality, then verify public metadata
+and collision diagnostics. Borrowing labels must not bypass owner precedence,
+stale-handle rejection, writability, bounds or atomic batch admission.
 For structural publication, use the existing `PortTopologyState` owner to
 observe expensive auxiliary fingerprints by their own component change ticks.
 `observe_if_changed` computes a cold key and recomputes changed owners; sample
@@ -189,18 +363,35 @@ updates reuse the recorded key. A participant's new admission must refresh
 auxiliary facts that could have changed while it was absent. Verify metadata
 edits, same-size declaration replacement, removal and re-admission. Keep direct
 backend inspection and write validation on the live contract.
-For fixed-step port costs, backend `declare_ports` uses `PortDeclarationQuery`
+For fixed-step port costs, the exchange exposes `cosim_exchange_topology`,
+`cosim_exchange_accumulate`,
+`cosim_exchange_holds`, `cosim_exchange_write` and `cosim_exchange_diagnostics`
+inside the single propagation owner. Attribute these phases before changing
+lookup or validation; do not add their nested duration to the parent.
+Backend `declare_ports` uses `PortDeclarationQuery`
 for both full inspection and exact-name, direction-constrained discovery.
 Map-backed owners query the requested name directly; named queries retain only
 the first matching direction without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
-`write_resolved` uses canonical input-write
-preparation once, compares the live owner with its locator, then commits within
-the same exclusive World boundary without a single-element batch allocation.
+Avian resolution, named declarations and metadata selection share immutable
+name candidates derived from `AVIAN`. Preserve candidate order and live group
+membership on removal, re-admission and mobility edits; full inspection retains
+table order. The index does not authorize a write or cache world membership.
+`write_resolved` shares its locator's `Arc<str>` with canonical input-write
+preparation, compares the live owner with its locator, then commits within
+the same exclusive World boundary without a name or single-element batch allocation.
+Registry clones share the immutable backend table; registration detaches it
+without changing existing snapshots or their precedence. Verify snapshot
+isolation and shared name identity when changing those allocation boundaries.
 Preserve live precedence, metadata, topology revision, slot, value checks, and
 rejection ordering. Separately prepared batches still revalidate every write
 before committing any of them.
+Ownership selection retains the winning backend's optional slot for the same
+World borrow. Handle creation, preparation and batch preflight consume that
+result without repeating the winner's resolver. Verify one resolver call per
+admission, declared owners without a slot, readable input-side sources, stale
+layouts and metadata edits; do not substitute a persistent ownership cache.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.
@@ -283,6 +474,17 @@ search for phase-space curves where X can reverse.
 For the entity tree, derive parent and grid facts through indexed lookups along
 named candidates' deduplicated ancestor closure instead of copying every scene
 entity's `ChildOf` and `Grid` membership into the snapshot.
+Before optimizing a panel snapshot's change query, trace its registered reader
+and confirm that reader in the live application. Remove unconsumed producers,
+public exports and dependencies together. Shared widget plugins initialize
+shared infrastructure; active domain panels own their view models.
+
+For fixed-step one-shot mechanisms, measure preparation after admission has
+settled. Raycast mass folding checks the existing eligible-carrier query before
+building additions; its shared ordering validator still checks every source.
+Use the mass mechanism's private math checks and production parity facts, and
+keep an already-failing drive verdict separate from a mass-preparation gain.
+
 Keep topology invalidation separate from the query-heavy snapshot producer:
 mark the revision dirty when scene facts change, then gate snapshot work until
 no prior worker is active. This lets a revision change reject an in-flight tree
@@ -298,8 +500,16 @@ Rhai verdicts. Separate initialization from settled frame costs and worker time 
 capture/commit time. Use `workbench_panel_render` child zones inside `render_workbench` to
 attribute painting and visible-row index costs independently of descriptor work.
 
-For startup asset graphs, separate asynchronous source reads from discovery,
-composition, and UI/physics admission. Read all known dependencies in each
+For startup asset graphs, separate asynchronous source reads, discovery,
+composition, and UI/physics admission. Include the file-backed scenario source
+wait before its document exists.
+The scripting owner retains one preparation key from asset admission through
+compilation and `on_start`; a faster solver must not admit ticks during that
+asset wait. Use the unchanged `modelica_observation_failure` production scene
+to verify its checked initial observation and `expect_runtime_fault` registration
+at global tick zero. Loader cancellation must release only its own pending key;
+document handoff must preserve it until activation.
+Read all known dependencies in each
 breadth-first frontier through bounded batches, then merge results in stable
 authored order; this avoids serializing independent branches behind one parent
 at a time. Preserve the source-change reload graph when using child load
@@ -319,13 +529,24 @@ load, normalize, and persist it on workers, merge typed results on the app
 schedule, serialize writes, and finish the final write during shutdown.
 
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
-`lower_for_live`, and ordered result commit. When equivalent requests share the
+`prepare_fmi_component`, and ordered result commit. When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a
 second worker; preserve one result position per participant in the existing
 stable commit queue. Keep the combined compiler/root/lowering admission bounded
-to the solve-pool worker count plus two staged operations, so the serialized
+to the largest pool count plus two staged operations, so the serialized
 Rumoca owner can compile later programs while solve workers are busy without
 building an unbounded DAE backlog.
+Measure preparation queue waits separately from lowering. The native host
+captures the typed `ModelicaWorkerLimits` resource before worker launch;
+its `preparation` and `live_execution` budgets each cap workers at six after
+reserving two reported CPU threads; small hosts retain one worker per pool.
+Its `document_execution` budget defaults to one owner; the default total can
+reach thirteen threads. Confirm all three pool counts in the
+production log and distinguish preparation from construction blocking. Preserve ordered result commits
+when changing that budget. Compare fresh isolated cold caches and the same
+exact scene/solver/override identities; retain sampled UI/API latency and peak
+process memory alongside readiness. A cache-hit replacement does not measure
+cold lowering, and concurrent Cargo or simulator work limits timing claims.
 
 For wrench-allocation cost, inspect the generated actuator count and sweep
 count separately from retained algebraic variables. The maintained allocator
@@ -378,6 +599,17 @@ the Rust preparation bundle; the application selector receives hook
 identities only. Compare the activation children before moving additional
 registry work across the lifecycle boundary; preserve authored install order
 and visible failure reporting.
+
+For startup schema registration, attribute the gated
+`register_ready_schema_assets` system over the whole capture: it sleeps after
+all sources settle. The schema owner parses each source once before the registry
+write lock and folds borrowed specs in standard path order. The asset owner
+admits the requested module prefix, waiting at unresolved sources and reporting
+terminal failures before proceeding. Preserve project-over-core precedence,
+schema-qualified declarations and core unit validation. Check the inline parser
+and pending-asset seams for invalid sources and reversed I/O readiness, then
+replay the unchanged production determinism reference. A registrar span gain
+does not establish clean loading or FPS improvement.
 
 Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
@@ -510,6 +742,14 @@ native light extraction is incremental, so focusing a parked preview must
 restore its shadows without requiring a light edit. This saves only maps
 provably irrelevant to all outputs; Bevy's main-world per-light caster
 visibility pass is still a separate cost to measure.
+
+Before adding shadow-content reuse, measure per-map native caster poses and
+light projections across consecutive frames; stable counts are insufficient.
+Reuse admission must also cover mesh/material/pipeline contents, skin/morph
+inputs, backing texture identity and atlas-layer assignment. Spot maps share
+the native directional atlas, so light or cascade changes can shift a layer
+without changing the light entity. A pose digest is diagnostic candidacy only.
+
 Count shadow roots independently of active cameras. Invisible extracted local
 lights retire their native `PointAndSpotLightViewEntities` through the renderer
 adapter; Bevy's cleanup observer removes the associated views. A deferred
@@ -517,11 +757,13 @@ retirement must retain a light already re-extracted in that boundary. Verify
 one/many parked-preview counts and text-to-Visual reactivation separately from
 authored shadow intent or a camera's `is_active` flag.
 
-Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
-camera-only Core3d stage sets only for camera roots; keep the shared shadow
-passes and the GPU preprocessing needed by the depth maps active on light
-roots. Verify the same retained shadow pass inventory before and after so this
-scheduling optimization cannot silently remove shadows.
+The render adapter routes native point/spot roots selecting Core3d to
+SharedShadowView after native light preparation. Check the compact schedule's
+native GPU-plugin/device admission, global indirect-prepass filters and final
+buffer flush order. Keep custom roots, cameras and directional cascades on
+their selected schedules. Verify the same early/late shared and camera shadow
+pass inventory before and after, plus visible shadow maps and normal frame
+timings. Fewer schedule systems alone does not establish faster frames.
 
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate
@@ -562,10 +804,19 @@ and reuse the aligned value buffer on steady ticks. Do not probe every target
 against the hold table or clone its presentation snapshot per tick.
 Readable `inputs:*` connection sources use a distinct input-side slot reader;
 write-only inputs can be targets but never become fabricated readable sources.
-Success diagnostics use entity-indexed borrowed-name lookups and retained tick
-scratch. Compiled targets cache surface presence until topology invalidation;
+Success diagnostics publish once per compiled target and retain a dense
+acknowledgement until fabric rebuild. Scene teardown clears the shared
+propagation cache with the scene's diagnostic ledger. Failed writes still check
+the live ledger; an acknowledgement must never admit or bypass a write.
+Compiled targets cache surface presence until topology invalidation;
 pending/broken snapshots share compiled names as `Arc<str>`, and fault warning
 keys are formatted only on first failure rather than every fixed step.
+
+Exclusive systems that query pending components must retain a system-local
+`QueryState` rather than create a fresh world query on every update. Its normal
+`iter(world)` refreshes new archetypes while reusing the established matches.
+Keep pending-source sampling, source ordering and reload admission unchanged;
+verify scene replacement and the unchanged exact replay reference.
 
 For deferred USD projectors, keep one entity-work set per owner and feed it
 from the complete lifecycle boundary: identity arrival, projection readiness,
@@ -598,11 +849,23 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+Within each prim's deferred work, use native component bundles for facts that
+commit together. Primitive shape identity accompanies its pending mesh request;
+grid cell and spatial projection publish together. Clear projection markers and
+retired geometry definitions in one removal bundle, retaining the owning
+failure, generation and replacement fences. Measure both prim and child
+flushes and CPU mesh publication. Verify complete event counts: a fixed startup
+time slice can omit work under contention. Separate initial and replacement
+admission using a verified inactive gap or an owner marker, and record background
+builds throughout each comparison. Preserve the exact physical replay reference.
 For large procedural terrain fields, profile both scatter execution and its
 deferred entity commands. Admit generated body bundles and visual components in
 stable bounded batches while physics continues. Keep the terrain's applied
 marker pending until bodies and required visuals are committed. Cancel queued
-entries on refresh and teardown.
+entries on refresh and teardown. Publish the terrain's `TerrainScatterContent`
+fingerprint at queue admission, separately from completion. An unchanged
+recomposition must preserve a partially displayed field; check that startup
+issues one scatter request and that an actual recipe change still refreshes it.
 Gate sparse lifecycle work on an existing pending marker or owner queue; an
 idle Update should not scan lifecycle state for a request that did not arrive.
 For joint admission, use one combined query over the existing
@@ -668,11 +931,14 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
-For Modelica telemetry metadata, build `ModelicaIndex::component_name_lookup`
-once per dirty metadata batch and resolve all variables through that borrowed
-lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
-steady sample batches should use the session's cached metadata without walking
-the document index.
+Modelica live metadata comes from the worker's checked FMI scalar inventory.
+Construction publishes it once; ordinary steps move only observations. Admit the
+inventory under the same session/source fences as the stepper and retain its
+immutable identity. Draft document edits must not invalidate live telemetry
+metadata or trigger component-name scans. Move first or changed facts into the
+shared signal registry, which owns comparison and storage; do not retain a
+second `SignalMeta` in the producer. `modelica_telemetry_channel_metadata`
+attributes that publication with the Modelica telemetry debug filter enabled.
 Cache each runtime producer's stable `SignalRef` identity for the session and
 borrow it when recording an existing channel. Avoid reconstructing and cloning
 signal paths for every due sample.
@@ -842,9 +1108,15 @@ attribute time to its internal owner operations before choosing an async
 boundary or cache.
 
 For startup `drive_engine_sync` outliers, compare
-`modelica_engine_completion_snapshot` (engine lock and parsed-tree snapshot)
+`modelica_engine_completion_snapshot` (engine lock and typed completion move)
 with `modelica_engine_completion_install` (generation validation and document
 syntax/index installation). The latter identifies the document and generation.
+`modelica_engine_syntax_prepare` measures the separate session AST copy. Native
+parse workers execute it before taking the session lock; WASM transport still
+performs that ownership copy on the page. Document results retain the worker's
+shared AST and exact diagnostics through the FIFO. Its per-update budget covers
+installation, but one large index can still exceed the budget. Attribute that
+remaining tail before changing the index preparation boundary.
 For physics telemetry, `physics_telemetry_source_retention` separates registry
 retention from kinematics/contact collection and marks metadata discovery with
 `metadata_dirty`. Compare first discovery with settled sampling before changing
@@ -866,6 +1138,14 @@ the owner, and preserve the owner's iteration order when it determines stable
 IDs. Relationship bundles such as `ChildOf` can use the same fallible batch:
 Bevy runs their relationship hooks per entity, in batch order, while continuing
 past stale entities.
+
+For `compute_local_gravity`, distinguish flat fields from position-dependent
+surface fields. Steady flat fields use the archetypal missing-field query;
+motion alone does not require recomputation. Retain global/frame/provider and
+link-removal invalidation, new-entity admission and unresolved surface cleanup.
+Steady surface work includes linked consumers and existing fields, excluding
+unlinked entities that have neither a field to produce nor one to remove.
+Profile flat and surface owners separately and require unchanged exact replay.
 
 For `sync_local_gravity_to_avian`, keep the comparison against the existing
 `ConstantLinearAcceleration` component and batch only changed values in query
@@ -903,7 +1183,14 @@ For fixed-step telemetry, keep static channel-presentation facts borrowed in
 the per-sample path and allocate their owned signal metadata only when that
 channel's metadata is first created or changes. Reuse one `HashMap::entry` for
 each sample's cached identity lookup and mutation, and update its global-owner
-association only when the owner identity changes. Add the shared `SignalSource`
+association only when publication is needed. Modelica's session cursor checks
+both live owner identity and the registry's catalog revision once per batch;
+new variables and removed/re-admitted channels still publish through the
+registry. Reuse starts only after a scalar sample has been retained; owner or
+metadata preparation alone cannot prove admitted wire ownership.
+Invalidate per-channel publication on a changed batch even for skipped values;
+only a channel's actual association acknowledges its new owner/catalog state.
+Add the shared `SignalSource`
 owner marker only when the entity first retains a sample; its removal observer
 owns history cleanup, so later batches do not need to queue marker writes.
 
@@ -938,3 +1225,24 @@ facts. Mark the exact idle/movement windows in Tracy messages, keep the initial
 avatar pose fixed, and seed a pointer in SceneView when reproducing native
 picking. Distinguish shader reload events from material/look changes. Verify
 invalid-stage diagnostics and hot-reload invalidation as well as frame time.
+For a hidden DEM continuation with complete terrain counts, compare source
+reflection and material readiness separately. Only source reflection owns
+`ShaderLookSourceInterface`; material retirement must preserve it. Check queue
+admission before source reflection and readiness invalidation before promotion.
+Use `shader_source_lifecycle.rhai` on an admitted celestial DEM scene to verify
+valid-source reload and inactive-path rejection through the production API.
+
+Resolved port writes validate the live owner and metadata before committing.
+When profiling co-simulation exchange, preserve those checks and the all-or-none
+preflight for retained batches; single exclusive writes need one validation pass.
+For initialization stalls, inspect each wire's selected source backend and its
+actual sample. A compiling Modelica participant can share an entity with ready
+native pose/control ports. Initialization reads the registered owner; only the
+Modelica backend withholds model outputs until its session has compiled. Missing
+samples remain pending and producer errors remain terminal.
+Check that participant surfaces publish before connection rebuilding and that
+the wiring transaction commits before initialization. Compare admitted inputs
+with authored connections when a missing-input failure varies between runs.
+`PendingInputConnections` records sources awaiting port-surface projection;
+initialization consumes that owner fact rather than treating omitted edges as
+unconnected inputs.

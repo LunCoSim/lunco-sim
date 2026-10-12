@@ -7,14 +7,12 @@
 //!
 //! ## Design Notes
 //!
-//! - **All types**: Unlike regex which only handled `Real`, these functions work
-//!   with any component type (Real, Integer, Boolean, String, custom types).
+//! - **All types**: Projects Real, Integer, Boolean, String, and custom types.
 //! - **Full class coverage**: Walks all top-level and nested classes, not just
 //!   the first `model|class|block|package` declaration.
-//! - **Expression-aware**: Extracts numeric values from AST expressions, not
-//!   just regex-captured number literals.
+//! - **Expression-aware**: Reads authored numeric bindings from AST expressions.
 
-use rumoca_core::{Causality, ClassType, OpBinary, OpUnary, Variability};
+use rumoca_core::{Causality, ClassType, Variability};
 use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};
 use std::collections::{BTreeSet, HashMap};
 
@@ -42,25 +40,25 @@ pub fn is_plot_node_record_call(expr: &Expression) -> bool {
 /// high-level API that extracts all symbols in one pass.
 fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
     // Interface metadata uses the compiler's tolerant syntax projection.
-    crate::parse_to_syntax(source, file_label)
+    rumoca_phase_parse::parse_to_syntax(source, file_label)
         .best_effort()
         .clone()
 }
 
 fn parse(source: &str) -> Option<StoredDefinition> {
-    let syntax = crate::parse_to_syntax(source, "model.mo");
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
     (!syntax.has_errors()).then(|| syntax.best_effort().clone())
 }
 
 // ---------------------------------------------------------------------------
-// Public extraction functions (drop-in replacements for regex versions)
+// Public source and AST projections
 // ---------------------------------------------------------------------------
 
 /// The declared, solver-independent face of a model: what it is called, what it
 /// takes, what it is tuned by.
 #[derive(Debug, Default, Clone)]
 pub struct ModelInterface {
-    /// First non-package class, fully qualified when nested.
+    /// First runnable model/block/class, qualified by package nesting.
     pub model_name: Option<String>,
     /// The file's `within` clause — the package its classes actually live in.
     /// The only authority on what a `.mo` is CALLED from outside it, which is
@@ -73,14 +71,11 @@ pub struct ModelInterface {
     pub required_source_roots: BTreeSet<String>,
     /// `parameter` declarations with their authored values.
     pub parameters: HashMap<String, f64>,
-    /// Every declared input, seeded with its authored default (`0.0` when it has
-    /// none). The INTERFACE is every input; the defaults map covers only the
-    /// subset that authored a numeric binding — seeding from defaults alone
-    /// gives an unbound `input Real drive_left` no port at all.
-    pub inputs: HashMap<String, f64>,
-    /// Authored numeric bindings for input variables. Unlike [`Self::inputs`],
-    /// this omits unbound inputs and preserves their distinction from the
-    /// documented zero seed used by the runtime port surface.
+    /// Declared input names. The checked DAE owns initialization values;
+    /// interface discovery never creates a numerical sample.
+    pub inputs: BTreeSet<String>,
+    /// Literal numeric declaration bindings projected for source/lint facts.
+    /// This is not the solver's scoped default evaluation.
     pub input_defaults: HashMap<String, f64>,
     /// Every causal output declared by the model, including output connector
     /// types whose causality is carried by the connector class.
@@ -123,8 +118,7 @@ fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, Modelic
             let unit = component
                 .modifications
                 .get("unit")
-                .map(expression_to_string)
-                .map(|unit| unit.trim_matches('"').to_string())
+                .and_then(string_literal_value)
                 .filter(|unit| !unit.is_empty());
             if description.is_some() || unit.is_some() {
                 output.insert(
@@ -149,9 +143,7 @@ fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, Modelic
 ///
 /// The ONE way any USD-driven path derives a `ModelicaModel` stub, whether the
 /// source was fetched as an asset (`cosim::dispatch_loaded_modelica_sources`)
-/// or emitted by the network projector (`lunco-usd-sim-domain`). Both used to
-/// open-code the same four extracts, and the copies drifted in exactly the
-/// place that matters — which inputs become ports.
+/// or emitted by the network projector (`lunco-usd-sim-domain`).
 ///
 /// Lenient (`best_effort`): a model with a semantic error still yields usable
 /// name/parameter/input snapshots, the same recovery `Session::recovered_file_query`
@@ -175,13 +167,7 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
         within,
         required_source_roots,
         parameters: extract_parameters_from_ast(ast),
-        inputs: extract_input_names_from_ast(ast)
-            .into_iter()
-            .map(|name| {
-                let seed = defaults.get(&name).copied().unwrap_or(0.0);
-                (name, seed)
-            })
-            .collect(),
+        inputs: extract_input_names_from_ast(ast).into_iter().collect(),
         input_defaults: defaults,
         outputs: extract_output_names_from_ast(ast),
         variable_metadata: variable_metadata_from_ast(ast),
@@ -190,11 +176,9 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
 
 /// Extract the model name from Modelica source code.
 ///
-/// Returns the name of the first non-package class found (model, block, class,
-/// connector, function, etc.). Package-level names are only returned if no
-/// other class exists.
-///
-/// This is a drop-in replacement for the regex-based `extract_model_name`.
+/// Returns the first runnable model, block, or class, qualified by its package
+/// nesting. Files containing only packages, connectors, records, types, or
+/// functions have no automatic simulation target.
 pub fn extract_model_name(source: &str) -> Option<String> {
     let ast = parse(source)?;
     extract_model_name_from_ast(&ast)
@@ -207,28 +191,14 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// rumoca parse that runs for tens of seconds in debug builds and
 /// visibly freezes the app.
 ///
-/// Returns a fully qualified class name (e.g.
-/// `"AnnotatedRocketStage.RocketStage"`) when the non-package class
-/// lives nested inside a package. Returns just the short name for
-/// top-level non-package classes. This matters because when the
-/// user clicks Compile without drilling into a specific class and
-/// the file is package-scoped (e.g. `package Foo { model Bar ... }`),
-/// rumoca needs the qualified `Foo.Bar` to locate the instantiable
-/// class — passing just `"Foo"` makes it compile the empty package.
+/// Returns the selected runnable name relative to the document's `within`
+/// clause, including its package nesting inside the document.
 pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
-    find_first_non_package_qualified(&ast.classes, "")
+    find_first_runnable_qualified(&ast.classes, "")
 }
 
 /// The package a file's classes belong to, from its `within` clause —
 /// `within LunCo.Propulsion;` → `Some("LunCo.Propulsion")`.
-///
-/// This is what makes a `.mo` a package MEMBER rather than a standalone
-/// document, and the two cannot be compiled the same way: a member's
-/// fully-qualified class is already owned by its package's source root, so
-/// seating the file on its own registers that class a second time and rumoca's
-/// merge pass rejects the pair (`Duplicate class '…' with non-identical
-/// definition`). The Modelica compiler host routes on this distinction before
-/// seating source into Rumoca.
 ///
 /// A bare `within;` names the top level and is reported as `None` — it declares
 /// membership of no package, which is the same thing as having no clause.
@@ -237,18 +207,9 @@ pub fn within_package(ast: &StoredDefinition) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Source-level counterpart of [`within_package`], for callers that do not
-/// already hold a parsed AST. Parses; `None` on a source too broken to parse
-/// (such a file has no compilable class either, so the caller's next step
-/// fails on its own terms).
-pub fn within_package_of_source(source: &str) -> Option<String> {
-    within_package(&parse(source)?)
-}
-
 /// Fully qualified names declared by a source document, including nested
 /// classes. This is document metadata, not a model-specific rule: the
-/// compiler uses it to decide whether a durable source root already owns an
-/// extra document before registering a second URI for the same class.
+/// Twin lint uses it to inspect the authored namespace.
 /// Extract every fully qualified class name declared by one source document.
 ///
 /// This is the same recovered AST walk used by the Modelica source-root
@@ -256,27 +217,9 @@ pub fn within_package_of_source(source: &str) -> Option<String> {
 /// names that the compiler can actually resolve, rather than comparing file
 /// basenames.
 pub fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
-    let ast = parse_recovered(source, file_label);
-    let prefix = ast
-        .within
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let mut names = Vec::new();
-    collect_declared_class_names(&ast.classes, &prefix, &mut names);
-    names
-}
-
-fn collect_declared_class_names(
-    classes: &AstIndexMap<String, ClassDef>,
-    prefix: &str,
-    names: &mut Vec<String>,
-) {
-    for (name, class) in classes {
-        let qualified = qualify(prefix, name);
-        names.push(qualified.clone());
-        collect_declared_class_names(&class.classes, &qualified, names);
-    }
+    rumoca_phase_parse::parse_to_syntax(source, file_label)
+        .best_effort()
+        .declared_class_names()
 }
 
 /// Join a parent qualified name with a child segment to form a new
@@ -293,136 +236,23 @@ pub fn qualify(parent: &str, child: &str) -> String {
     }
 }
 
-/// Return the last dotted segment of a qualified name — the short
-/// display form (`"Modelica.Blocks.PID"` → `"PID"`). For names
-/// without any `.`, returns the whole input. Empty input → empty.
-///
-/// Delegates to rumoca-core's `top_level_last_segment`, so it is
-/// **subscript-aware**: dots inside bracketed subscripts (`a.b[c.d]`)
-/// are ignored rather than split on. Single source of truth shared
-/// with rumoca's own name handling.
-pub fn short_name(qualified: &str) -> &str {
-    rumoca_core::top_level_last_segment(qualified)
-}
-
-/// Decode Modelica string-literal escape sequences. Replaces `\"`,
-/// `\\`, `\n`, `\t`, `\r`, and `\'` with the corresponding character;
-/// leaves any other `\X` pair as-is.
-///
-/// Operates on the **already-quote-stripped** content of a Modelica
-/// `STRING` terminal — the surrounding `"…"` should be removed by
-/// the caller. Use [`string_literal_value`] when starting from an
-/// `Expression` to do both steps in one call.
-pub fn unescape_modelica_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(n) = chars.next() {
-                match n {
-                    '"' => out.push('"'),
-                    '\\' => out.push('\\'),
-                    'n' => out.push('\n'),
-                    't' => out.push('\t'),
-                    'r' => out.push('\r'),
-                    '\'' => out.push('\''),
-                    other => {
-                        out.push('\\');
-                        out.push(other);
-                    }
-                }
-            } else {
-                out.push('\\');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Decode an `Expression::Terminal { terminal_type: String, .. }`
-/// into the raw `String` value. Strips surrounding quotes and
-/// applies the full Modelica escape table via
-/// [`unescape_modelica_string`]. Returns `None` for non-string
-/// terminals or non-terminal expressions.
-///
-/// Canonical entry point for decoding Modelica string terminals. All AST
-/// mutation and projection code uses this same decoder so stripping and escape
-/// handling stay identical at every call site.
-pub fn string_literal_value(e: &rumoca_ir_ast::Expression) -> Option<String> {
-    use rumoca_ir_ast::Expression;
-    use rumoca_ir_ast::TerminalType;
-    let Expression::Terminal {
-        terminal_type,
-        token,
-        ..
-    } = e
-    else {
-        return None;
-    };
-    if !matches!(terminal_type, TerminalType::String) {
-        return None;
-    }
-    let raw: &str = &token.text;
-    let trimmed = raw
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(raw);
-    Some(unescape_modelica_string(trimmed))
-}
-
-/// Return the qualified-name prefix *before* the last dotted segment
-/// — the parent scope. `"Modelica.Blocks.PID"` → `"Modelica.Blocks"`.
-/// Names without any `.` (single-segment, e.g. `"PID"`) return `""`
-/// — the implicit top-level scope. Empty input → `""`.
-///
-/// Uses the shared Modelica name segments, so a dot inside a quoted identifier
-/// or a bracketed subscript remains part of that segment.
-pub fn parent_qualified(qualified: &str) -> &str {
-    crate::qualified_name_segments(qualified)
-        .last()
-        .filter(|last| last.len() < qualified.len())
-        .map_or("", |last| &qualified[..qualified.len() - last.len() - 1])
-}
-
-/// Return ALL non-package classes (qualified) reachable from the
-/// top-level classes, depth-first. Used by the Compile handler to
-/// decide whether to auto-pick (length 0–1) or open a picker modal
-/// (length ≥ 2, task #102). Cheap — walks the already-parsed AST.
-pub fn collect_non_package_classes_qualified(ast: &StoredDefinition) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_non_package_qualified(&ast.classes, "", &mut out);
-    out
-}
-
-fn collect_non_package_qualified(
-    classes: &AstIndexMap<String, ClassDef>,
-    parent: &str,
-    out: &mut Vec<String>,
-) {
-    for (name, class) in classes {
-        let qualified = qualify(parent, name);
-        match class.class_type {
-            // Descend into packages to reach nested runnable classes.
-            ClassType::Package => {
-                collect_non_package_qualified(&class.classes, &qualified, out);
-            }
-            // Only runnable classes end up on the compile picker —
-            // connectors / records / types / functions have no
-            // equations to simulate and would only confuse the user
-            // by appearing as "Compile this" candidates.
-            ClassType::Model | ClassType::Block | ClassType::Class => {
-                out.push(qualified);
-            }
-            _ => {}
-        }
+/// Read a string literal's value from Rumoca's parsed AST.
+/// Rumoca has already removed source quotes and decoded Modelica escapes.
+/// The retained token text is the value, including any literal quotes or
+/// backslashes authored inside the string. Non-string expressions have no value.
+pub fn string_literal_value(e: &Expression) -> Option<String> {
+    match e {
+        Expression::Terminal {
+            terminal_type: TerminalType::String,
+            token,
+            ..
+        } => Some(token.text.to_string()),
+        _ => None,
     }
 }
 
-/// Depth-first walk of `classes` returning the first non-package
-/// class found, qualified by its path inside the surrounding packages.
-fn find_first_non_package_qualified(
+/// Select a runnable class, checking the current level before nested packages.
+fn find_first_runnable_qualified(
     classes: &AstIndexMap<String, ClassDef>,
     parent: &str,
 ) -> Option<String> {
@@ -443,16 +273,11 @@ fn find_first_non_package_qualified(
             continue;
         }
         let next_parent = qualify(parent, name);
-        if let Some(found) = find_first_non_package_qualified(&class.classes, &next_parent) {
+        if let Some(found) = find_first_runnable_qualified(&class.classes, &next_parent) {
             return Some(found);
         }
     }
-    // Entire subtree is packages-only (or empty). Fall back to the
-    // top-level package name so earlier callers that relied on the
-    // old "return the package when nothing else exists" behaviour
-    // still get something non-empty; compile will likely still fail
-    // but at least the error message names the file's top entity.
-    classes.keys().next().map(|n| qualify(parent, n))
+    None
 }
 
 /// Extract parameter values from Modelica source code.
@@ -461,7 +286,6 @@ fn find_first_non_package_qualified(
 /// extracts their binding values. Handles any component type, not just
 /// `parameter Real`.
 ///
-/// This is a drop-in replacement for the regex-based `extract_parameters`.
 pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
     let ast = match parse(source) {
         Some(a) => a,
@@ -705,128 +529,19 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 // merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
 // nonsensical pile.
 
-/// Find a class by short name, walking nested classes too.
-///
-/// Many source library packages and user-authored multi-class files (e.g.
-/// `AnnotatedRocketStage` which wraps `RocketStage`/`Tank`/`Valve`/…
-/// inside a `package AnnotatedRocketStage`) expose simulatable classes
-/// only inside a wrapper package. A top-level-only lookup misses them
-/// and breaks `describe_model` even when `compile_model` (which uses
-/// `collect_non_package_classes_qualified`) succeeds. Recursing here
-/// keeps the two views consistent.
-///
-/// Returns the first match in iteration order — duplicate short names
-/// across nested levels are resolved by the outer-most occurrence.
-///
-/// NOTE: this is a *distinct concern* from MLS §5.3 scope resolution
-/// ([`crate::scope_chain_candidates`]) — it's an intra-document
-/// leaf search for navigate-to-symbol, with no enclosing-scope/import
-/// context and no library lookup. It is intentionally NOT folded into
-/// the scope-chain resolver.
-pub fn find_class_by_short_name<'a>(
-    ast: &'a StoredDefinition,
-    short_name: &str,
-) -> Option<&'a ClassDef> {
-    find_in_classes(&ast.classes, short_name)
-}
-
-fn find_in_classes<'a>(
-    classes: &'a AstIndexMap<String, ClassDef>,
-    short_name: &str,
-) -> Option<&'a ClassDef> {
-    if let Some((_, class)) = classes.iter().find(|(name, _)| name.as_str() == short_name) {
-        return Some(class);
-    }
-    for class in classes.values() {
-        if let Some(found) = find_in_classes(&class.classes, short_name) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// Byte range of a class's FULL source text — from its leading prefix
-/// keyword(s) (`package`/`model`/`partial connector`/…) through the
-/// terminating `;`.
-///
-/// rumoca's `ClassDef.location` is misleading: despite its doc comment
-/// ("spanning from class keyword to end statement") it actually covers
-/// only the NAME token → the `end <Name>` token, omitting BOTH the prefix
-/// keyword(s) and the closing `;`. Slicing `source` by that bare range
-/// drops them and yields invalid Modelica (`FooCopy … end FooCopy` with no
-/// `package` and no `;`). Any code that extracts or duplicates a class's
-/// source text must use this span, never `location` directly.
-pub fn class_full_text_span(class: &ClassDef, source: &str) -> (usize, usize) {
-    let bytes = source.as_bytes();
-    // The parser's class-kind token owns the declaration start. Only class
-    // qualifiers may precede it; enclosing names on the same line are not
-    // part of this declaration.
-    let mut start = (class.class_type_token.location.start as usize).min(bytes.len());
-    loop {
-        let mut i = start;
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            i -= 1;
-        }
-        let word_end = i;
-        while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
-            i -= 1;
-        }
-        if i == word_end
-            || !matches!(
-                source.get(i..word_end),
-                Some(
-                    "encapsulated"
-                        | "partial"
-                        | "final"
-                        | "inner"
-                        | "outer"
-                        | "replaceable"
-                        | "redeclare"
-                        | "expandable"
-                        | "operator"
-                        | "pure"
-                        | "impure"
-                )
-            )
-        {
-            break;
-        }
-        start = i;
-    }
-    // Advance from the `end <Name>` token past the terminating `;`.
-    let mut end = class
-        .end_name_token
-        .as_ref()
-        .map(|t| t.location.end as usize)
-        .unwrap_or(class.location.end as usize)
-        .min(bytes.len());
-    while end < bytes.len() && bytes[end].is_ascii_whitespace() {
-        end += 1;
-    }
-    if end < bytes.len() && bytes[end] == b';' {
-        end += 1;
-    }
-    (start, end)
-}
-
 /// Visit every type-name reference reachable from `class`, recursing
 /// into nested classes. Emits each `extends` base name and each
 /// component `type_name` raw — **no filtering**. Callers apply their
 /// own predicate (built-in vs not, qualified-only, etc.).
 ///
-/// Centralised here so the icon warmer's "what to prefetch" and the
-/// source-roots scanner's "which libraries to load" share one
-/// traversal. The previous local `walk_class` / `walk_class_qualified_types`
-/// pair was identical traversal + different filter, which is exactly
-/// how the canonical `find_class_by_qualified_name` and the buggy
-/// local `walk_qualified` diverged. Filter at the call site, not in
-/// the walker.
+/// The icon warmer and source-root scanner share this traversal and apply
+/// their type-name selection at the call site.
 pub fn walk_class_type_names<F: FnMut(&str)>(class: &ClassDef, visit: &mut F) {
     for ext in &class.extends {
         let name = ext.base_name.to_string();
         visit(&name);
     }
-    for (_, comp) in class.iter_components() {
+    for (_, comp) in class.components.iter() {
         let t = format!("{}", comp.type_name);
         visit(&t);
     }
@@ -861,7 +576,11 @@ pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<Str
     }
     qualified_names
         .into_iter()
-        .filter_map(|name| name.split('.').next().map(str::to_owned))
+        .filter_map(|name| {
+            rumoca_core::qualified_name_segments(&name)
+                .next()
+                .map(str::to_owned)
+        })
         .filter(|root| !root.is_empty() && !is_builtin_type_name(root))
         .collect()
 }
@@ -872,7 +591,7 @@ pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<Str
 pub fn required_source_roots_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
     let mut roots = source_root_dependencies_from_ast(ast);
     if let Some(package) = within_package(ast)
-        && let Some(root) = package.split('.').next()
+        && let Some(root) = rumoca_core::qualified_name_segments(&package).next()
         && !ast.classes.contains_key(root)
         && !root.is_empty()
     {
@@ -928,7 +647,7 @@ pub fn extract_extends_for_class(class: &ClassDef) -> Vec<String> {
 /// flattened picture, matching MLS §5.3 semantics.
 ///
 /// Each entry carries the component's instance name, declared type,
-/// description string, and the literal modification map (`R=10`,
+/// description string, and the modification map (`R=10`,
 /// `unit="kg"`, …) projected to strings.
 #[derive(Debug, Clone)]
 pub struct ComponentInfo {
@@ -936,9 +655,9 @@ pub struct ComponentInfo {
     pub name: String,
     /// Declared Modelica type name.
     pub type_name: String,
-    /// Description string with surrounding Modelica quotes removed.
+    /// Description value decoded by Rumoca.
     pub description: String,
-    /// Literal component modifications keyed by their authored names.
+    /// Component modifications rendered by Rumoca, keyed by authored names.
     pub modifications: HashMap<String, String>,
 }
 
@@ -954,7 +673,7 @@ pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
             modifications: c
                 .modifications
                 .iter()
-                .map(|(k, v)| (k.clone(), expression_to_string(v)))
+                .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
         })
         .collect()
@@ -977,123 +696,11 @@ pub fn extract_connections_for_class(class: &ClassDef) -> Vec<(String, String)> 
         .collect()
 }
 
-/// Collapse Modelica description string tokens into the value shown to users.
-/// The AST stores each quoted token separately, so quote removal must happen
-/// before joining; otherwise a multi-token description retains embedded quote
-/// characters and each consumer renders it differently.
+/// Concatenate Rumoca's decoded description tokens in authored order.
+/// Modelica string concatenation inserts no separator and preserves whitespace.
 pub fn description_from_tokens(tokens: &[rumoca_core::Token]) -> Option<String> {
-    let mut description = String::new();
-    for token in tokens {
-        let text = token.text.trim();
-        let text = text.strip_prefix('"').unwrap_or(text);
-        let text = text.strip_suffix('"').unwrap_or(text);
-        if !text.is_empty() {
-            if !description.is_empty() {
-                description.push(' ');
-            }
-            description.push_str(text);
-        }
-    }
+    let description: String = tokens.iter().map(|token| token.text.as_ref()).collect();
     (!description.is_empty()).then_some(description)
-}
-
-/// Cheap stringification of an Expression for the modifications map.
-/// Numeric and string literals round-trip exactly; complex expressions
-/// fall back to a placeholder so the agent does not see a truncated
-/// half-rendering. `describe_model` is best-effort surface for
-/// authoring intent — for full fidelity the agent reads
-/// `get_document_source`.
-fn expression_to_string(expr: &Expression) -> String {
-    match expr {
-        Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } => match terminal_type {
-            TerminalType::String => token.text.trim_matches('"').to_string(),
-            _ => token.text.to_string(),
-        },
-        Expression::ComponentReference(cref) => cref.to_string(),
-        _ => "<expr>".into(),
-    }
-}
-
-/// Format the small expression subset used by Modelica parameter/icon labels.
-///
-/// This is deliberately a display projection, not a source serializer: values
-/// that cannot be rendered without misleading truncation return an empty
-/// string. Keeping it here makes the source library indexer and diagram projection use the
-/// same representation for literals, references, arithmetic, and arrays.
-pub fn format_expression_for_display(expr: &Expression) -> String {
-    match expr {
-        Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } => match terminal_type {
-            TerminalType::String => token.text.trim_matches('"').to_string(),
-            _ => token.text.to_string(),
-        },
-        Expression::ComponentReference(cref) => cref
-            .parts
-            .last()
-            .map(|part| part.ident.text.as_ref().to_string())
-            .unwrap_or_default(),
-        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
-            (OpUnary::Minus, inner) => {
-                let inner = format_expression_for_display(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("-{inner}")
-                }
-            }
-            (OpUnary::Plus, inner) => {
-                let inner = format_expression_for_display(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("+{inner}")
-                }
-            }
-            _ => String::new(),
-        },
-        Expression::Parenthesized { inner, .. } => {
-            let inner = format_expression_for_display(inner);
-            if inner.is_empty() {
-                String::new()
-            } else {
-                format!("({inner})")
-            }
-        }
-        Expression::Binary { op, lhs, rhs, .. } => {
-            let lhs = format_expression_for_display(lhs);
-            let rhs = format_expression_for_display(rhs);
-            let symbol = match op {
-                OpBinary::Add => "+",
-                OpBinary::Sub => "-",
-                OpBinary::Mul => "*",
-                OpBinary::Div => "/",
-                OpBinary::Exp => "^",
-                _ => return String::new(),
-            };
-            if lhs.is_empty() || rhs.is_empty() {
-                String::new()
-            } else {
-                format!("{lhs}{symbol}{rhs}")
-            }
-        }
-        Expression::Array { elements, .. } => {
-            let elements: Vec<String> =
-                elements.iter().map(format_expression_for_display).collect();
-            if elements.iter().any(String::is_empty) {
-                String::new()
-            } else {
-                format!("{{{}}}", elements.join(","))
-            }
-        }
-        _ => String::new(),
-    }
 }
 
 /// Extract every input-typed component for a class with rich metadata
@@ -1105,11 +712,13 @@ pub struct TypedComponent {
     pub name: String,
     /// Declared Modelica type name.
     pub type_name: String,
+    /// Whether this component declaration carries array dimensions.
+    pub has_array_dimensions: bool,
     /// Optional `unit` modification.
     pub unit: Option<String>,
     /// Numeric binding or start value, when one is available.
     pub default: Option<f64>,
-    /// Description string with surrounding Modelica quotes removed.
+    /// Description value decoded by Rumoca.
     pub description: String,
     /// Optional lower bound from the declaration.
     pub min: Option<f64>,
@@ -1157,7 +766,7 @@ fn is_input_connector_type(type_name: &str) -> bool {
     // tail. `Modelica.Blocks.Interfaces.RealInput` and bare
     // `RealInput` both resolve to the short name `RealInput`.
     let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = short_name(bare);
+    let short = rumoca_core::top_level_last_segment(bare);
     matches!(
         short,
         "RealInput" | "IntegerInput" | "BooleanInput" | "StringInput"
@@ -1168,24 +777,18 @@ fn is_input_connector_type(type_name: &str) -> bool {
 /// connectors — see that doc for the rationale.
 fn is_output_connector_type(type_name: &str) -> bool {
     let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = short_name(bare);
+    let short = rumoca_core::top_level_last_segment(bare);
     matches!(
         short,
         "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"
     ) || short.ends_with("Output")
 }
 
-/// Pull the `unit="..."` modification for a component, if any. Returns
-/// the inner string with quotes stripped.
+/// Read the unit value decoded by Rumoca, when authored as a string literal.
 fn unit_of_component(comp: &rumoca_ir_ast::Component) -> Option<String> {
-    comp.modifications.get("unit").and_then(|expr| match expr {
-        Expression::Terminal {
-            terminal_type: TerminalType::String,
-            token,
-            ..
-        } => Some(token.text.trim_matches('"').to_string()),
-        _ => None,
-    })
+    comp.modifications
+        .get("unit")
+        .and_then(string_literal_value)
 }
 
 fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
@@ -1199,12 +802,12 @@ where
         .map(|c| TypedComponent {
             name: c.name.clone(),
             type_name: c.type_name.to_string(),
+            has_array_dimensions: !c.shape.is_empty() || !c.shape_expr.is_empty(),
             unit: unit_of_component(c),
             default: c
                 .binding
                 .as_ref()
-                .and_then(numeric_of)
-                .or_else(|| numeric_of(&c.start)),
+                .map_or_else(|| numeric_of(&c.start), numeric_of),
             description: description_from_tokens(&c.description).unwrap_or_default(),
             min: c.modifications.get("min").and_then(numeric_of),
             max: c.modifications.get("max").and_then(numeric_of),
@@ -1226,29 +829,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn class_full_text_span_confines_same_line_nested_declarations() {
-        for (source, expected) in [
-            (
-                "package Root package B model Part Real value; end Part; end B; end Root;",
-                "model Part Real value; end Part;",
-            ),
-            (
-                "package Root package B partial connector Part Real value; end Part; end B; end Root;",
-                "partial connector Part Real value; end Part;",
-            ),
-            (
-                "package Root package B encapsulated\npartial model Part Real value; end Part\n; end B; end Root;",
-                "encapsulated\npartial model Part Real value; end Part\n;",
-            ),
+    fn model_selection_requires_a_runnable_declaration() {
+        for source in [
+            "package Root package Empty end Empty; end Root;",
+            "connector Pin Real x; end Pin;",
+            "record Data Real x; end Data;",
+            "type Count = Integer;",
+            "function Identity input Real x; output Real y; algorithm y := x; end Identity;",
         ] {
-            let syntax = crate::parse_to_syntax(source, "class-span.mo");
-            assert!(!syntax.has_errors());
-            let ast = syntax.parsed().expect("valid inline source");
-            let class = &ast.classes["Root"].classes["B"].classes["Part"];
-            let (start, end) = class_full_text_span(class, source);
-            assert_eq!(&source[start..end], expected);
-            assert!(!crate::parse_to_syntax(expected, "extracted.mo").has_errors());
+            assert_eq!(extract_model_name(source), None);
         }
+    }
+
+    #[test]
+    fn rumoca_metadata_projection_preserves_expressions_and_decoded_strings() {
+        let source = r#"model Metadata
+  parameter Real gain = 2;
+  Real value[2](min=if gain > 0 then sin(gain) else -1, start={gain, 2});
+  parameter String label = "\"quoted\"\\n";
+  input Real drive = sin(gain);
+  Real temperature(unit="\"K\"") "\"Case\" " + "temperature\\n";
+end Metadata;"#;
+        let ast = rumoca_phase_parse::parse_to_ast(source, "metadata.mo").expect("valid metadata");
+        let class = &ast.classes["Metadata"];
+        let components = extract_components_for_class(class);
+        let value = components.iter().find(|c| c.name == "value").unwrap();
+        assert_eq!(
+            value.modifications["min"],
+            "if gain > 0 then sin(gain) else -1"
+        );
+        assert_eq!(class.components["value"].start.to_string(), "{gain, 2}");
+        assert_eq!(
+            string_literal_value(class.components["label"].binding.as_ref().unwrap()),
+            Some("\"quoted\"\\n".to_string())
+        );
+        let metadata = variable_metadata(source, "metadata.mo");
+        assert_eq!(metadata["temperature"].unit.as_deref(), Some("\"K\""));
+        assert_eq!(
+            metadata["temperature"].description.as_deref(),
+            Some("\"Case\" temperature\\n")
+        );
+        assert!(string_literal_value(class.components["gain"].binding.as_ref().unwrap()).is_none());
+        assert_eq!(extract_typed_inputs_for_class(class)[0].default, None);
     }
 
     #[test]
@@ -1323,13 +945,7 @@ mod tests {
 
     #[test]
     fn test_extract_model_name_nested_in_package_returns_qualified() {
-        // Regression: user opened assets/models/AnnotatedRocketStage.mo
-        // (a package containing `model RocketStage`, `model Engine`, …)
-        // and hit Compile without drilling in first. Old extractor
-        // returned just `"AnnotatedRocketStage"` (the package) → rumoca
-        // compiled the empty package → error. The fallback must
-        // descend into packages and qualify the model name so rumoca
-        // can resolve it.
+        // Package documents select the first qualified executable class.
         let source = r#"
 package AnnotatedRocketStage
   model RocketStage
@@ -1392,7 +1008,7 @@ end FirstOrder;
     }
 
     #[test]
-    fn test_extract_model_name_package_fallback() {
+    fn test_extract_model_name_package_selects_executable_class() {
         let source = r#"
 package MyPackage
   model Inner
@@ -1400,9 +1016,6 @@ package MyPackage
   end Inner;
 end MyPackage;
 "#;
-        // Used to return just `"MyPackage"` which made rumoca compile
-        // the empty package and error out. New behaviour descends into
-        // packages and returns the qualified path of the first model.
         assert_eq!(
             extract_model_name(source),
             Some("MyPackage.Inner".to_string())

@@ -664,6 +664,13 @@ pub trait UsdRead {
     /// stage's authored units/axis. Live readers delegate to OpenUSD's
     /// Xformable implementation; prepared readers return the worker-produced
     /// value used for initial projection.
+    /// Canonical double-precision transform for physical geometry consumers.
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -825,6 +832,13 @@ pub trait UsdReadObject {
     fn time_codes_per_second(&self) -> f64;
     fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
     fn stage_metadata_value(&self, name: &str) -> Option<Value>;
+    /// Canonical double-precision transform for physical geometry consumers.
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -1433,6 +1447,15 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::stage_metadata_value(self, name)
     }
 
+    /// Canonical double-precision transform for physical geometry consumers.
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
+        UsdRead::local_transform_matrix_d_at(self, prim, time)
+    }
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -1574,6 +1597,15 @@ impl UsdRead for StageView<'_> {
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String> {
         StageView::collection_members(self, prim, instance_name)
+    }
+
+    /// Canonical double-precision transform for physical geometry consumers.
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
+        crate::local_transform_matrix_d_at(self, prim, time)
     }
 
     fn local_transform_at(
@@ -2069,6 +2101,18 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::attr_value_at(*reader, prim, name, time),
             Self::Live(reader) => UsdRead::attr_value_at(reader, prim, name, time),
+        }
+    }
+
+    /// Canonical double-precision transform for physical geometry consumers.
+    fn local_transform_matrix_d_at(
+        &self,
+        prim: &SdfPath,
+        time: f64,
+    ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
+        match self {
+            Self::Prepared(reader) => UsdRead::local_transform_matrix_d_at(*reader, prim, time),
+            Self::Live(reader) => UsdRead::local_transform_matrix_d_at(reader, prim, time),
         }
     }
 

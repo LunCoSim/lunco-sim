@@ -19,9 +19,8 @@ model DescentGuidance
 
    Note the asymmetry with the airframe, and that it is deliberate. Here `piloted`
    picks WHICH SOURCE commands — the correct use. It must never gate a capability the
-   vehicle physically has: `Lander.mo` used to gate attitude torque behind it, which
-   left an unpossessed vehicle unable to correct any tilt it acquired, with thrust
-   then steering it along that tilt until it flew off the terrain."
+   vehicle physically has. The airframe supplies attitude torque independently of
+   possession so guidance can correct tilt during autonomous flight."
 
   // ── Schedule + gains ──
   input Real kv = 1.2 "Descent-rate tracking gain";
@@ -44,22 +43,18 @@ model DescentGuidance
   output Real throttle_cmd "Commanded throttle 0..1 → the airframe's `guidance_throttle`";
 
   Real vy_sched, target_vy, a_cmd, raw, pos, cmd_thrust, law;
-  // LIVE (der-fed) copy of the tunable gain — a `der` stops rumoca folding it.
-  Real kv_live(start = 1.2);
 
 equation
-  der(kv_live) = (kv - kv_live) / 0.02;
-
   // Velocity-scheduled descent: command a descent speed proportional to height above
   // the resting altitude (capped), then a thrust that tracks it. DIRECT — no spool.
   vy_sched = min(max(descent_slope * (altitude - rest_altitude), 0.0), vy_max);
   target_vy = -vy_sched;
-  a_cmd = g + kv_live * (target_vy - descent_rate);
+  a_cmd = g + kv * (target_vy - descent_rate);
   raw = vehicle_mass * a_cmd;
   pos = max(raw, 0.0);
   cmd_thrust = min(pos, max_thrust);
   law = cmd_thrust / max_thrust;
 
-  // Branch-free (rumoca-safe): stand down when disengaged OR when a session is flying.
+  // Continuous gate: stand down when disengaged OR when a session is flying.
   throttle_cmd = engage * (1.0 - piloted) * law;
 end DescentGuidance;

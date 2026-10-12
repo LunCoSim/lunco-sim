@@ -108,6 +108,25 @@ fn verify_catalog_retirement(retired_paths) {
     report_verdict(checks, "Twin catalog retirement", "TWIN_CATALOG_RETIREMENT")
 }
 
+fn verify_spawn_catalog_source(spawnable_paths, non_spawnable_paths) {
+    let authority = twin_name();
+    if authority.is_empty() || spawnable_paths.is_empty() {
+        throw "catalog source check requires a mounted Twin and a positive asset";
+    }
+    let palette = query("ListSpawnCatalog");
+    let checks = [];
+    for relative in spawnable_paths + non_spawnable_paths {
+        let path = "twin://" + authority + "/" + relative;
+        let found = false;
+        for entry in palette.entries {
+            if entry.source.path == path { found = true; }
+        }
+        checks.push(t_true(found == spawnable_paths.contains(relative),
+            "catalog admission matches authored loadability for " + path));
+    }
+    report_verdict(checks, "Twin Spawn source context", "TWIN_SPAWN_SOURCE_CONTEXT")
+}
+
 fn sysml_registry_retired(id) {
     let inspection = query("InspectSysmlDocument", #{ doc_id: id });
     inspection != () && inspection.ok == false && inspection.status == "not_found"
@@ -121,6 +140,25 @@ fn verify_sysml_retirement(ids) {
         checks.push(t_true(sysml_registry_retired(id), "SysML domain registry released its retired document"));
     }
     report_verdict(checks, "SysML registry retirement", "TWIN_SYSML_RETIREMENT")
+}
+
+// The active scripting name must address the current mount's semantic source
+// set, including after the same root is reopened under a fresh authority.
+fn verify_twin_source_scope(retired_authority) {
+    let authority = twin_name();
+    let current = query("AnalyzeSysml", #{path: "twin://" + authority, tables: []});
+    let checks = [t_true(authority != "" && current != () && current.ok == true,
+        "the active scripting authority resolves its mounted SysML source set")];
+    if retired_authority != "" {
+        let retired = query("AnalyzeSysml", #{path: "twin://" + retired_authority, tables: []});
+        checks.push(t_true(authority != retired_authority,
+            "reopening publishes a fresh scripting authority"));
+        checks.push(t_true(retired != () && retired.ok == false
+            && retired.errors != () && retired.errors.len() > 0
+            && retired.errors[0].contains("not mounted"),
+            "the retired source authority remains rejected"));
+    }
+    report_verdict(checks, "Twin scripting source scope", "TWIN_SCRIPT_SOURCE_SCOPE")
 }
 
 fn verify_modelica_retirement(ids) {

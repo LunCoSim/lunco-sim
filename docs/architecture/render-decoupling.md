@@ -135,28 +135,38 @@ mesh identity in the production sandbox, including unlike-dimension isolation.
 Sharing admits native renderer batching; performance improvement still requires
 a matched measurement rather than an asset-count inference.
 
-### Auxiliary shadow-view schedule admission
+### Shared shadow-view schedule
 
-Bevy's camera driver also runs `Core3d` for point- and spot-light shadow roots.
-Those roots need Bevy's shared shadow passes and GPU preprocessing, but not the
-camera-only prepass, main-pass, or post-process stages. `lunco-render-bevy`
-gates those stage sets from the current root's `LightEntity` role. Camera roots
-and other non-light roots retain the complete schedule; shadow roots retain the
-actual shadow-map rendering path, resolution, lights, and quality settings.
-Directional cascades remain attached to their output-camera schedule and are
-not classified as auxiliary light roots.
-This avoids running camera-only stage systems for light roots without treating
-shadow views as output cameras or disabling shadows. Bevy still prepares
-per-view GPU preprocess bind groups and submits its pending command buffers in
-the normal frame-level queue call; only a before/after trace can establish
-whether skipping these stages reduces that batch's buffer count or CPU time.
+`lunco-render-bevy` routes native point/spot `RootNonCameraView` entities from
+`Core3d` to `SharedShadowView` after Bevy prepares lights and applies its view
+commands. The route is refreshed when native preparation reinserts its label.
+Custom schedule labels, output cameras and directional cascades retain their
+existing schedules. This continuous render mechanism requires no Rhai policy
+hook and does not change simulation admission or authoritative state.
+
+The shared schedule composes Bevy's native metadata clearing, bin unpacking,
+early/late GPU preprocessing, indirect preparation and shared shadow systems.
+GPU passes use the native plugin setting and device capability admission, with
+the native global prepass query conditions. The eight admitted GPU systems form
+a dependency chain, so this schedule uses Bevy's `SingleThreadedExecutor`
+without worker dispatch between stages. The two-pass CPU preparation mode uses
+the same executor and native early-before-late order. Frame-level Render and
+Core3d retain their existing executors. CPU preparation remains in the
+frame-level Render schedule. Automatic intermediate deferred flushes are off,
+as in native Core3d; final buffer application retains the preparation and draw
+order. Camera passes and post-processing do not enter this schedule. Shadow
+draws, maps, resolutions, visibility and quality settings remain native-owned.
+Production pass inventory, visible shadows and a normal artifact comparison
+are required to establish correctness and a performance gain.
 
 ### Shadow GPU diagnostics
 
 When Bevy's `RenderDiagnosticsPlugin` is enabled, `LuncoRenderPlugin::finish`
 composes each native shared and per-camera early/late shadow system between
 timestamp systems with Bevy's system pipe. The native delegate retains its
-implicit dependency set and runs exactly once.
+implicit dependency set and runs exactly once in its selected schedule. Shared
+passes are instrumented in both Core3d and SharedShadowView; camera passes are
+instrumented in Core3d.
 
 PBR's system-local before/after rules are reapplied to each pipe: early shadows
 follow early indirect preparation and precede depth downsampling and late
@@ -178,6 +188,17 @@ cover shared point/spot maps and camera-owned directional cascades separately.
 Late spans can contain only timestamp overhead when occlusion culling has no
 late work. Timestamp support and Bevy's per-frame query budget limit GPU
 coverage; CPU-only or missing GPU spans do not establish zero GPU cost.
+
+Each admitted early shared pass also nests `lunco_light_depth/<pass_name>`
+inside `lunco_shadow_shared_early`. Native exports include the parent prefix;
+these child spans attribute individual depth passes and must not be added to
+their parent totals. The paired `lunco_shadow_view_work` CPU span records the
+render entity, native pass label, viewport size, optional phase presence and
+emptiness, and native bin/set counts. It measures the admission snapshot, not
+the native pass's CPU execution. Bin counts are not draw or instance counts;
+unchanged counts do not establish unchanged caster inputs. Pass labels and
+render entities identify the current render allocation, not authored asset
+identity. The child closes before its parent on the same queued end context.
 
 ### Local-light shadow relevance
 

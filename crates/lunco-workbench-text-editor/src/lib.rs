@@ -31,6 +31,10 @@ const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 struct SourceEditorPanel;
 
 impl InstancePanel for SourceEditorPanel {
+    fn requires_instance_remap(&self) -> bool {
+        true
+    }
+
     fn kind(&self) -> PanelId {
         SOURCE_EDITOR_KIND
     }

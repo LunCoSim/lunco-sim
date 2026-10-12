@@ -1,9 +1,9 @@
 //! Fragment parsing and stub-class trick helpers.
 
 use super::errors::AstMutError;
-use crate::parse_to_ast;
 use crate::pretty;
 use rumoca_ir_ast::StoredDefinition;
+use rumoca_phase_parse::parse_to_ast;
 use std::sync::Arc;
 
 /// Wrapper class name used when fragments of Modelica (a binding
@@ -13,8 +13,7 @@ use std::sync::Arc;
 /// inside `model {FRAGMENT_CLASS_NAME} ... end {FRAGMENT_CLASS_NAME};`,
 /// parsed, and the wrapper is discarded by looking up the contained
 /// child. Centralised so all sites that construct the wrapper and
-/// all sites that retrieve the inner class agree on the literal —
-/// previously hand-typed in ~14 places.
+/// all sites that retrieve the inner class agree on the literal.
 pub const FRAGMENT_CLASS_NAME: &str = "__LunCoFragment";
 
 /// Parse a [`FRAGMENT_CLASS_NAME`] stub class and return the

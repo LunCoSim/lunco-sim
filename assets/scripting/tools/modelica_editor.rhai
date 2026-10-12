@@ -35,9 +35,9 @@ fn inspect(doc) {
     let valid = _doc_required(doc, "inspect");
     if !valid.ok { return valid; }
     let source = query("GetDocumentSource", #{ doc_id: doc });
-    if source == () || source.ok != true { return source; }
+    if !_query_ok(source) { return source; }
     let compile = query("CompileStatus", #{ doc_id: doc });
-    if compile == () || compile.ok != true {
+    if !_query_ok(compile) {
         return _error("compile_status", "CompileStatus failed");
     }
     #{ ok: true, domain: "modelica", source: source, compile: compile,

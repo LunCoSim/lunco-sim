@@ -339,19 +339,13 @@ fn derive_title_from_doc(doc: &lunco_modelica_document::ModelicaDocument) -> Str
     doc.origin().display_name()
 }
 
-/// Retire Modelica tabs and transient selection state when their Twin closes.
-///
-/// Workspace teardown closes the Twin's documents through `CloseDocument`; this
-/// observer retires tabs and transient selection that reference them. Pending
-/// file opens are fenced by their admitted runtime owner on completion.
-fn clear_modelica_state_on_twin_closed(
+/// Retire Modelica selection state when its Twin closes.
+/// Document views retire through the `CloseDocument` owner.
+fn clear_modelica_selection_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut tabs: Option<ResMut<crate::model_tabs::ModelTabs>>,
-    mut canvas: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     mut rename: Option<ResMut<browser_section::DocRenameState>>,
     mut workbench: Option<ResMut<WorkbenchState>>,
-    mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
         return;
@@ -367,30 +361,14 @@ fn clear_modelica_state_on_twin_closed(
         .collect();
 
     if let Some(state) = rename.as_mut() {
-        if state
-            .editing
-            .as_ref()
-            .is_some_and(|(doc, _)| closed_docs.contains(doc))
+        if event.was_active
+            || state
+                .editing
+                .as_ref()
+                .is_some_and(|(doc, _)| closed_docs.contains(doc))
         {
             state.editing = None;
             state.needs_focus = false;
-        }
-    }
-
-    if let Some(state) = tabs.as_mut() {
-        let tab_ids: Vec<_> = state
-            .iter()
-            .filter_map(|(tab, model)| closed_docs.contains(&model.doc).then_some(tab))
-            .collect();
-        for tab in tab_ids {
-            state.close_tab(tab);
-            commands.trigger(lunco_workbench_core::commands::CloseTab {
-                kind: MODEL_VIEW_KIND,
-                instance: tab,
-            });
-            if let Some(canvas) = canvas.as_mut() {
-                canvas.drop_tab(tab);
-            }
         }
     }
 
@@ -591,6 +569,7 @@ impl Plugin for ModelicaUiPlugin {
         // round-trips them.
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<panels::journal::JournalPanelSettings>();
+        app.register_settings_section::<panels::code_editor::EditorSettings>();
 
         // Document hot-exit: persist every open Modelica buffer into the
         // per-Twin workspace-state and restore it (with unsaved edits) on
@@ -659,7 +638,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::graphs::on_export_graph_requested)
             .add_observer(panels::model_view::on_sync_model_tab_requested)
             .add_observer(panels::model_view::on_fast_run_setup_requested)
-            .add_observer(clear_modelica_state_on_twin_closed)
+            .add_observer(clear_modelica_selection_on_twin_closed)
             .init_resource::<LogBuffer>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
@@ -896,23 +875,33 @@ fn register_settings_submenu(world: &mut World) {
                 .text_style(lunco_theme::TypographyRole::Label.text_style())
                 .weak(),
         );
-        let Some((original_word_wrap, original_auto_indent)) = ctx
-            .resource::<panels::code_editor::EditorBufferState>()
-            .map(|buf| (buf.word_wrap, buf.auto_indent))
+        let Some(original) = ctx
+            .resource::<panels::code_editor::EditorSettings>()
+            .copied()
         else {
             return;
         };
-        let mut word_wrap = original_word_wrap;
-        let mut auto_indent = original_auto_indent;
-        ui.checkbox(&mut word_wrap, "Word wrap")
+        let mut settings = original;
+        ui.checkbox(&mut settings.word_wrap, "Word wrap")
             .on_hover_text("Wrap long lines at editor width");
-        ui.checkbox(&mut auto_indent, "Auto indent")
+        ui.checkbox(&mut settings.auto_indent, "Auto indent")
             .on_hover_text("Copy previous line's indent on Enter");
-        if word_wrap != original_word_wrap || auto_indent != original_auto_indent {
-            ctx.trigger(panels::code_editor::EditorSettingsChanged {
-                word_wrap,
-                auto_indent,
-            });
+        ui.horizontal(|ui| {
+            ui.label("Text scale");
+            let mut percent = settings.text_scale * 100.0;
+            if ui.add(egui::DragValue::new(&mut percent)
+                .range(50.0..=300.0).speed(5.0).suffix("%"))
+                .on_hover_text("Editor text only. Ctrl/Cmd +/−, Ctrl/Cmd + wheel or trackpad pinch. Ctrl/Cmd + 0 resets.")
+                .changed()
+            {
+                settings.text_scale = percent / 100.0;
+            }
+            if ui.small_button("Reset").clicked() {
+                settings.text_scale = 1.0;
+            }
+        });
+        if settings != original {
+            ctx.trigger(panels::code_editor::EditorSettingsChanged { settings });
         }
         ui.separator();
         ui.label(

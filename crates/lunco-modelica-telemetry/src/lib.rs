@@ -1,7 +1,7 @@
 //! Runtime projection of Modelica state into the shared signal registry.
 //!
 //! A Modelica solver exposes its complete current state through
-//! [`ModelicaModel::variables`].  Retaining that state is a simulation concern,
+//! [`ModelicaVariables::values`]. Retaining that state is a simulation concern,
 //! not a plot concern: an inspector, API client, recorder, or graph may all
 //! consume the same history.  This module therefore owns the render-free
 //! projection and applies the shared telemetry rate, retention, and
@@ -13,16 +13,13 @@ use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
 use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
-use lunco_doc_bevy::DocumentRegistry;
-#[cfg(test)]
-use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
-use lunco_modelica_document::ModelicaDocument;
-use lunco_modelica_index::index::ComponentNameLookup;
+use lunco_modelica_runtime::ModelicaScalarMetadata;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout, ModelicaVariables};
 
 /// Plugin that retains landed Modelica state in the shared telemetry registry.
 ///
@@ -44,15 +41,19 @@ impl Plugin for ModelicaTelemetryPlugin {
 
 /// Modelica telemetry changes only when its source sample or metadata contract
 /// changes. Keep that projection off render-only frames while still observing
-/// document and settings edits independently of solver responses.
+/// compiled metadata, projected identity, and settings independently of samples.
 fn modelica_telemetry_inputs_changed(
-    models: Query<(), Or<(Changed<ModelicaModel>, Changed<ModelicaSignalLayout>)>>,
-    documents: Option<Res<DocumentRegistry<ModelicaDocument>>>,
+    models: Query<
+        (),
+        Or<(
+            Changed<ModelicaModel>,
+            Changed<ModelicaVariables>,
+            Changed<ModelicaSignalLayout>,
+        )>,
+    >,
     settings: Option<Res<TelemetrySettings>>,
 ) -> bool {
-    !models.is_empty()
-        || documents.is_some_and(|documents| documents.is_changed())
-        || settings.is_some_and(|settings| settings.is_changed())
+    !models.is_empty() || settings.is_some_and(|settings| settings.is_changed())
 }
 
 /// Runtime state retained for each Modelica participant.
@@ -70,27 +71,30 @@ pub struct RuntimeTelemetrySessions {
 struct RuntimeTelemetrySession {
     session_id: u64,
     signals: HashMap<String, RuntimeSignalCache>,
-    document_id: Option<lunco_doc::DocumentId>,
-    document_generation: Option<u64>,
+    metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
     /// Last model-time sample attempted for this solver session. The shared
     /// registry remains the final per-channel authority; this batch cursor
     /// only avoids rebuilding the same variable list between due samples.
     last_sample_time: Option<f64>,
+    /// The registry owns archived wire identity. This cursor admits reuse only
+    /// while its catalog and the source's live owner remain unchanged.
+    global_owner: Option<GlobalEntityId>,
+    owner_catalog_revision: Option<u64>,
 }
 
 struct RuntimeSignalCache {
     signal: SignalRef,
     retained: bool,
-    /// Metadata is catalog state, not a per-sample value. Refresh it only when
-    /// the authored layout or document index changes, or on first observation.
-    metadata: Option<SignalMeta>,
+    owner_published: bool,
+    /// The registry owns metadata; the producer only tracks its publication.
+    metadata_published: bool,
 }
 
 /// Retain the current variables of every live Modelica solver.
 ///
 /// The system runs in `Update`, after worker admission in `First` and the
 /// lifecycle cycle, where
-/// [`ModelicaModel::current_time`] and [`ModelicaModel::variables`] describe the
+/// [`ModelicaModel::current_time`] and [`ModelicaVariables::values`] describe the
 /// same landed solver result.  Sampling is paced by model time rather than by
 /// render frames, so a fast UI cannot inflate the recorded rate and a headless
 /// run follows the same policy.
@@ -98,11 +102,11 @@ pub fn retain_modelica_runtime_state(
     mut commands: Commands,
     settings: Option<Res<TelemetrySettings>>,
     mut signals: Option<ResMut<SignalRegistry>>,
-    documents: Option<Res<DocumentRegistry<ModelicaDocument>>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
     models: Query<(
         Entity,
         &ModelicaModel,
+        &ModelicaVariables,
         Option<Ref<ModelicaSignalLayout>>,
         Option<&GlobalEntityId>,
         Option<&SignalSource>,
@@ -131,11 +135,7 @@ pub fn retain_modelica_runtime_state(
     // the registry provides this count without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, model, layout, global_owner, signal_source) in &models {
-        let document_host = documents
-            .as_ref()
-            .and_then(|documents| documents.host(model.document));
-        let document = document_host.map(|host| (model.document, host.generation()));
+    for (entity, model, variables, layout, global_owner, signal_source) in &models {
         let session = sessions.sessions.entry(entity).or_default();
         if session.session_id != model.session_id {
             for cached in session.signals.values().filter(|cached| cached.retained) {
@@ -143,17 +143,19 @@ pub fn retain_modelica_runtime_state(
             }
             session.signals.clear();
             session.session_id = model.session_id;
-            session.document_id = None;
-            session.document_generation = None;
+            session.metadata = None;
             session.last_sample_time = None;
+            session.global_owner = None;
+            session.owner_catalog_revision = None;
         }
 
-        let metadata_dirty = session.document_id != document.map(|(id, _)| id)
-            || session.document_generation != document.map(|(_, generation)| generation)
-            || layout.as_ref().is_some_and(|layout| layout.is_changed());
+        let metadata_dirty = match (&session.metadata, &model.variable_metadata) {
+            (Some(previous), Some(current)) => !Arc::ptr_eq(previous, current),
+            (None, None) => false,
+            _ => true,
+        } || layout.as_ref().is_some_and(|layout| layout.is_changed());
         if metadata_dirty {
-            session.document_id = document.map(|(id, _)| id);
-            session.document_generation = document.map(|(_, generation)| generation);
+            session.metadata = model.variable_metadata.clone();
         }
 
         let sample_due = session.last_sample_time.is_none_or(|last| {
@@ -163,17 +165,15 @@ pub fn retain_modelica_runtime_state(
             continue;
         }
 
-        // Build the borrowed component-name lookup only for a metadata batch.
-        // Solver samples with settled metadata do not rebuild or walk the
-        // document index.
-        let mut component_names = if metadata_dirty {
-            document_host.map(|host| host.document().index().component_name_lookup())
-        } else {
-            None
-        };
-
+        let owner_dirty = session.global_owner != global_owner.copied()
+            || session.owner_catalog_revision != Some(signals.catalog_revision());
+        if owner_dirty {
+            for cached in session.signals.values_mut() {
+                cached.owner_published = false;
+            }
+        }
         let mut retained_any = false;
-        for (name, &value) in &model.variables {
+        for (name, &value) in &variables.values {
             if !value.is_finite() || name.is_empty() {
                 continue;
             }
@@ -196,7 +196,8 @@ pub fn retain_modelica_runtime_state(
                         RuntimeSignalCache {
                             signal,
                             retained: false,
-                            metadata: None,
+                            owner_published: false,
+                            metadata_published: false,
                         },
                     );
                     session
@@ -217,25 +218,19 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
             if let Some(owner) = global_owner {
-                signals.associate_global_owner(signal, *owner);
+                if !cached.owner_published || !cached.retained {
+                    signals.associate_global_owner(signal, *owner);
+                    cached.owner_published = true;
+                }
             }
 
-            // Generated-document metadata can become available after the
-            // first solver response when its asynchronous index build lands.
-            // Refresh metadata independently of sampling, but only when the
-            // authoritative document/layout inputs changed or this variable
-            // has not been described in this session yet.
-            if metadata_dirty || cached.metadata.is_none() {
-                if component_names.is_none() {
-                    component_names =
-                        document_host.map(|host| host.document().index().component_name_lookup());
-                }
-                let meta =
-                    model_signal_meta(component_names.as_ref(), model, layout.as_deref(), name);
-                if cached.metadata.as_ref() != Some(&meta) {
-                    signals.update_meta(signal.clone(), meta.clone());
-                }
-                cached.metadata = Some(meta);
+            // A checked FMI inventory changes only when the worker installs
+            // a new component. Draft edits never alter a live solver's facts.
+            if metadata_dirty || !cached.metadata_published {
+                let _span = bevy::log::debug_span!("modelica_telemetry_channel_metadata").entered();
+                let meta = model_signal_meta(model, layout.as_deref(), name);
+                signals.update_meta(signal.clone(), meta);
+                cached.metadata_published = true;
             }
 
             // The shared signal registry owns due-time and time-reversal for
@@ -256,6 +251,8 @@ pub fn retain_modelica_runtime_state(
             }
         }
 
+        session.global_owner = global_owner.copied();
+        session.owner_catalog_revision = Some(signals.catalog_revision());
         if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
@@ -266,30 +263,19 @@ pub fn retain_modelica_runtime_state(
 }
 
 fn model_signal_meta(
-    component_names: Option<&ComponentNameLookup<'_>>,
     model: &ModelicaModel,
     layout: Option<&ModelicaSignalLayout>,
     name: &str,
 ) -> SignalMeta {
-    let projected = layout.and_then(|layout| layout.metadata.get(name));
+    let compiled = model
+        .variable_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(name));
     let modelica_provenance = layout.and_then(|layout| layout.provenance(name));
-    let entry = component_names.and_then(|lookup| lookup.find_component_by_leaf(name));
     let model_variable = modelica_provenance
         .as_ref()
         .and_then(|identity| identity.model_variable.clone())
         .or_else(|| (!name.is_empty()).then(|| name.to_string()));
-    let connector_metadata = model_variable
-        .as_deref()
-        .and_then(standard_connector_metadata);
-    let unit = projected
-        .and_then(|entry| entry.unit.clone())
-        .or_else(|| {
-            entry
-                .and_then(|entry| entry.modifications.get("unit"))
-                .map(|unit| unit.trim_matches('"').to_string())
-                .filter(|unit| !unit.is_empty())
-        })
-        .or_else(|| connector_metadata.map(|(unit, _)| unit.to_string()));
 
     let model_class = modelica_provenance
         .as_ref()
@@ -301,16 +287,8 @@ fn model_signal_meta(
         .or_else(|| (!model.source_uri.is_empty()).then(|| model.source_uri.clone()));
 
     SignalMeta {
-        description: projected
-            .and_then(|entry| entry.description.clone())
-            .filter(|description| !description.is_empty())
-            .or_else(|| {
-                entry
-                    .map(|entry| entry.description.clone())
-                    .filter(|description| !description.is_empty())
-            })
-            .or_else(|| connector_metadata.map(|(_, description)| description.to_string())),
-        unit,
+        description: compiled.and_then(|entry| entry.description.clone()),
+        unit: compiled.and_then(|entry| entry.unit.clone()),
         provenance: Some("modelica".to_string()),
         group_path: layout
             .and_then(|layout| layout.group_path(name))
@@ -332,23 +310,12 @@ fn model_signal_meta(
     }
 }
 
-/// Standard Modelica electrical connector fields retain their physical
-/// contract after flattening, even when the generated solver document carries
-/// no declaration metadata for the connector member itself.
-fn standard_connector_metadata(variable: &str) -> Option<(&'static str, &'static str)> {
-    match variable {
-        "p.v" | "n.v" => Some(("V", "Electrical pin voltage.")),
-        "p.i" | "n.i" => Some(("A", "Electrical pin current; positive into the component.")),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::app::Update;
 
-    fn app_with_model(model: ModelicaModel) -> (App, Entity) {
+    fn app_with_model(model: ModelicaModel, variables: ModelicaVariables) -> (App, Entity) {
         let mut app = App::new();
         app.insert_resource(TelemetrySettings::default());
         app.insert_resource(SignalRegistry::default());
@@ -359,21 +326,22 @@ mod tests {
         );
         let entity = app
             .world_mut()
-            .spawn((model, ModelicaSignalLayout::default()))
+            .spawn((model, variables, ModelicaSignalLayout::default()))
             .id();
         (app, entity)
     }
 
     #[test]
     fn runtime_state_is_retained_without_a_plot_binding() {
-        let mut model = ModelicaModel {
+        let model = ModelicaModel {
             model_name: "LunCo.Test.Sensor".into(),
             source_uri: "lunco://models/LunCo/Test/Sensor.mo".into(),
             current_time: 0.0,
             ..Default::default()
         };
-        model.variables.insert("soc".to_string(), 0.95);
-        let (mut app, entity) = app_with_model(model);
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("soc".to_string(), 0.95);
+        let (mut app, entity) = app_with_model(model, variables);
 
         app.update();
 
@@ -409,19 +377,20 @@ mod tests {
     }
 
     #[test]
-    fn projected_member_metadata_is_used_for_generated_channel_names() {
+    fn checked_scalar_metadata_is_used_for_generated_channel_names() {
         let mut model = ModelicaModel::default();
-        model.variables.insert("member_current".to_string(), 3.0);
-        let mut layout = ModelicaSignalLayout::default();
-        layout.metadata.insert(
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
             "member_current".to_string(),
-            ModelicaVariableMetadata {
+            ModelicaScalarMetadata {
                 description: Some("Current delivered by the member".to_string()),
                 unit: Some("A".to_string()),
+                ..Default::default()
             },
         );
 
-        let meta = model_signal_meta(None, &model, Some(&layout), "member_current");
+        model.variable_metadata = Some(Arc::new(metadata));
+        let meta = model_signal_meta(&model, None, "member_current");
         assert_eq!(meta.unit.as_deref(), Some("A"));
         assert_eq!(
             meta.description.as_deref(),
@@ -431,10 +400,7 @@ mod tests {
 
     #[test]
     fn projected_modelica_identity_is_retained_for_solver_names() {
-        let mut model = ModelicaModel::default();
-        model
-            .variables
-            .insert("unit.Camera.power_draw_w".to_string(), 3.0);
+        let model = ModelicaModel::default();
         let mut layout = ModelicaSignalLayout::default();
         layout.provenance_prefixes.push((
             "unit.Camera.".to_string(),
@@ -445,7 +411,7 @@ mod tests {
             },
         ));
 
-        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Camera.power_draw_w");
+        let meta = model_signal_meta(&model, Some(&layout), "unit.Camera.power_draw_w");
         assert_eq!(
             meta.model_class.as_deref(),
             Some("LunCo.Electrical.CameraPayload")
@@ -458,36 +424,11 @@ mod tests {
     }
 
     #[test]
-    fn flattened_electrical_connector_fields_keep_units_and_meaning() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("unit.Battery.p.v".to_string(), 28.0);
-        let mut layout = ModelicaSignalLayout::default();
-        layout.provenance_prefixes.push((
-            "unit.Battery.".to_string(),
-            ModelicaSignalProvenance {
-                model_class: Some("LunCo.Electrical.Battery".into()),
-                ..default()
-            },
-        ));
-
-        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Battery.p.v");
-        assert_eq!(meta.unit.as_deref(), Some("V"));
-        assert_eq!(meta.description.as_deref(), Some("Electrical pin voltage."));
-        assert_eq!(meta.model_variable.as_deref(), Some("p.v"));
-
-        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Battery.p.i");
-        assert_eq!(meta.unit.as_deref(), Some("A"));
-        assert_eq!(
-            meta.description.as_deref(),
-            Some("Electrical pin current; positive into the component.")
-        );
-    }
-
-    #[test]
     fn runtime_state_uses_rate_and_retains_steady_time_samples() {
-        let mut model = ModelicaModel::default();
-        model.variables.insert("speed".to_string(), 1.0);
-        let (mut app, entity) = app_with_model(model);
+        let model = ModelicaModel::default();
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("speed".to_string(), 1.0);
+        let (mut app, entity) = app_with_model(model, variables);
         let signal = SignalRef::new(entity, "speed");
 
         app.update();
@@ -495,7 +436,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.01;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         assert_eq!(
@@ -511,7 +457,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.2;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         let history = app
@@ -529,7 +480,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.4;
-            value.variables.insert("speed".to_string(), 2.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.0);
         }
         app.update();
         assert_eq!(
@@ -546,7 +502,12 @@ mod tests {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.current_time = 0.61;
-            value.variables.insert("speed".to_string(), 2.1);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("speed".to_string(), 2.1);
         }
         app.update();
         assert_eq!(
@@ -561,13 +522,14 @@ mod tests {
 
     #[test]
     fn a_new_solver_session_clears_previous_history() {
-        let mut model = ModelicaModel {
+        let model = ModelicaModel {
             session_id: 1,
             current_time: 1.0,
             ..Default::default()
         };
-        model.variables.insert("x".to_string(), 4.0);
-        let (mut app, entity) = app_with_model(model);
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("x".to_string(), 4.0);
+        let (mut app, entity) = app_with_model(model, variables);
         let signal = SignalRef::new(entity, "x");
         app.update();
 
@@ -576,7 +538,12 @@ mod tests {
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
             value.session_id = 2;
             value.current_time = 0.0;
-            value.variables.insert("x".to_string(), 8.0);
+            drop(value);
+            model
+                .get_mut::<ModelicaVariables>()
+                .unwrap()
+                .values
+                .insert("x".to_string(), 8.0);
         }
         app.update();
 
@@ -591,11 +558,180 @@ mod tests {
     }
 
     #[test]
-    fn channel_limit_uses_live_registry_admission_after_removal() {
+    fn owner_publication_tracks_channel_lifecycle_and_source_identity() {
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("x".into(), 1.0);
         let mut model = ModelicaModel::default();
-        model.variables.insert("a".into(), 1.0);
-        model.variables.insert("b".into(), 2.0);
-        let (mut app, entity) = app_with_model(model);
+        model.current_time = f64::NAN;
+        let (mut app, entity) = app_with_model(model, variables);
+        let first_owner = GlobalEntityId::from_raw(42);
+        app.world_mut().entity_mut(entity).insert(first_owner);
+        app.update();
+        let x = SignalRef::new(entity, "x");
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&x)
+                .is_none()
+        );
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&x)
+                .is_some()
+        );
+
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            None
+        );
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.25;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(first_owner)
+        );
+
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("y".into(), 2.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.5;
+        app.update();
+        let y = SignalRef::new(entity, "y");
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&y),
+            Some(first_owner)
+        );
+
+        let next_owner = GlobalEntityId::from_raw(99);
+        app.world_mut().entity_mut(entity).insert(next_owner);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.75;
+        app.update();
+        for signal in [&x, &y] {
+            assert_eq!(
+                app.world()
+                    .resource::<SignalRegistry>()
+                    .global_owner(signal),
+                Some(next_owner)
+            );
+        }
+
+        // A skipped value must not acknowledge a batch's owner/catalog change.
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), f64::NAN);
+        let final_owner = GlobalEntityId::from_raw(123);
+        app.world_mut().entity_mut(entity).insert(final_owner);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(next_owner)
+        );
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), 3.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.25;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(final_owner)
+        );
+
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), f64::NAN);
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .remove_signal(&x);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.5;
+        app.update();
+        app.world_mut()
+            .get_mut::<ModelicaVariables>(entity)
+            .unwrap()
+            .values
+            .insert("x".into(), 4.0);
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 1.75;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SignalRegistry>().global_owner(&x),
+            Some(final_owner)
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<GlobalEntityId>();
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 2.0;
+        app.update();
+        for signal in [&x, &y] {
+            assert_eq!(
+                app.world()
+                    .resource::<SignalRegistry>()
+                    .global_owner(signal),
+                Some(final_owner)
+            );
+        }
+    }
+
+    #[test]
+    fn channel_limit_uses_live_registry_admission_after_removal() {
+        let model = ModelicaModel::default();
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("a".into(), 1.0);
+        variables.values.insert("b".into(), 2.0);
+        let (mut app, entity) = app_with_model(model, variables);
         app.world_mut()
             .resource_mut::<TelemetrySettings>()
             .max_channels = 1;

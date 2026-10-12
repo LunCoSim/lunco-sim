@@ -154,7 +154,6 @@ pub fn default_bounds() -> RunBounds {
         tolerance: None,
         solver: None,
         h0: None,
-        runtime: lunco_experiments::RuntimeMode::Batch,
     }
 }
 
@@ -191,68 +190,45 @@ pub enum ClassResolveError {
 impl std::fmt::Display for ClassResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unknown => write!(f, "is not a simulatable class in this document"),
+            Self::Unknown => write!(f, "does not identify an eligible class in this document"),
             Self::Ambiguous(m) => write!(f, "is ambiguous — matches {}", m.join(", ")),
         }
     }
 }
 
-/// Resolve a caller-supplied simulation target — fully qualified OR a bare
-/// leaf name — to the canonical fully-qualified class, matched against the
-/// document's simulatable `candidates` (themselves always qualified, from
-/// [`simulation_candidates`](lunco_modelica_index::index::ModelicaIndex::simulation_candidates)).
-///
-/// THE single source of class-name resolution shared by every "run this
-/// class" surface (`CompileModel`, `FastRunActiveModel`, `RunExperiment`), so
-/// they can't drift on how a name maps to a model. Precedence:
-///   1. exact match — the request is already a valid qualified name.
-///   2. unique leaf match — exactly one candidate whose last `.`-segment
-///      equals the request. This is what lets a caller pass
-///      `"RoverThermalSystem"` and reach `"LunarRover.RoverThermalSystem"`
-///      instead of handing the compiler a name it rejects with the opaque
-///      "model not found" at instantiate time.
-///   3. otherwise [`ClassResolveError`] (unknown / ambiguous), so the caller
-///      surfaces a clear, candidate-listing error rather than a deep compiler
-///      failure.
+/// Admit an exact document-relative or package-qualified class identity.
+/// A bare identifier is accepted only when one eligible class has that leaf.
+/// `within` is the parsed source document's package; candidates are the
+/// document-relative identities supplied by its index.
 pub fn resolve_requested_class(
     requested: &str,
     candidates: &[String],
+    within: Option<&str>,
 ) -> Result<String, ClassResolveError> {
     let req = requested.trim();
-    // 1. Exact (already-qualified, or a dot-free top-level name) match.
-    if let Some(hit) = candidates.iter().find(|c| c.as_str() == req) {
-        return Ok(hit.clone());
-    }
-    // 2. Leaf-name match: the bare request equals a candidate's last
-    //    `.`-segment (e.g. `"RoverThermalSystem"` → `"LunarRover.RoverThermalSystem"`).
-    let leaf_hits: Vec<String> = candidates
+    let qualify = |candidate: &str| match within.filter(|prefix| !prefix.is_empty()) {
+        Some(prefix) => format!("{prefix}.{candidate}"),
+        None => candidate.to_string(),
+    };
+    if let Some(candidate) = candidates
         .iter()
-        .filter(|c| c.rsplit('.').next() == Some(req))
-        .cloned()
-        .collect();
-    match leaf_hits.len() {
-        1 => return Ok(leaf_hits.into_iter().next().unwrap()),
-        n if n > 1 => return Err(ClassResolveError::Ambiguous(leaf_hits)),
-        _ => {}
+        .find(|candidate| candidate.as_str() == req || qualify(candidate) == req)
+    {
+        return Ok(qualify(candidate));
     }
-    // 3. Fully-qualified request that is a segment-aligned SUPERSET of an
-    //    under-qualified candidate — i.e. a candidate is a trailing dotted
-    //    suffix of the request. Return the request: it carries the full
-    //    prefix the compiler needs. This is the drilled-source library-class case: the
-    //    pin is the true FQN `Modelica.Blocks.Examples.PID_Controller`, while
-    //    the in-doc candidate is the `within`-relative
-    //    `Blocks.Examples.PID_Controller` (the doc's `within Modelica.Blocks.
-    //    Examples;` prefix isn't folded into the index's qualified names).
-    //    Compiling the under-qualified candidate would fail "model not found".
-    if req.contains('.') {
-        let mut suffix_hits = candidates.iter().filter(|c| {
-            c.rsplit('.').next() == req.rsplit('.').next() && req.ends_with(&format!(".{c}"))
-        });
-        if suffix_hits.next().is_some() && suffix_hits.next().is_none() {
-            return Ok(req.to_string());
-        }
+    if rumoca_core::has_top_level_dot(req) {
+        return Err(ClassResolveError::Unknown);
     }
-    Err(ClassResolveError::Unknown)
+    let matches = candidates
+        .iter()
+        .filter(|candidate| rumoca_core::top_level_last_segment(candidate) == req)
+        .map(|candidate| qualify(candidate))
+        .collect::<Vec<_>>();
+    match matches.len() {
+        1 => Ok(matches.into_iter().next().expect("one admitted class")),
+        n if n > 1 => Err(ClassResolveError::Ambiguous(matches)),
+        _ => Err(ClassResolveError::Unknown),
+    }
 }
 
 /// Map and validate a model's `experiment(...)` annotation to [`RunBounds`]. `None` when
@@ -275,7 +251,6 @@ pub fn bounds_from_experiment(
         tolerance: exp.tolerance,
         solver: None,
         h0: None,
-        runtime: lunco_experiments::RuntimeMode::Batch,
     };
     validate_run_bounds(&bounds)?;
     Ok(Some(bounds))
@@ -329,7 +304,6 @@ mod tests {
             tolerance: None,
             solver: None,
             h0: None,
-            runtime: lunco_experiments::RuntimeMode::Batch,
         }
     }
 
@@ -362,31 +336,48 @@ mod tests {
         ];
         // Exact qualified passes through.
         assert_eq!(
-            resolve_requested_class("LunarRover.LunarEnvironment", &cands).unwrap(),
+            resolve_requested_class("LunarRover.LunarEnvironment", &cands, None).unwrap(),
             "LunarRover.LunarEnvironment"
         );
         // Dot-free top-level matches exactly.
         assert_eq!(
-            resolve_requested_class("TopLevel", &cands).unwrap(),
+            resolve_requested_class("TopLevel", &cands, None).unwrap(),
             "TopLevel"
         );
         // Unique leaf resolves to its qualified form.
         assert_eq!(
-            resolve_requested_class("LunarEnvironment", &cands).unwrap(),
+            resolve_requested_class("LunarEnvironment", &cands, None).unwrap(),
             "LunarRover.LunarEnvironment"
         );
         // Whitespace is trimmed.
         assert_eq!(
-            resolve_requested_class("  LunarEnvironment ", &cands).unwrap(),
+            resolve_requested_class("  LunarEnvironment ", &cands, None).unwrap(),
             "LunarRover.LunarEnvironment"
         );
         // Unknown name → Unknown.
         assert_eq!(
-            resolve_requested_class("Nope", &cands),
+            resolve_requested_class("Nope", &cands, None),
+            Err(ClassResolveError::Unknown)
+        );
+        let quoted = vec!["Root.'A.B'".to_owned()];
+        assert_eq!(
+            resolve_requested_class("'A.B'", &quoted, Some("Space")).unwrap(),
+            "Space.Root.'A.B'"
+        );
+        assert_eq!(
+            resolve_requested_class("Root.'A.B'", &quoted, Some("Space")).unwrap(),
+            "Space.Root.'A.B'"
+        );
+        assert_eq!(
+            resolve_requested_class("Space.Root.'A.B'", &quoted, Some("Space")).unwrap(),
+            "Space.Root.'A.B'"
+        );
+        assert_eq!(
+            resolve_requested_class("Other.Space.Root.'A.B'", &quoted, Some("Space")),
             Err(ClassResolveError::Unknown)
         );
         // Leaf shared across packages → Ambiguous with both matches.
-        match resolve_requested_class("RoverThermalSystem", &cands) {
+        match resolve_requested_class("RoverThermalSystem", &cands, None) {
             Err(ClassResolveError::Ambiguous(m)) => {
                 assert_eq!(m.len(), 2);
                 assert!(m.contains(&"LunarRover.RoverThermalSystem".to_string()));

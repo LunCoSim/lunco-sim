@@ -20,3 +20,9 @@ pub enum CosimApplySet {
     /// Apply propagated actuator values to the participant backend.
     ApplyForces,
 }
+
+/// Read-only physical sampling before a participant's solver is initialized.
+/// Providers reuse their fixed-step sampling mechanisms here without advancing
+/// clocks, stepping participants, propagating wires, or applying actuators.
+#[derive(bevy::ecs::schedule::ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InitializationSampling;

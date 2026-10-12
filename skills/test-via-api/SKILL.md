@@ -57,9 +57,14 @@ document ID or preview may survive; repeat `OpenTwin` on B to verify fresh
 admission. A rejected Twin path must preserve the current documents. Twin
 replacement closes loose/library editor documents as well as Twin-owned files;
 `RestartScene` preserves editable documents and tests a different lifecycle.
+On restart, require fresh stage readiness before inspecting terrain or Modelica
+participants: the reused root waits for the prepared reload, and the document's
+serialized generation joins that loaded revision before later edits project.
 Pending editor and workspace-restore work must not recreate old tabs after
 replacement. Modelica `CloseDocument` is owned by the headless core, so exercise
 scratch-document closure in both headless and windowed hosts.
+`modelica_compiled_metadata.rhai` also verifies that closing an API scratch
+document retires its live Modelica participant through the shared close owner.
 
 The maintained document-close scene gate is
 `scenes/tests/twin_session_retirement/twin_session_retirement.usda` with verdict
@@ -89,6 +94,10 @@ driver). The scene-only LoadScene and RestartScene checks preserve the open
 Twin and require the replacement/restarted projection before their verdicts.
 AddTwin and AddFolderToWorkspace preserve the existing documents and active
 Twin; subsequent replacement must retire all added source catalogs too.
+Each replacement also requires `TWIN_SCRIPT_SOURCE_SCOPE`: `twin_name()` must
+resolve the replacement SysML source set while the outgoing authority remains
+rejected. A scene can finish loading even when its mission script failed;
+inspect `ScriptStatus` and actual propulsion when verifying ignition.
 
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
 tested through its production scene gate in `assets/scenes/tests/` with the

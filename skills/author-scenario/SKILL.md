@@ -43,6 +43,10 @@ authored test. Loading a source asynchronously must not allow physics to run
 before its actor exists. A malformed or missing authored source emits a
 structured runtime fault and retains admission until replacement or removal;
 replacement and Twin/scene teardown retire only that source operation's key.
+USD source actors retain one `ScenarioPreparationAdmissions` key through
+loading, document admission and startup. Independent asset requests own separate
+keys. A rejected source keeps its authored path and terminal loader state until
+replacement or removal; it must not reopen admission by deleting the bad input.
 
 For mission operations, read the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
@@ -124,11 +128,16 @@ fn simulation_dependencies(me, ctx) {
         entity_writes: [],
         query_reads: [],
         required_inputs: [
-            #{ owner: "sysml.twin-analysis", identity: ctx.twin_name },
+            #{ owner: "sysml.twin-analysis", identity: twin_name() },
         ],
     }
 }
 ```
+
+Dependency planning runs before required inputs are ready. Restrict it to
+identity discovery and declarations; read source facts in top-level
+initialization or `on_start`. For source-selected entities discovered there,
+call `track_entity_read(id)` or `track_entity_write(id)` before access.
 
 Modelica entities join the shared fixed-step causal barrier. Required input
 keys name an owner namespace and an exact identity; the generic runtime waits
@@ -166,9 +175,9 @@ Hierarchy and spatial identity queries remain available for discovery. If a
 scenario uses their returned ids in direct `get`, `port`, or mutation calls, it
 must include those ids in the corresponding access set.
 
-When a typed simulation command creates an entity whose id was not available
-while the plan was prepared, call `track_entity_read(id)` or
-`track_entity_write(id)` after the command has materialized the live entity
+When an entity is discovered after required inputs become ready, or a typed
+simulation command creates an entity unavailable during planning, call `track_entity_read(id)` or
+`track_entity_write(id)` once the entity is live
 and before accessing it. This commits access in serialized simulation order;
 if the entity is a Modelica participant, it also joins the scenario's barrier.
 

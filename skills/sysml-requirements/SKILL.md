@@ -190,7 +190,7 @@ registry must bind that case to its scene and observer.
 For example, from an in-app Rhai tool with the Twin mounted:
 
 ```rhai
-let report = query("ValidateSysml", #{path: "twin://astrobotic-griffin-1"});
+let report = query("ValidateSysml", #{path: "twin://" + twin_name()});
 ```
 
 Review `report.errors`, `report.warnings`, and the structured
@@ -561,6 +561,10 @@ by the authored Twin lifecycle policy. Non-empty source sets resolve against
 the embedded standard library on the async analysis worker; an empty optional
 source set commits an empty ready snapshot without initializing that library.
 Until the snapshot is ready, the query returns an explicit preparation result.
+Use `"twin://" + twin_name()` for the active source set and `twin_name()` for
+its `sysml.twin-analysis` required-input identity. This is the current asset
+mount authority, including after reopen; the manifest display name cannot
+address a retired mount. A missing active mount fails visibly.
 Saving an indexed SysML document invalidates the mounted Twin snapshot and
 reloads that exact `twin://` source before analysis runs again. After a save,
 retry the query until its preparation result becomes ready, then use the

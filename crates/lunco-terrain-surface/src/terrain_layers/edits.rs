@@ -272,6 +272,32 @@ pub fn edit_attr_writes(kind: &EditKind) -> Vec<(&'static str, &'static str, Str
 /// order at each sampled point (additive brush adds, flatten blends from the
 /// accumulated height).
 impl HeightModifier for EditsLayer {
+    fn height_bounds(&self, rect: [f64; 4], mut input: [f64; 2]) -> Option<[f64; 2]> {
+        for (_, kind) in &self.edits {
+            input = match *kind {
+                EditKind::Brush {
+                    center,
+                    radius,
+                    amplitude,
+                } => BrushModifier::new(center, radius, amplitude).height_bounds(rect, input)?,
+                EditKind::Flatten {
+                    center,
+                    radius,
+                    target_y,
+                } => FlattenModifier::new(center, radius, target_y).height_bounds(rect, input)?,
+                EditKind::Crater {
+                    center,
+                    radius,
+                    depth,
+                } => {
+                    let b = manual_crater(center, radius, depth)
+                        .delta_bounds(rect, self.min_wavelength)?;
+                    [input[0] + b[0], input[1] + b[1]]
+                }
+            };
+        }
+        Some(input)
+    }
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         let mut h = h_in;
         for (_, kind) in &self.edits {

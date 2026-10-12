@@ -17,7 +17,7 @@ use lunco_api::queries::{ApiQueryError, ApiQueryResult, api_param_array, api_par
 use lunco_api::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentOrigin};
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_workspace::WorkspaceResource;
 
 use lunco_experiments::ExperimentOrigins;
@@ -834,9 +834,8 @@ fn run_summary(exp: &lunco_experiments::Experiment, doc_id: Option<u64>) -> ApiV
         RunStatus::Done { wall_time_ms } => {
             obj.push(("wall_time_ms".into(), api_value!(*wall_time_ms)));
         }
-        RunStatus::Failed { error, partial } => {
+        RunStatus::Failed { error } => {
             obj.push(("error".into(), ApiValue::Str(error.clone())));
-            obj.push(("partial".into(), ApiValue::Bool(*partial)));
         }
         RunStatus::Pending | RunStatus::Queued | RunStatus::Cancelled => {}
     }
@@ -1009,7 +1008,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             );
         };
         let Some(result) = &exp.result else {
-            // Run dispatched but not done (pending/running/failed-no-partial).
+            // This run has not published a completed trajectory.
             return query_error(
                 ApiErrorCode::DeserializationError,
                 format!(
@@ -1061,6 +1060,23 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             }
         }
 
+        let metadata = ApiValue::Map(
+            series
+                .iter()
+                .filter_map(|(name, _)| {
+                    result.meta.variable_metadata.get(name).map(|fact| {
+                        (
+                            name.clone(),
+                            api_value!({
+                                "unit": fact.unit.clone(),
+                                "description": fact.description.clone(),
+                            }),
+                        )
+                    })
+                })
+                .collect(),
+        );
+
         query_ok(api_value!({
             "experiment_id": exp.id.0.to_string(),
             "name": exp.name.clone(),
@@ -1074,6 +1090,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             "missing_variables": missing,
             "times": times,
             "series": ApiValue::Map(series),
+            "metadata": metadata,
         }))
     }
 }
@@ -1205,9 +1222,9 @@ impl ApiQueryProvider for GetShareLinkProvider {
 //
 // Returns the structural picture of one class within a doc:
 // class_kind, extends, components (subinstances), connections (wiring),
-// plus typed inputs / parameters / outputs with units, bounds and
-// defaults. The agent picks which class via the `class` parameter; the
-// default is the drilled-in class or the first non-package class.
+// plus typed inputs / parameters / outputs with units, bounds, declaration
+// dimensions and defaults. The agent picks the class via the `class` parameter; the
+// omitted value uses the selected class or an unambiguous simulation root.
 // Equations and full annotations are intentionally not surfaced here
 // — those are best read via `get_document_source` when the agent
 // genuinely needs them.
@@ -1232,17 +1249,9 @@ impl ApiQueryProvider for DescribeModelProvider {
                     "DescribeModel: `class` must be a string",
                 );
             }
-        }
-        .filter(|value| !value.is_empty());
+        };
 
-        // Resolve drilled-in class as the fallback target before we
-        // borrow the modelica registry — `DrilledInClassNames` is a
-        // separate resource and we need both. Reading them in
-        // sequence keeps the borrow checker simple.
-        // of going through the `DrilledInClassNames` cache. The
-        // helper falls back to first-tab-for-doc when no
-        // `TabRenderContext` is in scope (which is the case here —
-        // API queries run off-render).
+        // An omitted class uses the document's selected class.
         let drilled_in = lunco_modelica_core::sim_default::drilled_class_for_doc(world, doc_id);
 
         let registry = world.resource::<ModelicaDocuments>();
@@ -1260,40 +1269,46 @@ impl ApiQueryProvider for DescribeModelProvider {
             );
         };
 
-        // Class resolution: explicit `class` param > drilled-in pin >
-        // first non-package class. Match by short name (the same
-        // convention `compile_model.class` uses) so the caller can pass
-        // either short or qualified.
+        let index = document.index();
+        let candidates = index.classes.keys().cloned().collect::<Vec<_>>();
         let target_class_name = class_param.or(drilled_in).or_else(|| {
-            // First non-package class via the per-doc Index — same
-            // pattern used across the inspector / palette / canvas
-            // drill-in code paths (see the Modelica UI panels).
-            host.document()
-                .index()
-                .classes
-                .values()
-                .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
-                .map(|c| c.name.clone())
+            let roots = index.simulation_candidates();
+            (roots.len() == 1 || index.simulation_preferred_count() == 1)
+                .then(|| roots.first().cloned())
+                .flatten()
         });
-        let Some(target_name) = target_class_name else {
-            return query_error(
-                ApiErrorCode::EntityNotFound,
-                format!("doc {} has no non-package class to describe", doc_id.raw()),
-            );
-        };
-        // The caller may pass `Foo.Bar` — try the short tail first.
-        let short = target_name.rsplit('.').next().unwrap_or(&target_name);
-        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short)
-        else {
-            let candidates =
-                lunco_modelica_ast::ast_extract::collect_non_package_classes_qualified(&ast);
+        let Some(requested) = target_class_name else {
             return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!(
-                    "class `{}` not found in doc {}. Candidates: [{}]",
-                    target_name,
+                    "DescribeModel requires a class selection in doc {}. Candidates: [{}]",
                     doc_id.raw(),
                     candidates.join(", ")
+                ),
+            );
+        };
+        let target_name = match lunco_modelica_core::sim_target::resolve_requested_class(
+            &requested,
+            &candidates,
+            index.within_path.as_deref(),
+        ) {
+            Ok(name) => name,
+            Err(error) => {
+                return query_error(
+                    ApiErrorCode::EntityNotFound,
+                    format!(
+                        "class `{requested}` {error}. Candidates: [{}]",
+                        candidates.join(", ")
+                    ),
+                );
+            }
+        };
+        let Some(class) = ast.get_class_by_qualified_name(&target_name) else {
+            return query_error(
+                ApiErrorCode::InternalError,
+                format!(
+                    "indexed class `{target_name}` has no declaration in doc {}",
+                    doc_id.raw()
                 ),
             );
         };
@@ -1313,7 +1328,15 @@ impl ApiQueryProvider for DescribeModelProvider {
             .get_resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
             .and_then(lunco_modelica_core::engine_resource::ModelicaEngineHandle::try_lock)
         {
-            Some(mut engine) => engine.inherited_members_typed(short),
+            Some(mut engine) => match engine.inherited_members_typed(&target_name) {
+                Some(members) => members,
+                None => {
+                    return query_error(
+                        ApiErrorCode::CommandRejected,
+                        format!("{target_name} has unresolved or cyclic inherited declarations"),
+                    );
+                }
+            },
             None => {
                 return query_error(
                     ApiErrorCode::InternalError,
@@ -1324,7 +1347,7 @@ impl ApiQueryProvider for DescribeModelProvider {
 
         query_ok(api_value!({
             "doc_id": doc_id.raw(),
-            "class_name": short,
+            "class_name": target_name,
             "class_kind": lunco_modelica_ast::ast_extract::class_kind_label(class),
             "extends": extends,
             "components": components.iter().map(component_info_api_value).collect::<Vec<_>>(),
@@ -1373,6 +1396,7 @@ fn typed_api_value(c: &lunco_modelica_ast::ast_extract::TypedComponent) -> ApiVa
     api_value!({
         "name": c.name.clone(),
         "type": c.type_name.clone(),
+        "has_array_dimensions": c.has_array_dimensions,
         "unit": c.unit.clone(),
         "default": c.default,
         "min": c.min,
@@ -1450,6 +1474,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
                 "parameters": ApiValue::Map(Vec::new()),
                 "inputs": ApiValue::Map(Vec::new()),
                 "variables": ApiValue::Map(Vec::new()),
+                "metadata": ApiValue::Map(Vec::new()),
             }));
         };
 
@@ -1461,7 +1486,15 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
                 "parameters": ApiValue::Map(Vec::new()),
                 "inputs": ApiValue::Map(Vec::new()),
                 "variables": ApiValue::Map(Vec::new()),
+                "metadata": ApiValue::Map(Vec::new()),
             }));
+        };
+
+        let Some(variables) = world.get::<ModelicaVariables>(entity) else {
+            return query_error(
+                ApiErrorCode::InternalError,
+                format!("Modelica participant {entity:?} has no required variable state"),
+            );
         };
 
         // Project to typed values, optionally honoring the `names` filter.
@@ -1483,15 +1516,35 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             ApiValue::Map(inner)
         };
 
+        let metadata = ApiValue::Map(
+            model
+                .variable_metadata
+                .iter()
+                .flat_map(|facts| facts.iter())
+                .filter(|(name, _)| in_filter(name))
+                .map(|(name, facts)| {
+                    (
+                        name.clone(),
+                        api_value!({
+                            "unit": facts.unit.clone(),
+                            "description": facts.description.clone(),
+                            "minimum": facts.minimum,
+                            "maximum": facts.maximum,
+                        }),
+                    )
+                })
+                .collect(),
+        );
         query_ok(api_value!({
             "doc_id": doc_id.raw(),
             "t": model.current_time,
-            "compiled": true,
+            "compiled": model.is_compiled,
             "model_name": model.model_name.clone(),
             "paused": model.paused,
             "parameters": project(&model.parameters),
             "inputs": project(&model.inputs),
-            "variables": project(&model.variables),
+            "variables": project(&variables.values),
+            "metadata": metadata,
         }))
     }
 }

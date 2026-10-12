@@ -23,10 +23,10 @@
 
 use lunco_doc::{NodeId, TextRange};
 use lunco_modelica_ast::pretty::Placement;
-use rumoca_compile::parsing::ast::{self as ast};
-use rumoca_compile::parsing::{
+use lunco_modelica_ast::{
     Causality as AstCausality, ClassType as AstClassType, Variability as AstVariability,
 };
+use rumoca_compile::parsing::ast::{self as ast};
 use std::collections::HashMap;
 
 // TODO(slotmap): when we hit the perf wall on dense Vec<X> + HashMap<Name, idx>
@@ -93,22 +93,6 @@ pub struct ModelicaIndex {
     pub has_errors: bool,
 }
 
-/// Borrowed name lookup for consumers that resolve many runtime names against
-/// one immutable document index. Duplicate names preserve the index's
-/// first-entry-wins lookup contract.
-pub struct ComponentNameLookup<'a> {
-    by_name: HashMap<&'a str, &'a ComponentEntry>,
-}
-
-impl<'a> ComponentNameLookup<'a> {
-    /// Find an exact component name first, then the leaf of a qualified name.
-    pub fn find_component_by_leaf(&self, name: &str) -> Option<&'a ComponentEntry> {
-        self.by_name.get(name).copied().or_else(|| {
-            component_leaf_fallback(name).and_then(|leaf| self.by_name.get(leaf).copied())
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ComponentEntry {
     pub key: ComponentKey,
@@ -120,6 +104,8 @@ pub struct ComponentEntry {
     /// Description string from the declaration (e.g. `"Resistance"` in
     /// `Real R "Resistance";`). Empty when none was provided.
     pub description: String,
+    /// Unit string value decoded by Rumoca from the declaration.
+    pub unit: Option<String>,
     /// Modifications attached to the declaration
     /// (e.g. `{"min": "0", "max": "100"}` for `Real x(min=0, max=100)`).
     pub modifications: HashMap<String, String>,
@@ -242,14 +228,16 @@ pub enum ClassResolutionState {
 impl ClassEntry {
     /// Short name (leaf segment of the qualified name).
     pub fn short_name(&self) -> &str {
-        lunco_modelica_ast::ast_extract::short_name(&self.name)
+        rumoca_core::top_level_last_segment(&self.name)
     }
 
     /// Second-level segment of the qualified name — e.g.
     /// `"Modelica.Electrical.Analog.Examples.X"` → `"Electrical"`.
     /// Empty when the name has fewer than two dotted segments.
     pub fn domain(&self) -> &str {
-        self.name.split('.').nth(1).unwrap_or("")
+        rumoca_core::qualified_name_segments(&self.name)
+            .nth(1)
+            .unwrap_or("")
     }
 
     /// `true` when the qualified name sits under any `Examples.`
@@ -452,6 +440,7 @@ impl ModelicaIndex {
             name: name.to_string(),
             type_name: type_name.to_string(),
             description: String::new(),
+            unit: None,
             modifications: HashMap::new(),
             source_range: None,
             placement: None,
@@ -596,6 +585,10 @@ impl ModelicaIndex {
             return;
         };
         if let Some(entry) = self.components.iter_mut().find(|c| c.key == key) {
+            if param == "unit" {
+                // The decoded value arrives at the next successful AST reconcile.
+                entry.unit = None;
+            }
             entry
                 .modifications
                 .insert(param.to_string(), value.to_string());
@@ -685,32 +678,6 @@ impl ModelicaIndex {
             .get(&(class.to_string(), name.to_string()))
             .copied()?;
         self.components.iter().find(|c| c.key == key)
-    }
-
-    /// Find a component by name, accepting either a fully-qualified
-    /// instance path (`tank.m_initial`) or a bare leaf (`m_initial`).
-    /// Tries the full string first, then the last `.`-segment. Used
-    /// by panels that key on runtime-published variable names but
-    /// need static metadata (description / `min` / `max`) declared at
-    /// the leaf level. First match wins on collisions across classes.
-    pub fn find_component_by_leaf(&self, name: &str) -> Option<&ComponentEntry> {
-        if let Some(c) = self.components.iter().find(|c| c.name == name) {
-            return Some(c);
-        }
-        let leaf = component_leaf_fallback(name)?;
-        self.components.iter().find(|c| c.name == leaf)
-    }
-
-    /// Build one borrowed name lookup for a batch of exact or qualified-name
-    /// queries. Use this when multiple runtime variables resolve against the
-    /// same document generation; the temporary index costs one component
-    /// traversal instead of one traversal per variable.
-    pub fn component_name_lookup(&self) -> ComponentNameLookup<'_> {
-        let mut by_name = HashMap::with_capacity(self.components.len());
-        for component in &self.components {
-            by_name.entry(component.name.as_str()).or_insert(component);
-        }
-        ComponentNameLookup { by_name }
     }
 
     /// Iterate components in `class` in declaration order.
@@ -814,13 +781,8 @@ impl ModelicaIndex {
     }
 }
 
-fn component_leaf_fallback(name: &str) -> Option<&str> {
-    let leaf = lunco_modelica_ast::ast_extract::short_name(name);
-    (leaf != name).then_some(leaf)
-}
-
 fn is_subcomponent(qualified: &str, used: &std::collections::HashSet<&str>) -> bool {
-    let short = qualified.rsplit('.').next().unwrap_or(qualified);
+    let short = rumoca_core::top_level_last_segment(qualified);
     used.contains(qualified) || used.contains(short)
 }
 
@@ -845,16 +807,15 @@ fn insert_class_recursive(
     source: &str,
 ) {
     // Description from the class header (`model X "desc"`).
-    let description = class_def
-        .description
-        .first()
-        .map(|t| t.text.as_ref().trim_matches('"').to_string())
-        .unwrap_or_default();
+    let description =
+        lunco_modelica_ast::ast_extract::description_from_tokens(&class_def.description)
+            .unwrap_or_default();
 
     // Direct child class qualified names — rebuild's recursion fills
     // them in below.
     let children: Vec<String> = class_def
-        .iter_classes()
+        .classes
+        .iter()
         .map(|(name, _)| format!("{}.{}", qualified, name))
         .collect();
 
@@ -918,13 +879,11 @@ fn insert_class_recursive(
     // preserves declaration order via `components_by_class`.
     //
     // Description + modifications come from `lunco_modelica_ast::ast_extract::extract_components_for_class`
-    // which runs the description + modification-expression flattening
-    // logic. Calling that public helper keeps Index in lockstep with
-    // the inspector's previous direct-AST path.
+    // so the index and inspector share Rumoca expression rendering and decoded descriptions.
     let infos = lunco_modelica_ast::ast_extract::extract_components_for_class(class_def);
     let info_by_name: HashMap<String, lunco_modelica_ast::ast_extract::ComponentInfo> =
         infos.into_iter().map(|i| (i.name.clone(), i)).collect();
-    for (name, comp) in class_def.iter_components() {
+    for (name, comp) in class_def.components.iter() {
         let key = idx.alloc_component_key();
         let info = info_by_name.get(name).cloned();
         let (description, modifications) = info
@@ -944,6 +903,10 @@ fn insert_class_recursive(
             name: name.to_string(),
             type_name: format!("{}", comp.type_name),
             description,
+            unit: comp
+                .modifications
+                .get("unit")
+                .and_then(lunco_modelica_ast::ast_extract::string_literal_value),
             modifications,
             source_range: Some(TextRange::new(
                 comp.name_token.location.start as usize,
@@ -1023,7 +986,7 @@ fn insert_class_recursive(
     }
 
     // Recurse nested classes (e.g. examples inside a package).
-    for (nested_name, nested_def) in class_def.iter_classes() {
+    for (nested_name, nested_def) in class_def.classes.iter() {
         let nested_qualified = format!("{}.{}", qualified, nested_name);
         insert_class_recursive(idx, nested_qualified, nested_def, source);
     }
@@ -1087,11 +1050,34 @@ fn map_variability(v: &AstVariability) -> Variability {
 mod tests {
     use super::*;
 
+    #[test]
+    fn index_metadata_preserves_rumoca_decoded_units_and_descriptions() {
+        let source = r#"model Labels "\"Model\" " + "description"
+  Real value(unit="\"K\"", min=sin(2)) "\"Value\" " + "description";
+end Labels;"#;
+        let ast = rumoca_phase_parse::parse_to_ast(source, "labels.mo").unwrap();
+        let mut index = ModelicaIndex::default();
+        index.rebuild_from_ast(&ast, source);
+        assert_eq!(index.classes["Labels"].description, "\"Model\" description");
+        let entry = index.find_component("Labels", "value").unwrap();
+        assert_eq!(entry.unit.as_deref(), Some("\"K\""));
+        assert_eq!(entry.description, "\"Value\" description");
+        assert_eq!(entry.modifications["min"], "sin(2)");
+        index.patch_parameter_changed("Labels", "value", "unit", "\"m\"");
+        assert!(
+            index
+                .find_component("Labels", "value")
+                .unwrap()
+                .unit
+                .is_none()
+        );
+    }
+
     const SRC: &str = "within Demo;\n\nmodel RC\n  parameter Real R = 100;\n  Real x;\n  Modelica.Electrical.Analog.Basic.Resistor resistor;\nend RC;\n";
 
     #[test]
     fn rebuild_populates_within_classes_components() {
-        let ast = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, SRC);
 
@@ -1222,12 +1208,12 @@ mod tests {
     #[test]
     fn rebuild_clears_old_state() {
         let mut idx = ModelicaIndex::new();
-        let ast1 = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast1 = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
         idx.rebuild_from_ast(&ast1, SRC);
         let gen_before = idx.generation;
 
         let small = "model Tiny\nend Tiny;\n";
-        let ast2 = lunco_modelica_ast::parse_to_ast(small, "Tiny.mo").expect("parses");
+        let ast2 = rumoca_phase_parse::parse_to_ast(small, "Tiny.mo").expect("parses");
         idx.rebuild_from_ast(&ast2, small);
 
         assert!(idx.generation > gen_before, "generation must advance");
@@ -1336,7 +1322,7 @@ mod tests {
     #[test]
     fn rebuild_extracts_connect_annotation_waypoints() {
         let src = "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b) annotation(Line(points={{0,0},{10,5},{20,10}}));\nend M;\n";
-        let ast = lunco_modelica_ast::parse_to_ast(src, "M.mo").expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, src);
 

@@ -774,34 +774,30 @@ fn retain_samples(
             continue;
         }
         let key = (entity, sample.name);
-        let (cached, known) = match metadata.entry(key) {
+        let cached = match metadata.entry(key) {
             Entry::Occupied(entry) => {
                 let cached = entry.into_mut();
-                let known = signals.scalar_history(&cached.signal).is_some();
-                if !physics_channel_allowed(known, *channel_count, settings) {
+                if !physics_channel_allowed(signals, &cached.signal, *channel_count, settings) {
                     continue;
                 }
-                (cached, known)
+                cached
             }
             Entry::Vacant(entry) => {
                 let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
-                let known = signals.scalar_history(&signal).is_some();
-                if !physics_channel_allowed(known, *channel_count, settings) {
+                if !physics_channel_allowed(signals, &signal, *channel_count, settings) {
                     continue;
                 }
-                (
-                    entry.insert(CachedPhysicsSignal {
-                        signal,
-                        metadata_published: false,
-                        global_owner: None,
-                    }),
-                    known,
-                )
+                entry.insert(CachedPhysicsSignal {
+                    signal,
+                    metadata_published: false,
+                    global_owner: None,
+                })
             }
         };
         let signal = &cached.signal;
         {
             let _span = (metadata_dirty || !cached.metadata_published).then(|| {
+                let known = signals.scalar_history(signal).is_some();
                 bevy::log::debug_span!("physics_telemetry_channel_metadata", known).entered()
             });
             if let Some(owner) = global_owner {
@@ -832,9 +828,7 @@ fn retain_samples(
             settings.default_retention,
         ) {
             retained = true;
-            if !known {
-                *channel_count += 1;
-            }
+            *channel_count = signals.scalar_count();
         }
     }
     retained
@@ -842,11 +836,14 @@ fn retain_samples(
 
 #[inline]
 fn physics_channel_allowed(
-    known: bool,
+    signals: &SignalRegistry,
+    signal: &SignalRef,
     channel_count: usize,
     settings: &TelemetrySettings,
 ) -> bool {
-    if !known && channel_count >= settings.max_channels {
+    // Below the limit append can admit any history; only a full catalog needs
+    // the extra lookup. Cached producer identity does not prove live history.
+    if channel_count >= settings.max_channels && signals.scalar_history(signal).is_none() {
         warn_once!(
             "physics telemetry: max_channels ({}) reached; additional state is not retained",
             settings.max_channels
@@ -859,6 +856,138 @@ fn physics_channel_allowed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Isolates the producer/registry seam with settled metadata and bounded histories.
+    #[test]
+    #[ignore = "manual retention performance measurement"]
+    fn settled_retention_benchmark() {
+        let mut world = World::new();
+        let entities: Vec<_> = (0..128).map(|_| world.spawn_empty().id()).collect();
+        let settings = TelemetrySettings {
+            default_rate_hz: 1.0,
+            default_retention: 16,
+            ..Default::default()
+        };
+        let mut signals = SignalRegistry::default();
+        let mut metadata = HashMap::new();
+        let mut count = 0;
+        let samples = vector_channels(
+            "linear_velocity",
+            DVec3::new(1.0, 2.0, 3.0),
+            "m/s",
+            "Velocity.",
+        );
+        for &entity in &entities {
+            retain_samples(
+                &mut signals,
+                &settings,
+                entity,
+                None,
+                "/Body",
+                0.0,
+                vector_channels(
+                    "linear_velocity",
+                    DVec3::new(1.0, 2.0, 3.0),
+                    "m/s",
+                    "Velocity.",
+                ),
+                &mut count,
+                &mut metadata,
+                true,
+            );
+        }
+        let began = std::time::Instant::now();
+        for time in 1..=6000 {
+            for &entity in &entities {
+                assert!(retain_samples(
+                    &mut signals,
+                    &settings,
+                    entity,
+                    None,
+                    "/Body",
+                    f64::from(time),
+                    vector_channels(
+                        "linear_velocity",
+                        DVec3::new(1.0, 2.0, 3.0),
+                        "m/s",
+                        "Velocity."
+                    ),
+                    &mut count,
+                    &mut metadata,
+                    false
+                ));
+            }
+        }
+        let elapsed = began.elapsed();
+        assert_eq!(count, 384);
+        let mut digest = 0xcbf29ce484222325u64;
+        for entity in entities {
+            for sample in &samples {
+                let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
+                let history = signals.scalar_history(&signal).unwrap();
+                assert_eq!(history.len(), 16);
+                for point in history.iter() {
+                    digest = (digest ^ point.time.to_bits()).wrapping_mul(0x100000001b3);
+                    digest = (digest ^ point.value.to_bits()).wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        println!(
+            "RETENTION_BENCH elapsed_ns={} samples=2304000 channels={} digest={digest:016x}",
+            elapsed.as_nanos(),
+            signals.scalar_count()
+        );
+    }
+
+    #[test]
+    fn channel_admission_follows_live_registry_after_limit_and_removal() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut settings = TelemetrySettings {
+            default_rate_hz: 1.0,
+            max_channels: 1,
+            ..Default::default()
+        };
+        let mut signals = SignalRegistry::default();
+        let mut metadata = HashMap::new();
+        let mut count = 0;
+        let mut record = |signals: &mut SignalRegistry, settings: &TelemetrySettings, time| {
+            // Production snapshots the live count at the start of each batch.
+            count = signals.scalar_count();
+            retain_samples(
+                signals,
+                settings,
+                entity,
+                None,
+                "/Body",
+                time,
+                vector_channels("linear_velocity", DVec3::X, "m/s", "Velocity."),
+                &mut count,
+                &mut metadata,
+                false,
+            )
+        };
+        assert!(record(&mut signals, &settings, 0.0));
+        let signal = SignalRef::new(entity, "linear_velocity.x");
+        assert_eq!(signals.scalar_count(), 1);
+        assert!(
+            signals
+                .scalar_history(&SignalRef::new(entity, "linear_velocity.y"))
+                .is_none()
+        );
+        settings.max_channels = 0;
+        assert!(record(&mut signals, &settings, 1.0));
+        assert_eq!(signals.scalar_history(&signal).unwrap().len(), 2);
+        signals.remove_signal(&signal);
+        assert!(!record(&mut signals, &settings, 2.0));
+        assert_eq!(signals.scalar_count(), 0);
+        settings.max_channels = 1;
+        assert!(record(&mut signals, &settings, 3.0));
+        assert_eq!(signals.scalar_count(), 1);
+        let point = signals.scalar_history(&signal).unwrap().back().unwrap();
+        assert_eq!(point.time.to_bits(), 3.0f64.to_bits());
+        assert_eq!(point.value.to_bits(), 1.0f64.to_bits());
+    }
 
     #[test]
     fn derivative_uses_physics_time_and_world_velocity() {

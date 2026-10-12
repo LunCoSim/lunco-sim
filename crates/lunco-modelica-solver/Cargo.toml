@@ -8,12 +8,12 @@ description = "Renderer-free Modelica solver backends and live integration sessi
 [dependencies]
 indexmap = { workspace = true }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
-lunco-experiments = { path = "../lunco-experiments" }
+lunco-experiments = { path = "../lunco-experiments", default-features = false }
 rumoca-compile = { workspace = true }
 rumoca-eval-solve = { workspace = true }
 rumoca-ir-solve = { workspace = true }
 rumoca-sim = { workspace = true }
-rumoca-solver-rk45 = { workspace = true }
+rumoca-solver = { workspace = true }
 web-time = { workspace = true }
 
 [lints]

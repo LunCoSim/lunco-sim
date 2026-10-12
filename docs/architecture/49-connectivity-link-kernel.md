@@ -119,6 +119,13 @@ per physics tick. Retune live, from any client or language:
 {"type":"ExecuteCommand","command": "SetLinkCadence", "params": {"interval_s": 1.0}}
 ```
 
+Trace spans separate endpoint collection (`link_collect_endpoints`), body/DEM/box
+snapshot preparation (`link_snapshot_occlusion_inputs`), pair evaluation
+(`link_evaluate_pair`), nonempty-DEM marching (`link_terrain_line_of_sight`) and
+hook-context construction plus verdict execution (`link_verdict_policy`). Pair
+durations include the terrain and policy children. These diagnostics preserve
+the native cadence, pair iteration, geometry precision and hook context.
+
 ### Terrain occlusion (rille radio-shadow)
 
 The kernel marches `lunco_terrain_core::los_hit` over each DEM's `SurfaceOracle`,

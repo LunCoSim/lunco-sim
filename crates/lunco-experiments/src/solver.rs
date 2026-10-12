@@ -47,8 +47,8 @@ impl SolverId {
 }
 
 impl From<&str> for SolverId {
-    /// Normalizes case, `-`, `_` and spaces, so `"TR-BDF2"`, `"tr_bdf2"` and
-    /// `"trbdf2"` are one id and cannot register twice under three spellings.
+    /// Normalizes case, `-`, `_` and spaces, so `"Fixed-RK4"`, `"fixed_rk4"` and
+    /// `"fixedrk4"` are one id and cannot register twice under three spellings.
     fn from(s: &str) -> Self {
         Self(s.trim().to_ascii_lowercase().replace(['-', '_', ' '], ""))
     }
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn ids_normalize_so_one_solver_cannot_register_under_three_spellings() {
-        assert_eq!(SolverId::from("TR-BDF2"), SolverId::from("tr_bdf2"));
-        assert_eq!(SolverId::from("tr bdf2"), SolverId::from("trbdf2"));
+        assert_eq!(SolverId::from("Fixed-RK4"), SolverId::from("fixed_rk4"));
+        assert_eq!(SolverId::from("fixed rk4"), SolverId::from("fixedrk4"));
     }
 }

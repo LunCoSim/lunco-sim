@@ -1896,6 +1896,20 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             continue;
         }
         let active_twin_document = active_doc == Some(doc);
+        // Restart owns the prepared replacement of the active document. Its
+        // refreshed source is already in the resolver overlay; replaying the
+        // reset into the outgoing canonical stage would bypass preparation.
+        if active_twin_document
+            && world.contains_resource::<crate::scene::SceneLoadInFlight>()
+            && world
+                .resource::<lunco_core::SceneTransitionCoordinator>()
+                .active()
+                .is_some_and(|transition| {
+                    matches!(transition, lunco_core::SceneTransition::Restart { .. })
+                })
+        {
+            continue;
+        }
         // Read the generation before any whole-stage payload. The composed source
         // is serialized only when this event-driven owner observes a new
         // generation, never on the render loop.

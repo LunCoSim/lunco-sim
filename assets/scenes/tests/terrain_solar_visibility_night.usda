@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "TerrainSolarVisibility"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "TerrainSolarVisibility" (
+    prepend references = @lunco://scenes/tests/terrain_solar_visibility.usda@</TerrainSolarVisibility>
+)
+{
+    over "Scenario"
+    {
+        def "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_solar_visibility_night.rhai@
+        }
+    }
+    def "Sun"
+    {
+        double3 xformOp:rotateXYZ = (5.0, 0.0, 0.0)
+    }
+    over "Power"
+    {
+        def "Panel"
+        {
+            double3 xformOp:rotateXYZ = (180.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        }
+    }
+    def "Blocker" (
+        prepend apiSchemas = "MaterialBindingAPI"
+    )
+    {
+        custom rel material:binding = </TerrainSolarVisibility/Blocker/HullLook>
+        color3f[] primvars:displayColor = [(0.800000011920929, 0.800000011920929, 0.800000011920929)]
+        def Material "HullLook" (
+            prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis/HullLook>
+        )
+        {
+        }
+    }
+}

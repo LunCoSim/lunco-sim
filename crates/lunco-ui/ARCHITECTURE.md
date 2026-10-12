@@ -329,14 +329,12 @@ In-process local UI triggers (`ctx.trigger` or `commands.trigger`) execute synch
 ```
 crates/lunco-ui/
 ├── ARCHITECTURE.md
-├── Cargo.toml               # deps include bevy, bevy_egui, workbench-core, lunco-workbench, big_space, lunco-core, lunco-avatar
+├── Cargo.toml               # renderer, reusable workbench contracts, theme and identity dependencies
 └── src/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
     ├── context.rs           # UiSelection
     ├── components.rs        # WorldPanel + Label3D
-    ├── mission_control.rs   # mission-control panel widget
-    ├── telemetry.rs         # telemetry panel widget
     ├── log.rs               # bounded log model + renderer
     ├── busy/                # busy/spinner indicator widget (mod.rs, spinner.rs, widget.rs)
     ├── diagrams/            # diagram widgets (mod.rs, time_series.rs)

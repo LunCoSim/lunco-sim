@@ -45,8 +45,8 @@ pub async fn load_library_class(
         lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
             bundle
                 .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, ast)| ast.clone())
+                .find(|document| document.uri() == key)
+                .map(|document| document.definition().clone())
         });
     let bundle_hit = bundled_ast.is_some();
 
@@ -66,7 +66,7 @@ pub async fn load_library_class(
     #[cfg(not(target_arch = "wasm32"))]
     let ast: StoredDefinition = match bundled_ast {
         Some(ast) => ast,
-        None => lunco_modelica_ast::parse_to_ast(&full_source, &key)
+        None => rumoca_phase_parse::parse_to_ast(&full_source, &key)
             .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
     };
 
@@ -90,11 +90,11 @@ fn selected_class_source(
     full_source: &str,
     qualified: &str,
 ) -> Result<String, String> {
-    let class_def =
-        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
-            .ok_or_else(|| format!("class `{qualified}` not found"))?;
-    let (full_start, full_end) =
-        lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
+    let class_def = ast
+        .get_class_by_qualified_name(qualified)
+        .ok_or_else(|| format!("class `{qualified}` not found"))?;
+    let full_start = class_def.location.start as usize;
+    let full_end = class_def.location.end as usize;
     if full_start > full_end
         || full_end > full_source.len()
         || !full_source.is_char_boundary(full_start)
@@ -107,7 +107,7 @@ fn selected_class_source(
     }
 
     let class_slice = &full_source[full_start..full_end];
-    let parent_pkg = lunco_modelica_ast::ast_extract::parent_qualified(qualified);
+    let parent_pkg = rumoca_core::parent_scope(qualified).unwrap_or("");
     Ok(if parent_pkg.is_empty() {
         class_slice.to_string()
     } else {
@@ -120,17 +120,17 @@ mod tests {
     #[test]
     fn library_class_selection_requires_exact_qualified_identity() {
         let source = "package Root package A model Part Real fromA; end Part; end A; package B model Part Real fromB; end Part; end B; end Root;";
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "siblings.mo");
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "siblings.mo");
         let ast = syntax.parsed().expect("valid inline source");
         let selected =
             super::selected_class_source(ast, source, "Root.B.Part").expect("exact class");
         assert!(selected.starts_with("within Root.B;\nmodel Part"));
         assert!(selected.contains("fromB"));
         assert!(!selected.contains("fromA"));
-        assert!(!lunco_modelica_ast::parse_to_syntax(&selected, "selected.mo").has_errors());
+        assert!(!rumoca_phase_parse::parse_to_syntax(&selected, "selected.mo").has_errors());
         assert!(super::selected_class_source(ast, source, "Root.C.Part").is_err());
         let source = "within Root.B; model Part Real fromB; end Part;";
-        let syntax = lunco_modelica_ast::parse_to_syntax(source, "within.mo");
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "within.mo");
         let ast = syntax.parsed().expect("valid inline source");
         assert!(super::selected_class_source(ast, source, "Root.B.Part").is_ok());
         assert!(super::selected_class_source(ast, source, "Root.BPart").is_err());

@@ -66,7 +66,7 @@ mod native {
     /// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
     /// runtime via [`lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
     /// and consumer can't drift; the runtime refuses a parsed bundle whose tag
-    /// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
+    /// doesn't match (the bincode'd `ParsedSourceDocument` layout is rumoca-version
     /// sensitive). Bump the shared const when the rumoca AST shape changes.
     use lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
     use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
@@ -186,6 +186,14 @@ mod native {
             source_roots.len()
         );
 
+        // Admit every source before publishing either artifact. The browser
+        // installs these paired source/syntax records without reparsing.
+        let parsed = pre_parse(&entries).unwrap_or_else(|error| {
+            eprintln!("source-library admission failed: {error}");
+            std::process::exit(1);
+        });
+        let parsed_count = parsed.len();
+
         // Tar → zstd → write to a temp file, then rename to hashed final path.
         let tmp_path = out_dir.join("sources.tar.zst.tmp");
         let total_uncompressed = pack(&entries, &tmp_path);
@@ -196,16 +204,6 @@ mod native {
         let final_path = out_dir.join(&final_name);
         fs::rename(&tmp_path, &final_path).expect("rename to final");
         let compressed_size = fs::metadata(&final_path).expect("stat final").len();
-
-        // Pre-parse every .mo source into a `StoredDefinition`, bincode-
-        // serialise the `Vec<(uri, StoredDefinition)>`, and zstd-compress.
-        // The wasm runtime fetches this and deserialises directly into
-        // rumoca via `Session::replace_parsed_source_set` — the alternative
-        // (per-file parse on the page) is ~27 minutes for 2670 files.
-        eprintln!("parsing {} files for the pre-parsed bundle…", entries.len());
-        let parsed = pre_parse(&entries);
-        let parsed_count = parsed.len();
-        eprintln!("parsed {parsed_count} / {} files", entries.len());
 
         let parsed_tmp = out_dir.join("parsed.bin.zst.tmp");
         let parsed_uncompressed_size = serialise_parsed(&parsed, &parsed_tmp);
@@ -265,7 +263,9 @@ mod native {
     /// stable identifiers (not real filesystem paths). Each entry is stripped
     /// against its own root, so files from different library roots keep their
     /// distinct top-level package namespace.
-    fn pre_parse(entries: &[(PathBuf, PathBuf)]) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
+    fn pre_parse(
+        entries: &[(PathBuf, PathBuf)],
+    ) -> Result<Vec<rumoca_compile::compile::ParsedSourceDocument>, String> {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -282,13 +282,12 @@ mod native {
             rayon::current_num_threads()
         );
 
-        // Parse in parallel — each file is independent and `parse_to_ast` is
+        // Parse in parallel — each file is independent and `ParsedSourceDocument::parse` is
         // pure. `.map(...).collect::<Vec<_>>()` over an *indexed* parallel
-        // iterator preserves input order exactly, so flattening the `Option`s
-        // yields a deterministic bundle (stable sha256 → the build's
-        // content-addressed `parsed-<sha>.bin.zst` skip logic keeps working).
+        // iterator preserves input order exactly, including the first
+        // diagnostic when any source fails admission.
         let done = AtomicUsize::new(0);
-        let parsed: Vec<Option<(String, rumoca_ir_ast::StoredDefinition)>> = mo_entries
+        let parsed: Vec<Result<rumoca_compile::compile::ParsedSourceDocument, String>> = mo_entries
             .par_iter()
             .map(|(root, path)| {
                 let uri = rel_key(root, path);
@@ -296,26 +295,19 @@ mod native {
                 if n.is_multiple_of(500) || n == total {
                     eprintln!("  parsed {n} / {total}");
                 }
-                let source = match fs::read_to_string(path) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("  skip {uri}: read failed: {e}");
-                        return None;
-                    }
-                };
-                match rumoca_phase_parse::parse_to_ast(&source, &uri) {
-                    Ok(def) => Some((uri, def)),
-                    Err(e) => {
-                        eprintln!("  skip {uri}: parse failed: {e}");
-                        None
-                    }
-                }
+                let source = fs::read_to_string(path)
+                    .map_err(|error| format!("{uri}: source read failed: {error}"))?;
+                rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), source)
+                    .map_err(|error| format!("{uri}: parse failed: {error}"))
             })
             .collect();
-        parsed.into_iter().flatten().collect()
+        parsed.into_iter().collect()
     }
 
-    fn serialise_parsed(parsed: &[(String, rumoca_ir_ast::StoredDefinition)], dest: &Path) -> u64 {
+    fn serialise_parsed(
+        parsed: &[rumoca_compile::compile::ParsedSourceDocument],
+        dest: &Path,
+    ) -> u64 {
         let raw = bincode::serde::encode_to_vec(parsed, bincode::config::standard())
             .expect("bincode serialise parsed");
         let uncompressed = raw.len() as u64;

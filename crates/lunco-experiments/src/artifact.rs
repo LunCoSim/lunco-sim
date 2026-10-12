@@ -9,7 +9,7 @@ use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
-pub const RUN_ARTIFACT_VERSION: u32 = 1;
+pub const RUN_ARTIFACT_VERSION: u32 = 2;
 
 /// Compiler-owned identity of the actual seated source contributions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,17 +349,8 @@ pub fn decode_run_artifact(bytes: &[u8], limits: RunResultLimits) -> Result<RunA
 
 /// Stamp only the actual compiled closure returned by the compiler owner.
 pub fn stamp_source_identity(update: &mut crate::RunUpdate, identity: &SourceContentIdentity) {
-    match update {
-        crate::RunUpdate::Completed(result) => result.meta.source_content = Some(identity.clone()),
-        crate::RunUpdate::Progress {
-            delta: Some(result),
-            ..
-        }
-        | crate::RunUpdate::Failed {
-            partial: Some(result),
-            ..
-        } => result.meta.source_content = Some(identity.clone()),
-        _ => {}
+    if let crate::RunUpdate::Completed(result) = update {
+        result.meta.source_content = Some(identity.clone());
     }
 }
 
@@ -487,6 +478,13 @@ mod tests {
                 times: vec![0.0, 1.0, 1.0],
                 series: BTreeMap::from([("x".into(), vec![1.0, 2.0, 3.0])]),
                 meta: crate::RunMeta {
+                    variable_metadata: Arc::new(BTreeMap::from([(
+                        "x".into(),
+                        crate::SeriesMetadata {
+                            unit: Some("m".into()),
+                            description: Some("distance".into()),
+                        },
+                    )])),
                     sample_count: 3,
                     source_content: Some(SourceContentIdentity::Available {
                         cid: lunco_hash::content::cid(b"compiled closure"),
@@ -511,6 +509,16 @@ mod tests {
         let restored = decode_run_artifact(&bytes, exact).expect("exact budget");
         assert_eq!(restored.experiment_id, artifact.experiment_id);
         assert_eq!(restored.result.times, vec![0.0, 1.0, 1.0]);
+        assert_eq!(
+            restored.result.meta.variable_metadata["x"].unit.as_deref(),
+            Some("m")
+        );
+        assert_eq!(
+            restored.result.meta.variable_metadata["x"]
+                .description
+                .as_deref(),
+            Some("distance")
+        );
         assert_eq!(
             restored.result.meta.source_content,
             artifact.result.meta.source_content
@@ -565,6 +573,18 @@ mod tests {
             decode_run_artifact(&bytes, limits)
                 .unwrap_err()
                 .contains("scalar budget")
+        );
+        let mut unmatched_metadata = artifact.clone();
+        Arc::make_mut(
+            &mut Arc::make_mut(&mut unmatched_metadata.result)
+                .meta
+                .variable_metadata,
+        )
+        .insert("absent".into(), crate::SeriesMetadata::default());
+        assert!(
+            encode_run_artifact(&unmatched_metadata, limits)
+                .unwrap_err()
+                .contains("no corresponding series")
         );
         let mut unavailable = artifact;
         Arc::make_mut(&mut unavailable.result).meta.source_content =

@@ -389,10 +389,11 @@ the integrator state.
 slow sun + a few dynamic movers. Baked horizon visibility owns long-range
 terrain self-shadowing, while static horizon terrain remains a native CSM
 caster and receiver for mesh-accurate near shadows and dynamic-object shadows.
-Only streamed terrain tiles are excluded from the CSM caster set because their
-resident tile population is too large; they remain receivers. This preserves
-the same "bake the static, compute only the moving" principle without removing
-the shadow path needed for objects to shade the terrain.
+Streamed tiles also remain CSM casters and receivers: a ground visibility
+texture cannot cast a crater shadow onto a rover. The cached ground path stays
+a single texture lookup, while Graphics bounds native shadow-map work. Wired
+environment probes independently memoize f64 terrain-to-Sun visibility by local
+pose, direction, and surface revision for physical consumers.
 
 ## 6. In-RAM memoization (existing, sound — leave alone)
 

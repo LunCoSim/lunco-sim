@@ -201,21 +201,36 @@ pub fn world_transform(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
+    let matrix = world_transform_matrix_d_at(reader, path, 0.0)?;
+    // Explicit projection to the render-oriented Transform boundary.
+    let columns = matrix.to_cols_array().map(|value| value as f32);
+    if columns.iter().any(|value| !value.is_finite()) {
+        return Err(malformed_transform(path));
+    }
+    Ok(Transform::from_matrix(Mat4::from_cols_array(&columns)))
+}
+
+/// Compose canonical f64 geometry through the reader's USD transform stack.
+/// A reset stack discards all ancestor transforms at that prim. Missing outer
+/// ancestors delimit prepared reference readers, as in `world_transform`.
+pub fn world_transform_matrix_d_at(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+    time: f64,
+) -> Result<DMat4, TransformReadError> {
     if !reader.has_prim(path) {
-        return Err(TransformReadError {
-            prim: path.to_string(),
-        });
+        return Err(malformed_transform(path));
     }
     let mut chain = Vec::new();
-    let mut cur = Some(path.clone());
-    while let Some(p) = cur {
-        if p.is_abs_root() {
+    let mut current = Some(path.clone());
+    while let Some(prim) = current {
+        if prim.is_abs_root() {
             break;
         }
-        chain.push(p);
-        cur = chain.last().and_then(SdfPath::parent);
+        current = prim.parent();
+        chain.push(prim);
     }
-    let mut acc = Transform::IDENTITY;
+    let mut matrix = DMat4::IDENTITY;
     let mut in_read_surface = false;
     for prim in chain.iter().rev() {
         if !reader.has_prim(prim) {
@@ -225,11 +240,19 @@ pub fn world_transform(
             continue;
         }
         in_read_surface = true;
-        if let Some(local) = reader.local_transform_at(prim, 0.0)? {
-            acc = acc.mul_transform(local);
+        if read_xform_op_order(reader, prim)
+            .is_some_and(|order| order.iter().any(|op| op == RESET_XFORM_STACK))
+        {
+            matrix = DMat4::IDENTITY;
+        }
+        if let Some(local) = reader.local_transform_matrix_d_at(prim, time)? {
+            matrix *= local;
         }
     }
-    Ok(acc)
+    if !matrix.is_finite() {
+        return Err(malformed_transform(path));
+    }
+    Ok(matrix)
 }
 
 /// Compose a prim's transform in an authored body's local frame.
@@ -350,6 +373,29 @@ mod high_precision_grid_translation_tests {
     fn plan(source: &str) -> crate::UsdStageProjectionPlan {
         let recipe = StageRecipe::from_source("high_precision.usda", source);
         crate::UsdStageProjectionPlan::from_recipe(&recipe).expect("compose authored stage")
+    }
+
+    #[test]
+    fn world_geometry_honors_reset_stack_without_narrowing() {
+        let stage = plan(
+            r#"#usda 1.0
+(metersPerUnit = 1)
+def Xform "Parent" {
+    double3 xformOp:translate = (1000000000, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Xform "Probe" {
+        double3 xformOp:translate = (0.125, 0, 0)
+        double3 xformOp:scale = (2, 3, 4)
+        uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate", "xformOp:scale"]
+    }
+}"#,
+        );
+        let path = SdfPath::new("/Parent/Probe").unwrap();
+        let matrix = world_transform_matrix_d_at(&stage, &path, 0.0).unwrap();
+        assert_eq!(
+            matrix.transform_point3(DVec3::ONE),
+            DVec3::new(2.125, 3.0, 4.0)
+        );
     }
 
     #[test]

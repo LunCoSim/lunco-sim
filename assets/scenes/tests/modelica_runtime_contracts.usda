@@ -1,0 +1,14 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "ModelicaRuntimeContracts"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+}

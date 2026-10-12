@@ -303,8 +303,8 @@ incomplete.
 file as a portable URI and CIDv1 raw/SHA-256 identity during immutable source
 preparation. `ModelicaCompiler::source_root_content_closure(id)` exposes the
 current admitted content state, including explicit errors after failed latest
-admissions and for the parsed-only standard bundle. Per-root capture still
-does not join the active model document and every compile dependency.
+admissions. Source-bearing parsed bundles retain the same exact-byte provenance.
+The successful strict compile reports its actual participating source closure.
 
 Each accepted live Modelica result also carries a typed
 `ModelicaLiveSolverSnapshot` from the exact resolved worker plan used to build
@@ -560,3 +560,8 @@ document journal only when the edit is authored as a document operation.
 - `lunco-twin-journal` — the op-log substrate (`record_op`, `EntryId`, `merged_order`).
 - `lunco-api::executor::api_command_dispatcher` — transport command ingress; direct
   typed command events also exist and must be included in any replay capture audit.
+
+Typed connection plans resolve selected variant-owned attributes into the composed
+property namespace during preflight. Unselected variants cannot supply a missing
+source. `usd_variant_connection_plan.rhai` covers admission and rejection through
+the production document API.

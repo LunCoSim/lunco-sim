@@ -90,6 +90,21 @@ pub struct SurfaceOracle {
 }
 
 impl SurfaceOracle {
+    /// Conservative composed enclosure for one raster cell's subrectangle.
+    pub(crate) fn height_bounds_in_cell(
+        &self,
+        cell: [usize; 2],
+        rect: [f64; 4],
+    ) -> Option<[f64; 2]> {
+        let mut bounds = self.base.cell_height_bounds(cell, rect);
+        for modifier in &self.modifiers {
+            bounds = modifier.height_bounds(rect, bounds)?;
+        }
+        Some(bounds)
+    }
+    pub(crate) fn base_resolution(&self) -> usize {
+        self.base.res
+    }
     /// An oracle that is just the raster base — no analytic layers.
     pub fn bare(base: Arc<HeightGrid>) -> Self {
         let base_key = lunco_terrain_bake::grid_content_key(&base);

@@ -52,8 +52,6 @@ pub enum ModelicaSourceRootContentError {
         source_set_id: String,
         details: String,
     },
-    /// The compiler retained parsed definitions but not the original source text.
-    SourceTextUnavailable { source_set_id: String },
 }
 
 impl std::fmt::Display for ModelicaSourceRootContentError {
@@ -84,10 +82,6 @@ impl std::fmt::Display for ModelicaSourceRootContentError {
             } => write!(
                 formatter,
                 "Modelica source root `{source_set_id}` failed admission: {details}"
-            ),
-            Self::SourceTextUnavailable { source_set_id } => write!(
-                formatter,
-                "Modelica source root `{source_set_id}` has parsed definitions but no source text"
             ),
         }
     }
@@ -254,24 +248,14 @@ fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
 }
 
 fn source_roots_from_parsed_docs(
-    docs: &[(String, rumoca_compile::parsing::ast::StoredDefinition)],
+    docs: &[rumoca_compile::compile::ParsedSourceDocument],
 ) -> std::collections::HashSet<String> {
     docs.iter()
-        .flat_map(|(_, definition)| {
-            // An authored `within;` denotes the global namespace. Its empty
-            // name does not prefix the top-level package's qualified identity.
-            let within = definition
-                .within
-                .as_ref()
-                .map(ToString::to_string)
-                .filter(|prefix| !prefix.is_empty());
-            definition.classes.keys().filter_map(move |class_name| {
-                let qualified = within
-                    .as_deref()
-                    .map(|prefix| format!("{prefix}.{class_name}"))
-                    .unwrap_or_else(|| class_name.clone());
-                qualified.split('.').next().map(str::to_owned)
-            })
+        .flat_map(|document| document.definition().declared_class_names())
+        .filter_map(|name| {
+            rumoca_core::qualified_name_segments(&name)
+                .next()
+                .map(str::to_owned)
         })
         .collect()
 }
@@ -284,7 +268,7 @@ pub struct PreparedSourceRoot {
     id: String,
     label: String,
     files: Vec<(String, String)>,
-    parsed: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+    parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     parsed_roots: std::collections::HashSet<String>,
     diagnostics: Vec<String>,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
@@ -325,9 +309,9 @@ impl PreparedSourceRoot {
 
         let mut parsed = Vec::with_capacity(files.len());
         for (uri, text) in &files {
-            match lunco_modelica_ast::parse_to_ast(text, uri) {
+            match rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), text.clone()) {
                 Ok(ast) => {
-                    parsed.push((uri.clone(), ast));
+                    parsed.push(ast);
                 }
                 Err(error) => diagnostics.push(format!(
                     "source root `{id}`: could not parse {uri}: {error:?}"
@@ -469,7 +453,7 @@ impl ModelicaCompiler {
         if roots.is_empty() {
             return false;
         }
-        let inserted = self.session.replace_parsed_source_set(
+        let inserted = self.session.replace_in_memory_source_set(
             "source-bundle",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             docs,
@@ -479,11 +463,13 @@ impl ModelicaCompiler {
         self.rebuild_source_set_indexes();
         self.library_revisions
             .insert("source-bundle".to_string(), bundle_revision);
+        let files = parsed
+            .iter()
+            .map(|document| (document.uri().to_owned(), document.source().to_owned()))
+            .collect::<Vec<_>>();
         self.source_root_content_closures.insert(
             "source-bundle".to_string(),
-            Err(ModelicaSourceRootContentError::SourceTextUnavailable {
-                source_set_id: "source-bundle".to_string(),
-            }),
+            source_root_content_closure("source-bundle", "source-bundle", &files, &[]),
         );
         inserted > 0
     }
@@ -610,9 +596,9 @@ impl ModelicaCompiler {
         self.compile_str_mode(model_name, source, filename, false)
     }
 
-    /// Compile after a live worker has explicitly admitted all source roots.
-    /// Missing roots are terminal here; the worker never performs synchronous
-    /// file discovery as a fallback on its serialized command lane.
+    /// Compile in the live worker's settled source-root context without file I/O.
+    /// Rumoca owns scope and reference validation, including standalone `within`
+    /// namespaces. Failed admitted roots retain their terminal diagnostics.
     pub fn compile_str_after_source_root_admission(
         &mut self,
         model_name: &str,
@@ -627,86 +613,9 @@ impl ModelicaCompiler {
         model_name: &str,
         source: &str,
         filename: &str,
-        require_admitted_roots: bool,
+        source_roots_admitted: bool,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.requested_source_roots =
-            lunco_modelica_index::source_deps::scan_source_root_deps_from_source(source, filename);
-        // Root installation is idempotent and remains owned by this compiler
-        // session. It must complete before the first DAE call so USD projection
-        // cannot turn dependency discovery into a hidden second compile.
-        self.prepare_requested_source_roots(require_admitted_roots)?;
-        // A `.mo` declaring `within P;` is a MEMBER of package `P`, not a document
-        // that stands on its own. Its class is `P.Name`, and `P`'s source root
-        // already owns it, so seating the file as a user overlay registers that
-        // qualified class under a SECOND URI and rumoca's merge pass rejects the
-        // pair — the same `Duplicate class '…' with non-identical definition` that
-        // `seated_user_uris` exists to prevent between two user docs, arrived at
-        // from the library side instead.
-        //
-        // That silently killed every USD prim pointing `info:sourceAsset`
-        // at a package member (the lander's `BellNozzle`, both scenes'
-        // `SunTracker`). The geometry still drew — the lathe is Rust-side — but the
-        // model never solved. It could not have been hit before those existed: every
-        // earlier target was a flat, `within`-less file.
-        //
-        // So do what Modelica does. `loadFile` is for documents; a library class is
-        // reached with `loadModel` — resolve the ROOT segment against the search
-        // path, seat that library, compile the qualified name. The file itself is
-        // never handed to the compiler, which is why no duplicate is possible rather
-        // than merely unlikely. `source` is still the authority on WHICH class this
-        // is: its `within` clause and class name are read straight from the text the
-        // caller loaded, not guessed from the file path.
-        if let Some(within) = lunco_modelica_ast::ast_extract::within_package_of_source(source) {
-            let root = within.split('.').next().unwrap_or(&within).to_string();
-            let qualified = lunco_modelica_ast::ast_extract::qualify(
-                &within,
-                lunco_modelica_ast::ast_extract::short_name(model_name),
-            );
-            if !self.installed_roots.contains(&root)
-                && (require_admitted_roots || !self.ensure_source_root_installed(&root))
-            {
-                let reason = self
-                    .failed_source_roots
-                    .get(&root)
-                    .map(|reason| format!(": {reason}"))
-                    .unwrap_or_default();
-                return Err(format!(
-                    "`{qualified}` declares `within {within};`, but no library `{root}` \
-                     could be seated from the configured Modelica asset library{reason}"
-                ));
-            }
-            return self.compile_loaded(&qualified);
-        }
-        if self.class_is_owned_by_installed_root(model_name) {
-            let cid = lunco_hash::content::cid(source.as_bytes());
-            let source_is_admitted = self.source_root_content_closures.values().any(|closure| {
-                closure
-                    .as_ref()
-                    .is_ok_and(|root| root.files.iter().any(|file| file.cid == cid))
-            });
-            if source_is_admitted {
-                return self.compile_loaded(model_name);
-            }
-            return Err(format!(
-                "`{filename}` declares `{model_name}`, but that class is already owned by a \
-                 loaded Modelica source root; edit the source-root document or use a new \
-                 namespace instead of registering a second definition"
-            ));
-        }
-        let mut keep = std::collections::HashSet::new();
-        keep.insert(filename.to_string());
-        self.evict_user_docs_except(&keep);
-        self.seat_user_source(filename, source)?;
-        self.seated_user_uris = keep;
-        self.compile_loaded(model_name)
-    }
-
-    /// Admit parsed source with declaration-scoped runtime input initialization,
-    /// retaining original text and locations for source identity and diagnostics.
-    fn seat_user_source(&mut self, filename: &str, source: &str) -> Result<(), String> {
-        self.session
-            .add_document(filename, source)
-            .map_err(|error| format!("could not parse {filename}: {error}"))
+        self.compile_str_multi_mode(model_name, source, filename, &[], source_roots_admitted)
     }
 
     /// Release user-document overlays after a caller has captured its compile
@@ -720,7 +629,7 @@ impl ModelicaCompiler {
     /// docs (plus the immutable source roots). This is what makes
     /// each compile hermetic against prior compiles — see
     /// [`Self::seated_user_uris`]. source library roots are installed via
-    /// `replace_parsed_source_set` (not tracked here), so they're untouched.
+    /// `replace_in_memory_source_set` (not tracked here), so they're untouched.
     fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
         let stale: Vec<String> = self
             .seated_user_uris
@@ -769,8 +678,8 @@ impl ModelicaCompiler {
     /// can satisfy cross-doc class references (e.g. a fresh untitled
     /// `RocketStage` referencing `AnnotatedRocketStage.Tank` from a
     /// sibling untitled doc that holds the package). Each extra is
-    /// loaded via the same `update_document` path; rumoca dedups by
-    /// filename so re-loading the same file is harmless.
+    /// parsed once with its source text and installed in the same batch.
+    /// Repeated URIs must carry identical source bytes.
     ///
     /// The active compile's user docs (primary + extras) become the session's
     /// ENTIRE user-overlay set: any previously-seated user doc that isn't part
@@ -792,9 +701,8 @@ impl ModelicaCompiler {
         self.compile_str_multi_mode(model_name, source, filename, extras, false)
     }
 
-    /// Compile after a live worker has explicitly admitted all source roots
-    /// used by the primary and sibling documents. Missing roots fail on the
-    /// worker lane rather than triggering synchronous discovery.
+    /// Compile primary and sibling documents in the live worker's settled roots.
+    /// This path performs no file discovery; Rumoca validates all references.
     pub fn compile_str_multi_after_source_root_admission(
         &mut self,
         model_name: &str,
@@ -811,88 +719,82 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         extras: &[(String, String)],
-        require_admitted_roots: bool,
+        source_roots_admitted: bool,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        use rumoca_compile::compile::ParsedSourceDocument;
+        let primary = ParsedSourceDocument::parse(filename, source)
+            .map_err(|error| format!("could not parse {filename}: {error}"))?;
+        let selected = primary
+            .definition()
+            .qualified_class_name(model_name)
+            .unwrap_or_else(|| model_name.to_owned());
         self.requested_source_roots =
-            lunco_modelica_index::source_deps::scan_source_root_deps_from_source(source, filename);
-        for (extra_filename, extra_source) in extras {
-            self.requested_source_roots.extend(
-                lunco_modelica_index::source_deps::scan_source_root_deps_from_source(
-                    extra_source,
-                    extra_filename,
-                ),
-            );
-        }
-        self.prepare_requested_source_roots(require_admitted_roots)?;
-        let primary_owned_class = if let Some(within) =
-            lunco_modelica_ast::ast_extract::within_package_of_source(source)
-        {
-            let root = within.split('.').next().unwrap_or(&within);
-            if !self.installed_roots.contains(root)
-                && (require_admitted_roots || !self.ensure_source_root_installed(root))
-            {
-                if let Some(error) = self.failed_source_roots.get(root) {
-                    return Err(format!("Modelica source root `{root}` failed: {error}"));
-                }
-                if require_admitted_roots {
+            lunco_modelica_ast::ast_extract::required_source_roots_from_ast(primary.definition())
+                .into_iter()
+                .collect();
+        let mut documents = vec![(primary, lunco_hash::content::cid(source.as_bytes()))];
+        let mut seen = std::collections::HashMap::from([(
+            filename.to_owned(),
+            lunco_hash::content::cid(source.as_bytes()),
+        )]);
+        for (uri, text) in extras {
+            let content = lunco_hash::content::cid(text.as_bytes());
+            if let Some(previous) = seen.get(uri) {
+                if previous != &content {
                     return Err(format!(
-                        "Modelica source root `{root}` was not admitted before compile"
+                        "source URI `{uri}` has conflicting contents in one compile"
                     ));
                 }
-            }
-            let qualified = lunco_modelica_ast::ast_extract::qualify(
-                &within,
-                lunco_modelica_ast::ast_extract::short_name(model_name),
-            );
-            self.class_is_owned_by_installed_root(&qualified)
-                .then_some(qualified)
-        } else {
-            None
-        };
-        let mut keep = std::collections::HashSet::new();
-        if primary_owned_class.is_none() {
-            keep.insert(filename.to_string());
-        }
-        let mut filtered_extras = Vec::with_capacity(extras.len());
-        for (extra_filename, extra_source) in extras {
-            if extra_filename != filename {
-                let declared = lunco_modelica_ast::ast_extract::declared_class_names(
-                    extra_source,
-                    extra_filename,
-                );
-                let owned = declared
-                    .iter()
-                    .filter(|qualified| self.class_is_owned_by_installed_root(qualified))
-                    .count();
-                if owned == declared.len() && !declared.is_empty() {
-                    continue;
-                }
-                if owned != 0 {
-                    return Err(format!(
-                        "extra source `{extra_filename}` mixes classes already owned by a \
-                         loaded source root with new definitions; update the source root or \
-                         place the new classes under a distinct namespace"
-                    ));
-                }
-                keep.insert(extra_filename.clone());
-                filtered_extras.push((extra_filename, extra_source));
-            }
-        }
-        self.evict_user_docs_except(&keep);
-        for (extra_filename, extra_source) in filtered_extras {
-            if extra_filename == filename {
                 continue;
             }
-            self.seat_user_source(extra_filename, extra_source)?;
+            let document = ParsedSourceDocument::parse(uri.clone(), text.clone())
+                .map_err(|error| format!("could not parse {uri}: {error}"))?;
+            self.requested_source_roots.extend(
+                lunco_modelica_ast::ast_extract::required_source_roots_from_ast(
+                    document.definition(),
+                ),
+            );
+            seen.insert(uri.clone(), content);
+            documents.push((document, content));
         }
-        if primary_owned_class.is_none() {
-            self.seat_user_source(filename, source)?;
+        self.prepare_requested_source_roots(source_roots_admitted)?;
+        let mut admitted = Vec::new();
+        let mut keep = std::collections::HashSet::new();
+        for (document, content) in documents {
+            let declared = document.definition().declared_class_names();
+            if declared.is_empty() {
+                continue;
+            }
+            let owned = declared
+                .iter()
+                .filter(|name| self.class_is_owned_by_installed_root(name))
+                .count();
+            if owned > 0 {
+                if owned != declared.len() {
+                    return Err(format!(
+                        "source `{}` mixes classes already owned by a loaded source root with new definitions; update the source root or use a distinct namespace",
+                        document.uri()
+                    ));
+                }
+                if !self.source_root_content_closures.values().any(|closure| {
+                    closure
+                        .as_ref()
+                        .is_ok_and(|root| root.files.iter().any(|file| file.cid == content))
+                }) {
+                    return Err(format!(
+                        "source `{}` declares classes already owned by a loaded source root with different contents; update the source-root document or use a distinct namespace",
+                        document.uri()
+                    ));
+                }
+                continue;
+            }
+            keep.insert(document.uri().to_owned());
+            admitted.push(document);
         }
+        self.evict_user_docs_except(&keep);
+        self.session.add_in_memory_parsed_batch(admitted);
         self.seated_user_uris = keep;
-        match primary_owned_class {
-            Some(qualified) => self.compile_loaded(&qualified),
-            None => self.compile_loaded(model_name),
-        }
+        self.compile_loaded(&selected)
     }
 
     /// Whether a fully-qualified class name belongs to a durable source root
@@ -900,7 +802,7 @@ impl ModelicaCompiler {
     /// not treated as durable ownership; they remain governed by
     /// `seated_user_uris` and are replaced by the next compile.
     fn class_is_owned_by_installed_root(&mut self, qualified: &str) -> bool {
-        let Some(root) = qualified.split('.').next() else {
+        let Some(root) = rumoca_core::qualified_name_segments(qualified).next() else {
             return false;
         };
         self.installed_roots.contains(root) && self.session.class_lookup_query(qualified).is_some()
@@ -943,17 +845,9 @@ impl ModelicaCompiler {
             }
         };
 
-        let mut result = self
+        let result = self
             .session
             .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
-
-        if let Err(error) = &mut result {
-            if error.to_ascii_lowercase().contains("unbalanced model") {
-                if let Some(explanation) = self.structural_balance_explanation(model_name) {
-                    error.push_str(&explanation);
-                }
-            }
-        }
 
         log::info!(
             "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
@@ -964,64 +858,14 @@ impl ModelicaCompiler {
         result
     }
 
-    /// Explain an underdetermined Modelica compile with Rumoca's existing
-    /// structural-matching diagnosis. This runs only when strict compilation
-    /// has already rejected a model as unbalanced; the diagnostic DAE is never
-    /// returned to the simulation path.
-    fn structural_balance_explanation(&mut self, model_name: &str) -> Option<String> {
-        let compiled = self
-            .session
-            .compile_model_dae_allow_unbalanced_for_diagnostics(model_name)
-            .ok()?;
-        let diagnosis = rumoca_sim_diagnostics::diagnose_structural_singularity(
-            &compiled.dae,
-            &rumoca_sim_diagnostics::SimOptions::default(),
-        )
-        .ok()??;
-        if diagnosis.unknowns.is_empty() {
-            return None;
-        }
-        let mut unknowns = diagnosis.unknowns;
-        unknowns.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-
-        let mut explanation = format!(
-            "\n\nWhy simulation did not start: Modelica compilation found an underdetermined system: {} equations and {} unknowns, with {} unknowns left unmatched. These values cannot be uniquely calculated from the model's current equations:",
-            diagnosis.n_equations,
-            diagnosis.n_unknowns,
-            unknowns.len(),
-        );
-        for unknown in unknowns {
-            let mut referencing_rows = unknown.referencing_rows;
-            referencing_rows.sort_unstable();
-            referencing_rows.dedup();
-            let rows = if referencing_rows.is_empty() {
-                "no equation rows reference it".to_string()
-            } else {
-                format!(
-                    "referenced by {}",
-                    referencing_rows
-                        .iter()
-                        .map(|index| format!("f_x[{index}]"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            explanation.push_str(&format!(
-                "\n  • {} ({}) — {rows}",
-                unknown.name, unknown.category
-            ));
-        }
-        explanation.push_str(
-            "\nReview the listed variables and equation rows, then add or correct enough independent equations or constraints to determine them.",
-        );
-        Some(explanation)
-    }
-
     /// Seat the source roots discoverable from the source text before the first
     /// compile attempt.  The compiler session is the sole owner of this
     /// operation; callers only provide source text and never duplicate the
     /// dependency inventory or root installation logic.
-    fn prepare_requested_source_roots(&mut self, require_admitted: bool) -> Result<(), String> {
+    fn prepare_requested_source_roots(
+        &mut self,
+        source_roots_admitted: bool,
+    ) -> Result<(), String> {
         let mut roots = self
             .requested_source_roots
             .iter()
@@ -1032,12 +876,7 @@ impl ModelicaCompiler {
             if let Some(error) = self.failed_source_roots.get(&root) {
                 return Err(format!("Modelica source root `{root}` failed: {error}"));
             }
-            if !self.installed_roots.contains(&root) {
-                if require_admitted {
-                    return Err(format!(
-                        "Modelica source root `{root}` was not admitted before compile"
-                    ));
-                }
+            if !source_roots_admitted && !self.installed_roots.contains(&root) {
                 let _ = self.ensure_source_root_installed(&root);
             }
         }
@@ -1122,7 +961,7 @@ impl ModelicaCompiler {
         // diagnostic. Bulk installation also keeps Rumoca's source-set index
         // and invalidation work to one pass instead of one pass per file.
         let inserted = if diagnostics.is_empty() && !parsed.is_empty() {
-            let inserted = self.session.replace_parsed_source_set(
+            let inserted = self.session.replace_in_memory_source_set(
                 &id,
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
                 parsed,
@@ -1252,8 +1091,8 @@ impl ModelicaCompiler {
     }
 
     /// Return the current source-content state for one root. Failed latest
-    /// admissions and parsed-only source bundles return explicit errors rather
-    /// than exposing stale or unavailable source text as a closure.
+    /// admissions return explicit errors rather than exposing stale source text
+    /// as a closure.
     pub fn source_root_content_closure(
         &self,
         source_set_id: &str,
@@ -1294,10 +1133,10 @@ impl ModelicaCompiler {
             if self.seated_user_uris.contains(&participant.uri) {
                 let document = self
                     .session
-                    .get_document(&participant.uri)
+                    .document_source_text(&participant.uri)
                     .ok_or("participating overlay no longer has seated text")?;
                 overlays.push(lunco_hash::content::cid(
-                    normalize_overlay(&document.content).as_bytes(),
+                    normalize_overlay(&document).as_bytes(),
                 ));
             } else {
                 if participant.source_set_keys.is_empty() {
@@ -1654,23 +1493,37 @@ end Controls;"
             ("b.enabled", 0.0),
             ("d.enabled", 5.0),
         ] {
-            let var = &compiled.dae.variables.inputs[&rumoca_compile::compile::VarName::new(name)];
-            let Some(rumoca_compile::compile::core::Expression::Literal {
-                value: rumoca_compile::compile::core::Literal::Real(actual),
-                ..
-            }) = &var.start
-            else {
-                panic!("{name}: unexpected default {:?}", var.start);
-            };
-            assert_eq!(
-                *actual, value,
-                "{name} retains its declaring class's default"
-            );
+            compiled.dae.inspect(|view| {
+                let (_, variable) = view
+                    .variables()
+                    .find(|(_, variable)| variable.name().as_str() == name)
+                    .expect("qualified input retained");
+                assert_eq!(
+                    variable.role(),
+                    rumoca_compile::compile::VariableRole::Input
+                );
+                let expression = variable
+                    .binding()
+                    .or_else(|| variable.start())
+                    .expect("authored default retained");
+                let actual = view.expression(expression).expect("checked expression");
+                let rumoca_compile::compile::ExpressionOperation::Literal(
+                    rumoca_ir_dae::DaeLiteral::Real(actual),
+                ) = actual.operation()
+                else {
+                    panic!("{name}: authored literal default lost");
+                };
+                assert_eq!(*actual, value, "{name} retains its declaring class default");
+            });
         }
         let internal = compiler.compile_str("Internal",
             "model Internal Controls.On a; Controls.Off b; output Real y; equation y=a.y+b.y; end Internal;", "internal.mo")
             .expect("internal defaults retain their equations");
-        assert!(internal.dae.variables.inputs.is_empty());
+        assert!(internal.dae.inspect(|view| {
+            view.variables().all(|(_, variable)| {
+                variable.role() != rumoca_compile::compile::VariableRole::Input
+            })
+        }));
         assert!(compiler.compile_str("Invalid",
             "model Invalid input Real enabled=missing; output Real y; equation y=enabled; end Invalid;", "invalid.mo").is_err(),
             "invalid defaults produce a diagnostic rather than a fabricated value");
@@ -1804,7 +1657,7 @@ end Controls;"
             prepared
                 .parsed
                 .iter()
-                .map(|(uri, _)| uri.as_str())
+                .map(|document| document.uri())
                 .collect::<Vec<_>>(),
             ["a/Alpha.mo", "z/Zed.mo"]
         );
@@ -1942,6 +1795,135 @@ end Controls;"
         );
     }
 
+    fn admission_fixture(root: &str, member: &str) -> ModelicaCompiler {
+        let mut compiler = ModelicaCompiler::new();
+        let report = compiler.load_source_root_in_memory(
+            "inline:admission",
+            "inline source admission",
+            vec![
+                ("package.mo".into(), format!("package {root} end {root};")),
+                ("member.mo".into(), member.into()),
+            ],
+        );
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+        compiler
+    }
+
+    #[test]
+    fn source_admission_rejects_changed_owned_member() {
+        let original = "within Demo; model Part output Real x=1; end Part;";
+        let changed = "within Demo; model Part output Real x=2; end Part;";
+        let mut compiler = admission_fixture("Demo", original);
+        let single = compiler.compile_str("Demo.Part", changed, "edited.mo");
+        let multi = compiler.compile_str_multi("Demo.Part", changed, "edited.mo", &[]);
+        assert!(
+            single.is_err() && multi.is_err(),
+            "changed library source must be rejected: single={}, multi={}",
+            single.is_err(),
+            multi.is_err()
+        );
+        assert!(single.unwrap_err().contains("already owned"));
+        assert!(multi.unwrap_err().contains("already owned"));
+    }
+
+    #[test]
+    fn source_admission_accepts_new_within_namespace() {
+        let source = "within FreeScope; model Part output Real x=1; end Part;";
+        let mut compiler = ModelicaCompiler::new();
+        let single = compiler.compile_str("FreeScope.Part", source, "new.mo");
+        let multi = compiler.compile_str_multi("FreeScope.Part", source, "new.mo", &[]);
+        assert!(
+            single.is_ok(),
+            "new namespace must compile: {:?}",
+            single.err()
+        );
+        assert!(
+            multi.is_ok(),
+            "new namespace must compile: {:?}",
+            multi.err()
+        );
+    }
+
+    #[test]
+    fn source_admission_preserves_nested_selected_identity() {
+        let source = "within Demo; package Box model Part output Real x=1; end Part; end Box;";
+        let mut compiler = admission_fixture("Demo", source);
+        let single = compiler.compile_str("Demo.Box.Part", source, "selected.mo");
+        let multi = compiler.compile_str_multi("Demo.Box.Part", source, "selected.mo", &[]);
+        assert!(
+            single.is_ok(),
+            "nested identity must compile: {:?}",
+            single.err()
+        );
+        assert!(
+            multi.is_ok(),
+            "nested identity must compile: {:?}",
+            multi.err()
+        );
+    }
+
+    #[test]
+    fn source_admission_rejects_changed_owned_extra() {
+        let original = "within Demo; model Part output Real x=1; end Part;";
+        let changed = "within Demo; model Part output Real x=2; end Part;";
+        let mut compiler = admission_fixture("Demo", original);
+        let result = compiler.compile_str_multi(
+            "Probe",
+            "model Probe Demo.Part part; end Probe;",
+            "probe.mo",
+            &[("edited.mo".into(), changed.into())],
+        );
+        assert!(result.is_err(), "changed extra must not be discarded");
+        assert!(result.unwrap_err().contains("already owned"));
+    }
+
+    #[test]
+    fn source_admission_preserves_quoted_root_identity() {
+        let source = "within 'Demo.Root'; model Part output Real x=1; end Part;";
+        let mut compiler = admission_fixture("'Demo.Root'", source);
+        assert_eq!(
+            compiler.source_root_namespaces("inline:admission"),
+            vec!["'Demo.Root'"]
+        );
+        let single = compiler.compile_str("'Demo.Root'.Part", source, "selected.mo");
+        let multi = compiler.compile_str_multi("'Demo.Root'.Part", source, "selected.mo", &[]);
+        assert!(
+            single.is_ok(),
+            "quoted root must compile: {:?}",
+            single.err()
+        );
+        assert!(multi.is_ok(), "quoted root must compile: {:?}", multi.err());
+    }
+
+    #[test]
+    fn source_admission_rejects_conflicting_document_uri() {
+        let source = "model Probe output Real x=1; end Probe;";
+        let mut compiler = ModelicaCompiler::new();
+        let error = compiler
+            .compile_str_multi(
+                "Probe",
+                source,
+                "probe.mo",
+                &[(
+                    "probe.mo".into(),
+                    "model Probe output Real x=2; end Probe;".into(),
+                )],
+            )
+            .unwrap_err();
+        assert!(error.contains("conflicting contents"), "{error}");
+        assert!(compiler.seated_user_uris.is_empty());
+        assert!(
+            compiler
+                .compile_str_multi(
+                    "Probe",
+                    source,
+                    "probe.mo",
+                    &[("probe.mo".into(), source.into())]
+                )
+                .is_ok()
+        );
+    }
+
     #[test]
     fn admitted_library_revision_is_order_independent_and_content_sensitive() {
         let first = vec![
@@ -1962,7 +1944,7 @@ end Controls;"
                 "demo",
                 &[("a.mo".to_string(), "model A end A; changed".to_string())]
             ),
-            "a source edit must invalidate prepared solve IR"
+            "a source edit must invalidate prepared FMI components"
         );
 
         let mut compiler = ModelicaCompiler::new();
@@ -2000,7 +1982,7 @@ end Controls;"
         let source =
             "model IdentityProbe Real x(start=1,fixed=true); equation der(x)=0; end IdentityProbe;";
         let mut compiler = ModelicaCompiler::new();
-        let mut unused = PreparedSourceRoot::prepare(
+        let unused = PreparedSourceRoot::prepare(
             "unused-root",
             "unused-root",
             vec![(
@@ -2009,9 +1991,6 @@ end Controls;"
             )],
             Vec::new(),
         );
-        unused.content_closure = Err(ModelicaSourceRootContentError::SourceTextUnavailable {
-            source_set_id: "unused-root".into(),
-        });
         assert!(compiler.install_source_root(unused).diagnostics.is_empty());
         let first = compiler
             .compile_str_multi(
@@ -2043,7 +2022,7 @@ end Controls;"
         );
         let identity = compiler
             .compiled_source_content_identity(&first, str::to_owned)
-            .expect("unused parsed-only root is excluded");
+            .expect("unused source root is excluded");
         compiler.clear_user_documents();
         let second = compiler
             .compile_str("IdentityProbe", source, "/host-b/editor.mo")
@@ -2067,10 +2046,19 @@ end Controls;"
         let required = "model RequiredProbe Unused.Part part; end RequiredProbe;";
         let compiled = compiler
             .compile_str("RequiredProbe", required, "RequiredProbe.mo")
-            .expect("parsed-only dependency remains compilable");
-        let error = compiler
+            .expect("source-bearing dependency compiles");
+        let dependent_identity = compiler
             .compiled_source_content_identity(&compiled, str::to_owned)
-            .expect_err("participating parsed-only bytes are unavailable");
-        assert!(error.contains("parsed definitions but no source text"));
+            .expect("participating source bytes retain provenance");
+        assert_ne!(identity, dependent_identity);
+        assert_eq!(
+            compiled
+                .source_closure
+                .as_ref()
+                .expect("strict closure")
+                .files
+                .len(),
+            2
+        );
     }
 }

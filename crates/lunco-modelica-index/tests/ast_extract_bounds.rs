@@ -15,11 +15,11 @@ end BoundsFixture;
 
 #[test]
 fn bounds_extraction_finds_valve_opening_min_max() {
-    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "bounds_fixture.mo").expect("parses");
+    let ast = rumoca_phase_parse::parse_to_ast(SOURCE, "bounds_fixture.mo").expect("parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, SOURCE);
     let entry = index
-        .find_component_by_leaf("opening")
+        .find_component("BoundsFixture.Valve", "opening")
         .expect("opening not in index");
     let mn: Option<f64> = entry.modifications.get("min").and_then(|s| s.parse().ok());
     let mx: Option<f64> = entry.modifications.get("max").and_then(|s| s.parse().ok());
@@ -40,7 +40,7 @@ equation
   thrust = throttle * max_rate;
 end DescriptionFixture;
 "#;
-    let ast = lunco_modelica_ast::parse_to_ast(source, "description_fixture.mo")
+    let ast = rumoca_phase_parse::parse_to_ast(source, "description_fixture.mo")
         .expect("description fixture parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, source);
@@ -51,7 +51,7 @@ end DescriptionFixture;
         ("thrust", "Thrust"),
     ] {
         let entry = index
-            .find_component_by_leaf(name)
+            .find_component("DescriptionFixture", name)
             .unwrap_or_else(|| panic!("no component '{name}' in index"));
         assert!(
             entry.description.contains(needle),

@@ -273,6 +273,10 @@ the physics solver empties. Never block that queue:
   an async parse/library completion, or an expired edit-debounce deadline;
   completion workers use a mutex-ordered wake latch, so bounded drains do not
   lose queued work and idle frames do not poll the engine.
+  Native workers prepare the session/document AST copies off-thread and queue
+  the exact typed syntax result with its diagnostics. The UI drain only moves
+  that result; its budget includes document/index installation and it stops
+  after a result exhausts the budget. Index construction remains update-side.
 - **Frame-rate-independent animation.** Anything using time must
   take `dt` from `ui.ctx().input(|i| i.unstable_dt)` (egui) or
   `Time::delta` (bevy). Never assume 60 Hz.
@@ -289,11 +293,31 @@ package — none of these belong on the UI thread every frame. Patterns:
   returns a `Task<T>`; `future::poll_once(&mut task)` in an Update
   system yields the result when ready without blocking. Reference:
   the Package Browser's `handle_package_loading_tasks`.
+- **Dataset consent**: `lunco-luncosim-ui` republishes the Rhai-owned consent
+  model only when registry/workspace/input state, installed policy generation,
+  or interactive-window availability changes. `EngineExposures` publishes the
+  derived notification. Dataset diagnostic-outbox drains preserve registry
+  catalog change ticks while delivering every failure event.
+  Actual dataset state changes retain their ordinary notifications. Validate
+  quiet resource ticks, window transitions, failure delivery and authored
+  `dataset_provisioning_surface.rhai` dismissal/retired-property checks.
 - **Derived entity tree**: the UI thread snapshots the typed ECS facts needed
   for names, hierarchy, visibility, and camera labels once per invalidation;
   hierarchy construction and sorting run on one bounded worker task. Repeated
   topology changes mark the resource dirty through a small invalidation system;
-  the query-heavy snapshot producer runs only when no worker is active. A
+  native `ChildOf` insertions and additions of `Mesh3d`, `SelectableRoot` and
+  `SceneCamera` arrive through one typed source queue.
+  The Update gate coalesces parent edges and candidate admissions separately.
+  The metadata query retains the five mutable change filters; native additions
+  cover marker admission without three per-entity added-marker checks; the
+  existing `Changed<Name>` filter admits new names.
+  Indexed candidate reads fetch current facts only for changed or admitted
+  identities. A new name on a tracked unnamed ancestor can introduce a container
+  row. The same metadata query protects pending worker members from stale edits.
+  Identical parent replacements remain no-ops; removals and scene boundaries
+  retain their current checks.
+  Active Twin closure clears every queued source admission.
+  The query-heavy snapshot producer runs only when no worker is active. A
   revision fence rejects stale results, and Twin close clears the published
   view. Panels continue reading the last completed view while a current build
   is pending. Keep each snapshot fact in

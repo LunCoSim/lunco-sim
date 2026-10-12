@@ -1,15 +1,12 @@
-//! The render half of the heightfield sun-shadow pipeline — **moved here from
-//! `lunco-environment::horizon`** (2026-07-13).
+//! The render half of the heightfield sun-shadow pipeline.
 //!
 //! `lunco-environment` bakes the heightfield, the R32Float height texture and the
 //! R8Unorm sun-visibility cache. All of that is render-free and runs headless.
-//! What could NOT stay there is this: feeding those textures and the per-frame sun
-//! uniforms INTO a concrete material.
+//! This crate feeds those textures and Sun uniforms into concrete materials.
 //!
 //! It is deliberately not expressed as `PbrLook`/`ShaderLook` intent. This is a
 //! **per-frame uniform feed** — `ShaderMaterial::set_many`, `height_map`,
-//! `shadow_cache`, and a `StandardMaterial::base_color` scale on glb props (cloned
-//! to a unique handle so shared materials don't darken together). An intent
+//! and `shadow_cache`. An intent
 //! component whose contents change every frame would defeat the content-keyed look
 //! caches (a new material per frame, never freed). The systems therefore update
 //! only engine-owned uniforms on already-bound materials; they never choose a
@@ -420,9 +417,9 @@ pub fn wire_terrain_materials(
         // identity, sun revision epsilon, and all engine scalars cover the
         // complete terrain shader contract.
         written_materials.clear();
-        // Cached streamed tiles do not cast terrain into CSM. Zero means their
-        // heightfield visibility owns the whole range; native object shadows
-        // still come from Bevy. Static meshes retain their native caster range.
+        // Cached visibility covers streamed ground at every distance. Native
+        // terrain casting also shades objects; native object shadows still
+        // land on the terrain. Static meshes retain their native CSM range.
         if shadow_cache_on > 0.5 {
             inputs.csm_far = 0.0;
         }

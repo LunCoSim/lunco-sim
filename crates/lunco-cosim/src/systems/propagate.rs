@@ -153,8 +153,7 @@ struct DetectedLoop {
 /// [`propagate_connections`] and rebuilt when either the
 /// [`lunco_cosim_core::SimConnection`] set or port-surface revision changes.
 ///
-/// Replaces the old per-tick snapshot (string-cloning every connector every
-/// tick + a string-keyed `HashMap` accumulator). Targets are interned to dense
+/// Targets are interned to dense
 /// indices so propagation accumulates into a plain `Vec<f64>` with no hashing.
 /// Each endpoint is resolved to a [`ResolvedPort`] handle at compile time so the
 /// hot loop exchanges by slot, not by name-scan across backends.
@@ -189,6 +188,9 @@ struct PropagationScratch {
     broken: Vec<BrokenConnection>,
     pending: Vec<BrokenConnection>,
     landed_targets: Vec<usize>,
+    /// Acknowledgements of successful ledger publication in this compiled fabric.
+    /// These never admit a write or decide whether a failure is already landed.
+    landing_published: Vec<bool>,
 }
 
 impl CompiledWiring {
@@ -201,8 +203,8 @@ impl CompiledWiring {
         self.targets.clear();
         self.target_indices.clear();
 
-        // Registry is `Copy` fn-pointers; clone it out so resolution below borrows
-        // `world` immutably alongside the collected connections.
+        // Share the registry snapshot so resolution below borrows `world`
+        // immutably alongside the collected connections.
         let registry = world.resource::<PortRegistry>().clone();
         let mut q = world.query_filtered::<&SimConnection, With<BoundConnection>>();
         let conns: Vec<SimConnection> = q.iter(world).cloned().collect();
@@ -527,19 +529,24 @@ fn propagate_connections_with_cache(
     scratch.broken.clear();
     scratch.pending.clear();
     scratch.landed_targets.clear();
-    // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
-    // write phase can take `&mut World` without holding a resource borrow.
+    // Share the registry snapshot so the write phase can take `&mut World`
+    // without holding a resource borrow or copying the backend table.
     let registry = world.resource::<PortRegistry>().clone();
 
     // Phase 1: recompile the fabric iff the connection set or port surface changed. The compiled
     // fabric is owned by the shared cache (no world borrow), so the phases below keep
     // `&mut World` for the resolver.
+    let topology_span = bevy::log::info_span!("cosim_exchange_topology").entered();
     let mut rewired = false;
     let compiled = wiring.get_or_rebuild(world, |compiled, world| {
         rewired = true;
         compiled.rebuild(world)
     });
     if rewired {
+        scratch.landing_published.clear();
+        scratch
+            .landing_published
+            .resize(compiled.targets.len(), false);
         // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
         // so a gate can ask "did anything never land", `landed` so a wire that
         // once worked is never re-reported. Topology loops are kept in their
@@ -642,6 +649,7 @@ fn propagate_connections_with_cache(
             }
         }
     }
+    drop(topology_span);
 
     if compiled.targets.is_empty() {
         // No wires ⇒ nothing broken. Clear any report left from a prior fabric.
@@ -654,6 +662,7 @@ fn propagate_connections_with_cache(
     }
 
     // Phase 2: seed accumulator slots.
+    let accumulate_span = bevy::log::info_span!("cosim_exchange_accumulate").entered();
     scratch.accumulator.clear();
     scratch.accumulator.resize(compiled.targets.len(), 0.0);
 
@@ -662,21 +671,39 @@ fn propagate_connections_with_cache(
     // transaction, so a stale locator is never silently rerouted by name.
     for w in &compiled.wires {
         let read_src = |w: &CompiledWire| {
-            if w.src_is_input {
-                registry.read_input_port(world, w.src_entity, &w.src_port)
-            } else {
-                registry.read_output_port(world, w.src_entity, &w.src_port)
-            }
+            lunco_cosim_core::initialization::read_causal_sample(
+                &registry,
+                world,
+                w.src_entity,
+                &w.src_port,
+                w.src_is_input,
+            )
         };
         let src = match &w.src_resolved {
             Some(resolved) => registry.read_resolved(world, w.src_entity, resolved),
             None => read_src(w),
         };
         let Some(src) = src else {
-            continue; // source output absent — contributes nothing this tick
+            if !w.src_is_input
+                && world
+                    .get::<lunco_cosim_core::RequiredOutputSamples>(w.src_entity)
+                    .is_some_and(|required| required.0.iter().any(|name| name == &w.src_port))
+            {
+                if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+                    faults.raise(
+                        "cosim-required-sample-unavailable",
+                        Some(w.src_entity),
+                        "co-simulation exchange",
+                        format!("required output '{}' has no physical sample", w.src_port),
+                    );
+                }
+                return;
+            }
+            continue;
         };
         scratch.accumulator[w.dst_index] += src * w.scale + w.offset;
     }
+    drop(accumulate_span);
 
     // Phase 4: write each target once, by resolved handle where available.
     // Gated per target (see `peer_simulates`), never by process role.
@@ -691,6 +718,7 @@ fn propagate_connections_with_cache(
     // intents that remain live across fixed ticks. Explicit port/control release
     // clears requested holds; authority lifecycle release clears controller
     // holds only; scene teardown clears both layers.
+    let holds_span = bevy::log::info_span!("cosim_exchange_holds").entered();
     let holds = world.get_resource::<PortHolds>();
     let hold_revision = holds.map_or(0, PortHolds::revision);
     if rewired || scratch.held_revision != Some(hold_revision) {
@@ -709,6 +737,8 @@ fn propagate_connections_with_cache(
         }
         scratch.held_revision = Some(hold_revision);
     }
+    drop(holds_span);
+    let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity) {
             continue;
@@ -741,7 +771,9 @@ fn propagate_connections_with_cache(
         // once its interface is terminal. A compiling model may expose a partial
         // surface while its generated contract is still landing.
         if written {
-            scratch.landed_targets.push(i);
+            if !scratch.landing_published[i] {
+                scratch.landed_targets.push(i);
+            }
             continue;
         }
         let unresolved = BrokenConnection {
@@ -804,26 +836,28 @@ fn propagate_connections_with_cache(
             }
         }
     }
+    drop(write_span);
 
     // Publish the tick's report. Overwrites last tick's (the set is "what is broken
     // now"), so a wire that resolves once its model loads clears itself.
     //
-    // `faults` is the opposite: it REMEMBERS which wires have never carried a
-    // value. Propagation is change-driven, so a wire that dropped its write at
-    // load is not re-attempted on a quiet tick and the live set reads empty a
-    // second later — a gate sampling it at verdict time passes a run whose vehicle
-    // was never actuated.
+    // `faults` remembers endpoints that have never accepted a write, including
+    // transient failures no longer present in the current fabric. The publication
+    // cursor suppresses only repeated successful ledger notifications; failed
+    // writes still consult the live ledger on every attempt.
     //
     // A wire that DOES land retracts its fault and is never reported again: the
     // first write may well arrive late (a joint's `angle` port exists only once
     // avian admits both bodies), and that window is load order, not an authoring
     // error. Only a wire that never lands at all survives here.
+    let _span = bevy::log::info_span!("cosim_exchange_diagnostics").entered();
     let mut diag = world.resource_mut::<CosimDiagnostics>();
     for index in scratch.landed_targets.drain(..) {
         let target = &compiled.targets[index];
         if diag.mark_landed_shared(target.entity, &target.name) {
             diag.remove_fault(target.entity, &target.name);
         }
+        scratch.landing_published[index] = true;
     }
     std::mem::swap(&mut diag.pending, &mut scratch.pending);
     std::mem::swap(&mut diag.broken, &mut scratch.broken);
@@ -834,6 +868,126 @@ mod wire_order_tests {
     use super::*;
     use SimComponent;
     use lunco_core::GlobalEntityId;
+
+    fn diagnostic_publication_world() -> (World, Vec<Entity>) {
+        use lunco_port_core::ports::PortDirection;
+        use lunco_port_core::{Port, PortSurface, PortSurfacePort};
+        let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        world.init_resource::<PropagationCache>();
+        world.init_resource::<CosimDiagnostics>();
+        world.init_resource::<PortHolds>();
+        world.init_resource::<lunco_cosim_core::BindingRevision>();
+        let mut registry = PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+        let source_port = world.spawn(Port { value: 2.0 }).id();
+        let source = world
+            .spawn(PortSurface::new(HashMap::from([(
+                "signal".into(),
+                PortSurfacePort::new(source_port, PortDirection::Out),
+            )])))
+            .id();
+        let mut endpoints = Vec::new();
+        for _ in 0..128 {
+            let endpoint = world.spawn(Port::default()).id();
+            let target = world
+                .spawn(PortSurface::new(HashMap::from([(
+                    "command".into(),
+                    PortSurfacePort::new(endpoint, PortDirection::In),
+                )])))
+                .id();
+            wire(&mut world, source, "signal", target, "command");
+            endpoints.push(endpoint);
+        }
+        (world, endpoints)
+    }
+
+    /// Isolates steady exchange and its diagnostic publication with inline surfaces.
+    #[test]
+    #[ignore = "manual diagnostic publication performance measurement"]
+    fn settled_diagnostic_publication_benchmark() {
+        let (mut world, endpoints) = diagnostic_publication_world();
+        propagate_connections(&mut world);
+        let began = std::time::Instant::now();
+        for _ in 0..6000 {
+            propagate_connections(&mut world);
+        }
+        let elapsed = began.elapsed();
+        assert_eq!(
+            world.resource::<CosimDiagnostics>().landed.len(),
+            endpoints.len()
+        );
+        for endpoint in endpoints {
+            assert_eq!(
+                world
+                    .get::<lunco_port_core::Port>(endpoint)
+                    .unwrap()
+                    .value
+                    .to_bits(),
+                2.0f64.to_bits()
+            );
+        }
+        println!(
+            "DIAGNOSTIC_PUBLICATION_BENCH elapsed_ns={} writes=768000 final_bits={:016x}",
+            elapsed.as_nanos(),
+            2.0f64.to_bits()
+        );
+    }
+
+    /// The private publication cursor follows the fabric and scene resource seams.
+    #[test]
+    fn landing_publication_acknowledgements_reset_with_fabric_and_scene() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut world, endpoints) = diagnostic_publication_world();
+        propagate_connections(&mut world);
+        assert!(
+            world
+                .resource::<PropagationCache>()
+                .scratch
+                .landing_published
+                .iter()
+                .all(|published| *published)
+        );
+        let missing = world.spawn_empty().id();
+        let source = world.spawn_empty().id();
+        wire(&mut world, source, "absent", missing, "absent");
+        propagate_connections(&mut world);
+        let published = &world
+            .resource::<PropagationCache>()
+            .scratch
+            .landing_published;
+        assert_eq!(
+            published.iter().filter(|published| **published).count(),
+            endpoints.len()
+        );
+        assert_eq!(published.iter().filter(|published| !**published).count(), 1);
+        assert!(
+            world
+                .resource::<CosimDiagnostics>()
+                .has_fault(missing, "absent")
+        );
+        // The real teardown boundary also runs before the scene's entities are reclaimed.
+        world.run_system_once(crate::reset_scene_state).unwrap();
+        assert!(
+            world
+                .resource::<PropagationCache>()
+                .scratch
+                .landing_published
+                .is_empty()
+        );
+        assert!(world.resource::<CosimDiagnostics>().landed.is_empty());
+        propagate_connections(&mut world);
+        assert_eq!(
+            world.resource::<CosimDiagnostics>().landed.len(),
+            endpoints.len()
+        );
+        assert!(
+            world
+                .resource::<CosimDiagnostics>()
+                .has_fault(missing, "absent")
+        );
+    }
 
     /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
     /// order must be a function of the wires' *identities*, not of the order the

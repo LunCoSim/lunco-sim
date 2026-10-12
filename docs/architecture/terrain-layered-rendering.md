@@ -68,6 +68,13 @@ paths and typed values; it contains no lunar fragment or vertex shader path.
 The source reflection publishes typed shader defaults, so an omitted DEM
 albedo uses its shader-owned default. The exterior composes the site base
 colour with its authored raster weight before fading to the body appearance.
+`ShaderLookSourceInterface` belongs to the render binder's source-reflection
+path, independently of material binding and render readiness. Retiring a
+material or invalidating `ShaderLookReady` preserves those loaded-source facts.
+Source replacement/removal and reload publication are handled by the reflection
+owner. Source request admission precedes reflection; material readiness
+invalidation precedes readiness promotion. Required consumers must not lose a
+valid interface while their material waits for binding or repacking.
 The exterior also carries the site lunar photometry parameters and fades
 its direct-sun response to the body response. Shared PBR and terrain lighting
 helpers own lighting; no heightfield shadow march runs for the collar. The
@@ -174,15 +181,77 @@ engine-derived products that USD did not author.
 
 ### Shadow ownership
 
-Static terrain keeps native directional-shadow casting and receiving. CSM
-owns its near-field mesh shadows, and heightfield visibility fades in beyond
-`csm_far`. Streamed tiles remain receivers for object shadows. Their active
-heightfield cache owns terrain self-shadow: the stream look sets
-`ShaderLook.no_shadow_cast`, and the binder applies `NotShadowCaster`.
-`wire_terrain_materials` sets those cached streamed materials' `csm_far` to
-zero, meaning cached visibility covers every distance. When the cache is
-inactive, native terrain casting and its CSM range are restored. Static
-materials retain their native CSM range even when a cache is bound.
+Static and streamed terrain both keep native directional-shadow casting and
+receiving. Native CSM carries terrain shadows onto objects and object shadows
+onto ground. A heightfield cache only supplies ground self-shadow; it cannot
+replace the terrain caster needed by object materials. `wire_terrain_materials`
+sets cached streamed materials' `csm_far` to zero so the cached ground visibility
+covers every distance without a fragment march. Native shadow-map resolution,
+range, and cascade count remain owned by Graphics. Static materials retain
+their native CSM range.
+
+Physical illumination is independent of the camera and GPU shadow cache.
+`LunCoEnvironmentProbeAPI.outputs:sun_visibility` is the fraction of explicitly
+authored sampling points with a clear ray to the Sun centre. A point probe is
+an `Xform`; an area probe uses standard `UsdGeomPoints.points`. The shared panel
+uses nine equal-area cell centres just above its collecting face. The USD bridge
+composes their metric offsets with the native double transform, including scale and `resetXformStack`;
+the live framed pose supplies motion. This declares a spatial approximation,
+not exact cell coverage or solar-disc penumbra.
+
+`lunco-terrain-surface::solar_visibility` publishes demanded samples before the
+fixed co-simulation exchange. Terrain queries traverse native raster cells and
+check coarse cells before breadth-first refinement using conservative enclosures
+of the same bicubic surface and analytic modifiers used by the terrain oracle.
+Actual surface samples certify blockers; clear results require complete
+interval coverage. Within one ray, exact coordinate-bit identities reuse
+height samples at shared endpoints and refinement positions. This cache is
+discarded with the ray and holds at most three samples per admitted interval;
+it changes neither interval budgets nor the classification order. This search
+order keeps an uncertain contact edge from starving a later definite blocker.
+Unsupported bounds, numerical
+ambiguity and exhausted work return unavailable data. `SurfaceOcclusionBudget`
+bounds each ray, total interval work per fixed tick, and retained cell enclosures.
+Probe admission follows unique composed USD paths; terrain intervals follow
+canonical geometry keys. Scene teardown clears sampled visibility, cell bounds,
+and optical geometry before the next Twin loads.
+Canonical cell subdivisions are shared across sampling points and moving probes, with bounded FIFO
+admission and complete surface-key invalidation. Exact pose, direction, surface
+identity and participating shape revisions fence complete-sample memo reuse.
+
+Equipment optical proxies are explicitly selected with standard
+`CollectionAPI:occluders` on the probe. Members must expose an admitted collision
+shape and pose. The physics owner supplies a reusable f64 Parry BVH; neither
+camera LOD nor streamed DEM colliders select physical terrain visibility.
+Omitting the collection selects no equipment proxies. Authors must select
+geometry that represents their optical occluders; collision geometry does not
+imply opacity. Each sampling ray tests the union of terrain and its selected
+proxies, so overlapping shadows cannot be counted twice.
+
+The Sun provider supplies `outputs:sun_irradiance_w_m2` separately: direct-normal
+physical irradiance in W/m2, calibrated by `LunarSun.irradiance_w_m2` at one AU and
+scaled by inverse-square distance for a celestial source. Render lux and exposure
+are separate quantities. The electrical network explicitly routes irradiance,
+visibility and direction through its root boundary to `SolarPanel.mo`. Modelica
+owns incidence and electrical conversion, and publishes incident irradiance and
+radiant power for thermal models to apply absorption and losses. This panel is a
+lumped current source; string mismatch and bypass diodes require an authored
+Modelica electrical network with independently sampled zones.
+
+Missing demanded physical samples are withdrawn and produce a structured terminal
+fault. `RequiredOutputSamples` prevents the generic exchange from substituting
+zero, and the Modelica worker does not dispatch another step after an earlier
+fault in the same fixed transaction. Physical queries cover admitted finite DEMs
+and explicitly selected proxies; they do not establish whole-body eclipse or
+occlusion beyond that geometry. The terrain shader's below-horizon check remains
+necessary for its finite heightfield domain; it is not a global Sun-hide rule.
+
+Production gates: `terrain_solar_visibility` exercises raised, partially shaded,
+moving-proxy, fully terrain-shaded and clear panel states through Modelica;
+`terrain_solar_visibility_night` verifies below-surface sunlight with a panel
+that faces the Sun; `terrain_solar_visibility_invalid_admission` declares the expected runtime fault
+before loading `terrain_solar_visibility_invalid`, then requires the terminal
+`solar-sample-unavailable` diagnostic from the sampling owner.
 
 The canonical fragment applies lunar photometry and heightfield visibility
 only to the selected Sun's direct contribution, using Bevy's directional BRDF

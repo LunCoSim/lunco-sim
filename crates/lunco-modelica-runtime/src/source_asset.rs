@@ -10,7 +10,6 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::tasks::AsyncComputeTaskPool;
 use lunco_modelica_ast::ast_extract::{ModelInterface, parse_model_interface};
-use lunco_modelica_ast::normalize_modelica_source;
 
 /// The text contents of a `.mo` file, surfaced as an asset.
 #[derive(Asset, TypePath, Debug, Clone)]
@@ -44,7 +43,7 @@ impl AssetLoader for ModelicaSourceLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let text = normalize_modelica_source(std::str::from_utf8(&bytes)?).into_owned();
+        let text = String::from_utf8(bytes)?;
         // Asset loaders run on Bevy's I/O pool. Native builds move CPU-heavy
         // parsing to the existing async-compute pool so a large Modelica file
         // cannot stall other asset I/O or the app schedule.
@@ -71,7 +70,7 @@ pub fn read_text_sync(path: &std::path::Path) -> Result<String, String> {
         .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
     let text =
         String::from_utf8(bytes).map_err(|e| format!("non-utf8 text `{}`: {e}", path.display()))?;
-    Ok(normalize_modelica_source(&text).into_owned())
+    Ok(text)
 }
 
 /// Read a file against the immutable mount snapshot captured by its caller.
@@ -83,7 +82,6 @@ pub async fn read_admitted_file(
 ) -> Result<(lunco_workspace::ResolvedFileDocument, String), String> {
     let (resolved, bytes) = admission.read(path).await?;
     let text = String::from_utf8(bytes).map_err(|error| format!("non-UTF-8 source: {error}"))?;
-    let text = normalize_modelica_source(&text).into_owned();
     Ok((resolved, text))
 }
 
@@ -122,8 +120,7 @@ mod tests {
         assert_eq!(source.interface.model_name.as_deref(), Some("Rover"));
         assert_eq!(source.interface.within.as_deref(), Some("Demo"));
         assert_eq!(source.interface.parameters.get("mass"), Some(&12.0));
-        assert!(source.interface.inputs.contains_key("drive"));
-        assert_eq!(source.interface.inputs.get("drive"), Some(&0.0));
+        assert!(source.interface.inputs.contains("drive"));
         assert_eq!(source.interface.input_defaults.get("gain"), Some(&2.5));
         assert!(!source.interface.input_defaults.contains_key("drive"));
         assert!(source.interface.outputs.contains("speed"));

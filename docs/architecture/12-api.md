@@ -98,10 +98,10 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `CompileStatus` | `{"doc_id": u64}` | Get the current compilation and run state of a document. |
 | `RunStatus` | `{"experiment_id": string}` | Get the status of a specific simulation run. |
 | `ListRuns` | `{"doc_id": u64?}` | List all simulation runs, optionally filtered by document. |
-| `GetExperimentResult` | `{"experiment_id": string, "max_points": u64?}` | Retrieve trajectory data (timeseries) for a completed run. |
+| `GetExperimentResult` | `{"experiment_id": string, "variables": string[]?, "max_points": u64?}` | Retrieve trajectory samples and exact per-run unit/description metadata, filtered by the same series names. |
 | `GetDocumentSource` | `{"doc_id": u64}` | Get the raw source code of a document (Modelica only). |
 | `DescribeModel` | `{"doc_id": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
-| `SnapshotVariables` | `{"doc_id": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
+| `SnapshotVariables` | `{"doc_id": u64, "names": string[]?}` | Get current values and checked scalar metadata (unit, description, minimum, maximum) for simulation variables/inputs. |
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, admitted source libraries, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{"include_values": bool?, "include_entities": bool?}` | List USD-driven cosim entities with live telemetry. Both options default to `true`; `include_values: false` omits input/output maps and verbose model/error details, while `include_entities: false` returns only counts, synchronization state, and an aggregate Modelica step profile. |

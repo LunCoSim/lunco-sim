@@ -1112,6 +1112,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 Some(shape) => {
                     let request = primitives.request(shape, quality);
                     commands.entity(entity).try_insert((
+                        UsdPrimitiveMesh(shape),
                         PendingUsdMesh {
                             build: PendingUsdMeshBuild::Primitive(request),
                             stage_id: prim_path.stage_handle.id(),
@@ -1130,17 +1131,15 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             }
         };
 
-        if let Some(shape) = primitive_shape {
-            commands.entity(entity).try_insert(UsdPrimitiveMesh(shape));
-        } else if mesh_handle.is_none() && !mesh_pending {
-            commands
-                .entity(entity)
-                .remove::<Mesh3d>()
-                .remove::<SharedMeshAsset>()
-                .remove::<UsdPrimitiveMesh>()
-                .remove::<UsdCurveMesh>()
-                .remove::<PendingUsdMesh>()
-                .remove::<UsdSceneGeometryPending>();
+        if primitive_shape.is_none() && mesh_handle.is_none() && !mesh_pending {
+            commands.entity(entity).try_remove::<(
+                Mesh3d,
+                SharedMeshAsset,
+                UsdPrimitiveMesh,
+                UsdCurveMesh,
+                PendingUsdMesh,
+                UsdSceneGeometryPending,
+            )>();
         }
 
         // Author the PBR appearance intent (`PbrLook`) with the USD
@@ -1403,16 +1402,20 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             cell = next_cell;
             transform.translation = local_translation;
         }
-        if parent_grid.is_some() {
-            commands.entity(entity).try_insert(cell);
-        }
-        commands.entity(entity).try_insert((
+        let spatial_projection = (
             transform,
             UsdSceneProjected,
             final_vis,
             InheritedVisibility::default(),
             ViewVisibility::default(),
-        ));
+        );
+        if parent_grid.is_some() {
+            commands
+                .entity(entity)
+                .try_insert((cell, spatial_projection));
+        } else {
+            commands.entity(entity).try_insert(spatial_projection);
+        }
 
         // Tag entities carrying any authored animated channel (xform, visibility,
         // or a bound-shader/displayColor material input) for the animation adapter.
@@ -1911,7 +1914,7 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
     q: Query<
-        &UsdPrimPath,
+        (&UsdPrimPath, Has<UsdSceneAwaitingStage>),
         (
             Without<UsdSceneProjected>,
             Without<UsdSceneProjectionFailed>,
@@ -1921,10 +1924,13 @@ fn on_usd_prim_added(
     stages: Res<Assets<UsdStageAsset>>,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = q.get(entity) else {
+    let Ok((prim_path, awaiting_stage)) = q.get(entity) else {
         return;
     };
 
+    if awaiting_stage {
+        return;
+    }
     if stages.get(&prim_path.stage_handle).is_none() {
         commands.entity(entity).try_insert(UsdSceneAwaitingStage);
         return;
@@ -2193,8 +2199,7 @@ fn process_queued_usd_visuals(
 
         commands
             .entity(entity)
-            .try_remove::<UsdSceneProjectionQueued>()
-            .try_remove::<UsdSceneAwaitingStage>();
+            .try_remove::<(UsdSceneProjectionQueued, UsdSceneAwaitingStage)>();
         let parent_grid = q_child_of
             .get(entity)
             .ok()
@@ -2537,8 +2542,7 @@ fn finish_pending_usd_child(
     if pending_children.finish_child(parent) {
         commands
             .entity(parent)
-            .try_remove::<UsdSceneAwaitingStage>()
-            .try_remove::<UsdSceneProjectionQueued>();
+            .try_remove::<(UsdSceneAwaitingStage, UsdSceneProjectionQueued)>();
     }
 }
 
@@ -2553,8 +2557,7 @@ fn fail_usd_projection(
     commands
         .entity(parent)
         .try_insert((UsdSceneProjectionFailed(message), Visibility::Hidden))
-        .try_remove::<UsdSceneAwaitingStage>()
-        .try_remove::<UsdSceneProjectionQueued>();
+        .try_remove::<(UsdSceneAwaitingStage, UsdSceneProjectionQueued)>();
 }
 
 /// Commit completed CPU-generated USD meshes without reading USD again.
@@ -2604,8 +2607,7 @@ fn poll_pending_usd_meshes(
         if stale {
             commands
                 .entity(entity)
-                .try_remove::<PendingUsdMesh>()
-                .try_remove::<UsdSceneGeometryPending>()
+                .try_remove::<(PendingUsdMesh, UsdSceneGeometryPending)>()
                 .try_insert(UsdSceneProjectionQueued);
             continue;
         }
@@ -2630,14 +2632,14 @@ fn poll_pending_usd_meshes(
                 "[usd-bevy] {} CPU mesh build produced no geometry; visual mesh was not created",
                 pending.path.as_str()
             );
-            commands
-                .entity(entity)
-                .try_remove::<PendingUsdMesh>()
-                .try_remove::<UsdSceneGeometryPending>()
-                .try_remove::<UsdPrimitiveMesh>()
-                .try_remove::<UsdCurveMesh>()
-                .try_remove::<lathe::NurbsSurface>()
-                .try_remove::<lathe::UsdLathe>();
+            commands.entity(entity).try_remove::<(
+                PendingUsdMesh,
+                UsdSceneGeometryPending,
+                UsdPrimitiveMesh,
+                UsdCurveMesh,
+                lathe::NurbsSurface,
+                lathe::UsdLathe,
+            )>();
             continue;
         };
 
@@ -2654,8 +2656,7 @@ fn poll_pending_usd_meshes(
         }
         commands
             .entity(entity)
-            .try_remove::<PendingUsdMesh>()
-            .try_remove::<UsdSceneGeometryPending>();
+            .try_remove::<(PendingUsdMesh, UsdSceneGeometryPending)>();
     }
 }
 

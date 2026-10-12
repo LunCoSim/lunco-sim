@@ -27,7 +27,7 @@
 //! wait either still describes the world or it does not.
 
 use bevy::prelude::*;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
 
 use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
@@ -127,15 +127,23 @@ fn scene_still_loading(stage_loading: bool) -> bool {
 /// or program-name special case. A standalone program with no rigid-body
 /// ancestor holds its own entity, preserving the original participant scope.
 fn track_model_compiles(
-    models: Query<(Entity, &ModelicaModel, Option<&SimComponent>), With<UsdSourcedCosim>>,
+    models: Query<
+        (
+            Entity,
+            &ModelicaModel,
+            Option<&ModelicaVariables>,
+            Option<&SimComponent>,
+        ),
+        With<UsdSourcedCosim>,
+    >,
     waits: Query<(Entity, &ModelCompileWait)>,
     parents: Query<&ChildOf>,
     rigid_bodies: Query<(), With<avian3d::prelude::RigidBody>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    for (entity, model, component) in &models {
-        let kind = modelica_wait_kind(model, component);
+    for (entity, model, variables, component) in &models {
+        let kind = modelica_wait_kind(model, variables, component);
         let wait = waits.get(entity).ok();
         let owner = owning_physics_entity(entity, &parents, &rigid_bodies);
         match (kind, wait) {
@@ -289,9 +297,11 @@ fn owning_physics_entity(
 /// has not received the same diagnostic yet.
 fn modelica_wait_kind(
     model: &ModelicaModel,
+    variables: Option<&ModelicaVariables>,
     component: Option<&SimComponent>,
 ) -> Option<&'static str> {
-    if model.last_error.is_some()
+    if variables.is_none()
+        || model.last_error.is_some()
         || component.is_some_and(|component| {
             matches!(component.status, lunco_cosim_core::SimStatus::Error(_))
         })
@@ -302,8 +312,10 @@ fn modelica_wait_kind(
     } else if !model.paused
         && (!model.current_time.is_finite()
             || model.current_time < 0.0
-            || model.variables.is_empty()
-            || model.variables.values().any(|value| !value.is_finite()))
+            || variables.is_some_and(|variables| {
+                variables.values.is_empty()
+                    || variables.values.values().any(|value| !value.is_finite())
+            }))
     {
         Some(kinds::PARTICIPANT_INIT)
     } else {
@@ -371,11 +383,15 @@ mod tests {
         };
         let model = ModelicaModel::default();
         assert_eq!(
-            modelica_wait_kind(&model, None),
+            modelica_wait_kind(&model, Some(&ModelicaVariables::default()), None),
             Some(kinds::PROGRAM_COMPILE)
         );
         assert_eq!(
-            modelica_wait_kind(&model, Some(&compiling)),
+            modelica_wait_kind(
+                &model,
+                Some(&ModelicaVariables::default()),
+                Some(&compiling)
+            ),
             Some(kinds::PROGRAM_COMPILE)
         );
 
@@ -384,7 +400,7 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&model, Some(&failed)),
+            modelica_wait_kind(&model, Some(&ModelicaVariables::default()), Some(&failed)),
             Some(kinds::PROGRAM_FAILED),
             "a failed model remains a named policy fact"
         );
@@ -395,7 +411,11 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&compiled, Some(&compiling)),
+            modelica_wait_kind(
+                &compiled,
+                Some(&ModelicaVariables::default()),
+                Some(&compiling)
+            ),
             None,
             "a deliberately paused model is ready after its source compiles"
         );
@@ -406,7 +426,11 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&active, Some(&compiling)),
+            modelica_wait_kind(
+                &active,
+                Some(&ModelicaVariables::default()),
+                Some(&compiling)
+            ),
             Some(kinds::PARTICIPANT_INIT),
             "an active participant remains pending until its initialized t=0 snapshot"
         );
@@ -414,11 +438,16 @@ mod tests {
         let initialized = ModelicaModel {
             is_compiled: true,
             paused: false,
-            variables: [("initial_output".to_owned(), 1.0)].into(),
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&initialized, None),
+            modelica_wait_kind(
+                &initialized,
+                Some(&ModelicaVariables {
+                    values: [("initial_output".to_owned(), 1.0)].into()
+                }),
+                None
+            ),
             None,
             "the committed t=0 solver snapshot closes participant initialization"
         );
@@ -430,7 +459,11 @@ mod tests {
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&positive_time_without_snapshot, None),
+            modelica_wait_kind(
+                &positive_time_without_snapshot,
+                Some(&ModelicaVariables::default()),
+                None
+            ),
             Some(kinds::PARTICIPANT_INIT),
             "a clock value without an output snapshot is not initialized state"
         );
@@ -439,11 +472,16 @@ mod tests {
             is_compiled: true,
             paused: false,
             current_time: f64::NAN,
-            variables: [("initial_output".to_owned(), 1.0)].into(),
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&invalid_time, None),
+            modelica_wait_kind(
+                &invalid_time,
+                Some(&ModelicaVariables {
+                    values: [("initial_output".to_owned(), 1.0)].into()
+                }),
+                None
+            ),
             Some(kinds::PARTICIPANT_INIT),
             "a non-finite solver clock is not evidence of an initial exchange"
         );
@@ -452,11 +490,16 @@ mod tests {
             is_compiled: true,
             paused: false,
             current_time: 0.0,
-            variables: [("initial_output".to_owned(), f64::NAN)].into(),
             ..default()
         };
         assert_eq!(
-            modelica_wait_kind(&invalid_snapshot, None),
+            modelica_wait_kind(
+                &invalid_snapshot,
+                Some(&ModelicaVariables {
+                    values: [("initial_output".to_owned(), f64::NAN)].into()
+                }),
+                None
+            ),
             Some(kinds::PARTICIPANT_INIT),
             "non-finite initial observables cannot release participant readiness"
         );

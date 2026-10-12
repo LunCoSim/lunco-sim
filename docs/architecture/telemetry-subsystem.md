@@ -85,12 +85,24 @@ Modelica runtime telemetry caches each session's `SignalRef` by solver variable 
 `record_scalar_at_rate` path borrows that identity for existing channels, so steady samples do
 not rebuild or clone an owned signal path. The registry clones the key only when it first
 creates the channel; a new solver session clears the prior histories and cached identities.
+Modelica reuses owner publication only for variables that have retained a scalar
+sample. Until that first admission, it continues to associate through the registry;
+preparing an owner or metadata alone does not establish a retained channel. A session
+compares the live `GlobalEntityId` and the registry's catalog revision once per
+batch; unchanged admitted channels skip repeated owner-map lookups. New variables,
+source-owner changes and catalog edits publish through the registry again. This
+includes removal/re-admission: prior scalar retention cannot establish that a
+removed wire owner still exists. A changed batch invalidates each channel's
+publication flag, including channels skipped for invalid values or capacity.
+Only actual owner association acknowledges that channel. Session reset clears
+the publication cursor, and absent live ownership preserves the registry's
+archived identity.
 Rate admission, backwards-time clearing and append share one mutable history lookup.
 Rejected samples leave history capacity, publisher activity and catalog revision unchanged;
 accepted samples apply retention and reactivate archived publishers at that same boundary.
 
-Modelica channel admission uses the registry's live scalar count. Below the
-configured limit, append can admit either a new or an existing history; the
+Modelica and physics channel admission use the registry's live scalar count.
+Below the configured limit, append can admit either a new or an existing history; the
 producer reads the resulting count after an accepted sample. At the limit,
 it checks live history existence so existing channels continue recording while
 new channels are rejected. Cached producer identities do not authorize a new
@@ -250,7 +262,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. A missing bound domain is an owner-visible error, never an implicit switch to world time. |
 | **Retention / ring buffer** | `lunco_signal::SignalRegistry` — chunked `ScalarHistory` with a bounded mutable tail **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path; use `snapshot()` when bulk history processing belongs on a worker. |
 | **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. The core health publisher exposes the latest facts and a bounded frame-time history in `EngineHealthSnapshot`; `lunco-telemetry` also retains selected samples in the global `SignalRegistry` | **Use typed engine-health facts for app presentation and the retained `SignalRegistry` for telemetry plots, APIs, and recording.** Do not read `DiagnosticsStore` from a UI surface. |
-| **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
+| **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { t_current }` (lifecycle progress), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | Completed dense experiment trajectories use `RunResult`. Telemetry recordings export the retained `SignalRegistry` histories with explicit gaps; they retain their independently sampled time axes. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_port_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
 | **Command shape** | `ControlAnimation { playing: Option<bool>, seek_secs: Option<f64>, rate: Option<f64> }` — one verb, all-`Option`, each field a distinct control | **Copy this idiom exactly.** One `ControlTelemetry`, not five verbs. |
@@ -398,9 +410,10 @@ Three lanes, and they are not interchangeable:
 
 ### 5b. Model state and explicit channels share one retention plane
 
-`ModelicaModel::parameters`, `inputs`, and `variables` are the live model-inspector surface, and
+`ModelicaModel::parameters` and `inputs`, plus the required
+`ModelicaVariables::values` snapshot, are the live model-inspector surface, and
 `CosimStatus`/`SnapshotVariables` expose the same state to agents and API clients. After a solver
-response lands, `lunco-modelica-telemetry` retains finite `variables` in the shared
+response lands, `lunco-modelica-telemetry` retains finite `ModelicaVariables::values` in the shared
 `SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to the shared deadband,
 retention, and channel cap. The projection clears a solver session's old history when the
 authoritative Modelica `session_id` changes, so reloads cannot mix time bases.
@@ -422,6 +435,12 @@ The physics producer treats metadata as catalog state: it publishes metadata on 
 discovery or when an entity's USD owner path changes, then only records samples on later fixed
 steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
 registry remains the single metadata owner.
+
+Modelica producers likewise retain only a publication flag. First observation
+and document-generation or authored-layout changes build metadata and move it
+into `SignalRegistry::update_meta`, which owns both comparison and storage.
+Settled solver samples reuse the channel identity and do not reconstruct or
+retain a second copy of the metadata strings.
 
 Physics and Modelica producers add `SignalSource` when an entity first retains a sample. The
 marker owns history cleanup on source removal; later sample batches do not rewrite it.
@@ -659,7 +678,7 @@ duplication this subsystem was built to avoid.
 
 The one subtlety: channels sample at *different rates* (that is the point of Phase 1), so
 they share no time axis. The export builds the sorted **union** of sample times and fills a
-channel's missing slots with `null` — the same NaN-padding `RunResult::merge_delta` does.
+channel's missing slots with `null`.
 **Do not interpolate**: a hole is data the channel genuinely never reported, and inventing a
 value would launder a 1 Hz channel into looking like a 60 Hz one.
 

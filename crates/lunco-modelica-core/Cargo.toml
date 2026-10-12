@@ -25,6 +25,7 @@ server = ["api"]
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+rumoca-phase-parse.workspace = true
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-hooks = { path = "../lunco-hooks" }
@@ -66,6 +67,7 @@ lunco-modelica-library = { path = "../lunco-modelica-library" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-source-roots = { path = "../lunco-modelica-source-roots" }
 rumoca-compile = { workspace = true }
+rumoca-core = { workspace = true }
 rumoca-tool-lint = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

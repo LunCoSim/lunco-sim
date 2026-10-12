@@ -158,7 +158,7 @@ use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResul
 use lunco_api_core::{ApiErrorCode, ApiValue};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::TelemetryValue;
 use lunco_usd_document::document::UsdDocument;
@@ -1588,17 +1588,22 @@ fn scene_materialized(world: &mut World) -> bool {
 /// continues to block the runner.
 fn participants_ready(world: &mut World) -> bool {
     let models_ready = {
-        let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
-        q.iter(world).all(|model| {
+        let mut q = world
+            .query_filtered::<(&ModelicaModel, Option<&ModelicaVariables>), With<UsdSourcedCosim>>(
+            );
+        q.iter(world).all(|(model, variables)| {
             model.last_error.is_some()
                 || (model.is_compiled
+                    && variables.is_some()
                     && !model.is_compiling
                     && !model.is_stepping
                     && (model.paused
                         || (model.current_time.is_finite()
                             && model.current_time >= 0.0
-                            && !model.variables.is_empty()
-                            && model.variables.values().all(|value| value.is_finite()))))
+                            && variables.is_some_and(|variables| {
+                                !variables.values.is_empty()
+                                    && variables.values.values().all(|value| value.is_finite())
+                            }))))
         })
     };
     if !models_ready {
@@ -1679,9 +1684,10 @@ fn log_participant_readiness_blockers(world: &mut World) {
     let mut models = world.query::<(
         Entity,
         &ModelicaModel,
+        Option<&ModelicaVariables>,
         Option<&lunco_cosim_core::SimComponent>,
     )>();
-    for (entity, model, component) in models.iter(world) {
+    for (entity, model, variables, component) in models.iter(world) {
         let status = component
             .map(|component| format!("{:?}", component.status))
             .unwrap_or_else(|| "no SimComponent".into());
@@ -1694,7 +1700,9 @@ fn log_participant_readiness_blockers(world: &mut World) {
             model.is_stepping,
             model.current_time,
             model.target_time,
-            model.variables.len(),
+            variables
+                .map(|variables| variables.values.len().to_string())
+                .unwrap_or_else(|| "missing".to_owned()),
             status,
             model.last_error.as_deref().unwrap_or("none"),
         );

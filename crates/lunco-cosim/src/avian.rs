@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn joint_island_mass_ports_expose_only_complete_solver_measurements() {
         let mut app = App::new();
-        app.init_resource::<lunco_physics::DynamicJointIslandMasses>()
+        app.add_plugins(lunco_physics::assembly::DynamicJointIslandMassPlugin)
             .add_systems(Update, lunco_physics::refresh_dynamic_joint_island_masses);
         let root = app
             .world_mut()

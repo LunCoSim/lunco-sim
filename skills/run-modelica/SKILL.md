@@ -34,6 +34,22 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+When composing a component with bound input defaults, supply replacements as
+instance modifiers. Follow the
+[declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
+and validate the composed participant through its production scene gate.
+
+Automatic target selection requires a runnable model, block, or class. A file
+containing only packages, records, connectors, types, or functions has no
+simulation target. Component metadata uses Rumoca's complete expression
+rendering and already-decoded string values; preserve literal quotes,
+backslashes, and description concatenation when inspecting authored facts.
+Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
+including inherited units and scalar array entries. Editing a draft does not
+change live units or descriptions; recompile to install a new inventory. A name
+such as `p.v` alone implies no electrical unit. Use
+`modelica_compiled_metadata.rhai` for that lifecycle contract.
+
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
 the physical vehicle identity after compile and reload.
@@ -60,6 +76,14 @@ For radiation or surface thermal models, also resolve the typed finish/coating
 assigned to the analyzed face and use its sourced engineering optical/thermal
 properties. `UsdShade` shader presets are presentation mappings only and must
 not be used as Modelica property sources.
+
+For solar-driven electrical or thermal models, use the probe’s required physical
+`sun_irradiance_w_m2`, sampled `sun_visibility`, and framed direction. Keep
+incidence and conversion in Modelica; connect incident radiant power to thermal
+equations with authored absorption properties. Missing demanded samples fault
+the exchange rather than becoming zero. See the
+[physical illumination contract](../../docs/architecture/terrain-layered-rendering.md)
+for area sampling, explicit optical proxies and production scene gates.
 
 | App | Launch | Modelica surface |
 |---|---|---|
@@ -152,7 +176,7 @@ prepared AST interface, document compiles derive them from the primary and
 sibling ASTs, and a generated policy's `source_roots` list is its required root
 manifest. The worker commits root preparations in admission order before
 compilation, rejects unadmitted roots, and reports failed roots without retrying
-synchronous discovery. Synchronous compiler helpers remain for CLI and batch
+synchronous discovery. Synchronous compiler helpers remain for standalone CLI
 callers.
 The worker's successful load acknowledgement carries the authored top-level
 namespaces parsed by that exact source-set operation. The registry retains those
@@ -175,7 +199,7 @@ content in the source key captured from the successful strict compiler's
 participating-source closure before clearing user overlays. Generated class/network-title identity is
 normalized; equations, parameters, initial values, participating siblings, and
 contributing library bytes remain structural. Unrelated sibling edits and runtime
-document IDs do not invalidate prepared solve IR. The captured key remains with
+document IDs do not invalidate prepared FMI components. The captured key remains with
 the immutable DAE through shared reuse and resets; the precompile DAE cache uses
 the full submitted input set until the strict closure is known. It does not scan
 the complete Modelica tree during the first live stepper build.
@@ -203,7 +227,12 @@ root wait for ECS publication. Worker completion never bypasses the oldest
 request or its Twin/stage/instance validation.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
-DAE cache. Source-root installation, `Compile`, `Reset`, parameter updates, and
+DAE cache. Native experiment `CompileBatch` requests use this same actor and
+admitted package context; copies retain their `within` scope without injecting
+imports. The typed batch reply carries the DAE and participating-source CID.
+Only the background run thread waits, and cancellation releases its scheduler
+slot while the compiler finishes immutable preparation. Source-root installation,
+`Compile`, `Reset`, parameter updates, and
 cache-invalidating Step auto-init share a FIFO. The worker commits results in
 submission order after entity-session and library-generation checks; a Step
 that needs a rebuild resumes only after its initialization commits. These
@@ -212,6 +241,19 @@ and actor requests plus solve preparations share bounded admission. Persistent
 solve-cache reads and writes run with DAE lowering in the preparation pool; the
 native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
+
+Native preparation uses the startup-captured
+`lunco_modelica_worker::worker::ModelicaWorkerLimits` resource. Its independent
+`preparation` and `live_execution` budgets each default to six maximum workers
+and two reserved reported CPU threads, retaining one worker on small hosts.
+Its `document_execution` budget defaults to one owner. The three pools can
+therefore total thirteen workers. The typed compile command captures `Scene`
+or `Document` from the admitted actor kind and cached rebuilds retain it;
+document construction and preparation never run on a scene session owner.
+Insert it before
+`ModelicaExecutionPlugin` to configure capacity. Invalid zero capacity fails
+visibly through the worker diagnostic; changing the resource after launch
+does not resize the pools or alter solver clocks.
 
 Shared immutable RAM caches use the captured
 `lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
@@ -251,7 +293,7 @@ bounded preparation pool because the DAE input and solve options are immutable.
 The worker alone commits the resulting solve model and constructs the live
 stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
 ordered behind that commit. Persistent solve-IR entries are keyed by structural
-participating-source closure identity, solver, and exact parameter-override bits.
+participating-source closure identity, solver, and exact parameter-override and initial-input bits.
 Source-root changes invalidate compilation; bounded prepared models remain
 reusable when fresh strict resolution yields the same participating closure.
 A contributing-library edit changes that closure key. Native disk records use
@@ -341,17 +383,46 @@ use `Duplicate to edit`, then perform the same placement check. A drag that
 appears to work but disappears on reload is a product bug, not an acceptable
 generated-model editing mode.
 
-Use the shared AST `strip_within_prefix` for qualified lookup and editing;
-similarly spelled package prefixes must not match an authored `within` package.
-Reuse the AST's `qualified_name_segments` and `parent_qualified` for class paths;
-quoted identifiers containing dots remain one segment. Extraction checks do not
-prove the compiler accepts that qualified name: validate compilation separately
-through its actual command/error boundary.
+Parse original UTF-8 source through `rumoca_phase_parse`'s strict or recovering
+entry point. The parser accepts a single leading BOM and keeps raw byte offsets;
+loaders and editor paste must preserve the text and line endings.
+Verify source preservation, original-source batch compilation and current-generation
+parser rejection through `assets/scenarios/tests/modelica_source_encoding.rhai`.
 
-For class source extraction, reuse `lunco-modelica-ast::ast_extract::class_full_text_span`
-from the same parsed bytes. Its inline seam test covers same-line enclosing
-declarations and class qualifiers; do not derive declaration bounds by scanning
-backward through arbitrary identifiers.
+Run dispatch requires a current parsed document snapshot. Resolve explicit and
+default run targets against the document index's eligible candidates and parsed
+`within` metadata through `sim_target::resolve_requested_class`; use its qualified
+identity unchanged. Verify both run APIs and an unrelated-prefix rejection through
+`assets/scenarios/tests/modelica_class_compile.rhai`.
+
+Compiler admission uses Rumoca's `ParsedSourceDocument` once per unique URI and
+the definition's `qualified_class_name`/`declared_class_names` queries. Reuse a
+loaded source root only for exact admitted source bytes; changed or mixed owned
+definitions require updating that root or choosing a distinct namespace.
+Read participating text through `Session::document_source_text` for content
+identity. Single-source and multi-source compiles share this admission boundary.
+
+Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
+query for exact source selection and editing. `relative_class_name` strips only
+the actual authored `within` package. Use `rumoca_core::qualified_name_segments`
+and its parent/leaf helpers for path boundaries; quoted dots remain inside
+identifiers. The engine uses `Session::class_definition_query` for the current
+source revision and `class_component_declarations_query` for complete inherited
+facts. Do not add a second class index, miss cache, first-leaf search, or guessed
+member classification.
+
+`DescribeModel.class_name` is the canonical authored name. Verify duplicate
+leaves, quoted identifiers, document-relative requests under `within`, and
+terminal ambiguity/unresolved-inheritance diagnostics through
+`assets/scenarios/tests/modelica_class_identity.rhai`. Qualified and quoted
+compile acceptance plus wrong-package rejection are covered by
+`assets/scenarios/tests/modelica_class_compile.rhai`. Source query and compile
+acceptance remain distinct boundaries.
+
+For class source extraction, use Rumoca's `ClassDef.location` against the same
+parsed bytes. It includes declaration qualifiers, the terminating semicolon and
+element constraints. Check the range and UTF-8 boundaries at the source reader;
+invalid coordinates are errors. Name/end-name tokens own only identifier spans.
 Read-only library views also require exact qualified identity. The generic
 library extraction seam checks sibling leaf names and a missing sibling without
 reading repository fixtures.
@@ -363,16 +434,28 @@ Closing the source or target lifetime during preparation must cancel publication
 and release pending names, tabs and status. Use inline parser tests for span and
 rewrite boundaries, and authored Rhai commands/queries for these public lifecycle
 outcomes. `assets/scenarios/tests/modelica_duplicate_lifecycle.rhai` exercises
-qualified siblings and quoted names, error diagnostics and exact-name reuse,
+qualified siblings, quoted names and complete commented declaration extents,
+error diagnostics and exact-name reuse,
 observed pending source-close cancellation, original-target Twin replacement
 without retagging, and a valid successor. Run it in a UI-capable host with
 Application/Retain lifetime and API-authored `root_a`, `root_b`, `entry_scene`
-fixtures. Asynchronous folder scanning permits a duplicate to install while its
+fixtures.
+Application hosts require a settled scene to open scenario lifecycle; pass
+the application fixture through `RunScenarioAsset.scene_asset` while leaving
+`owner_twin_id` omitted for this gate. The default host receives its identity
+through session admission before declared simulation queries execute.
+Asynchronous folder scanning permits a duplicate to install while its
 old Twin is live; the gate preserves that valid retained-source outcome. Exact
 Twin/connection retirement of never-ready tasks belongs to the generic resource
 seam test, since public folder replacement cannot force that worker boundary.
 Native preparation runs on the existing task pool; browser Bevy tasks
 retain the browser editor's deferred parsing contract.
+
+For Editor checkpoints, use `modelica_editor::inspect(doc)` to combine native
+source and compile facts, then `authoring_session::checkpoint("modelica", doc)`
+to require the current compiled model. `CompileModel` admits compile intent;
+`CompileStatus` reports completion. Exercise that path, invalid current source,
+and closed-document rejection with `modelica_editor_checkpoint.rhai`.
 
 Projection must remain responsive while a native package or inherited icon is
 being resolved. Verify that `/api/ready` stays responsive, the canvas shows an
@@ -469,14 +552,10 @@ post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id"
 just unpauses (no recompile). `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only.
 
-If a live compile fails on an unbalanced DAE, its ordinary Modelica Error event
-in Recent status events explains why simulation did not start and lists the
-unknowns Rumoca's structural matcher could not pair with equations, plus their
-categories and referencing equation rows. Selecting the row expands the full
-message. `GetDiagnostics` also returns the explanation with the structured
-compiler findings. Those names identify values the current equations cannot
-determine; add or correct independent equations or constraints. The diagnostic
-DAE is never simulated.
+A strict compile failure is terminal and appears as a Modelica Error in Recent
+status events. Selecting the row expands Rumoca's checked phase diagnostic;
+`GetDiagnostics` exposes the structured compiler findings. Correct the authored
+equations or constraints before requesting another solve.
 
 ## 4. Recipe B — build an experiment (batch + parameter sweep)
 
@@ -556,8 +635,8 @@ runtime input variables.
 - `n_intervals` — output **NumberOfIntervals**: emits `n+1` evenly-spaced
   samples. Takes precedence over `dt` when set.
 - `tolerance` — solver tolerance.
-- `solver` — family: `"bdf"|"dassl"|"ida"` → BDF; `"esdirk34"|"rk"|"dopri"|"trbdf2"`
-  → ESDIRK34; `"auto"`/omit → backend default (BDF).
+- `solver` — registered ID: `"bdf"`, `"rk45"`, or `"fixed-rk4"`. Omission selects
+  the highest-ranked capable backend. Unknown IDs are rejected.
 - `h0` — initial step size (seconds).
 - Omit any field to fall back to the model's `experiment(...)` annotation, then
   the backend default.
@@ -604,8 +683,8 @@ post '{"type":"ExecuteCommand","command":"GetExperimentResult","params":{
   "variables":["altitude","velocity"], "max_points":500
 }}'
 # max_points = strided downsample, final sample always kept. Omit = uncapped.
-# Returns {state:"Done", times:[...], series:{"altitude":[...], ...}} or an
-# error if the run is not Done (Pending/Running/Failed-without-partial).
+# Returns {state:"done", times:[...], series:{"altitude":[...], ...}} or an
+# error if the run has no completed result.
 ```
 
 `RunStatus` is the query provider for one run's progress and terminal state:
@@ -617,6 +696,11 @@ post '{"type":"ExecuteCommand","command":"RunStatus","params":{"experiment_id":"
 Poll until `done`, `failed`, or `cancelled`; only request the trajectory after
 `done`. `ListRuns` is useful for discovery and UI review, not as a substitute
 for retaining the id returned by the dispatch you just made.
+
+Batch progress reports lifecycle state only. A successful run publishes one
+validated complete trajectory; a failed or cancelled run publishes no new
+trajectory. `modelica_output_budget.rhai` verifies visible failure without
+result publication and completion of the valid successor.
 
 A native worker panic, thread-admission failure, or disconnect without a
 terminal result produces `failed` with its cause and retires the handle.
@@ -698,7 +782,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/source libraries/open docs → URIs |
 | `Open` | `{uri}` | open bundled/source-library/path/mem into a tab |
 | `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, dirty, active` per tab |
-| `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs (pre-compile) |
+| `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs and `has_array_dimensions` declaration facts (pre-compile) |
 | `CompileStatus` | `{doc}` | `state, ast_parsed, candidates, picker_pending, drilled_in_class` |
 | `GetDiagnostics` | exactly one of `{doc_id}` or `{scope}` | shared parser/compiler/lint diagnostics; poll `complete`, then read channel states, stable codes, source locations, and suggestions. `scope` is `loaded_stages` or `twin` |
 | `ListCompileCandidates` | `{doc}` | `{candidates:[{qualified,short}]}` — the picker choices |
@@ -718,7 +802,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 **Results & viz**
 | command | params | returns / effect |
 |---|---|---|
-| `SnapshotVariables` | `{doc, names?}` | one-shot live `{t, parameters, inputs, variables}` |
+| `SnapshotVariables` | `{doc_id, names?}` | one-shot live `{t, parameters, inputs, variables, metadata}` |
 | `ListRuns` | `{doc?}` | experiment rows (newest first) |
 | `RunStatus` | `{experiment_id}` | one run's progress/terminal state |
 | `GetExperimentResult` | `{experiment_id? \| doc, variables?, max_points?}` | full trajectory `{times, series}` |
@@ -740,8 +824,8 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   modal). Call `ListCompileCandidates` first, pass the short or qualified name.
 - **Fire before parse** → `no compilable top-level class`. Poll `CompileStatus`
   until `ast_parsed:true` before compiling/running a just-opened doc.
-- **`GetExperimentResult` errors** unless the run is `Done` (or `Failed` with a
-  partial). Check `ListRuns` state first; a big sweep runs async.
+- **`GetExperimentResult` errors** unless the run has a completed result.
+  Check `ListRuns` state first; a big sweep runs async.
 - **Unified opening**: prefer `Open{uri}`. `OpenClass` resolves a Modelica
   class through the source-aware document/library path; `OpenFile` resolves a
   filesystem URI.
@@ -769,12 +853,15 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 - **Complete result admission**: finite ordered times, matching series/metadata
   lengths, and finite values are required before a trajectory is marked Done.
   `experiments.result_limits` supplies the shared budgets; defaults are 8,000,000
-  scalar values and 256 MiB artifact bytes. Failed partial streams may retain
-  explicit missing-value holes. A malformed optional artifact warns without
+  scalar values and 256 MiB artifact bytes. Failed runs retain their diagnostic
+  without publishing a trajectory. A malformed optional artifact warns without
   replacing a valid runtime result.
   Native and browser Fast Runs capture the same limits at admission. Actual
   lowered output dimensions and the requested grid are checked before batch
   trajectory allocation; event samples also consume the scoped recorder budget.
+  Stored and queried results retain all checked event samples, including both
+  sides of a discontinuity. Exercise `modelica_batch_events.rhai` to verify
+  off-grid reinitializations independently of plot decimation.
   Exercise `modelica_output_budget.rhai` with the documented default value cap
   and `max_parallel=1` to prove visible rejection and valid successor completion.
 - **Durable batch history**: completed Twin-owned results persist asynchronously
@@ -860,3 +947,40 @@ URLs use their path component when selecting the executor.
 Twin Modelica directories may use `.` to designate the admitted Twin root;
 the directory resolver preserves this manifest semantic without permitting
 parent traversal or using it as a concrete file address.
+
+For causal USD models, initialization waits for all wired producers to publish
+finite current samples. Link class declarations refresh at this initialization
+boundary, including nodes created by the current projection transaction.
+External environment sources must be wired into explicit network boundary
+inputs when their consumers belong to a generated acausal collection.
+Explicit unconnected USD inputs and connected samples
+enter `Compile.initial_inputs`; no interface placeholder is an initialization
+value. An unbound input without a declaration default or admitted runtime value
+fails visibly. Reset and reinitialization admit current input values before
+solving initialization equations.
+Input rejection and invalid solver observations stop the affected participant
+with a `modelica-step-failed` runtime fault. Check this boundary through the
+production negative gate:
+
+```sh
+"$LUNCOSIM_BIN" test --scene assets/scenes/tests/modelica_observation_failure.usda \
+  --max-ticks 120 --threads 1 --api 4261
+```
+
+Use an explicit free port owned by the task. A passing gate requires the declared
+terminal fault; advancing past the invalid observation fails the authored verdict.
+
+`modelica_controller_inputs.rhai` accepts the exact authored DescentGuidance
+source snapshot in `RunScenarioAsset.params` (`source` and
+`source_uri: "lunco://models/DescentGuidance.mo"`). It checks sensor feedback,
+current gain initialization, paused input changes, and the authority gate.
+Reset admits current values even when the worker has not stepped after a write.
+
+`SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
+`minimum`, and `maximum` facts for the installed component, using the same
+optional `names` filter as values. Input sliders use those compiled bounds.
+`GetExperimentResult.metadata` returns the units and descriptions compiled for
+that run, using the same `variables` filter as its series. Draft edits and later
+runs cannot change those retained facts. `modelica_run_metadata.rhai` exercises
+this contract through production runs; version 2 completed-history artifacts
+retain the same facts across persistence.

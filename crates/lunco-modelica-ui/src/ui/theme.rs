@@ -15,8 +15,8 @@
 //! and a typed accessor here (domain translation in one place).
 
 use bevy_egui::egui::Color32;
+use lunco_modelica_ast::ClassType;
 use lunco_theme::Theme;
-use rumoca_compile::parsing::ClassType;
 
 /// Modelica-domain typed accessors over [`lunco_theme::Theme`].
 ///
@@ -99,7 +99,7 @@ impl ModelicaThemeExt for Theme {
     }
 
     fn wire_color(&self, connector_type: &str) -> Color32 {
-        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
+        let leaf = rumoca_core::top_level_last_segment(connector_type);
         let s = &self.schematic;
         match leaf {
             "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {

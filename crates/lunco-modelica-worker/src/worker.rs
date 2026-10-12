@@ -1,7 +1,7 @@
 //! Off-thread Modelica simulation worker + Bevy bridge.
 //!
-//! `modelica_worker` runs on its own OS thread (it owns a
-//! `!Send` `SimulationSession`, so it can't live on the Bevy main loop). The
+//! `modelica_worker` admits commands and ordered results on its own OS thread.
+//! Bounded persistent solver workers own the `!Send` live sessions. The
 //! Bevy systems `spawn_modelica_requests` and
 //! `handle_modelica_responses` exchange `ModelicaCommand` /
 //! `ModelicaResult` messages with it via crossbeam channels.
@@ -22,14 +22,14 @@ use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
     ModelicaCacheLimits, ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot,
     ModelicaModel, ModelicaNotice, ModelicaResult, ModelicaRuntimeProfile,
-    ModelicaSolverCapabilities, ModelicaSolverParameters, NoticeLevel, SimSampleBatch,
-    SimSampleStream,
+    ModelicaSolverCapabilities, ModelicaSolverParameters, ModelicaVariables, NoticeLevel,
+    SimSampleBatch, SimSampleStream,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 8;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 11;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,11 +40,19 @@ mod compile;
 pub use bridge::{
     handle_modelica_responses, on_remove_modelica, reconcile_modelica_preparation_progress,
     request_modelica_compiles, retire_closed_twin_models, retire_replication_models,
-    spawn_modelica_requests,
+    spawn_modelica_requests, validate_modelica_variable_ownership,
 };
-pub use compile::dispatch_modelica_compile_requests;
+pub use compile::{PendingCompileAdmissions, dispatch_modelica_compile_requests};
 #[cfg(not(target_arch = "wasm32"))]
 mod compiler_actor;
+#[cfg(not(target_arch = "wasm32"))]
+mod thread_pool;
+#[cfg(not(target_arch = "wasm32"))]
+use thread_pool::ThreadAffinePool;
+#[cfg(not(target_arch = "wasm32"))]
+mod live_session;
+#[cfg(not(target_arch = "wasm32"))]
+use live_session::{LiveConstructionResult, SessionHandle};
 #[cfg(not(target_arch = "wasm32"))]
 mod scheduling;
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,11 +126,10 @@ fn live_stepper_options(
         // `h0` is the initial/maximum internal step: pinned to the micro-step
         // so the integrator's first internal step matches what it is asked for.
         h0: Some(LIVE_MICRO_DT),
-        // The live stepper is driven by `step(dt)` calls, never by `t_end`;
-        // the window only feeds defaults, so it is wide enough that no
-        // realistic session reaches it.
+        // Live sessions are open. This span sets the initial root-scan scale;
+        // it is not a stop time.
         t_start: 0.0,
-        t_end: f64::from(u32::MAX),
+        t_end: LIVE_MICRO_DT,
     };
     let options = lunco_modelica_solver::solver_backends::rumoca_options(&spec, &parameters)?;
     Ok((spec, parameters, options))
@@ -130,9 +137,8 @@ fn live_stepper_options(
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
 ///
-/// **Single source of truth** for live stepper construction across the worker —
-/// every site routes through here instead of copy-pasting the `SimOptions` setup
-/// + `SimulationSession::new` call (there were ~9 such copies).
+/// Every worker live construction uses this boundary to resolve solver options
+/// and borrow the checked prepared FMI component.
 ///
 /// Stepping POLICY (fixed micro-step ladder, fixed tolerance) is live-specific;
 /// the SOLVER is resolved from the model's own requirements — see
@@ -178,9 +184,17 @@ struct LiveBuildPlan {
     admitted_library_revision: Option<u64>,
 }
 
+type BuiltStepper<S> = (
+    S,
+    ModelicaLiveSolverSnapshot,
+    std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
+    Vec<(String, f64)>,
+);
+
 fn live_build_plan(
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
+    initial_inputs: &[(String, f64)],
     source_key: u64,
     _admitted_library_revision: Option<u64>,
 ) -> Result<LiveBuildPlan, rumoca_sim::SimulationDiagnosticError> {
@@ -192,6 +206,8 @@ fn live_build_plan(
     // parameter dependents and initial-equation states are recomputed. Mutating
     // the DAE after compilation leaves the initialization vector stale.
     options.param_overrides = parameter_overrides.clone();
+    let initial_inputs = canonical_parameter_overrides(initial_inputs);
+    options.initial_inputs = initial_inputs.clone();
     let snapshot = ModelicaLiveSolverSnapshot {
         solver_id: spec.id.to_string(),
         capabilities: ModelicaSolverCapabilities {
@@ -211,8 +227,9 @@ fn live_build_plan(
             t_end: parameters.t_end,
         },
         parameter_overrides: parameter_overrides.clone(),
+        initial_inputs: initial_inputs.clone(),
     };
-    let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides);
+    let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides, &initial_inputs);
     Ok(LiveBuildPlan {
         spec,
         snapshot,
@@ -223,15 +240,34 @@ fn live_build_plan(
     })
 }
 
+#[cfg(target_arch = "wasm32")]
 fn build_stepper(
     _comp_res: &CompiledModelArtifact,
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
+    initial_inputs: &[(String, f64)],
     source_key: u64,
     library_revision: Option<u64>,
     prepared: &mut PreparedSolveCache,
-) -> Result<(LiveStepper, ModelicaLiveSolverSnapshot), rumoca_sim::SimulationDiagnosticError> {
-    let plan = live_build_plan(profile, parameter_overrides, source_key, library_revision)?;
+) -> Result<
+    (
+        LiveStepper,
+        ModelicaLiveSolverSnapshot,
+        std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
+        Vec<(String, f64)>,
+    ),
+    rumoca_sim::SimulationDiagnosticError,
+> {
+    let plan = {
+        let _span = bevy::log::info_span!("modelica_live_plan_admission").entered();
+        live_build_plan(
+            profile,
+            parameter_overrides,
+            initial_inputs,
+            source_key,
+            library_revision,
+        )?
+    };
     if !prepared.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(
@@ -242,10 +278,7 @@ fn build_stepper(
         #[cfg(target_arch = "wasm32")]
         {
             let lower_started = web_time::Instant::now();
-            let model = lunco_modelica_solver::simulation_session::lower_for_live(
-                &_comp_res.compiled.dae,
-                &plan.options,
-            )?;
+            let model = rumoca_sim::prepare_fmi_component(&_comp_res.compiled.dae, &plan.options)?;
             bevy::log::info!(
                 "[modelica-runtime] prepared solver IR for `{}`: lower={:?} cache=miss",
                 plan.spec.id,
@@ -263,20 +296,114 @@ fn build_stepper(
     let model = prepared
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
-    let stepper = lunco_modelica_solver::simulation_session::live_from_solve_model(
-        model,
-        &plan.spec,
-        plan.options,
-    )?;
-    Ok((stepper, plan.snapshot))
+    build_prepared_stepper(model, plan)
+}
+
+fn build_prepared_stepper(
+    model: &rumoca_ir_solve::fmi::FmiComponent,
+    plan: LiveBuildPlan,
+) -> Result<BuiltStepper<LiveStepper>, rumoca_sim::SimulationDiagnosticError> {
+    let stepper = {
+        let _span = bevy::log::info_span!("modelica_live_session_construct").entered();
+        lunco_modelica_solver::simulation_session::live_from_fmi_component(
+            model,
+            &plan.spec,
+            plan.options,
+        )?
+    };
+    let variable_metadata = {
+        let _span = bevy::log::info_span!("modelica_compiled_scalar_metadata").entered();
+        model
+            .variables()
+            .iter()
+            .flat_map(|variable| {
+                variable
+                    .scalar_names()
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, name)| {
+                        (
+                            name.clone(),
+                            lunco_modelica_runtime::ModelicaScalarMetadata {
+                                unit: variable.unit().map(str::to_owned),
+                                description: variable.description().map(str::to_owned),
+                                minimum: variable.minimum().map(|values| values[index]),
+                                maximum: variable.maximum().map(|values| values[index]),
+                            },
+                        )
+                    })
+            })
+            .collect()
+    };
+    let symbols = {
+        let _span = bevy::log::info_span!("modelica_initial_observation").entered();
+        collect_stepper_observables(&stepper)?
+    };
+    Ok((stepper, plan.snapshot, variable_metadata, symbols))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Owns bounded off-thread preparation for immutable solve models and source roots.
-/// Disk-cache access and DAE lowering stay here; the Modelica command owner only
-/// commits a completed model and creates the thread-affine live stepper.
-struct SolvePreparationPool {
-    pool: rayon::ThreadPool,
+/// Independent native preparation and live-owner budgets captured at startup.
+#[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
+pub struct ModelicaWorkerLimits {
+    pub preparation: WorkerThreadBudget,
+    pub live_execution: WorkerThreadBudget,
+    pub document_execution: WorkerThreadBudget,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for ModelicaWorkerLimits {
+    fn default() -> Self {
+        Self {
+            preparation: WorkerThreadBudget::default(),
+            live_execution: WorkerThreadBudget::default(),
+            document_execution: WorkerThreadBudget {
+                max_worker_threads: 1,
+                reserved_cpu_threads: 2,
+            },
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerThreadBudget {
+    pub max_worker_threads: usize,
+    pub reserved_cpu_threads: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for WorkerThreadBudget {
+    fn default() -> Self {
+        Self {
+            max_worker_threads: 6,
+            reserved_cpu_threads: 2,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WorkerThreadBudget {
+    fn worker_threads(&self, available: std::num::NonZeroUsize) -> Result<usize, String> {
+        if self.max_worker_threads == 0 {
+            return Err("Modelica worker capacity must be positive".to_owned());
+        }
+        Ok(available
+            .get()
+            .saturating_sub(self.reserved_cpu_threads)
+            .max(1)
+            .min(self.max_worker_threads))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Isolates source/FMI preparation from bounded thread-affine live owners.
+/// Each session is constructed, stepped and retired on one persistent thread;
+/// the command owner admits only typed observations in command order.
+struct ModelicaWorkerPools {
+    pool: ThreadAffinePool<()>,
+    live_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
+    document_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
     disk_limits: PreparedSolveDiskLimits,
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
@@ -353,28 +480,63 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl SolvePreparationPool {
-    fn new(disk_limits: PreparedSolveDiskLimits) -> Result<Self, String> {
+impl ModelicaWorkerPools {
+    fn new(
+        disk_limits: PreparedSolveDiskLimits,
+        limits: ModelicaWorkerLimits,
+    ) -> Result<Self, String> {
         disk_limits.validate()?;
-        // Solve lowering is memory-heavy and each request walks a complete
-        // structural graph. A small dedicated pool avoids turning parallel
-        // startup into memory-bandwidth contention while reserving two logical
-        // CPUs for Bevy and the OS.
-        let threads = std::thread::available_parallelism()
-            .map(|count| count.get().saturating_sub(2).clamp(1, 4))
-            .unwrap_or(1);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .stack_size(16 * 1024 * 1024)
-            .thread_name(|index| format!("modelica-solve-{index}"))
-            .build()
-            .map_err(|error| format!("cannot start Modelica solve-preparation pool: {error}"))?;
-        bevy::log::info!(
-            "[modelica-runtime] solve preparation pool ready: {threads} worker thread(s)"
-        );
+        let available = std::thread::available_parallelism()
+            .map_err(|error| format!("cannot determine Modelica worker CPU capacity: {error}"))?;
+        let preparation_threads = limits
+            .preparation
+            .worker_threads(available)
+            .map_err(|error| format!("invalid preparation budget: {error}"))?;
+        let live_threads = limits
+            .live_execution
+            .worker_threads(available)
+            .map_err(|error| format!("invalid live-execution budget: {error}"))?;
+        let document_threads = limits
+            .document_execution
+            .worker_threads(available)
+            .map_err(|error| format!("invalid document-execution budget: {error}"))?;
         let (tx, rx) = crossbeam_channel::unbounded();
+        let failure_tx = tx.clone();
+        let pool = ThreadAffinePool::new(
+            "modelica-prepare",
+            preparation_threads,
+            || (),
+            move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            },
+        )?;
+        let failure_tx = tx.clone();
+        let live_pool =
+            ThreadAffinePool::new("modelica-live", live_threads, HashMap::new, move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            })?;
+        let failure_tx = tx.clone();
+        let document_pool = ThreadAffinePool::new(
+            "modelica-document",
+            document_threads,
+            HashMap::new,
+            move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            },
+        )?;
+        bevy::log::info!(
+            "[modelica-runtime] solve preparation pool ready: {preparation_threads} worker thread(s)"
+        );
+        bevy::log::info!(
+            "[modelica-runtime] live execution pool ready: {live_threads} worker thread(s)"
+        );
+        bevy::log::info!(
+            "[modelica-runtime] document execution pool ready: {document_threads} worker thread(s)"
+        );
         Ok(Self {
             pool,
+            live_pool,
+            document_pool,
             disk_limits,
             tx,
             rx,
@@ -391,11 +553,17 @@ impl SolvePreparationPool {
     }
 
     /// Bound the full compile-to-solve pipeline while leaving two entries of
-    /// lookahead beyond the workers currently lowering solve models. This lets
+    /// lookahead beyond the largest preparation/scene/document worker count. This lets
     /// the serialized Rumoca owner prepare later independent programs while
     /// the solve pool is busy, without allowing an unbounded DAE backlog.
     fn can_admit(&self, pending_operations: usize) -> bool {
-        pending_operations < self.pool.current_num_threads().saturating_add(2)
+        pending_operations
+            < self
+                .pool
+                .worker_count()
+                .max(self.live_pool.worker_count())
+                .max(self.document_pool.worker_count())
+                .saturating_add(2)
     }
 
     fn submit(&mut self, work: &CompileWork, runtime_tx: &Sender<ModelicaResult>) -> u64 {
@@ -471,9 +639,9 @@ impl SolvePreparationPool {
                 let lower_started = web_time::Instant::now();
                 let result = {
                     let _lower_span =
-                        bevy::log::info_span!("modelica_solve_preparation_lower_for_live").entered();
+                        bevy::log::info_span!("modelica_solve_preparation_fmi").entered();
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        lunco_modelica_solver::simulation_session::lower_for_live(&dae, &options)
+                        rumoca_sim::prepare_fmi_component(&dae, &options)
                     }))
                     .unwrap_or_else(|payload| {
                         let message = payload
@@ -589,12 +757,21 @@ impl SolvePreparationPool {
 #[cfg(not(target_arch = "wasm32"))]
 enum WorkerPreparationResult {
     Solve(SolvePreparationResult),
+    Live(LiveConstructionResult),
     SourceRoot(SourceRootPreparationResult),
     Compiler(CompilerCompletion),
+    Failed(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum SolveCompletion {
+    Prepared(SolvePreparationResult),
+    Live(LiveConstructionResult),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingCompile {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     entity: Entity,
     session_id: u64,
     cancelled: bool,
@@ -603,6 +780,7 @@ struct PendingCompile {
     doc_uri: String,
     raw_extras: Vec<(String, String)>,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     library_gen: u64,
     intent: CompileIntent,
 }
@@ -650,7 +828,10 @@ struct SolvePreparationResult {
     id: u64,
     key: PreparedSolveKey,
     result: std::sync::Arc<
-        Result<std::sync::Arc<rumoca_ir_solve::SolveModel>, rumoca_sim::SimulationDiagnosticError>,
+        Result<
+            std::sync::Arc<rumoca_ir_solve::fmi::FmiComponent>,
+            rumoca_sim::SimulationDiagnosticError,
+        >,
     >,
 }
 
@@ -664,6 +845,7 @@ struct SourceRootPreparationResult {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct CompileWork {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     entity: Entity,
     session_id: u64,
     /// The entity was despawned while this immutable preparation was still
@@ -676,6 +858,7 @@ struct CompileWork {
     doc_uri: String,
     raw_extras: Vec<(String, String)>,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     unit: CompileUnit,
     comp_res: CompiledModelArtifact,
     unit_key: u64,
@@ -768,32 +951,75 @@ fn send_compile_artifact_error(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn finish_compile_work(
+fn dispatch_live_construction(
     work: CompileWork,
-    steppers: &mut HashMap<Entity, (u64, String, LiveStepper)>,
-    cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
     prepared_solve_cache: &mut PreparedSolveCache,
+    tx: &Sender<ModelicaResult>,
+    pool: &mut ModelicaWorkerPools,
+    order: &mut VecDeque<u64>,
+    pending: &mut HashMap<u64, CompileWork>,
+) {
+    let plan = {
+        let _span = bevy::log::info_span!("modelica_live_plan_admission").entered();
+        live_build_plan(
+            profile_for(work.entity, realtime_models),
+            &work.parameter_overrides,
+            &work.initial_inputs,
+            work.unit_key,
+            Some(work.library_revision),
+        )
+    };
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(error) => {
+            compile_work_error(tx, &work, &error);
+            return;
+        }
+    };
+    let Some(component) = prepared_solve_cache.get(&plan.key).cloned() else {
+        compile_work_error(
+            tx,
+            &work,
+            &rumoca_sim::SimulationDiagnosticError::Solver(
+                "native stepper construction requires its admitted prepared FMI component"
+                    .to_owned(),
+            ),
+        );
+        return;
+    };
+    let id = pool.allocate_id();
+    let lane = match work.execution_domain {
+        lunco_modelica_runtime::ModelicaExecutionDomain::Scene => pool.live_pool.next_lane(),
+        lunco_modelica_runtime::ModelicaExecutionDomain::Document => pool.document_pool.next_lane(),
+    };
+    if let Err(error) = live_session::construct(id, lane, component, plan, pool.tx.clone()) {
+        let _ = tx.send(ModelicaResult::worker_failure(error));
+        return;
+    }
+    order.push_back(id);
+    pending.insert(id, work);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_compile_work(
+    work: CompileWork,
+    stepper_result: Result<BuiltStepper<SessionHandle>, rumoca_sim::SimulationDiagnosticError>,
+    steppers: &mut HashMap<Entity, (u64, String, SessionHandle)>,
+    cached_models: &mut HashMap<Entity, CachedModel>,
     step_lane: &mut VecDeque<ModelicaCommand>,
     tx: &Sender<ModelicaResult>,
 ) {
     let _span = bevy::log::info_span!(
-        "modelica_finish_compile_work",
+        "modelica_live_construction_commit",
         model = %work.model_name,
         entity = ?work.entity,
     )
     .entered();
-    let stepper_result = build_stepper(
-        &work.comp_res,
-        profile_for(work.entity, realtime_models),
-        &work.parameter_overrides,
-        work.unit_key,
-        Some(work.library_revision),
-        prepared_solve_cache,
-    );
     match stepper_result {
-        Ok((stepper, live_solver_snapshot)) => {
+        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
             let CompileWork {
+                execution_domain,
                 entity,
                 session_id,
                 cancelled: _,
@@ -802,6 +1028,7 @@ fn finish_compile_work(
                 doc_uri,
                 raw_extras,
                 parameter_overrides,
+                initial_inputs,
                 unit,
                 comp_res,
                 unit_key: _,
@@ -810,21 +1037,29 @@ fn finish_compile_work(
                 plan: _,
                 intent,
             } = work;
+            let (published_metadata, pending_metadata) =
+                if matches!(&intent, CompileIntent::StepInit(_)) {
+                    (None, Some(variable_metadata))
+                } else {
+                    (Some(variable_metadata), None)
+                };
             let input_names = stepper.input_names().to_vec();
-            let symbols = collect_stepper_observables(&stepper);
             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
             cached_models.insert(
                 entity,
                 CachedModel {
+                    execution_domain,
                     model_name: model_name.clone(),
                     source: Arc::from(source),
                     extra_sources: raw_extras,
                     parameter_overrides,
+                    initial_inputs,
                     doc_uri,
                     compiled: comp_res.clone(),
                     unit_hash,
                     library_gen,
                     live_solver_snapshot: live_solver_snapshot.clone(),
+                    pending_variable_metadata: pending_metadata,
                 },
             );
             steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -847,6 +1082,7 @@ fn finish_compile_work(
                             loaded_source_root_id: None,
                             compile_diagnostics: Vec::new(),
                             live_solver_snapshot: Some(live_solver_snapshot.clone()),
+                            variable_metadata: published_metadata,
                             ..Default::default()
                         },
                         &comp_res,
@@ -857,6 +1093,7 @@ fn finish_compile_work(
                         reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
                     result.compile_diagnostics = Vec::new();
                     result.live_solver_snapshot = Some(live_solver_snapshot.clone());
+                    result.variable_metadata = published_metadata;
                     let _ = tx.send(result);
                 }
                 CompileIntent::UpdateParameters => {
@@ -874,6 +1111,7 @@ fn finish_compile_work(
                         detected_input_names: input_names,
                         compile_diagnostics: Vec::new(),
                         live_solver_snapshot: Some(live_solver_snapshot),
+                        variable_metadata: published_metadata,
                         ..Default::default()
                     });
                 }
@@ -889,14 +1127,13 @@ fn finish_compile_work(
 #[cfg(not(target_arch = "wasm32"))]
 fn complete_preparation(
     preparation: SolvePreparationResult,
+    pool: &mut ModelicaWorkerPools,
+    order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
     current_sessions: &HashMap<Entity, u64>,
     library_gen: u64,
     prepared_solve_cache: &mut PreparedSolveCache,
-    steppers: &mut HashMap<Entity, (u64, String, LiveStepper)>,
-    cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
-    step_lane: &mut VecDeque<ModelicaCommand>,
     tx: &Sender<ModelicaResult>,
 ) {
     let preparation_id = preparation.id;
@@ -944,14 +1181,14 @@ fn complete_preparation(
             let model_name = work.model_name.clone();
             let intent = work.intent.clone();
             let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                finish_compile_work(
+                dispatch_live_construction(
                     work,
-                    steppers,
-                    cached_models,
                     realtime_models,
                     prepared_solve_cache,
-                    step_lane,
                     tx,
+                    pool,
+                    order,
+                    pending_compile_works,
                 );
             }));
             if let Err(payload) = commit {
@@ -978,72 +1215,103 @@ fn complete_preparation(
 #[cfg(not(target_arch = "wasm32"))]
 fn stage_preparation_result(
     result: WorkerPreparationResult,
-    ready_solves: &mut HashMap<u64, SolvePreparationResult>,
+    ready_solves: &mut HashMap<u64, SolveCompletion>,
     ready_source_roots: &mut HashMap<u64, SourceRootPreparationResult>,
     ready_compiler: &mut HashMap<u64, CompilerCompletion>,
-) {
+    runtime_tx: &Sender<ModelicaResult>,
+) -> bool {
     let duplicate = match result {
-        WorkerPreparationResult::Solve(result) => ready_solves.insert(result.id, result).is_some(),
+        WorkerPreparationResult::Solve(result) => ready_solves
+            .insert(result.id, SolveCompletion::Prepared(result))
+            .is_some(),
+        WorkerPreparationResult::Live(result) => ready_solves
+            .insert(result.id, SolveCompletion::Live(result))
+            .is_some(),
         WorkerPreparationResult::SourceRoot(result) => {
             ready_source_roots.insert(result.id, result).is_some()
         }
         WorkerPreparationResult::Compiler(result) => {
             let id = match &result {
-                CompilerCompletion::Compile { id, .. }
+                CompilerCompletion::Batch { id, .. }
+                | CompilerCompletion::Compile { id, .. }
                 | CompilerCompletion::SourceRoot { id, .. }
                 | CompilerCompletion::SourceRootUnload { id, .. } => *id,
             };
             ready_compiler.insert(id, result).is_some()
         }
+        WorkerPreparationResult::Failed(error) => {
+            let _ = runtime_tx.send(ModelicaResult::worker_failure(error));
+            return false;
+        }
     };
     if duplicate {
         bevy::log::error!("[modelica-runtime] duplicate preparation completion id");
     }
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn commit_ready_solve_preparations(
-    pool: &mut SolvePreparationPool,
+    pool: &mut ModelicaWorkerPools,
     order: &mut VecDeque<u64>,
-    ready: &mut HashMap<u64, SolvePreparationResult>,
+    ready: &mut HashMap<u64, SolveCompletion>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
     current_sessions: &HashMap<Entity, u64>,
     library_gen: u64,
     prepared_solve_cache: &mut PreparedSolveCache,
-    steppers: &mut HashMap<Entity, (u64, String, LiveStepper)>,
+    steppers: &mut HashMap<Entity, (u64, String, SessionHandle)>,
     cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
     step_lane: &mut VecDeque<ModelicaCommand>,
     tx: &Sender<ModelicaResult>,
 ) {
-    loop {
-        let Some(result) = pop_ready_in_order(order, ready) else {
-            return;
-        };
-        for follower_id in pool.finish_solve(&result) {
-            let follower = SolvePreparationResult {
-                id: follower_id,
-                key: result.key.clone(),
-                result: std::sync::Arc::clone(&result.result),
-            };
-            if ready.insert(follower_id, follower).is_some() {
-                bevy::log::error!(
-                    "[modelica-runtime] duplicate shared solve preparation id {follower_id}"
+    while let Some(completion) = pop_ready_in_order(order, ready) {
+        match completion {
+            SolveCompletion::Prepared(result) => {
+                for follower_id in pool.finish_solve(&result) {
+                    let follower = SolvePreparationResult {
+                        id: follower_id,
+                        key: result.key.clone(),
+                        result: Arc::clone(&result.result),
+                    };
+                    if ready
+                        .insert(follower_id, SolveCompletion::Prepared(follower))
+                        .is_some()
+                    {
+                        bevy::log::error!(
+                            "[modelica-runtime] duplicate shared solve preparation id {follower_id}"
+                        );
+                    }
+                }
+                complete_preparation(
+                    result,
+                    pool,
+                    order,
+                    pending_compile_works,
+                    current_sessions,
+                    library_gen,
+                    prepared_solve_cache,
+                    realtime_models,
+                    tx,
                 );
             }
+            SolveCompletion::Live(result) => {
+                let Some(work) = pending_compile_works.remove(&result.id) else {
+                    let _ = tx.send(ModelicaResult::worker_failure(format!(
+                        "live construction {} has no admitted compile work",
+                        result.id,
+                    )));
+                    return;
+                };
+                if work.cancelled
+                    || current_sessions.get(&work.entity).copied() != Some(work.session_id)
+                    || work.library_gen != library_gen
+                {
+                    continue;
+                }
+                install_compile_work(work, result.result, steppers, cached_models, step_lane, tx);
+            }
         }
-        complete_preparation(
-            result,
-            pending_compile_works,
-            current_sessions,
-            library_gen,
-            prepared_solve_cache,
-            steppers,
-            cached_models,
-            realtime_models,
-            step_lane,
-            tx,
-        );
     }
 }
 
@@ -1054,7 +1322,7 @@ fn dispatch_ready_source_roots(
     compiler: &mut CompilerActor,
     compiler_order: &mut VecDeque<u64>,
     pending_solve_preparations: usize,
-    solve_preparation_pool: &SolvePreparationPool,
+    solve_preparation_pool: &ModelicaWorkerPools,
     pending_installs: &mut HashSet<u64>,
     latest_source_root_operations: &HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
@@ -1171,18 +1439,18 @@ fn commit_ready_compiler_completions(
     library_gen: &mut u64,
     library_revision: &mut u64,
     prepared_solve_cache: &mut PreparedSolveCache,
-    solve_preparation_pool: &mut SolvePreparationPool,
+    solve_preparation_pool: &mut ModelicaWorkerPools,
     solve_preparation_order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
-    steppers: &mut HashMap<Entity, (u64, String, LiveStepper)>,
-    cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
-    step_lane: &mut VecDeque<ModelicaCommand>,
     latest_source_root_operations: &mut HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
 ) {
     while let Some(completion) = pop_ready_in_order(order, ready) {
         match completion {
+            CompilerCompletion::Batch { reply, outcome, .. } => {
+                let _ = reply.send(outcome);
+            }
             CompilerCompletion::SourceRoot {
                 id,
                 source_root_operation_id,
@@ -1286,6 +1554,7 @@ fn commit_ready_compiler_completions(
                 let plan = match live_build_plan(
                     profile_for(pending.entity, realtime_models),
                     &pending.parameter_overrides,
+                    &pending.initial_inputs,
                     unit_key,
                     Some(artifact.library_revision),
                 ) {
@@ -1303,6 +1572,7 @@ fn commit_ready_compiler_completions(
                     }
                 };
                 let work = CompileWork {
+                    execution_domain: pending.execution_domain,
                     entity: pending.entity,
                     session_id: pending.session_id,
                     cancelled: false,
@@ -1311,6 +1581,7 @@ fn commit_ready_compiler_completions(
                     doc_uri: pending.doc_uri,
                     raw_extras: pending.raw_extras,
                     parameter_overrides: pending.parameter_overrides,
+                    initial_inputs: pending.initial_inputs,
                     unit: artifact.unit,
                     comp_res,
                     unit_key,
@@ -1333,14 +1604,14 @@ fn commit_ready_compiler_completions(
                         work.session_id,
                         lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded,
                     );
-                    finish_compile_work(
+                    dispatch_live_construction(
                         work,
-                        steppers,
-                        cached_models,
                         realtime_models,
                         prepared_solve_cache,
-                        step_lane,
                         tx,
+                        solve_preparation_pool,
+                        solve_preparation_order,
+                        pending_compile_works,
                     );
                 } else {
                     let job_id = solve_preparation_pool.submit(&work, tx);
@@ -1368,16 +1639,18 @@ use std::sync::Arc;
 /// every `LoadSourceRoot`). Native rebuilds validate both before reusing the
 /// artifact; wasm rebuilds refresh it through [`rebuild_from_cache`].
 struct CachedModel {
+    #[cfg(not(target_arch = "wasm32"))]
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     model_name: String,
     source: Arc<str>,
     /// Sibling docs the model was compiled with, raw like `source`. Replayed
-    /// on a cache-invalidating recompile so Reset / Step auto-init resolve the
-    /// same cross-doc references the original Compile did (the source-only
-    /// cache silently dropped these and recompiled the primary alone).
+    /// on a cache-invalidating recompile so Reset and Step auto-init resolve
+    /// the same source closure as Compile.
     extra_sources: Vec<(String, String)>,
-    /// Instance parameter values applied to the cached DAE. Reapplied if a
+    /// Instance parameter values passed to checked FMI preparation. Reapplied if a
     /// library invalidates the artifact and it must be compiled again.
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     /// The document's stable session URI (see `ModelicaCommand::Compile`'s
     /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
     /// UpdateParameters — re-seats under this SAME key so the reused rumoca
@@ -1391,6 +1664,8 @@ struct CachedModel {
     library_gen: u64,
     /// The resolved solver plan used by the installed or rebuildable stepper.
     live_solver_snapshot: ModelicaLiveSolverSnapshot,
+    pending_variable_metadata:
+        Option<std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>>,
 }
 
 /// Key identifying WHAT a cached artifact was compiled from: the assembled
@@ -1418,6 +1693,8 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
 struct CompiledModelArtifact {
     compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
     prepared_source_key: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    source_content: lunco_hash::content::Cid,
 }
 
 type CompiledArtifactCache = BoundedReuseCache<u64, CompiledModelArtifact>;
@@ -1431,16 +1708,17 @@ fn prepared_source_key(
     model_name: &str,
     doc_uri: &str,
     unit: &CompileUnit,
+    source_content: lunco_hash::content::Cid,
 ) -> Result<u64, String> {
     use std::hash::{Hash, Hasher};
     let generated = is_generated_structural_unit(model_name, unit, doc_uri);
-    let identity = compiler.compiled_source_content_identity(compiled, |source| {
-        if generated {
+    let identity = if generated {
+        compiler.compiled_source_content_identity(compiled, |source| {
             generated_structural_source(model_name, source)
-        } else {
-            source.to_owned()
-        }
-    })?;
+        })?
+    } else {
+        source_content
+    };
     let mut h = std::collections::hash_map::DefaultHasher::new();
     identity.to_bytes().hash(&mut h);
     Ok(h.finish())
@@ -1575,10 +1853,20 @@ fn compile_shared(
         )
     };
     let compiled = outcome?;
-    let prepared_source_key = prepared_source_key(compiler, &compiled, model_name, doc_uri, unit)?;
+    let source_content = compiler.compiled_source_content_identity(&compiled, str::to_owned)?;
+    let prepared_source_key = prepared_source_key(
+        compiler,
+        &compiled,
+        model_name,
+        doc_uri,
+        unit,
+        source_content,
+    )?;
     let artifact = CompiledModelArtifact {
         compiled,
         prepared_source_key,
+        #[cfg(not(target_arch = "wasm32"))]
+        source_content,
     };
     artifacts.insert(key, artifact.clone());
     Ok(artifact)
@@ -1663,11 +1951,13 @@ fn artifact_still_valid(cached_hash: u64, cached_gen: u64, hash: u64, library_ge
 #[cfg(target_arch = "wasm32")]
 struct CacheRebuild {
     model_name: String,
+    source: Arc<str>,
     /// Revision of the compiler-owned source roots used by this artifact.
     library_revision: Option<u64>,
     /// The instance values that must be supplied to Rumoca when the cached DAE
     /// is lowered into a fresh live stepper.
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     /// `Ok` = artifact to build the stepper from; `Err` = rumoca's formatted
     /// compile summary.
     outcome: Result<CompiledModelArtifact, String>,
@@ -1686,7 +1976,16 @@ fn rebuild_from_cache(
     entity: Entity,
     library_gen: u64,
 ) -> Option<CacheRebuild> {
-    let (model_name, doc_uri, source, extras, parameter_overrides, cached_hash, cached_gen) = {
+    let (
+        model_name,
+        doc_uri,
+        source,
+        extras,
+        parameter_overrides,
+        initial_inputs,
+        cached_hash,
+        cached_gen,
+    ) = {
         let c = cached_models.get(&entity)?;
         (
             c.model_name.clone(),
@@ -1694,11 +1993,13 @@ fn rebuild_from_cache(
             Arc::clone(&c.source),
             c.extra_sources.clone(),
             c.parameter_overrides.clone(),
+            c.initial_inputs.clone(),
             c.unit_hash,
             c.library_gen,
         )
     };
     let unit = assemble_compile_unit(&source, extras);
+    let diagnostic_source = Arc::clone(&source);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
     if artifact_still_valid(cached_hash, cached_gen, hash, library_gen) {
         let library_revision = Some(backend.library_revision());
@@ -1709,8 +2010,10 @@ fn rebuild_from_cache(
             .clone();
         return Some(CacheRebuild {
             model_name,
+            source: diagnostic_source,
             library_revision,
             parameter_overrides,
+            initial_inputs,
             outcome: Ok(compiled),
             compile_diagnostics: Vec::new(),
         });
@@ -1725,8 +2028,10 @@ fn rebuild_from_cache(
     }
     Some(CacheRebuild {
         model_name,
+        source: diagnostic_source,
         library_revision: Some(result.library_revision),
         parameter_overrides,
+        initial_inputs,
         outcome: result.outcome,
         compile_diagnostics: result.diagnostics,
     })
@@ -1734,11 +2039,13 @@ fn rebuild_from_cache(
 
 #[cfg(not(target_arch = "wasm32"))]
 struct NativeCachedRebuild {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     model_name: String,
     source: Arc<str>,
     raw_extras: Vec<(String, String)>,
     doc_uri: String,
     parameter_overrides: Vec<(String, f64)>,
+    initial_inputs: Vec<(String, f64)>,
     compiled: CompiledModelArtifact,
     unit_hash: u64,
     cached_library_gen: u64,
@@ -1767,6 +2074,7 @@ impl NativeCachedRebuild {
     ) -> (PendingCompile, CompileUnit) {
         (
             PendingCompile {
+                execution_domain: self.execution_domain,
                 entity,
                 session_id,
                 cancelled: false,
@@ -1775,6 +2083,7 @@ impl NativeCachedRebuild {
                 doc_uri: self.doc_uri,
                 raw_extras: self.raw_extras,
                 parameter_overrides: self.parameter_overrides,
+                initial_inputs: self.initial_inputs,
                 library_gen,
                 intent,
             },
@@ -1793,10 +2102,12 @@ impl NativeCachedRebuild {
         let plan = live_build_plan(
             profile,
             &self.parameter_overrides,
+            &self.initial_inputs,
             self.unit_key,
             Some(self.library_revision),
         )?;
         Ok(CompileWork {
+            execution_domain: self.execution_domain,
             entity,
             session_id,
             cancelled: false,
@@ -1805,6 +2116,7 @@ impl NativeCachedRebuild {
             doc_uri: self.doc_uri,
             raw_extras: self.raw_extras,
             parameter_overrides: self.parameter_overrides,
+            initial_inputs: self.initial_inputs,
             unit: self.unit,
             comp_res: self.compiled,
             unit_key: self.unit_key,
@@ -1826,11 +2138,13 @@ fn native_cached_rebuild(
     let unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
     let unit_key = cached.compiled.prepared_source_key;
     Some(NativeCachedRebuild {
+        execution_domain: cached.execution_domain,
         model_name: cached.model_name.clone(),
         source: Arc::clone(&cached.source),
         raw_extras: cached.extra_sources.clone(),
         doc_uri: cached.doc_uri.clone(),
         parameter_overrides: cached.parameter_overrides.clone(),
+        initial_inputs: cached.initial_inputs.clone(),
         compiled: cached.compiled.clone(),
         unit_hash: cached.unit_hash,
         cached_library_gen: cached.library_gen,
@@ -1858,6 +2172,7 @@ fn cached_solve_is_prepared(
     live_build_plan(
         profile,
         &cached.parameter_overrides,
+        &cached.initial_inputs,
         cached.unit_key,
         Some(cached.library_revision),
     )
@@ -1906,14 +2221,11 @@ fn submit_cached_solve_preparation(
     library_gen: u64,
     profile: solver::RuntimeProfile,
     intent: CompileIntent,
-    solve_preparation_pool: &mut SolvePreparationPool,
+    solve_preparation_pool: &mut ModelicaWorkerPools,
     solve_preparation_order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
-    steppers: &mut HashMap<Entity, (u64, String, LiveStepper)>,
-    cached_models: &mut HashMap<Entity, CachedModel>,
     realtime_models: &std::collections::HashSet<Entity>,
     prepared_solve_cache: &mut PreparedSolveCache,
-    step_lane: &mut VecDeque<ModelicaCommand>,
     tx: &Sender<ModelicaResult>,
 ) {
     let source = Arc::clone(&cached.source);
@@ -1939,14 +2251,14 @@ fn submit_cached_solve_preparation(
             work.session_id,
             lunco_modelica_runtime::ModelicaPreparationPhase::CachedSolverLoaded,
         );
-        finish_compile_work(
+        dispatch_live_construction(
             work,
-            steppers,
-            cached_models,
             realtime_models,
             prepared_solve_cache,
-            step_lane,
             tx,
+            solve_preparation_pool,
+            solve_preparation_order,
+            pending_compile_works,
         );
     } else {
         let job_id = solve_preparation_pool.submit(&work, tx);
@@ -1955,43 +2267,62 @@ fn submit_cached_solve_preparation(
     }
 }
 
-/// Collect every readable variable from the stepper — states, inputs, and
-/// (on rumoca `main`) algebraic / output reconstructions via
-/// `EliminationResult`. Non-finite values are dropped so the UI never
-/// plots NaN. Filtering out parameters / inputs happens downstream in
-/// [`handle_modelica_responses`]; we report everything here so the UI has
-/// the full picture and decides what goes into `model.variables`.
-pub(crate) trait ObservableStepper {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError>;
-}
-
-impl ObservableStepper for LiveStepper {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
-        self.state()
-    }
-}
-
-impl ObservableStepper for rumoca_sim::SimulationSession {
-    fn observable_state(
-        &self,
-    ) -> Result<rumoca_sim::SessionState, rumoca_sim::SimulationDiagnosticError> {
-        self.state()
-    }
-}
-
-pub(crate) fn collect_stepper_observables<S: ObservableStepper>(stepper: &S) -> Vec<(String, f64)> {
-    let Ok(state) = stepper.observable_state() else {
-        return Vec::new();
-    };
-    state
+/// Project the admitted live observation without hiding solver diagnostics.
+fn collect_stepper_observables(
+    stepper: &LiveStepper,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    Ok(stepper
+        .state()?
         .values
         .into_iter()
-        .filter(|(name, val)| val.is_finite() && name != "time")
+        .filter(|(name, _)| name != "time")
+        .collect())
+}
+
+/// Admit causal inputs, integrate, and read the complete checked observation
+/// before the worker publishes any part of the transaction.
+fn advance_checked_step(
+    stepper: &mut LiveStepper,
+    inputs: &[(String, f64)],
+    dt: f64,
+    stop_time: f64,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    for (name, value) in inputs {
+        stepper.set_input(name, *value)?;
+    }
+    integrate_macro_step(stepper, dt)?;
+    validate_step_completion(stepper.time(), stop_time)
+        .map_err(rumoca_sim::SimulationDiagnosticError::Solver)?;
+    collect_stepper_observables(stepper)
+}
+
+fn capture_initial_inputs(
+    stepper: &LiveStepper,
+) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    let state = stepper.state()?;
+    stepper
+        .input_names()
+        .iter()
+        .map(|name| {
+            let value = state.values.get(name).copied().ok_or_else(|| {
+                rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "admitted input '{name}' has no runtime observation"
+                ))
+            })?;
+            if !value.is_finite() {
+                return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "admitted input '{name}' is not finite"
+                )));
+            }
+            Ok((name.clone(), value))
+        })
         .collect()
+}
+
+fn merge_initial_inputs(initial: &mut Vec<(String, f64)>, values: &[(String, f64)]) {
+    let mut merged: std::collections::BTreeMap<_, _> = initial.drain(..).collect();
+    merged.extend(values.iter().cloned());
+    initial.extend(merged);
 }
 
 /// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
@@ -2255,6 +2586,8 @@ pub fn failed_result_for_command(
             result.unloaded_source_root_id = Some(id.clone());
             result.source_root_operation_id = Some(*operation_id);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        ModelicaCommand::CompileBatch { .. } => {}
         ModelicaCommand::Despawn { .. } => {}
     }
     result
@@ -2309,30 +2642,9 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
     }
 }
 
-/// `set_input` with the dedup-warn the hot Step path uses: a rejected input
-/// means the compiled model exposes no such runtime slot, so the wired value
-/// is silently discarded forever — warn ONCE per (entity, name).
-#[cfg(not(target_arch = "wasm32"))]
-fn set_input_or_warn(
-    stepper: &mut LiveStepper,
-    rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
-    entity: Entity,
-    name: &str,
-    val: f64,
-) {
-    if stepper.set_input(name, val).is_err() && rejected_inputs.insert((entity, name.to_string())) {
-        warn!(
-            "[modelica] {entity:?} rejected input '{name}' — the \
-             compiled model exposes no such runtime slot, so the \
-             wired value is DISCARDED and the model keeps its \
-             declared default. Verify the admitted model's runtime input names."
-        );
-    }
-}
-
-/// The background worker that owns !Send live steppers, per-entity source
-/// metadata, and the two-lane command scheduler. A separate native actor owns
-/// the mutable Rumoca session and shared compiled-artifact cache.
+/// The native command/result owner, with per-entity source metadata and the
+/// two-lane scheduler. Persistent solver workers own thread-affine sessions;
+/// a separate compiler actor owns the mutable Rumoca session and DAE cache.
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
 /// `ModelicaPlugin::build`) and persists cache entries through the storage
@@ -2345,6 +2657,7 @@ pub fn modelica_worker(
     tx: Sender<ModelicaResult>,
     disk_limits: PreparedSolveDiskLimits,
     cache_limits: ModelicaCacheLimits,
+    worker_limits: ModelicaWorkerLimits,
 ) {
     let (compiled_capacity, prepared_capacity) = match cache_limits.validate() {
         Ok(capacities) => capacities,
@@ -2353,19 +2666,13 @@ pub fn modelica_worker(
             return;
         }
     };
-    let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, String, SessionHandle)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // Which models declared the realtime promise, from `Compile`. Half of the
     // solver-selection input, kept per entity because every later rebuild — Reset,
     // parameter update, Step
     // auto-init — must resolve the SAME solver as the original compile did.
     let mut realtime_models: std::collections::HashSet<Entity> = Default::default();
-    // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
-    // be `let _ =` on this per-tick path, which made the single most damaging
-    // failure mode in the whole co-sim silent: rumoca demotes a bound `input` to
-    // an algebraic, so an input that never became a runtime slot fails here on
-    // EVERY tick while the model quietly keeps its declared default forever.
-    let mut rejected_inputs: std::collections::HashSet<(Entity, String)> = Default::default();
     // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
     // rebuild steppers from `CachedModel::compiled` without recompiling.
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
@@ -2374,9 +2681,9 @@ pub fn modelica_worker(
     // overrides so two USD instances do not lower identical networks twice
     // during scene startup.
     let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
-    // Immutable DAE lowering is dispatched to this bounded pool; the native
-    // Rumoca session itself is owned by a separate single-thread actor.
-    let mut solve_preparation_pool = match SolvePreparationPool::new(disk_limits) {
+    // Source/FMI preparation and live sessions have independent bounded workers.
+    // The mutable Rumoca compiler has its own single-thread actor.
+    let mut solve_preparation_pool = match ModelicaWorkerPools::new(disk_limits, worker_limits) {
         Ok(pool) => pool,
         Err(error) => {
             let _ = tx.send(ModelicaResult::worker_failure(error));
@@ -2451,12 +2758,12 @@ pub fn modelica_worker(
                 // channel and leave a finished model uncommitted forever.
                 crossbeam_channel::select_biased! {
                     recv(solve_preparation_pool.rx) -> message => match message {
-                        Ok(result) => stage_preparation_result(
+                        Ok(result) => { if !stage_preparation_result(
                             result,
                             &mut ready_solve_preparations,
                             &mut ready_source_root_preparations,
                             &mut ready_compiler_completions,
-                        ),
+                         &tx) { return; } },
                         Err(_) => return,
                     },
                     recv(rx) -> message => match message {
@@ -2480,12 +2787,15 @@ pub fn modelica_worker(
         // more commands; otherwise a continuously-fed Step channel can keep
         // the worker in the command-drain loop and strand a finished solver.
         while let Ok(result) = solve_preparation_pool.rx.try_recv() {
-            stage_preparation_result(
+            if !stage_preparation_result(
                 result,
                 &mut ready_solve_preparations,
                 &mut ready_source_root_preparations,
                 &mut ready_compiler_completions,
-            );
+                &tx,
+            ) {
+                return;
+            };
         }
         dispatch_ready_source_roots(
             &mut source_root_preparation_order,
@@ -2510,10 +2820,7 @@ pub fn modelica_worker(
             &mut solve_preparation_pool,
             &mut solve_preparation_order,
             &mut pending_compile_works,
-            &mut steppers,
-            &mut cached_models,
             &realtime_models,
-            &mut step_lane,
             &mut latest_source_root_operations,
             &tx,
         );
@@ -2552,12 +2859,15 @@ pub fn modelica_worker(
         // A result can arrive while the bounded command batch is being
         // admitted. Drain and commit it before selecting the next work round.
         while let Ok(result) = solve_preparation_pool.rx.try_recv() {
-            stage_preparation_result(
+            if !stage_preparation_result(
                 result,
                 &mut ready_solve_preparations,
                 &mut ready_source_root_preparations,
                 &mut ready_compiler_completions,
-            );
+                &tx,
+            ) {
+                return;
+            };
         }
         dispatch_ready_source_roots(
             &mut source_root_preparation_order,
@@ -2582,10 +2892,7 @@ pub fn modelica_worker(
             &mut solve_preparation_pool,
             &mut solve_preparation_order,
             &mut pending_compile_works,
-            &mut steppers,
-            &mut cached_models,
             &realtime_models,
-            &mut step_lane,
             &mut latest_source_root_operations,
             &tx,
         );
@@ -2694,15 +3001,15 @@ pub fn modelica_worker(
         {
             // Preparation results are lifecycle completions, not optional
             // background work. Prioritize them over the continuously-fed Step
-            // channel so a finished participant always reaches `finish_compile_work`.
+            // channel so a finished participant always reaches its ordered construction commit.
             crossbeam_channel::select_biased! {
                 recv(solve_preparation_pool.rx) -> message => match message {
-                    Ok(result) => stage_preparation_result(
+                    Ok(result) => { if !stage_preparation_result(
                         result,
                         &mut ready_solve_preparations,
                         &mut ready_source_root_preparations,
                         &mut ready_compiler_completions,
-                    ),
+                     &tx) { return; } },
                     Err(_) => return,
                 },
                 recv(rx) -> message => match message {
@@ -2722,6 +3029,50 @@ pub fn modelica_worker(
             continue;
         }
 
+        // Independent participants already have their complete causal inputs.
+        // Dispatch one transaction per entity before admitting any result; each
+        // owner keeps its solver serial, while this loop retains command order.
+        let mut dispatched_entities: HashSet<Entity> = HashSet::default();
+        for command in &mut to_process {
+            let ModelicaCommand::Step {
+                entity,
+                session_id,
+                step_id,
+                start_time,
+                stop_time,
+                model_name,
+                inputs,
+                dt,
+            } = command
+            else {
+                continue;
+            };
+            if !dispatched_entities.insert(*entity)
+                || *session_id < *current_sessions.get(entity).unwrap_or(&0)
+            {
+                continue;
+            }
+            let Some((owner_session, owner_name, stepper)) = steppers.get_mut(entity) else {
+                continue;
+            };
+            if owner_session != session_id
+                || owner_name != model_name
+                || stepper.has_pending_step()
+                || validate_step_request(stepper.time(), *start_time, *stop_time, *dt).is_err()
+            {
+                continue;
+            }
+            if let Err(error) = stepper.start_step(
+                *step_id,
+                *start_time,
+                *stop_time,
+                *dt,
+                std::mem::take(inputs),
+            ) {
+                let _ = tx.send(ModelicaResult::worker_failure(error.to_string()));
+                return;
+            }
+        }
         let round_size = to_process.len();
         for (round_index, cmd) in to_process.into_iter().enumerate() {
             let is_step = matches!(&cmd, ModelicaCommand::Step { .. });
@@ -2744,7 +3095,12 @@ pub fn modelica_worker(
                 | ModelicaCommand::Reset { entity, .. }
                 | ModelicaCommand::Despawn { entity } => Some(*entity),
                 ModelicaCommand::LoadSourceRoot { .. }
-                | ModelicaCommand::UnloadSourceRoot { .. } => None,
+                | ModelicaCommand::UnloadSourceRoot { .. }
+                | ModelicaCommand::CompileBatch { .. } => None,
+            };
+            let batch_failure_reply = match &cmd {
+                ModelicaCommand::CompileBatch { reply, .. } => Some(reply.clone()),
+                _ => None,
             };
             let panic_result = panic_result_for_command(
                 &cmd,
@@ -2765,8 +3121,60 @@ pub fn modelica_worker(
             log::debug!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
-                    ModelicaCommand::Reset { entity, session_id } => {
+                    ModelicaCommand::CompileBatch {
+                        model_name,
+                        source,
+                        doc_uri,
+                        extra_sources,
+                        cancel,
+                        reply,
+                    } => {
+                        match compiler.submit_batch(
+                            model_name,
+                            assemble_compile_unit(&source, extra_sources),
+                            doc_uri,
+                            library_gen,
+                            cancel,
+                            reply.clone(),
+                        ) {
+                            Ok(id) => compiler_order.push_back(id),
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
+                            }
+                        }
+                    }
+                    ModelicaCommand::Reset {
+                        entity,
+                        session_id,
+                        initial_inputs,
+                    } => {
                         current_sessions.insert(entity, session_id);
+
+                        if let Some((_, _, stepper)) = steppers.get(&entity) {
+                            match stepper.capture_initial_inputs() {
+                                Ok(inputs) => {
+                                    if let Some(cached) = cached_models.get_mut(&entity) {
+                                        cached.initial_inputs = inputs;
+                                    }
+                                }
+                                Err(error) => {
+                                    let mut result = reset_ok(
+                                        entity,
+                                        session_id,
+                                        Vec::new(),
+                                        Vec::new(),
+                                        "Reset rejected.",
+                                    );
+                                    result.error = Some(error.to_string());
+                                    let _ = tx_inner.send(result);
+                                    return;
+                                }
+                            }
+                        }
+
+                        if let Some(cached) = cached_models.get_mut(&entity) {
+                            merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
+                        }
 
                         // Rebuild from the cached DAE. A changed library set
                         // recompiles through the Rumoca actor; a missing solve
@@ -2801,22 +3209,19 @@ pub fn modelica_worker(
                                 &mut solve_preparation_pool,
                                 &mut solve_preparation_order,
                                 &mut pending_compile_works,
-                                &mut steppers,
-                                &mut cached_models,
                                 &realtime_models,
                                 &mut prepared_solve_cache,
-                                &mut step_lane,
                                 &tx_inner,
                             );
                         } else {
                             steppers.remove(&entity);
-                            let _ = tx_inner.send(reset_ok(
+                            let _ = tx_inner.send(ModelicaResult {
                                 entity,
                                 session_id,
-                                Vec::new(),
-                                Vec::new(),
-                                "Reset complete (no cached model).",
-                            ));
+                                is_reset: true,
+                                error: Some("Reset requires a cached compiled model".to_owned()),
+                                ..Default::default()
+                            });
                         }
                     }
                     ModelicaCommand::UpdateParameters {
@@ -2831,15 +3236,40 @@ pub fn modelica_worker(
                         }
                         current_sessions.insert(entity, session_id);
 
+                        if let Some((_, _, stepper)) = steppers.get(&entity) {
+                            match stepper.capture_initial_inputs() {
+                                Ok(inputs) => {
+                                    if let Some(cached) = cached_models.get_mut(&entity) {
+                                        cached.initial_inputs = inputs;
+                                    }
+                                }
+                                Err(error) => {
+                                    let mut result = result_ok(entity, session_id);
+                                    result.is_parameter_update = true;
+                                    result.error = Some(error.to_string());
+                                    let _ = tx_inner.send(result);
+                                    return;
+                                }
+                            }
+                        }
+
                         // Re-seat under the SAME session URI the model was first
                         // compiled with. The actor owns the mutable Rumoca session;
                         // the command owner records this continuation and remains
                         // available for other entities while it compiles.
-                        let doc_uri = cached_models
-                            .get(&entity)
-                            .map(|c| c.doc_uri.clone())
-                            .unwrap_or_else(|| model_name.clone());
+                        let Some(cached) = cached_models.get(&entity) else {
+                            let mut result = result_ok(entity, session_id);
+                            result.is_parameter_update = true;
+                            result.error = Some(
+                                "Parameter update requires a cached compiled model".to_owned(),
+                            );
+                            let _ = tx_inner.send(result);
+                            return;
+                        };
+                        let execution_domain = cached.execution_domain;
+                        let doc_uri = cached.doc_uri.clone();
                         let pending = PendingCompile {
+                            execution_domain,
                             entity,
                             session_id,
                             cancelled: false,
@@ -2848,6 +3278,7 @@ pub fn modelica_worker(
                             doc_uri,
                             raw_extras: Vec::new(),
                             parameter_overrides: Vec::new(),
+                            initial_inputs: cached.initial_inputs.clone(),
                             library_gen,
                             intent: CompileIntent::UpdateParameters,
                         };
@@ -2862,6 +3293,7 @@ pub fn modelica_worker(
                         );
                     }
                     ModelicaCommand::Compile {
+                        execution_domain,
                         entity,
                         session_id,
                         model_name,
@@ -2869,6 +3301,7 @@ pub fn modelica_worker(
                         doc_uri,
                         extra_sources,
                         parameter_overrides,
+                        initial_inputs,
                         stream,
                         realtime_safe,
                     } => {
@@ -2897,6 +3330,7 @@ pub fn modelica_worker(
                         let raw_extras = extra_sources.clone();
                         let unit = assemble_compile_unit(&source, extra_sources);
                         let pending = PendingCompile {
+                            execution_domain,
                             entity,
                             session_id,
                             cancelled: false,
@@ -2905,6 +3339,7 @@ pub fn modelica_worker(
                             doc_uri: doc_uri.clone(),
                             raw_extras,
                             parameter_overrides,
+                            initial_inputs,
                             library_gen,
                             intent: CompileIntent::Compile,
                         };
@@ -2957,9 +3392,10 @@ pub fn modelica_worker(
                                 .get(&entity)
                                 .is_some_and(|c| c.model_name == model_name);
                             if cached_name_matches {
-                                if let Some(cached) =
+                                if let Some(mut cached) =
                                     native_cached_rebuild(&cached_models, entity, library_revision)
                                 {
+                                    merge_initial_inputs(&mut cached.initial_inputs, &inputs);
                                     if !cached.artifact_is_valid(library_gen) {
                                         let pipeline_load = compiler_order.len()
                                             + pending_compile_works.len()
@@ -3023,11 +3459,8 @@ pub fn modelica_worker(
                                         &mut solve_preparation_pool,
                                         &mut solve_preparation_order,
                                         &mut pending_compile_works,
-                                        &mut steppers,
-                                        &mut cached_models,
                                         &realtime_models,
                                         &mut prepared_solve_cache,
-                                        &mut step_lane,
                                         &tx_inner,
                                     );
                                     return;
@@ -3053,32 +3486,14 @@ pub fn modelica_worker(
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
-                                let step_started = web_time::Instant::now();
-                                for (name, val) in inputs {
-                                    set_input_or_warn(
-                                        stepper,
-                                        &mut rejected_inputs,
-                                        entity,
-                                        &name,
-                                        val,
-                                    );
-                                }
-                                // Macro step: integrate the requested `dt` — the
-                                // gap between the model's clock and the world's —
-                                // as a fixed ladder of micro-steps.
-                                let step_err = integrate_macro_step(stepper, dt)
-                                    .err()
-                                    .map(|error| error.to_string())
-                                    .or_else(|| {
-                                        validate_step_completion(stepper.time(), stop_time).err()
-                                    });
-                                let worker_step_duration_ns =
-                                    step_started.elapsed().as_nanos() as u64;
-                                if let Some(e) = step_err {
+                                let step_outcome =
+                                    stepper.advance_checked(step_id, inputs, dt, stop_time);
+                                let worker_step_duration_ns = stepper.last_step_duration_ns();
+                                if let Err(e) = &step_outcome {
                                     let mut r = step_result_ok(entity, session_id, step_id);
                                     r.new_time = stepper.time();
                                     r.step_id = Some(step_id);
-                                    r.worker_step_duration_ns = Some(worker_step_duration_ns);
+                                    r.worker_step_duration_ns = worker_step_duration_ns;
                                     r.worker_backlog_count = worker_backlog_count;
                                     // Runtime solver blow-up: `SimulationDiagnosticError`
                                     // Display is human-readable (the `Solver` variant
@@ -3087,11 +3502,10 @@ pub fn modelica_worker(
                                     let _ = tx_inner.send(r);
                                     steppers.remove(&entity);
                                 } else {
-                                    // `state()` reconstructs algebraics / outputs via
-                                    // `EliminationResult` and also includes inputs, so
-                                    // this single call supersedes the old two-loop
-                                    // variable_names + input_names collection.
-                                    let outputs = collect_stepper_observables(stepper);
+                                    // The checked session observation includes
+                                    // reconstructed algebraics, outputs, and inputs.
+                                    let outputs = step_outcome
+                                        .expect("successful step outcome checked above");
                                     let new_time = stepper.time();
                                     // Publish the immutable stream projection
                                     // for same-address-space readers. The
@@ -3116,9 +3530,12 @@ pub fn modelica_worker(
                                         is_parameter_update: false,
                                         is_reset: false,
                                         detected_input_names: Vec::new(),
-                                        worker_step_duration_ns: Some(worker_step_duration_ns),
+                                        worker_step_duration_ns,
                                         worker_backlog_count,
                                         live_solver_snapshot,
+                                        variable_metadata: cached_models.get_mut(&entity).and_then(
+                                            |cached| cached.pending_variable_metadata.take(),
+                                        ),
                                         ..Default::default()
                                     });
                                 }
@@ -3198,13 +3615,16 @@ pub fn modelica_worker(
             }
 
             if result.is_err() {
+                if let Some(reply) = batch_failure_reply {
+                    let _ =
+                        reply.send(Err("Modelica batch preparation command panicked".to_owned()));
+                }
                 if let Some(entity) = panic_entity {
                     steppers.remove(&entity);
                     cached_models.remove(&entity);
                     sim_streams.remove(&entity);
                     current_sessions.remove(&entity);
                     realtime_models.remove(&entity);
-                    rejected_inputs.retain(|(candidate, _)| *candidate != entity);
                 }
                 let _ = tx.send(panic_result);
             }
@@ -3237,6 +3657,9 @@ fn command_label(cmd: &ModelicaCommand) -> String {
         ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
         ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
         ModelicaCommand::UnloadSourceRoot { id, .. } => format!("UnloadSourceRoot id={id}"),
+        ModelicaCommand::CompileBatch { model_name, .. } => {
+            format!("CompileBatch model={model_name}")
+        }
     }
 }
 
@@ -3253,9 +3676,9 @@ fn cmd_entity(cmd: &ModelicaCommand) -> Entity {
         // from is_squashable), so the placeholder is only consulted
         // by the result-fence logic which keys on a different
         // structural shape.
-        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => {
-            Entity::PLACEHOLDER
-        }
+        ModelicaCommand::LoadSourceRoot { .. }
+        | ModelicaCommand::UnloadSourceRoot { .. }
+        | ModelicaCommand::CompileBatch { .. } => Entity::PLACEHOLDER,
     }
 }
 
@@ -3267,7 +3690,9 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
         ModelicaCommand::UpdateParameters { session_id, .. } => *session_id,
         ModelicaCommand::Reset { session_id, .. } => *session_id,
         ModelicaCommand::Despawn { .. } => 0,
-        ModelicaCommand::LoadSourceRoot { .. } | ModelicaCommand::UnloadSourceRoot { .. } => 0,
+        ModelicaCommand::LoadSourceRoot { .. }
+        | ModelicaCommand::UnloadSourceRoot { .. }
+        | ModelicaCommand::CompileBatch { .. } => 0,
     }
 }
 
@@ -3425,26 +3850,44 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             w.library_gen,
                         )
                     };
-                    if let Some(rb) = rebuild {
-                        if let Ok(comp_res) = rb.outcome {
-                            if let Ok((mut s, live_solver_snapshot)) = build_stepper(
+                    if let Some(mut rb) = rebuild {
+                        merge_initial_inputs(&mut rb.initial_inputs, &inputs);
+                        let comp_res = match rb.outcome {
+                            Ok(comp_res) => comp_res,
+                            Err(error) => {
+                                let mut result = step_result_ok(entity, session_id, step_id);
+                                result.error = Some(format!("Initialization failed: {error}"));
+                                result.compile_diagnostics = rb.compile_diagnostics;
+                                send(result);
+                                return;
+                            }
+                        };
+                        let (stepper, live_solver_snapshot, variable_metadata, _) =
+                            match build_stepper(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
+                                &rb.initial_inputs,
                                 comp_res.prepared_source_key,
                                 rb.library_revision,
                                 &mut w.prepared_solve_cache,
                             ) {
-                                for (name, val) in &inputs {
-                                    let _ = s.set_input(name, *val);
+                                Ok(built) => built,
+                                Err(error) => {
+                                    let mut result = step_result_ok(entity, session_id, step_id);
+                                    result.error = Some(format!("Initialization failed: {error}"));
+                                    result.compile_diagnostics =
+                                        diagnostics_from_sim_error(&error, &rb.source);
+                                    send(result);
+                                    return;
                                 }
-                                if let Some(cached) = w.cached_models.get_mut(&entity) {
-                                    cached.live_solver_snapshot = live_solver_snapshot;
-                                }
-                                w.steppers
-                                    .insert(entity, (session_id, model_name.clone(), s));
-                            }
+                            };
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.live_solver_snapshot = live_solver_snapshot;
+                            cached.pending_variable_metadata = Some(variable_metadata);
                         }
+                        w.steppers
+                            .insert(entity, (session_id, model_name.clone(), stepper));
                     }
                 }
             }
@@ -3468,17 +3911,10 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     let step_started = web_time::Instant::now();
-                    for (name, val) in &inputs {
-                        let _ = stepper.set_input(name, *val);
-                    }
-                    // Same macro-step ladder as the native worker.
-                    let step_err = integrate_macro_step(stepper, dt)
-                        .err()
-                        .map(|error| error.to_string())
-                        .or_else(|| validate_step_completion(stepper.time(), stop_time).err());
+                    let step_outcome = advance_checked_step(stepper, &inputs, dt, stop_time);
                     let worker_step_duration_ns = step_started.elapsed().as_nanos() as u64;
 
-                    if let Some(e) = step_err {
+                    if let Err(e) = &step_outcome {
                         send(ModelicaResult {
                             entity,
                             session_id,
@@ -3497,7 +3933,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         });
                         w.steppers.remove(&entity);
                     } else {
-                        let outputs = collect_stepper_observables(stepper);
+                        let outputs = step_outcome.expect("successful step outcome checked above");
                         if let Some(stream) = w.sim_streams.get(&entity) {
                             let prev = stream.load();
                             let next = SimSnapshot::advance(&prev, stepper.time(), &outputs);
@@ -3517,6 +3953,10 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             is_reset: false,
                             detected_input_names: Vec::new(),
                             live_solver_snapshot,
+                            variable_metadata: w
+                                .cached_models
+                                .get_mut(&entity)
+                                .and_then(|cached| cached.pending_variable_metadata.take()),
                             worker_step_duration_ns: Some(worker_step_duration_ns),
                             ..Default::default()
                         });
@@ -3525,14 +3965,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     send(step_result_ok(entity, session_id, step_id));
                 }
             } else {
-                // No stepper for this entity. The Bevy-side
-                // `spawn_modelica_requests` is supposed to catch this
-                // and dispatch a Compile first; if we got here the
-                // user pressed Run on a never-compiled model AND the
-                // auto-compile hook didn't fire (e.g. doc id is
-                // missing). Surface a message that tells the user
-                // what to do next instead of "Sim engine failed to
-                // start." which doesn't.
+                // Stepping requires a successfully installed compiled session.
                 send(ModelicaResult {
                     entity,
                     session_id,
@@ -3554,6 +3987,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             }
         }
         ModelicaCommand::Compile {
+            execution_domain: _,
             entity,
             session_id,
             model_name,
@@ -3561,6 +3995,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             doc_uri,
             extra_sources,
             parameter_overrides,
+            initial_inputs,
             stream,
             realtime_safe,
         } => {
@@ -3594,14 +4029,14 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &parameter_overrides,
+                        &initial_inputs,
                         comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
-                        Ok((stepper, live_solver_snapshot)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                             w.cached_models.insert(
                                 entity,
@@ -3610,11 +4045,13 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     source: Arc::from(source.clone()),
                                     extra_sources: raw_extras,
                                     parameter_overrides,
+                                    initial_inputs,
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
                                     live_solver_snapshot: live_solver_snapshot.clone(),
+                                    pending_variable_metadata: None,
                                 },
                             );
 
@@ -3636,6 +4073,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     compiled_model_name: Some(model_name.clone()),
                                     loaded_source_root_id: None,
                                     live_solver_snapshot: Some(live_solver_snapshot),
+                                    variable_metadata: Some(variable_metadata),
                                     ..Default::default()
                                 },
                                 &comp_res,
@@ -3682,11 +4120,40 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 }
             }
         }
-        ModelicaCommand::Reset { entity, session_id } => {
+        ModelicaCommand::Reset {
+            entity,
+            session_id,
+            initial_inputs,
+        } => {
             w.current_sessions.insert(entity, session_id);
 
-            // M3: rebuild from the cached compiled artifact — instant unless a
-            // LoadSourceRoot / compiler reset invalidated it.
+            if let Some((_, _, stepper)) = w.steppers.get(&entity) {
+                match capture_initial_inputs(stepper) {
+                    Ok(inputs) => {
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.initial_inputs = inputs;
+                        }
+                    }
+                    Err(error) => {
+                        let mut result = reset_ok(
+                            entity,
+                            session_id,
+                            Vec::new(),
+                            Vec::new(),
+                            "Reset rejected.",
+                        );
+                        result.error = Some(error.to_string());
+                        send(result);
+                        return;
+                    }
+                }
+            }
+
+            if let Some(cached) = w.cached_models.get_mut(&entity) {
+                merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
+            }
+
+            // Rebuild from the compiled artifact while its source admission is current.
             let rebuild = {
                 let mut backend = InlineCompileBackend {
                     compiler: &mut w.compiler,
@@ -3697,49 +4164,46 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some(rb) = rebuild {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok((stepper, live_solver_snapshot)) = build_stepper(
-                            &comp_res,
-                            profile_for(entity, &w.realtime_models),
-                            &rb.parameter_overrides,
-                            comp_res.prepared_source_key,
-                            rb.library_revision,
-                            &mut w.prepared_solve_cache,
-                        ) {
-                            let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
-                            w.steppers
-                                .insert(entity, (session_id, rb.model_name.clone(), stepper));
-                            if let Some(stream) = w.sim_streams.get(&entity) {
-                                stream.store(Arc::new(SimSnapshot::empty_at_zero()));
-                            }
-                            if let Some(cached) = w.cached_models.get_mut(&entity) {
-                                cached.live_solver_snapshot = live_solver_snapshot.clone();
-                            }
-                            let mut result = reset_ok(
-                                entity,
-                                session_id,
-                                symbols,
-                                input_names,
-                                "Reset complete.",
-                            );
-                            result.live_solver_snapshot = Some(live_solver_snapshot);
-                            send(result);
-                        } else {
-                            send(ModelicaResult {
-                                entity,
-                                session_id,
-                                new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(),
-                                error: Some("Stepper init failed".to_string()),
-                                log_message: None,
-                                is_new_model: false,
-                                is_parameter_update: false,
-                                is_reset: true,
-                                detected_input_names: Vec::new(),
-                                ..Default::default()
-                            });
+                        let (stepper, live_solver_snapshot, variable_metadata, symbols) =
+                            match build_stepper(
+                                &comp_res,
+                                profile_for(entity, &w.realtime_models),
+                                &rb.parameter_overrides,
+                                &rb.initial_inputs,
+                                comp_res.prepared_source_key,
+                                rb.library_revision,
+                                &mut w.prepared_solve_cache,
+                            ) {
+                                Ok(built) => built,
+                                Err(error) => {
+                                    send(ModelicaResult {
+                                        entity,
+                                        session_id,
+                                        is_reset: true,
+                                        error: Some(format!("Reset stepper error: {error}")),
+                                        compile_diagnostics: diagnostics_from_sim_error(
+                                            &error, &rb.source,
+                                        ),
+                                        ..Default::default()
+                                    });
+                                    return;
+                                }
+                            };
+                        let input_names: Vec<String> = stepper.input_names().to_vec();
+                        w.steppers
+                            .insert(entity, (session_id, rb.model_name.clone(), stepper));
+                        if let Some(stream) = w.sim_streams.get(&entity) {
+                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
                         }
+                        if let Some(cached) = w.cached_models.get_mut(&entity) {
+                            cached.live_solver_snapshot = live_solver_snapshot.clone();
+                            cached.pending_variable_metadata = None;
+                        }
+                        let mut result =
+                            reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
+                        result.live_solver_snapshot = Some(live_solver_snapshot);
+                        result.variable_metadata = Some(variable_metadata);
+                        send(result);
                     }
                     Err(e) => {
                         send(ModelicaResult {
@@ -3761,13 +4225,13 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 }
             } else {
                 w.steppers.remove(&entity);
-                send(reset_ok(
+                send(ModelicaResult {
                     entity,
                     session_id,
-                    Vec::new(),
-                    Vec::new(),
-                    "Reset complete (no cached model).",
-                ));
+                    is_reset: true,
+                    error: Some("Reset requires a cached compiled model".to_owned()),
+                    ..Default::default()
+                });
             }
         }
         ModelicaCommand::UpdateParameters {
@@ -3791,6 +4255,24 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 .map(|c| c.doc_uri.clone())
                 .unwrap_or_else(|| model_name.clone());
 
+            let initial_inputs = match w.steppers.get(&entity) {
+                Some((_, _, stepper)) => match capture_initial_inputs(stepper) {
+                    Ok(inputs) => inputs,
+                    Err(error) => {
+                        let mut result = result_ok(entity, session_id);
+                        result.is_parameter_update = true;
+                        result.error = Some(error.to_string());
+                        send(result);
+                        return;
+                    }
+                },
+                None => w
+                    .cached_models
+                    .get(&entity)
+                    .map(|cached| cached.initial_inputs.clone())
+                    .unwrap_or_default(),
+            };
+
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
 
             match compile_shared(
@@ -3806,13 +4288,13 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &[],
+                        &initial_inputs,
                         comp_res.prepared_source_key,
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
-                        Ok((stepper, live_solver_snapshot)) => {
+                        Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
                             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                             w.cached_models.insert(
                                 entity,
@@ -3823,11 +4305,13 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     // compiled without extras, matching above.
                                     extra_sources: Vec::new(),
                                     parameter_overrides: Vec::new(),
+                                    initial_inputs,
                                     doc_uri: doc_uri.clone(),
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
                                     live_solver_snapshot: live_solver_snapshot.clone(),
+                                    pending_variable_metadata: None,
                                 },
                             );
 
@@ -3847,6 +4331,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 detected_input_names: input_names,
                                 compile_diagnostics: Vec::new(),
                                 live_solver_snapshot: Some(live_solver_snapshot),
+                                variable_metadata: Some(variable_metadata),
                                 ..Default::default()
                             });
                         }
@@ -3971,6 +4456,115 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 source_root_operation_id: Some(operation_id),
                 ..Default::default()
             });
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod worker_budget_tests {
+    use super::*;
+
+    #[test]
+    fn parameter_update_without_a_cached_identity_is_terminal() {
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        let one = WorkerThreadBudget {
+            max_worker_threads: 1,
+            reserved_cpu_threads: 0,
+        };
+        let owner = std::thread::spawn(move || {
+            modelica_worker(
+                command_rx,
+                result_tx,
+                PreparedSolveDiskLimits::default(),
+                ModelicaCacheLimits::default(),
+                ModelicaWorkerLimits {
+                    preparation: one,
+                    live_execution: one,
+                    document_execution: one,
+                },
+            )
+        });
+        let entity = Entity::from_raw_u32(7).unwrap();
+        command_tx
+            .send(ModelicaCommand::UpdateParameters {
+                entity,
+                session_id: 1,
+                model_name: "Uncompiled".to_owned(),
+                source: "model Uncompiled end Uncompiled;".to_owned(),
+            })
+            .unwrap();
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result.entity, entity);
+        assert_eq!(result.session_id, 1);
+        assert!(result.is_parameter_update);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Parameter update requires a cached compiled model")
+        );
+        assert!(result.worker_failure.is_none());
+        drop(command_tx);
+        assert!(owner.join().is_ok());
+        assert!(result_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn worker_budgets_bound_all_pools_and_reject_zero_capacity() {
+        let available = |count| std::num::NonZeroUsize::new(count).unwrap();
+        let limits = WorkerThreadBudget::default();
+        assert_eq!(limits.worker_threads(available(32)).unwrap(), 6);
+        assert_eq!(limits.worker_threads(available(4)).unwrap(), 2);
+        assert_eq!(limits.worker_threads(available(1)).unwrap(), 1);
+        let custom = ModelicaWorkerLimits {
+            preparation: WorkerThreadBudget {
+                max_worker_threads: 3,
+                reserved_cpu_threads: 0,
+            },
+            live_execution: WorkerThreadBudget {
+                max_worker_threads: 2,
+                reserved_cpu_threads: 0,
+            },
+            document_execution: WorkerThreadBudget {
+                max_worker_threads: 1,
+                reserved_cpu_threads: 0,
+            },
+        };
+        let pool = ModelicaWorkerPools::new(PreparedSolveDiskLimits::default(), custom).unwrap();
+        let count = pool.pool.worker_count();
+        assert!((1..=3).contains(&count));
+        assert!((1..=2).contains(&pool.live_pool.worker_count()));
+        assert_eq!(pool.document_pool.worker_count(), 1);
+        assert!(pool.can_admit(count + 1));
+        assert!(!pool.can_admit(count + 2));
+
+        for domain in 0..3 {
+            let mut limits = ModelicaWorkerLimits::default();
+            match domain {
+                0 => limits.preparation.max_worker_threads = 0,
+                1 => limits.live_execution.max_worker_threads = 0,
+                2 => limits.document_execution.max_worker_threads = 0,
+                _ => unreachable!(),
+            }
+            let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+            let (result_tx, result_rx) = crossbeam_channel::unbounded();
+            modelica_worker(
+                command_rx,
+                result_tx,
+                PreparedSolveDiskLimits::default(),
+                ModelicaCacheLimits::default(),
+                limits,
+            );
+            let result = result_rx.try_recv().unwrap();
+            assert!(
+                result
+                    .worker_failure
+                    .as_deref()
+                    .unwrap()
+                    .contains("worker capacity must be positive")
+            );
+            assert!(result_rx.try_recv().is_err());
         }
     }
 }
@@ -4245,6 +4839,7 @@ mod macro_step_tests {
         let entity = Entity::from_raw_u32(7).expect("valid test entity");
         let compile = panic_result_for_command(
             &ModelicaCommand::Compile {
+                execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
                 entity,
                 session_id: 4,
                 model_name: "Balloon".into(),
@@ -4253,6 +4848,7 @@ mod macro_step_tests {
                 doc_uri: "balloon.mo".into(),
                 extra_sources: Vec::new(),
                 parameter_overrides: Vec::new(),
+                initial_inputs: Vec::new(),
                 stream: None,
             },
             "panic",
@@ -4402,8 +4998,17 @@ mod artifact_cache_tests {
         let compiled = compiler
             .compile_str_multi(model, &unit.source, uri, &unit.extras)
             .expect("inline strict compilation succeeds");
-        prepared_source_key(&compiler, &compiled, model, uri, &unit)
-            .expect("participating source bytes are available")
+        prepared_source_key(
+            &compiler,
+            &compiled,
+            model,
+            uri,
+            &unit,
+            compiler
+                .compiled_source_content_identity(&compiled, str::to_owned)
+                .unwrap(),
+        )
+        .expect("participating source bytes are available")
     }
 
     /// The hash keys the whole assembled CompileUnit: primary source, extras,
@@ -4633,8 +5238,17 @@ mod artifact_cache_tests {
         );
         let prepare = |compiler: &mut ModelicaCompiler| {
             let compiled = compiler.compile_str("Probe", source, "Probe.mo").unwrap();
-            let source_key =
-                prepared_source_key(compiler, &compiled, "Probe", "Probe.mo", &unit).unwrap();
+            let source_key = prepared_source_key(
+                compiler,
+                &compiled,
+                "Probe",
+                "Probe.mo",
+                &unit,
+                compiler
+                    .compiled_source_content_identity(&compiled, str::to_owned)
+                    .unwrap(),
+            )
+            .unwrap();
             let revision = compiler.library_revision();
             let plan = live_build_plan(
                 solver::RuntimeProfile {
@@ -4642,15 +5256,12 @@ mod artifact_cache_tests {
                     predicted: false,
                 },
                 &[],
+                &[],
                 source_key,
                 Some(revision),
             )
             .unwrap();
-            let model = lunco_modelica_solver::simulation_session::lower_for_live(
-                &compiled.dae,
-                &plan.options,
-            )
-            .unwrap();
+            let model = rumoca_sim::prepare_fmi_component(&compiled.dae, &plan.options).unwrap();
             compiler.clear_user_documents();
             (plan.key, revision, model)
         };
@@ -4672,8 +5283,14 @@ mod artifact_cache_tests {
         let (unrelated_key, unrelated_revision, unrelated_model) = prepare(&mut compiler);
         assert_ne!(first_revision, unrelated_revision);
         assert_eq!(first_key.source_key, unrelated_key.source_key);
-        assert_eq!(first_model.initial_y, unrelated_model.initial_y);
-        assert_eq!(first_model.parameters, unrelated_model.parameters);
+        assert_eq!(
+            first_model.runtime_view().model().initial_y,
+            unrelated_model.runtime_view().model().initial_y
+        );
+        assert_eq!(
+            first_model.runtime_view().model().parameters,
+            unrelated_model.runtime_view().model().parameters
+        );
         assert_eq!(
             first_key, unrelated_key,
             "unrelated admitted roots do not change a prepared solve's participating input closure"
@@ -4691,7 +5308,10 @@ mod artifact_cache_tests {
         let (changed_key, _, changed_model) = prepare(&mut compiler);
         assert_ne!(first_key.source_key, changed_key.source_key);
         assert_ne!(first_key, changed_key);
-        assert_ne!(first_model.parameters, changed_model.parameters);
+        assert_ne!(
+            first_model.runtime_view().model().parameters,
+            changed_model.runtime_view().model().parameters
+        );
     }
 
     #[test]
@@ -4717,6 +5337,7 @@ mod live_solver_snapshot_tests {
         let plan = live_build_plan(
             profile,
             &[("zeta".to_owned(), 2.0), ("alpha".to_owned(), 1.0)],
+            &[],
             17,
             Some(9),
         )
@@ -4740,7 +5361,7 @@ mod live_solver_snapshot_tests {
         assert_eq!(plan.snapshot.parameters.rtol, LIVE_TOL);
         assert_eq!(plan.snapshot.parameters.h0, Some(LIVE_MICRO_DT));
         assert_eq!(plan.snapshot.parameters.t_start, 0.0);
-        assert_eq!(plan.snapshot.parameters.t_end, f64::from(u32::MAX));
+        assert_eq!(plan.snapshot.parameters.t_end, LIVE_MICRO_DT);
         assert_eq!(
             plan.snapshot.parameter_overrides,
             vec![("alpha".to_owned(), 1.0), ("zeta".to_owned(), 2.0)]
@@ -4753,3 +5374,49 @@ mod live_solver_snapshot_tests {
 }
 
 // ===========================================================================
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod checked_step_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_worker_inputs_return_diagnostics_without_advancing() {
+        let source = "model Probe input Real admitted=1; output Real observed; equation observed=admitted; end Probe;";
+        let compiled = ModelicaCompiler::new()
+            .compile_str("Probe", source, "Probe.mo")
+            .unwrap();
+        for (name, value) in [("unadmitted", 99.0), ("admitted", f64::NAN)] {
+            let plan = live_build_plan(
+                solver::RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
+                &[],
+                &[("admitted".into(), 1.0)],
+                0,
+                Some(0),
+            )
+            .unwrap();
+            let component =
+                rumoca_sim::prepare_fmi_component(&compiled.dae, &plan.options).unwrap();
+            let mut stepper = lunco_modelica_solver::simulation_session::live_from_fmi_component(
+                &component,
+                &plan.spec,
+                plan.options,
+            )
+            .unwrap();
+            let error = advance_checked_step(
+                &mut stepper,
+                &[(name.to_owned(), value)],
+                LIVE_MICRO_DT,
+                LIVE_MICRO_DT,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().to_ascii_lowercase().contains("input"),
+                "{error}"
+            );
+            assert_eq!(stepper.time(), 0.0);
+        }
+    }
+}

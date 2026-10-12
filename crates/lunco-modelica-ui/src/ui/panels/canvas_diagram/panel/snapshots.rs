@@ -2,7 +2,7 @@
 
 use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_workbench_core::PanelCtx;
 
 /// Publish the active diagram's namespace into the canvas snapshot. This is
@@ -25,50 +25,6 @@ fn project_target_unit_scope(
         .collect();
     for (name, value) in scoped {
         values.insert(name, value);
-    }
-}
-
-/// Resolve the `(min, max)` attributes of an input `member` on a
-/// component of type `ty`, by building (once, cached) a `ModelicaIndex`
-/// over the bundled package `pkg`'s source. This recovers real input
-/// bounds (e.g. `Valve.opening` → 0..100) for a standalone `within P;`
-/// duplicate whose own index can't see the package's class internals —
-/// without it the on-canvas input slider has no range to anchor to and
-/// falls back to a value-derived range that the user's drag can run away.
-/// Cached per package; bundled
-/// sources are immutable so the index is parsed at most once per session.
-fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Option<f64>) {
-    thread_local! {
-        static CACHE: std::cell::RefCell<
-            std::collections::HashMap<String, std::rc::Rc<lunco_modelica_index::index::ModelicaIndex>>,
-        > = std::cell::RefCell::new(std::collections::HashMap::new());
-    }
-    let idx = CACHE.with(|c| {
-        if let Some(i) = c.borrow().get(pkg) {
-            return Some(i.clone());
-        }
-        let src = crate::ui::class_source::bundled_source_for(pkg)?;
-        let ast = lunco_modelica_ast::parse_to_ast(&src, "input-bounds.mo").ok()?;
-        let mut index = lunco_modelica_index::index::ModelicaIndex::new();
-        index.rebuild_with_errors(&ast, &src, false);
-        let rc = std::rc::Rc::new(index);
-        c.borrow_mut().insert(pkg.to_string(), rc.clone());
-        Some(rc)
-    });
-    let Some(idx) = idx else { return (None, None) };
-    // Match by member name AND owning class (exact or qualified suffix) so
-    // a member name shared across classes (e.g. `availability`) resolves to
-    // the right one.
-    let entry = idx
-        .components
-        .iter()
-        .find(|e| e.name == member && (e.class == ty || e.class.ends_with(&format!(".{ty}"))));
-    match entry {
-        Some(e) => (
-            e.modifications.get("min").and_then(|s| s.parse().ok()),
-            e.modifications.get("max").and_then(|s| s.parse().ok()),
-        ),
-        None => (None, None),
     }
 }
 
@@ -144,13 +100,19 @@ pub(crate) fn stash_snapshots(
         }
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
+                let Some(variables) = ctx.get::<ModelicaVariables>(entity) else {
+                    bevy::log::warn_once!(
+                        "Modelica canvas snapshot unavailable: participant {entity:?} has no required variable state"
+                    );
+                    return;
+                };
                 for (k, v) in &model.parameters {
                     state.values.insert(k.to_string(), *v);
                 }
                 for (k, v) in &model.inputs {
                     state.values.insert(k.to_string(), *v);
                 }
-                for (k, v) in &model.variables {
+                for (k, v) in &variables.values {
                     state.values.insert(k.to_string(), *v);
                 }
                 project_target_unit_scope(&mut state.values, target_unit_instance);
@@ -179,42 +141,13 @@ pub(crate) fn stash_snapshots(
             lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
-                let host = ctx
-                    .resource::<ModelicaDocuments>()
-                    .and_then(|r| r.host(model.document));
-                let index_ref = host.map(|h| h.document().index());
-                // A standalone `within P;` duplicate's own index can't see
-                // the sibling component classes (`Valve` etc.), so an input
-                // like an unbounded input has no min/max → the slider falls back
-                // to a value-derived range that runs away. Recover the real
-                // bounds (0..100) from the bundled package P.
-                let within_pkg = host.and_then(|h| {
-                    lunco_modelica_ast::ast_extract::within_package_of_source(h.document().source())
-                });
                 for (qualified, value) in &model.inputs {
-                    let (mut mn, mut mx) = index_ref
-                        .and_then(|idx| idx.find_component_by_leaf(qualified))
-                        .map(|entry| {
-                            (
-                                entry.modifications.get("min").and_then(|s| s.parse().ok()),
-                                entry.modifications.get("max").and_then(|s| s.parse().ok()),
-                            )
-                        })
-                        .unwrap_or((None, None));
-                    if mn.is_none() && mx.is_none() {
-                        if let (Some(pkg), Some((inst, member))) =
-                            (within_pkg.as_deref(), qualified.split_once('.'))
-                        {
-                            if let Some(ty) = index_ref
-                                .and_then(|idx| idx.find_component_by_leaf(inst))
-                                .map(|e| e.type_name.clone())
-                            {
-                                let (bmn, bmx) = bundled_member_bounds(pkg, &ty, member);
-                                mn = bmn;
-                                mx = bmx;
-                            }
-                        }
-                    }
+                    let metadata = model
+                        .variable_metadata
+                        .as_ref()
+                        .and_then(|facts| facts.get(qualified));
+                    let mn = metadata.and_then(|facts| facts.minimum);
+                    let mx = metadata.and_then(|facts| facts.maximum);
                     control_snapshot
                         .inputs
                         .insert(qualified.to_string(), (*value, mn, mx));

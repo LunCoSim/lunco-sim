@@ -3,34 +3,14 @@
 //!
 //! See `docs/architecture/25-experiments.md` for the design.
 //!
-//! ## Parameter / input injection
-//!
-//! Inputs and parameter overrides are applied at the **DAE level** by
-//! rebinding each target variable's `start` after a single clean compile
-//! (see [`apply_value_bindings_to_dae`]) — the authored source is never
-//! mutated for an individual run. One compile is shared across a whole
-//! sweep. A target that is neither a top-level DAE parameter nor input
-//! (or a non-scalar value) is a hard error rather than a silent re-compile.
-//!
-//! - Fast Runs use the configured bounded scheduler on native and wasm.
-//!
-//! ## Compile-once parameter sweeps
-//! Overrides are applied at the *DAE* level, not by reflattening per run.
-//! `run_inner` compiles the source ONCE, caches the resulting `Dae` keyed by
-//! a hash of the model source (`dae_cache`; see [`dae_cache_key`]), and for
-//! each sweep point rebinds the target variables' `start` to literals via
-//! [`apply_value_bindings_to_dae`]. This relies on rumoca's
-//! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
-//! derived parameters symbolic so they recompute at `SimulationSession::new`.
-//! Invalid binding targets or non-scalar values produce a terminal run error.
+//! Run values enter `SimOptions::param_overrides` and `initial_inputs` at
+//! simulation preparation. The checked compiled DAE remains immutable and
+//! shared across parameter sweeps. Rumoca validates targets, recomputes
+//! parameter dependents, and initializes the model with the admitted inputs.
 
 #[cfg(target_arch = "wasm32")]
 use lunco_core_runtime::LockExt;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-#[cfg(not(target_arch = "wasm32"))]
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,12 +22,6 @@ use lunco_experiments::{
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
 use rumoca_compile::compile::Dae;
-// Used by `apply_value_bindings_to_dae` on both platforms: native and wasm
-// inject run values at the DAE level.
-use rumoca_compile::parsing::ir_core::{
-    Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
-};
-
 /// Immutable Modelica source and runtime owner supplied at run admission.
 #[derive(Clone, Debug)]
 pub struct ModelSource {
@@ -93,7 +67,7 @@ struct QueuedJob {
     cancel: Arc<AtomicBool>,
 }
 
-/// Native + wasm-shared scheduling and compiled snapshot cache.
+/// Native and browser run admission and bounded scheduling.
 struct RunnerState {
     /// Max concurrently-executing runs. `run_fast` starts a run
     /// immediately while `in_flight.len() < max_parallel`, else queues it.
@@ -104,74 +78,22 @@ struct RunnerState {
     /// FIFO of runs waiting for a slot. Drained by `pump_scheduler` as
     /// in-flight runs finish.
     pending: VecDeque<QueuedJob>,
-    /// Source content and runtime owner identify reusable compiled snapshots.
     #[cfg(not(target_arch = "wasm32"))]
-    dae_cache: HashMap<u64, CachedDae>,
-    /// Persistent compiler reused across runs, so source library installs **once** for
-    /// the runner (on first source-root admission via `ModelicaCompiler`) instead of
-    /// rebuilding a fresh session per run. Behind its **own** lock, not the
-    /// `state` mutex: a compile can take seconds, and holding `state` across
-    /// it would stall the scheduler and every parallel run (which only need
-    /// `state` briefly for cache lookups). Native only — the web build
-    /// compiles on the worker, so the runner never constructs one. See
-    /// [`run_inner`].
-    #[cfg(not(target_arch = "wasm32"))]
-    compiler: Arc<Mutex<lunco_modelica_compiler::ModelicaCompiler>>,
+    compile_tx: Sender<lunco_modelica_runtime::ModelicaCommand>,
 }
 
-/// Source identity whose newer compiled revision replaces an older cache entry.
-#[cfg(not(target_arch = "wasm32"))]
-type ModelIdent = (String, String);
-
-#[cfg(not(target_arch = "wasm32"))]
-struct CachedDae {
-    model: ModelIdent,
-    runtime: lunco_workspace::DocumentRuntimeOwner,
-    dae: Arc<Dae>,
-    source_content: lunco_experiments::SourceContentIdentity,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_cached_dae(
-    state: &mut RunnerState,
-    source: &ModelSource,
-    key: u64,
-    dae: Arc<Dae>,
-    cancel: &AtomicBool,
-    source_content: lunco_experiments::SourceContentIdentity,
-) {
-    // Called under the state lock: owner retirement sets cancellation before
-    // taking the same lock, so closed work cannot repopulate its cache.
-    if cancel.load(Ordering::SeqCst) {
-        return;
-    }
-    let model = (source.model_name.clone(), source.filename.clone());
-    state
-        .dae_cache
-        .retain(|_, entry| entry.model != model || entry.runtime != source.runtime);
-    state.dae_cache.insert(
-        key,
-        CachedDae {
-            model,
-            runtime: source.runtime.clone(),
-            dae,
-            source_content,
-        },
-    );
-}
-
-impl Default for RunnerState {
-    fn default() -> Self {
+impl RunnerState {
+    fn new(
+        #[cfg(not(target_arch = "wasm32"))] compile_tx: Sender<
+            lunco_modelica_runtime::ModelicaCommand,
+        >,
+    ) -> Self {
         Self {
             max_parallel: ExperimentSettings::default().resolved_max_parallel(),
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            dae_cache: HashMap::new(),
-            // Cheap: `new()` builds an empty session and installs no source library
-            // (Layer A). source library lands on the first run that actually needs it.
-            #[cfg(not(target_arch = "wasm32"))]
-            compiler: Arc::new(Mutex::new(lunco_modelica_compiler::ModelicaCompiler::new())),
+            compile_tx,
         }
     }
 }
@@ -191,7 +113,6 @@ fn lock_runner_state(
                 job.cancel.store(true, Ordering::SeqCst);
                 let _ = job.tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
             Err(())
@@ -207,6 +128,7 @@ pub struct ModelicaRunner {
     state: Arc<Mutex<RunnerState>>,
 }
 
+#[cfg(target_arch = "wasm32")]
 impl Default for ModelicaRunner {
     fn default() -> Self {
         Self::new()
@@ -214,9 +136,16 @@ impl Default for ModelicaRunner {
 }
 
 impl ModelicaRunner {
-    pub fn new() -> Self {
+    pub fn new(
+        #[cfg(not(target_arch = "wasm32"))] compile_tx: Sender<
+            lunco_modelica_runtime::ModelicaCommand,
+        >,
+    ) -> Self {
         Self {
-            state: Arc::new(Mutex::new(RunnerState::default())),
+            state: Arc::new(Mutex::new(RunnerState::new(
+                #[cfg(not(target_arch = "wasm32"))]
+                compile_tx,
+            ))),
         }
     }
 
@@ -236,18 +165,6 @@ impl ModelicaRunner {
     /// Current max-parallel cap.
     pub fn max_parallel(&self) -> usize {
         self.state.lock().map(|s| s.max_parallel).unwrap_or(1)
-    }
-
-    /// Release this runtime owner's compiled snapshots after its runs cancel.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn retire_runtime_cache(
-        &self,
-        owner: &lunco_workspace::DocumentRuntimeOwner,
-    ) -> Result<(), String> {
-        let mut state =
-            lock_runner_state(&self.state).map_err(|_| POISONED_RUNNER_STATE.to_owned())?;
-        state.dae_cache.retain(|_, entry| &entry.runtime != owner);
-        Ok(())
     }
 
     /// `true` when no scheduler slot is free — i.e. starting another run
@@ -308,7 +225,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = source.result_limits.validate() {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -320,7 +236,6 @@ impl ExperimentRunner for ModelicaRunner {
         if let Err(error) = lunco_modelica_core::sim_target::validate_run_bounds(&exp.bounds) {
             let _ = tx.send(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return RunHandle {
                 run_id,
@@ -346,7 +261,6 @@ impl ExperimentRunner for ModelicaRunner {
             Err(()) => {
                 let _ = tx.send(RunUpdate::Failed {
                     error: POISONED_RUNNER_STATE.to_owned(),
-                    partial: None,
                 });
             }
         }
@@ -492,14 +406,12 @@ fn start_native_job(
                     .unwrap_or("non-string panic payload");
                 let _ = tx.send(RunUpdate::Failed {
                     error: format!("experiment worker panicked: {detail}"),
-                    partial: None,
                 });
             }
         });
     if let Err(error) = spawned {
         let _ = failure_tx.send(RunUpdate::Failed {
             error: format!("experiment worker could not start: {error}"),
-            partial: None,
         });
         // The scheduler pump that admitted this job continues after return.
         release_run_slot(&state, run_id);
@@ -534,7 +446,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     // finished. `drain_pending_handles` maps this `Progress` to `Running`.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
     let src = source;
     // Forward worker updates into the handle's tx; the forwarder frees the
@@ -542,7 +453,6 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     let Some(transport) = crate::worker_run_transport() else {
         let _ = tx.send(RunUpdate::Failed {
             error: "Modelica worker run transport is not installed".to_string(),
-            partial: None,
         });
         finish_run(&state, run_id);
         return;
@@ -640,77 +550,28 @@ pub fn pump_wasm_forwarders() {
     }
 }
 
-/// Body of the run thread. Compiles, runs the simulation, posts
-/// updates. All errors funnel into `RunUpdate::Failed`. Cancellation
-/// observed between steps via the shared `AtomicBool`.
-/// Key for the compile-once DAE cache. Folds in model identity, the model
-/// **source body**, and extra sources — but NOT overrides (those are applied to
-/// the cached DAE), so a sweep that varies only overrides hits one cache entry.
-///
-/// CQ-525: the source body MUST be hashed in. Without it, editing a model's
-/// body while keeping its name/filename produced an identical key, serving a
-/// stale DAE; correctness then leaned entirely on the external whole-cache
-/// clear. (The old `after_inputs` param was always `""` — inputs are bound at
-/// the DAE level, not baked into source — so it contributed nothing and is
-/// dropped.)
-#[cfg(not(target_arch = "wasm32"))]
-fn dae_cache_key(src: &ModelSource) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.runtime.hash(&mut h);
-    src.model_name.hash(&mut h);
-    src.filename.hash(&mut h);
-    src.source.hash(&mut h);
-    for (name, body) in &src.extras {
-        name.hash(&mut h);
-        body.hash(&mut h);
-    }
-    h.finish()
-}
-
-/// Apply value bindings — both parameter overrides AND experiment input
-/// values — directly to a compiled DAE by rebinding each target variable's
-/// `start` to a literal. This is THE single place run values are injected;
-/// the authored source remains unchanged. Both the native runner and the wasm
-/// worker call it, so the two platforms inject identically.
-///
-/// A target is looked up first among DAE `parameters`, then `inputs`:
-/// - **Parameters** rely on rumoca's `preserve_overridable_param_starts` fold
-///   keeping computed dependents symbolic, so overriding a base (e.g. `Isp`)
-///   recomputes its dependents (e.g. `massRatio`) at `SimulationSession::new` via
-///   `build_params`.
-/// - **Inputs**: the build seeds each input's initial value from its `start`
-///   once (the batch solver never calls `set_input`), so rebinding `start`
-///   here pins the input to a constant for the run — the DAE-level analog of
-///   the DAE-level equivalent of pinning an input for a batch run, with no
-///   source mutation or second compile required.
-///
-/// Returns `Err` when a target is neither a parameter nor an input, or the
-/// value isn't a scalar literal — a hard error so the run cannot diverge from
-/// the compiled source contract.
-pub fn apply_value_bindings_to_dae(
-    dae: &mut Dae,
-    bindings: &BTreeMap<ParamPath, ParamValue>,
+/// Admit finite scalar run values through Rumoca's parameter and input options.
+pub fn apply_run_values(
+    options: &mut rumoca_sim::SimOptions,
+    inputs: &BTreeMap<ParamPath, ParamValue>,
+    overrides: &BTreeMap<ParamPath, ParamValue>,
 ) -> Result<(), String> {
-    for (path, value) in bindings {
-        let key = DaeVarName::new(path.0.clone());
-        let var = dae
-            .variables
-            .parameters
-            .get_mut(&key)
-            .or_else(|| dae.variables.inputs.get_mut(&key))
-            .ok_or_else(|| format!("'{}' is not a top-level DAE parameter or input", path.0))?;
-        let lit = match value {
-            ParamValue::Real(x) => DaeLiteral::Real(*x),
-            ParamValue::Int(x) => DaeLiteral::Integer(*x),
-            ParamValue::Bool(b) => DaeLiteral::Boolean(*b),
-            ParamValue::String(s) => DaeLiteral::String(s.clone()),
-            _ => return Err(format!("binding for '{}' is not a scalar literal", path.0)),
-        };
-        var.start = Some(DaeExpression::Literal {
-            value: lit,
-            span: DaeSpan::DUMMY,
-        });
+    fn numeric(values: &BTreeMap<ParamPath, ParamValue>) -> Result<Vec<(String, f64)>, String> {
+        values.iter().map(|(path, value)| {
+            let value = match value {
+                ParamValue::Real(value) => *value,
+                ParamValue::Int(value) if value.unsigned_abs() <= (1_u64 << 53) => *value as f64,
+                ParamValue::Bool(value) => f64::from(*value),
+                _ => return Err(format!("binding for '{}' requires a finite numeric or Boolean scalar representable exactly as f64", path.0)),
+            };
+            if !value.is_finite() { return Err(format!("binding for '{}' must be finite", path.0)); }
+            Ok((path.0.clone(), value))
+        }).collect()
     }
+    let inputs = numeric(inputs)?;
+    let overrides = numeric(overrides)?;
+    options.initial_inputs = inputs;
+    options.param_overrides = overrides;
     Ok(())
 }
 
@@ -724,7 +585,7 @@ fn run_inner(
     cancel: Arc<AtomicBool>,
     tx: Sender<RunUpdate>,
 ) {
-    let _cancellation = rumoca_solver::SolverCancellationGuard::install(cancel.clone());
+    let _cancellation = rumoca_eval_solve::EvaluationCancellationGuard::install(cancel.clone());
     let t_wall = web_time::Instant::now();
 
     if cancel.load(Ordering::SeqCst) {
@@ -733,140 +594,71 @@ fn run_inner(
     }
 
     // Announce that this job has left the queue and is now executing. The
-    // batch path is one blocking `simulate_solve_model` call that emits
+    // batch path is one blocking `simulate_fmi_component` call that emits
     // no mid-solve `Progress`, so without this the registry status would sit
     // at `Queued` (set at dispatch) for the entire compile + solve and only
     // flip straight to `Done` — making a long-grinding run look stuck in a
     // queue. `drain_pending_handles` maps any `Progress` to
     // `RunStatus::Running`, so this single emit flips the label to "Running"
-    // the moment the worker thread picks the job up (covering compile time
-    // too, not just the solve). Interactive runs additionally stream their
-    // own per-step `Progress` with the real `t_current`.
+    // the moment the worker thread picks the job up, including compile time.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
-        delta: None,
     });
 
-    // Persistent runner compiler: clone the handle out of `state` (brief
-    // lock), then compile under the compiler's OWN lock so the multi-second
-    // compile never holds `state` and stall the scheduler / parallel runs.
-    // source library installs once into this session (lazily) instead of per run.
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
-    let compiler_handle = match lock_runner_state(&state) {
-        Ok(s) => s.compiler.clone(),
+    let compile_tx = match lock_runner_state(&state) {
+        Ok(state) => state.compile_tx.clone(),
         Err(_) => {
             let _ = tx.send(RunUpdate::Failed {
-                error: "runner state poisoned".to_string(),
-                partial: None,
+                error: POISONED_RUNNER_STATE.to_owned(),
             });
             return;
         }
     };
-
-    // Compile-once: compile the CLEAN model source (no inputs/overrides baked
-    // in) a single time and cache the resulting DAE. Inputs and overrides are
-    // applied to the DAE afterwards (see `apply_value_bindings_to_dae`), so a
-    // whole parameter/input sweep shares ONE compile and recompiles zero times.
-    let key = dae_cache_key(&source);
-    let cached = state.lock().ok().and_then(|s| {
-        s.dae_cache
-            .get(&key)
-            .map(|entry| (entry.dae.clone(), entry.source_content.clone()))
-    });
-    let (base_dae, source_content) = match cached {
-        Some(d) => d,
-        None => {
-            let compiled = {
-                let mut compiler = match compiler_handle.lock() {
-                    Ok(compiler) => compiler,
-                    Err(_) => {
-                        let _ = tx.send(RunUpdate::Failed {
-                            error: "experiment compiler is poisoned after an earlier panic"
-                                .to_owned(),
-                            partial: None,
-                        });
-                        return;
-                    }
-                };
-                if cancel.load(Ordering::SeqCst) {
-                    let _ = tx.send(RunUpdate::Cancelled);
-                    return;
-                }
-                let result = compiler.compile_str_multi(
-                    &source.model_name,
-                    &source.source,
-                    &source.filename,
-                    &source.extras,
-                );
-                let identity = result
-                    .as_ref()
-                    .map_err(|error| error.clone())
-                    .and_then(|compiled| {
-                        compiler.compiled_source_content_identity(compiled, str::to_owned)
-                    })
-                    .map(|cid| lunco_experiments::SourceContentIdentity::Available { cid })
-                    .unwrap_or_else(|reason| {
-                        lunco_experiments::SourceContentIdentity::Unavailable { reason }
-                    });
-                compiler.clear_user_documents();
-                (result, identity)
-            };
-            let (compiled, identity) = compiled;
-            match compiled {
-                Ok(d) => {
-                    let dae = d.dae.clone();
-                    if let Ok(mut s) = lock_runner_state(&state) {
-                        publish_cached_dae(
-                            &mut s,
-                            &source,
-                            key,
-                            dae.clone(),
-                            &cancel,
-                            identity.clone(),
-                        );
-                    }
-                    (dae, identity)
-                }
-                Err(e) => {
-                    let _ = tx.send(RunUpdate::Failed {
-                        error: format!("compile failed: {e}"),
-                        partial: None,
-                    });
-                    return;
-                }
+    let (reply, compiled_rx) = crossbeam_channel::bounded(1);
+    if compile_tx
+        .send(lunco_modelica_runtime::ModelicaCommand::CompileBatch {
+            model_name: source.model_name.clone(),
+            source: source.source.clone(),
+            doc_uri: source.filename.clone(),
+            extra_sources: source.extras.clone(),
+            cancel: cancel.clone(),
+            reply,
+        })
+        .is_err()
+    {
+        let _ = tx.send(RunUpdate::Failed {
+            error: "Modelica compiler worker is unavailable".to_owned(),
+        });
+        return;
+    }
+    // Only this background run thread waits. The shared owner admits the request
+    // after source-root commits; cancellation releases its scheduler slot promptly.
+    let artifact = loop {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = tx.send(RunUpdate::Cancelled);
+            return;
+        }
+        match compiled_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(Ok(artifact)) => break artifact,
+            Ok(Err(error)) => {
+                let _ = tx.send(RunUpdate::Failed {
+                    error: format!("compile failed: {error}"),
+                });
+                return;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                let _ = tx.send(RunUpdate::Failed {
+                    error: "Modelica batch compilation reply disconnected".to_owned(),
+                });
+                return;
             }
         }
     };
-
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
-
-    // Merge inputs + overrides into one binding set and apply at the DAE level
-    // — the SINGLE injection path, no source rewriting. Inputs and parameter
-    // overrides are the same operation (pin a top-level variable to a value),
-    // so they share `apply_value_bindings_to_dae`. An empty set reuses the
-    // cached base DAE untouched.
-    let mut bindings = inputs;
-    bindings.extend(overrides);
-    let run_dae: Arc<Dae> = if bindings.is_empty() {
-        base_dae
-    } else {
-        let mut d = (*base_dae).clone();
-        if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("parameter/input binding failed: {reason}"),
-                partial: None,
-            });
-            return;
-        }
-        Arc::new(d)
+    let base_dae = artifact.dae;
+    let source_content = lunco_experiments::SourceContentIdentity::Available {
+        cid: artifact.source_content,
     };
-
     if cancel.load(Ordering::SeqCst) {
         let _ = tx.send(RunUpdate::Cancelled);
         return;
@@ -882,30 +674,24 @@ fn run_inner(
         cancel,
         source_content,
     };
-    drive_run(&run_dae, &bounds, source.result_limits, t_wall, &mut sink);
+    drive_run(
+        &base_dae,
+        &bounds,
+        &inputs,
+        &overrides,
+        source.result_limits,
+        t_wall,
+        &mut sink,
+    );
 }
 
-/// THE single simulation entry point, shared by the native runner
-/// ([`run_inner`]) and the wasm worker (`lunica_worker::run_fast_in_worker`).
-///
-/// Branches on [`RunBounds::runtime`](lunco_experiments::RunBounds::runtime):
-///   * [`Batch`](lunco_experiments::RuntimeMode::Batch) (default) — the
-///     dense-output [`run_batch_sim`] solve. The solver free-steps with its
-///     own adaptive step and output is dense-interpolated, so the solver step
-///     is decoupled from the output `dt`. This is why stiff long-horizon
-///     models (the lunar rover thermal system, the orbital-datacenter eclipse
-///     switch) complete here, where the interactive stepper — bounded by the
-///     output `dt` — collapses (`BDF step: step size too small at t=0`) unless
-///     `dt` is driven down to a few thousand seconds.
-///   * [`Interactive`](lunco_experiments::RuntimeMode::Interactive) — the live
-///     [`run_stepping_loop`], for streamable / steerable runs.
-///
-/// Keeping this one function (rather than each platform open-coding the match)
-/// is what guarantees the worker can't fall back to a stepper-only path again:
-/// the divergence that made stiff models run natively but fail in the browser.
+/// Shared native and Web Worker simulation entry point over Rumoca's checked
+/// batch solver, admitted output grid, run values, and retained-output budget.
 pub fn drive_run(
     dae: &Dae,
     bounds: &RunBounds,
+    inputs: &BTreeMap<ParamPath, ParamValue>,
+    overrides: &BTreeMap<ParamPath, ParamValue>,
     limits: lunco_experiments::RunResultLimits,
     started: web_time::Instant,
     sink: &mut impl RunSink,
@@ -923,10 +709,7 @@ pub fn drive_run(
         }) {
         Ok(budget) => budget,
         Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error,
-                partial: None,
-            });
+            sink.emit(RunUpdate::Failed { error });
             return;
         }
     };
@@ -936,7 +719,6 @@ pub fn drive_run(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
@@ -944,65 +726,57 @@ pub fn drive_run(
     // Solver options (tolerance / family / initial step) — the SINGLE source
     // (`stepper_options_from_bounds`) both runtimes derive from. An incapable
     // authored solver fails the run here rather than per-step later.
-    let stepper_opts = match stepper_options_from_bounds(bounds) {
+    let mut stepper_opts = match stepper_options_from_bounds(bounds) {
         Ok(opts) => opts,
         Err(err) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("run configuration failed: {err}"),
-                partial: None,
             });
             return;
         }
     };
-    match bounds.runtime {
-        lunco_experiments::RuntimeMode::Batch => {
-            // The batch solver reads its output grid from `opts.dt` (one column
-            // per `dt` step). `stepper_options_from_bounds` leaves `opts.dt` as
-            // the *initial step* (`h0`) for the interactive path; for batch we
-            // instead resolve the requested output spacing — from either the
-            // `Interval` (`dt`) or the `NumberOfIntervals` (`n_intervals`) knob
-            // — so the run honours whichever the user chose. The solver
-            // free-steps regardless, so a coarse output grid doesn't constrain
-            // it (and `run_batch_sim` decimates the event-flooded result back
-            // to that grid).
-            let mut batch_opts = stepper_opts;
-            batch_opts.dt = Some(output_dt);
-            bevy::log::info!(
-                "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
-                bounds.t_start,
-                bounds.t_end,
-                output_dt,
-                bounds.dt,
-                bounds.n_intervals
-            );
-            run_batch_sim(dae, &batch_opts, output_budget, started, sink);
-        }
-        lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper =
-                match lunco_modelica_solver::simulation_session::interactive(dae, stepper_opts) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        sink.emit(RunUpdate::Failed {
-                            error: format!("stepper init failed: {e:?}"),
-                            partial: None,
-                        });
-                        return;
-                    }
-                };
-            bevy::log::info!(
-                "[runner] simulate begin (interactive): t={}..{} dt={:?}",
-                bounds.t_start,
-                bounds.t_end,
-                bounds.dt
-            );
-            run_stepping_loop(&mut stepper, bounds, limits, started, sink);
-        }
+    if let Err(error) = apply_run_values(&mut stepper_opts, inputs, overrides) {
+        sink.emit(RunUpdate::Failed { error });
+        return;
     }
+    // The requested output grid is independent of the solver's internal step.
+    let mut batch_opts = stepper_opts;
+    batch_opts.dt = Some(output_dt);
+    bevy::log::info!(
+        "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
+        bounds.t_start,
+        bounds.t_end,
+        output_dt,
+        bounds.dt,
+        bounds.n_intervals
+    );
+    run_batch_sim(dae, &batch_opts, output_budget, started, sink);
+}
+
+/// Retain Rumoca's checked output facts under the experiment's series identity.
+fn series_metadata(
+    metadata: Vec<rumoca_solver::SimVariableMeta>,
+) -> std::sync::Arc<BTreeMap<String, lunco_experiments::SeriesMetadata>> {
+    std::sync::Arc::new(
+        metadata
+            .into_iter()
+            .filter(|fact| fact.name != "time")
+            .map(|fact| {
+                (
+                    fact.name,
+                    lunco_experiments::SeriesMetadata {
+                        unit: fact.unit,
+                        description: fact.description,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
-/// solver ([`rumoca_sim::simulate_solve_model`]) and emit the trajectory
-/// as a single [`RunUpdate::Completed`]. Unlike [`run_stepping_loop`], the
+/// solver ([`rumoca_sim::simulate_fmi_component`]) and emit the trajectory
+/// as a single [`RunUpdate::Completed`]. The
 /// solver owns its own adaptive time loop and the output samples are taken by
 /// dense interpolation, so the solver step size is independent of the output
 /// spacing — the robust path for stiff long-horizon runs.
@@ -1037,23 +811,21 @@ fn run_batch_sim(
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: error.to_string(),
-                partial: None,
             });
             return;
         }
     };
-    let model = match rumoca_sim::lower_for_simulation_with_overrides(dae, opts) {
+    let model = match rumoca_sim::prepare_fmi_component(dae, opts) {
         Ok(model) => model,
         Err(error) => {
             sink.emit(RunUpdate::Failed {
                 error: format!("solve lowering failed: {error}"),
-                partial: None,
             });
             return;
         }
     };
     let admission = budget
-        .sample_capacity(model.visible_names.len())
+        .sample_capacity(model.runtime_view().model().visible_names.len())
         .and_then(|capacity| {
             rumoca_solver::timeline::output_sample_count(
                 opts.t_start,
@@ -1065,11 +837,10 @@ fn run_batch_sim(
     if let Err(error) = admission {
         sink.emit(RunUpdate::Failed {
             error: error.to_string(),
-            partial: None,
         });
         return;
     }
-    let result = match rumoca_sim::simulate_solve_model(&model, opts) {
+    let result = match rumoca_sim::simulate_fmi_component(model, opts) {
         Ok(r) => r,
         Err(e) => {
             if sink.is_cancelled() {
@@ -1078,7 +849,6 @@ fn run_batch_sim(
             }
             sink.emit(RunUpdate::Failed {
                 error: format!("simulate failed: {e}"),
-                partial: None,
             });
             return;
         }
@@ -1089,70 +859,52 @@ fn run_batch_sim(
         return;
     }
 
-    // The batch solver records the requested grid plus root/event crossings.
-    // Every sample has already passed the recorder budget. Select the nearest
-    // available sample per requested grid point before storing or sending the
-    // trajectory; smooth exact-grid results retain all their samples.
-    let keep = match batch_keep_indices(&result.times, opts.t_start, opts.t_end, output_dt) {
-        Ok(keep) => keep,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error: error.to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
-    let raw_samples = result.times.len();
-    let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
-        Some(idx) => (
-            idx.iter().map(|&i| result.times[i]).collect(),
-            Some(idx.clone()),
-        ),
-        None => (result.times.clone(), None),
-    };
-
+    if result.data.len() != result.names.len()
+        || result
+            .data
+            .iter()
+            .any(|column| column.len() != result.times.len())
+    {
+        sink.emit(RunUpdate::Failed {
+            error: "solver trajectory columns do not match their names and time vector".into(),
+        });
+        return;
+    }
+    let variable_metadata = series_metadata(result.variable_meta);
+    if result
+        .names
+        .iter()
+        .filter(|name| name.as_str() != "time")
+        .any(|name| !variable_metadata.contains_key(name))
+    {
+        sink.emit(RunUpdate::Failed {
+            error: "solver trajectory has a series without checked metadata".into(),
+        });
+        return;
+    }
     // SimResult stores one column per visible variable (`data[var][t]`),
     // mirroring the `RunResult` series map keyed by variable name. Drop the
     // synthetic `time` column — `times` carries it.
     let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for (i, name) in result.names.iter().enumerate() {
+    for (name, column) in result.names.into_iter().zip(result.data) {
         if name == "time" {
             continue;
         }
-        let full = result.data.get(i);
-        let column: Vec<f64> = match (&gather, full) {
-            (Some(idx), Some(col)) => idx
-                .iter()
-                .map(|&j| col.get(j).copied().unwrap_or(f64::NAN))
-                .collect(),
-            (None, Some(col)) => col.clone(),
-            (_, None) => Vec::new(),
-        };
-        series.insert(name.clone(), column);
+        series.insert(name, column);
     }
 
-    let n_samples = kept_times.len();
-    if keep.is_some() {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples (decimated from {} solver/event samples), {} vars, {:.2}s wall",
-            n_samples,
-            raw_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    } else {
-        bevy::log::info!(
-            "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
-            n_samples,
-            series.len(),
-            started.elapsed().as_secs_f64(),
-        );
-    }
+    let n_samples = result.times.len();
+    bevy::log::info!(
+        "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
+        n_samples,
+        series.len(),
+        started.elapsed().as_secs_f64(),
+    );
     sink.emit(RunUpdate::Completed(RunResult {
-        times: kept_times,
+        times: result.times,
         series,
         meta: RunMeta {
+            variable_metadata,
             wall_time_ms: started.elapsed().as_millis() as u64,
             sample_count: n_samples,
             notes: None,
@@ -1161,76 +913,10 @@ fn run_batch_sim(
     }));
 }
 
-/// Pick the sample indices to keep so a batch trajectory matches the requested
-/// output grid. rumoca emits the `opts.dt` grid PLUS an extra sample at every
-/// event/root crossing; for chattering models that's millions of points. For
-/// each grid time `t_start + k·dt` we keep the trajectory sample whose time is
-/// nearest (advancing a single monotonic cursor — O(n)), always keeping the
-/// first and last sample. Invalid grids are rejected before integer conversion
-/// or allocation. Returns `None` when the trajectory is at/under the grid size (the
-/// well-behaved smooth-model case — leave it byte-for-byte untouched).
-fn batch_keep_indices(
-    times: &[f64],
-    t_start: f64,
-    t_end: f64,
-    dt: f64,
-) -> Result<Option<Vec<usize>>, lunco_modelica_core::sim_target::RunBoundsError> {
-    let dt = lunco_modelica_core::sim_target::resolve_step_dt(t_start, t_end, Some(dt), None)?;
-    if times.len() < 2 {
-        return Ok(None);
-    }
-    let span = t_end - t_start;
-    // +1 for the inclusive endpoint; small slack so we never over-decimate a
-    // result that already sits on (or just above) the grid.
-    let grid_n = (span / dt).round() as usize + 1;
-    if times.len() <= grid_n.saturating_mul(2) {
-        return Ok(None);
-    }
-    let mut keep: Vec<usize> = Vec::with_capacity(grid_n + 1);
-    let mut cursor = 0usize;
-    let n = times.len();
-    for k in 0..=grid_n {
-        let target = t_start + (k as f64) * dt;
-        // Advance while the next sample is closer to `target` than the current.
-        while cursor + 1 < n && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
-        {
-            cursor += 1;
-        }
-        if keep.last() != Some(&cursor) {
-            keep.push(cursor);
-        }
-    }
-    // Guarantee the true final sample is present (events can land past the last
-    // grid node).
-    if keep.last() != Some(&(n - 1)) {
-        keep.push(n - 1);
-    }
-    Ok(Some(keep))
-}
-
-/// Cancellation + update sink for a stepping run. This is the ONE seam
-/// between the native runner and the wasm worker: both share
-/// [`run_stepping_loop`] and differ only in these two methods (native =
-/// crossbeam channel + `AtomicBool`; worker = `postMessage` + cancel
-/// registry). Keeping the loop itself platform-agnostic is what stops the
-/// two from drifting — the divergence that let a stale `unwrap_or(0.01)`
-/// OOM-trap the browser while native was already fixed.
+/// Native and browser adapters for cancellation and typed experiment updates.
 pub trait RunSink {
-    /// True if the run was cancelled; the loop emits `Cancelled` and stops.
     fn is_cancelled(&mut self) -> bool;
-    /// Deliver a run update (`Progress` / `Completed` / `Failed` / `Cancelled`).
     fn emit(&mut self, update: RunUpdate);
-    /// Optional wall-clock backstop. When `Some(d)`, a run still stepping
-    /// after `d` of wall time is aborted with a graceful `Failed` instead of
-    /// being allowed to run unbounded. Returns `None` by default (native
-    /// runs are unbounded); the wasm worker overrides it so a pathological
-    /// in-browser run can't hog its (off-thread) worker forever. Note this
-    /// fires only *between* solver steps — it can't interrupt a single
-    /// runaway `step()`; that case is contained by worker-crash recovery on
-    /// the main thread (`worker_transport`).
-    fn wall_budget(&self) -> Option<core::time::Duration> {
-        None
-    }
 }
 
 /// Native [`RunSink`]: crossbeam channel + shared atomic cancel flag.
@@ -1252,48 +938,8 @@ impl RunSink for ChannelSink {
     }
 }
 
-/// Build the solver [`SimOptions`](rumoca_sim::SimOptions) from [`RunBounds`].
-/// The SINGLE source of the tolerance / solver-family / initial-step defaults,
-/// shared by native and the wasm worker so they can't drift.
-///
-/// Defaults follow the Modelica convention, tuned for what works across the
-/// stiff multi-day horizons:
-///   * tolerance default = 1e-6 (the standard Modelica / OMC / Dymola default).
-///     The non-interactive batch runtime (the default) honours it on the stiff
-///     thermal models; per-run editable via the experiments Setup dialog.
-///   * solver default = BDF. (Earlier this was TR-BDF2, on the rationale that
-///     "BDF dies at the second sunrise louver crossing" — but that predates the
-///     rumoca solve-IR fix for connection flow-sum unknowns. With that fix BDF
-///     now completes the full multi-lunar-cycle horizon on the stiff thermal
-///     models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34) hit
-///     "nonlinear solver failures (50)" within the first lunar hour on the same
-///     models. BDF is the robust default again; the SDIRK tableaus stay opt-in.)
-///
-/// Background: docs/numeric-experiments/README.md § Known working solver configurations
-///
-/// The worker's live interactive sim (`lunco_modelica_worker::worker::build_stepper`) previously had
-/// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,
-/// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
-/// delegates here, collapsing that divergence: one tolerance default, one
-/// `atol`/`rtol` policy, one solver family across live + batch.
-/// Default solver tolerance when neither the run bounds nor the model's
-/// `experiment(Tolerance=…)` annotation supplies one. Applied to BOTH `atol`
-/// and `rtol` (scalar). This is the standard Modelica default (`1e-6`, the same
-/// value OMC/Dymola assume): with the non-interactive batch runtime as the
-/// default ([`RuntimeMode::Batch`](lunco_experiments::RuntimeMode::Batch)) the
-/// dense-output solver honours it across the stiff multi-cycle horizons (the
-/// lunar rover thermal system completes its full two-lunar-day run at `1e-6`),
-/// so there's no reason to loosen below the Modelica convention. It stays
-/// per-run editable through the experiments Setup dialog (`bounds.tolerance`).
-///
-/// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
-/// share this policy: an adaptive-implicit solver whose step sequence comes
-/// from per-machine error estimates must not run inside the client-predicted
-/// fixed-step loop. It has its own configuration in
-/// `lunco_modelica_worker::worker::live_stepper_options`
-/// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces
-/// are meant to differ here — see
-/// `docs/architecture/28-modelica-realtime-physics.md` §2a.
+/// Offline runs use the Modelica tolerance default unless bounds or annotations
+/// supply a value. Live prediction uses its separate fixed-step policy.
 pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
 /// Offline run configuration rejection from its bounds or solver owner.
@@ -1312,30 +958,8 @@ impl std::fmt::Display for RunConfigurationError {
     }
 }
 
-/// The ONE place `SimOptions` is built for an offline/batch run — the app, the
-/// wasm worker, `modelica_run` and `modelica_tester` all come through here
-/// rather than hand-rolling options, so a policy change lands everywhere at once.
-///
-/// Carrying `bounds.t_start/t_end` through is load-bearing on BOTH runtimes, and
-/// silently so:
-/// * the non-interactive batch solve (`simulate_solve_model`) integrates
-///   `opts.t_start..opts.t_end`. Left at the `SimOptions::default()` `0.0..1.0`,
-///   a run stops at t=1 with a fine output grid that pins the solver onto
-///   closely spaced stop-times and collapses ("step size too small") in the
-///   first second.
-/// * `SimulationSession` (rumoca ≥0.9.20) **clamps every `step`/`advance_to` at
-///   `opts.t_end`**. With the default horizon an interactive run parks at t=1s
-///   and quietly reports a frozen model instead of erroring — the failure mode
-///   that made a 60 s rocket burn drain exactly 1 s of propellant.
-///
-/// Both this and the live path resolve through `lunco_experiments::solver`, which
-/// is the point: two paths choosing independently is how a live model ends up on
-/// a family the batch path would have refused.
-///
-/// Fallible on purpose. A solver that cannot be resolved or built is reported to
-/// the caller, never swapped for one that happens to work: a run that silently
-/// used a different integrator than the one asked for produces numbers the user
-/// attributes to their choice.
+/// Resolve the registered offline solver and translate the admitted run bounds.
+/// Unknown or incapable solvers return a terminal configuration error.
 pub fn stepper_options_from_bounds(
     bounds: &RunBounds,
 ) -> Result<rumoca_sim::SimOptions, RunConfigurationError> {
@@ -1368,332 +992,6 @@ pub fn stepper_options_from_bounds(
         .map_err(RunConfigurationError::Solver)
 }
 
-/// Emit a `Failed` update carrying everything sampled so far as a partial
-/// result. The three ways a run dies mid-loop (wall-clock budget, a solver
-/// step error, an unreadable session state) all report the same shape.
-fn emit_partial_failure(
-    sink: &mut impl RunSink,
-    names: &[String],
-    all_times: &[f64],
-    all_series: &[Vec<f64>],
-    started: web_time::Instant,
-    error: String,
-    notes: String,
-) {
-    let series: BTreeMap<String, Vec<f64>> = names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| (name.clone(), all_series[i].clone()))
-        .collect();
-    sink.emit(RunUpdate::Failed {
-        error,
-        partial: Some(RunResult {
-            times: all_times.to_vec(),
-            series,
-            meta: RunMeta {
-                wall_time_ms: started.elapsed().as_millis() as u64,
-                sample_count: all_times.len(),
-                notes: Some(notes),
-                ..Default::default()
-            },
-        }),
-    });
-}
-
-/// Drive a built [`SimulationSession`](rumoca_sim::SimulationSession) to `bounds.t_end`,
-/// accumulating output samples at the spacing
-/// [`lunco_modelica_core::sim_target::resolve_step_dt`]
-/// derives, streaming throttled `Progress` deltas, and emitting the terminal
-/// `Completed` / `Failed` / `Cancelled` through `sink`.
-///
-/// This is the SINGLE stepping loop shared by every platform — native and the
-/// wasm worker each implement only [`RunSink`], never the loop. `started` is
-/// the run's wall-clock origin (used for `RunMeta::wall_time_ms`).
-pub fn run_stepping_loop(
-    stepper: &mut rumoca_sim::SimulationSession,
-    bounds: &RunBounds,
-    limits: lunco_experiments::RunResultLimits,
-    started: web_time::Instant,
-    sink: &mut impl RunSink,
-) {
-    let t_end = bounds.t_end;
-    let step_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
-        Ok(dt) => dt,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed {
-                error: error.to_string(),
-                partial: None,
-            });
-            return;
-        }
-    };
-
-    bevy::log::info!(
-        "[sim] simulate begin: t={}..{} step_dt={}",
-        bounds.t_start,
-        t_end,
-        step_dt
-    );
-
-    // Variable names from the initial state.
-    let names: Vec<String> = match stepper.state() {
-        Ok(state) => state
-            .values
-            .keys()
-            .filter(|n| *n != "time")
-            .cloned()
-            .collect(),
-        Err(e) => {
-            bevy::log::warn!("[sim] initial state read failed: {e:?}");
-            sink.emit(RunUpdate::Failed {
-                error: format!("simulate failed before the first sample: {e:?}"),
-                partial: None,
-            });
-            return;
-        }
-    };
-
-    // Interactive storage grows per retained sample rather than preallocating
-    // the batch grid; its first sample is after a step, not at t_start.
-    if let Err(error) = limits.validate_dimensions(names.len(), 1) {
-        sink.emit(RunUpdate::Failed {
-            error: error.to_string(),
-            partial: None,
-        });
-        return;
-    }
-    let mut all_times: Vec<f64> = Vec::new();
-    let mut all_series: Vec<Vec<f64>> = Vec::new();
-    if let Err(error) = all_series.try_reserve_exact(names.len()) {
-        sink.emit(RunUpdate::Failed {
-            error: format!("output column allocation failed: {error}"),
-            partial: None,
-        });
-        return;
-    }
-    all_series.resize_with(names.len(), Vec::new);
-    let mut last_emit_idx = 0;
-    let mut last_progress_emit = web_time::Instant::now();
-
-    // Output grid spacing the user asked for (`Interval` / `numberOfIntervals`
-    // via `resolve_step_dt`). RECORDED identically on native and web, so the
-    // emitted sample count honours the request on both — no more wasm-only
-    // fixed ~`SAMPLE_CAP` point count.
-    let output_dt = step_dt;
-    // Solver advance per loop iteration. On wasm we bound it to a memory-safe
-    // cadence (the worker's linear memory climbs between *output* samples and
-    // only stays bounded when the solver is sampled frequently — see obs:
-    // step≈25s completes, 50s OOM-traps), but that cadence drives the SOLVER,
-    // not what we keep: output is decimated to `output_dt` below. Native steps
-    // straight to the next output point. This is the one place the two targets
-    // differ, and it no longer leaks into the user-visible sample count.
-    #[cfg(target_arch = "wasm32")]
-    let internal_dt = {
-        let span = (t_end - bounds.t_start).max(0.0);
-        output_dt
-            .min(25.0)
-            .max(span / lunco_modelica_core::sim_target::SAMPLE_CAP)
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let internal_dt = output_dt;
-    if let Err(error) = lunco_modelica_core::sim_target::resolve_step_dt(
-        bounds.t_start,
-        t_end,
-        Some(internal_dt),
-        None,
-    ) {
-        sink.emit(RunUpdate::Failed {
-            error: format!("internal solver cadence: {error}"),
-            partial: None,
-        });
-        return;
-    }
-    // Next output-grid time we still owe a sample for.
-    let mut next_output = bounds.t_start + output_dt;
-
-    while stepper.time() < t_end {
-        if sink.is_cancelled() {
-            sink.emit(RunUpdate::Cancelled);
-            return;
-        }
-
-        // Wall-clock backstop (worker-only by default). Fail gracefully
-        // rather than letting a too-heavy run monopolise its worker.
-        if let Some(budget) = sink.wall_budget() {
-            if started.elapsed() > budget {
-                bevy::log::warn!(
-                    "[sim] wall-time budget {:.0}s exceeded at t={:.3}/{} — aborting run",
-                    budget.as_secs_f64(),
-                    stepper.time(),
-                    t_end
-                );
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    format!(
-                        "run exceeded the {:.0}s wall-time budget at sim t={:.1}/{:.1} \
-                         — model too heavy for this environment; try a shorter StopTime \
-                         or a looser Tolerance",
-                        budget.as_secs_f64(),
-                        stepper.time(),
-                        t_end
-                    ),
-                    "aborted: wall-time budget exceeded".to_string(),
-                );
-                return;
-            }
-        }
-
-        if let Err(e) = stepper.step(internal_dt) {
-            bevy::log::warn!("[sim] simulate err: {e:?}");
-            emit_partial_failure(
-                sink,
-                &names,
-                &all_times,
-                &all_series,
-                started,
-                format!("simulate failed: {e:?}"),
-                format!("failed during step: {e:?}"),
-            );
-            return;
-        }
-
-        let t = stepper.time();
-        // Record on the requested output grid only. Internal sub-steps (the
-        // wasm memory cadence) between grid points are dropped, so the stored
-        // sample count equals span/output_dt on every target — the user's
-        // `dt`/`numberOfIntervals` is honoured identically native and web.
-        // Always keep the final sample once we reach `t_end`.
-        let at_end = t >= t_end;
-        if !(t + 0.5 * internal_dt >= next_output || at_end) {
-            continue;
-        }
-        let current_values = match stepper.state() {
-            Ok(state) => state.values,
-            Err(e) => {
-                bevy::log::warn!("[sim] state read err: {e:?}");
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    format!("simulate failed: {e:?}"),
-                    format!("failed reading state at t={t}: {e:?}"),
-                );
-                return;
-            }
-        };
-        let samples = match all_times.len().checked_add(1) {
-            Some(samples) => samples,
-            None => {
-                emit_partial_failure(
-                    sink,
-                    &names,
-                    &all_times,
-                    &all_series,
-                    started,
-                    "interactive output sample count overflow".into(),
-                    "output storage exhausted".into(),
-                );
-                return;
-            }
-        };
-        let admission = limits
-            .validate_dimensions(names.len(), samples)
-            .map_err(|error| error.to_string())
-            .and_then(|()| {
-                all_times
-                    .try_reserve(1)
-                    .map_err(|error| format!("output time allocation failed: {error}"))
-            })
-            .and_then(|()| {
-                for series in &mut all_series {
-                    series
-                        .try_reserve(1)
-                        .map_err(|error| format!("output series allocation failed: {error}"))?;
-                }
-                Ok(())
-            });
-        if let Err(error) = admission {
-            emit_partial_failure(
-                sink,
-                &names,
-                &all_times,
-                &all_series,
-                started,
-                error,
-                "output storage exhausted".into(),
-            );
-            return;
-        }
-        all_times.push(t);
-        for (i, name) in names.iter().enumerate() {
-            // CQ-522: a missing variable is an honest gap, not 0.0 — match
-            // the batch path (`f64::NAN`) so plots don't show a fabricated
-            // zero where the stepper had no value.
-            let val = current_values.get(name).copied().unwrap_or(f64::NAN);
-            all_series[i].push(val);
-        }
-        // Advance the grid cursor past the sample we just stored so the next
-        // grid point is in the future (skips any we overshot in one step).
-        while next_output <= t {
-            next_output += output_dt;
-        }
-
-        // Throttle progress to ~10 Hz to avoid flooding the consumer and
-        // incurring excessive serialization overhead.
-        if last_progress_emit.elapsed().as_millis() > 100 {
-            let delta_times = all_times[last_emit_idx..].to_vec();
-            let mut delta_series = BTreeMap::new();
-            for (i, name) in names.iter().enumerate() {
-                delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
-            }
-            sink.emit(RunUpdate::Progress {
-                t_current: t,
-                delta: Some(RunResult {
-                    times: delta_times,
-                    series: delta_series,
-                    meta: RunMeta {
-                        wall_time_ms: started.elapsed().as_millis() as u64,
-                        sample_count: all_times.len() - last_emit_idx,
-                        notes: None,
-                        ..Default::default()
-                    },
-                }),
-            });
-            last_progress_emit = web_time::Instant::now();
-            last_emit_idx = all_times.len();
-        }
-    }
-
-    bevy::log::info!(
-        "[sim] simulate ok: {} samples, {} vars, {:.2}s wall",
-        all_times.len(),
-        names.len(),
-        started.elapsed().as_secs_f64(),
-    );
-
-    let mut final_series = BTreeMap::new();
-    for (i, name) in names.iter().enumerate() {
-        final_series.insert(name.clone(), all_series[i].clone());
-    }
-    let n_samples = all_times.len();
-    sink.emit(RunUpdate::Completed(RunResult {
-        times: all_times,
-        series: final_series,
-        meta: RunMeta {
-            wall_time_ms: started.elapsed().as_millis() as u64,
-            sample_count: n_samples,
-            notes: None,
-            ..Default::default()
-        },
-    }));
-}
-
 /// One detected top-level `parameter` declaration. Used by the
 /// override editor UI to render an editable row per parameter.
 #[derive(Clone, Debug, PartialEq)]
@@ -1707,10 +1005,7 @@ pub struct DetectedParam {
     /// `"foo"`, `true`). `None` if the parameter has no literal
     /// default (e.g. expression-bound, inherited).
     pub default_literal: Option<String>,
-    /// Whether the DAE-level value-binding override path can rebind this
-    /// declaration's `start`. False for non-literal RHS (expression
-    /// bindings), for arrays / records, and for params not found at the
-    /// top level.
+    /// Whether this scalar declaration can enter the numeric run-options path.
     pub supportable: bool,
     /// Reason override is unsupported, when `!supportable`. Surfaced
     /// in the editor as a tooltip.
@@ -1721,10 +1016,8 @@ pub struct DetectedParam {
     pub description: Option<String>,
 }
 
-/// One detected top-level `input` declaration. Modelica `input` vars
-/// have no defaults — at runtime the stepper sets them via
-/// `set_input(name, value)`. For batch Fast Run the runner pins them through
-/// the same compiled-DAE binding path used for parameter overrides.
+/// One parsed input declaration. Live sessions use `set_input`; batch runs use
+/// `initial_inputs`. An omitted override retains its compiled declaration value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedInput {
     pub name: String,
@@ -1760,27 +1053,18 @@ pub fn detect_top_level_inputs(
 /// declared default and the Modelica description-comment directly, so the
 /// editor no longer textually re-scans the file every frame.
 ///
-/// **Supportability** reflects the actual injection path: run values are
-/// applied by [`apply_value_bindings_to_dae`], which rebinds a DAE
-/// parameter's `start` to a scalar literal. Every top-level *scalar*
-/// parameter is therefore overridable — default-bound or not, literal or
-/// computed. Only array/record parameters (which can't be rebound to a
-/// scalar) are greyed out. This is strictly more capable than the old
-/// textual heuristic, which refused any parameter whose default wasn't a
-/// bare literal.
-///
-/// Inherited parameters (declared in an `extends` base) are not yet
-/// surfaced — they don't live in this class's own component list.
+/// Numeric scalar values enter Rumoca's override-aware preparation. Arrays,
+/// records, and String values cannot enter that path. The compiler and lowering
+/// owner make the final admission decision for tunability and effective types.
 pub fn detect_top_level_literal_parameters(
     class: &rumoca_compile::parsing::ast::ClassDef,
 ) -> Vec<DetectedParam> {
     lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class(class)
         .into_iter()
         .map(|c| {
-            // Arrays/records can't be rebound to a scalar literal by the
-            // DAE value-binding path, so grey those rows; bracket in the
-            // type name is the cheap, reliable array signal.
-            let is_array = c.type_name.contains('[');
+            // Run values are scalar. Rumoca retains declaration dimensions
+            // independently of the type name, including symbolic dimensions.
+            let unsupported = c.has_array_dimensions || c.type_name == "String";
             DetectedParam {
                 name: c.name,
                 type_name: c.type_name,
@@ -1788,8 +1072,9 @@ pub fn detect_top_level_literal_parameters(
                 // straight from the AST; non-numeric defaults show as "—"
                 // but are still overridable.
                 default_literal: c.default.map(|x| format!("{x}")),
-                supportable: !is_array,
-                reason: is_array.then(|| "array/record parameters can't be overridden".to_string()),
+                supportable: !unsupported,
+                reason: unsupported
+                    .then(|| "run overrides require numeric or Boolean scalars".to_string()),
                 description: {
                     let d = c.description.trim();
                     if d.is_empty() {
@@ -1820,7 +1105,7 @@ pub struct ExperimentDraft {
     pub overrides: BTreeMap<ParamPath, ParamValue>,
     /// User-set values for `input` variables. Stored separately from
     /// parameter overrides so the UI can preserve the two authored concepts
-    /// while the runner applies both through one DAE-level binding path.
+    /// while the runner admits them into separate parameter/input option fields.
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds_override: Option<RunBounds>,
 }
@@ -1925,15 +1210,11 @@ pub fn drain_pending_handles(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => RunUpdate::Failed {
                     error: "experiment worker disconnected without a terminal outcome".to_owned(),
-                    partial: None,
                 },
             };
             match update {
-                RunUpdate::Progress { t_current, delta } => {
+                RunUpdate::Progress { t_current } => {
                     registry.set_status(handle.run_id, RunStatus::Running { t_current });
-                    if let Some(d) = delta {
-                        registry.merge_result(handle.run_id, d);
-                    }
                     ev_progress.write(RunProgress {
                         experiment_id: handle.run_id,
                         origin: handle.origin.clone(),
@@ -1961,14 +1242,10 @@ pub fn drain_pending_handles(
                     {
                         let error = format!("complete result rejected: {error}");
                         bevy::log::warn!("[experiments] run {:?} {error}", handle.run_id);
-                        let partial = registry
-                            .get(handle.run_id)
-                            .is_some_and(|run| run.result.is_some());
                         registry.set_status(
                             handle.run_id,
                             RunStatus::Failed {
                                 error: error.clone(),
-                                partial,
                             },
                         );
                         ev_failed.write(RunFailed {
@@ -1987,17 +1264,12 @@ pub fn drain_pending_handles(
                     });
                     terminal = true;
                 }
-                RunUpdate::Failed { error, partial } => {
+                RunUpdate::Failed { error } => {
                     bevy::log::warn!("[experiments] run {:?} failed: {error}", handle.run_id);
-                    let had_partial = partial.is_some();
-                    if let Some(p) = partial {
-                        registry.set_partial_result(handle.run_id, p);
-                    }
                     registry.set_status(
                         handle.run_id,
                         RunStatus::Failed {
                             error: error.clone(),
-                            partial: had_partial,
                         },
                     );
                     ev_failed.write(RunFailed {
@@ -2033,9 +1305,57 @@ pub fn drain_pending_handles(
 mod tests {
     use super::*;
 
+    fn test_runner() -> ModelicaRunner {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = unbounded();
+            std::thread::spawn(move || {
+                while let Ok(command) = rx.recv() {
+                    if let lunco_modelica_runtime::ModelicaCommand::CompileBatch { reply, .. } =
+                        command
+                    {
+                        let _ = reply.send(Err("test compiler rejection".to_owned()));
+                    }
+                }
+            });
+            ModelicaRunner::new(tx)
+        }
+        #[cfg(target_arch = "wasm32")]
+        ModelicaRunner::new()
+    }
+
+    #[test]
+    fn parameter_rows_use_declared_shape_instead_of_type_spelling() {
+        let source = r#"model ShapeFacts
+          type 'Bracket[Scalar]' = Real;
+          parameter Integer n=2;
+          parameter Real literal[2]={1,2};
+          parameter Real symbolic[n]=fill(1,n);
+          parameter Real[2,3] matrix=ones(2,3);
+          parameter 'Bracket[Scalar]' scalar=1;
+          parameter String text="label";
+        end ShapeFacts;"#;
+        let ast = rumoca_compile::parsing::parse_source_to_ast(source, "shape-facts.mo")
+            .expect("valid declarations");
+        let class = ast
+            .get_class_by_qualified_name("ShapeFacts")
+            .expect("class");
+        let rows = detect_top_level_literal_parameters(class);
+        for name in ["literal", "symbolic", "matrix", "text"] {
+            let row = rows.iter().find(|row| row.name == name).expect("parameter");
+            assert!(!row.supportable, "{name} must not accept a scalar override");
+            assert!(row.reason.is_some());
+        }
+        for name in ["n", "scalar"] {
+            let row = rows.iter().find(|row| row.name == name).expect("parameter");
+            assert!(row.supportable, "{name} is a scalar declaration");
+            assert!(row.reason.is_none());
+        }
+    }
+
     #[test]
     fn set_max_parallel_floors_at_one() {
-        let r = ModelicaRunner::new();
+        let r = test_runner();
         r.set_max_parallel(0);
         assert_eq!(r.max_parallel(), 1, "cap must never drop below 1");
         r.set_max_parallel(4);
@@ -2068,7 +1388,7 @@ mod tests {
 
     #[test]
     fn poisoned_runner_state_rejects_queued_and_new_runs_without_rescheduling() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let held = mint_exp(&mut registry, "HeldSlot");
@@ -2090,7 +1410,7 @@ mod tests {
         let rejected_handle = runner.run_fast(&rejected, test_source(&rejected.model_ref.0));
         for handle in [&queued_handle, &rejected_handle] {
             assert!(
-                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error, partial: None }) if error == POISONED_RUNNER_STATE)
+                matches!(handle.progress_rx.try_recv(), Ok(RunUpdate::Failed { error }) if error == POISONED_RUNNER_STATE)
             );
             assert!(matches!(
                 handle.progress_rx.try_recv(),
@@ -2111,7 +1431,7 @@ mod tests {
 
     #[test]
     fn queued_same_name_runs_keep_their_admitted_source_snapshots() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let held = mint_exp(&mut registry, "Held");
@@ -2151,74 +1471,12 @@ mod tests {
         assert_eq!(runner.queued_count(), 0);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn cache_retirement_keeps_other_owners_and_rejects_late_cancelled_publish() {
-        let runner = ModelicaRunner::new();
-        let twin = lunco_workspace::TwinId::new(1);
-        let mut source = test_source("CacheProbe");
-        let mut owned = source.clone();
-        owned.runtime = lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin);
-        let mut other = source.clone();
-        other.runtime =
-            lunco_workspace::DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(2));
-        let cancel = AtomicBool::new(false);
-        for input in [&source, &owned, &other] {
-            publish_cached_dae(
-                &mut runner.state.lock().expect("state"),
-                input,
-                dae_cache_key(input),
-                Arc::new(Dae::default()),
-                &cancel,
-                lunco_experiments::SourceContentIdentity::Unavailable {
-                    reason: "inline cache fixture".into(),
-                },
-            );
-        }
-        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 3);
-        cancel.store(true, Ordering::SeqCst);
-        runner
-            .retire_runtime_cache(&lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin))
-            .expect("cache retirement");
-        {
-            let mut state = runner.state.lock().expect("state");
-            publish_cached_dae(
-                &mut state,
-                &owned,
-                dae_cache_key(&owned),
-                Arc::new(Dae::default()),
-                &cancel,
-                lunco_experiments::SourceContentIdentity::Unavailable {
-                    reason: "inline cache fixture".into(),
-                },
-            );
-            assert_eq!(state.dae_cache.len(), 2);
-            assert!(!state.dae_cache.contains_key(&dae_cache_key(&owned)));
-        }
-        // A newer application snapshot replaces only its own model revision.
-        source.source = "new application source".into();
-        publish_cached_dae(
-            &mut runner.state.lock().expect("state"),
-            &source,
-            dae_cache_key(&source),
-            Arc::new(Dae::default()),
-            &AtomicBool::new(false),
-            lunco_experiments::SourceContentIdentity::Unavailable {
-                reason: "inline cache fixture".into(),
-            },
-        );
-        assert_eq!(runner.state.lock().expect("state").dae_cache.len(), 2);
-    }
-
-    /// Submitting more runs than `max_parallel` must NOT reject the extras
-    /// (the old busy-gate behaviour) — they queue and drain as slots free,
-    /// every run reaching a terminal update, and the scheduler settling
-    /// back to empty. Explicit malformed source produces a compile rejection.
+    /// The scheduler drains every admitted run after compiler rejection.
     #[test]
     fn scheduler_queues_beyond_cap_and_drains_all() {
         use std::time::Duration;
 
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(2);
 
         let mut reg = ExperimentRegistry::new();
@@ -2264,7 +1522,7 @@ mod tests {
 
     #[test]
     fn invalid_bounds_fail_before_scheduler_or_solver_admission() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         let mut registry = ExperimentRegistry::new();
         let mut exp = mint_exp(&mut registry, "BoundsProbe");
         exp.bounds.dt = Some(1.0e-300);
@@ -2274,10 +1532,7 @@ mod tests {
             .try_recv()
             .expect("terminal admission failure")
         {
-            RunUpdate::Failed {
-                error,
-                partial: None,
-            } => error,
+            RunUpdate::Failed { error } => error,
             update => panic!("unexpected admission update: {update:?}"),
         };
         assert!(error.contains("output grid"));
@@ -2288,26 +1543,6 @@ mod tests {
         assert_eq!(runner.queued_count(), 0);
         assert_eq!(runner.in_flight_count(), 0);
 
-        struct Capture(Vec<RunUpdate>);
-        impl RunSink for Capture {
-            fn is_cancelled(&mut self) -> bool {
-                false
-            }
-            fn emit(&mut self, update: RunUpdate) {
-                self.0.push(update);
-            }
-        }
-        let mut sink = Capture(Vec::new());
-        drive_run(
-            &Dae::default(),
-            &exp.bounds,
-            lunco_experiments::RunResultLimits::default(),
-            web_time::Instant::now(),
-            &mut sink,
-        );
-        assert!(
-            matches!(&sink.0[..], [RunUpdate::Failed { error, partial: None }] if error.contains("output grid"))
-        );
         assert!(matches!(
             stepper_options_from_bounds(&exp.bounds),
             Err(RunConfigurationError::Bounds(_))
@@ -2316,7 +1551,7 @@ mod tests {
 
     #[test]
     fn cancelling_queued_run_withdraws_it_before_admission() {
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let active = mint_exp(&mut registry, "Active");
@@ -2392,21 +1627,21 @@ mod tests {
     fn native_worker_panic_releases_slot_and_admits_successor() {
         use std::time::Duration;
 
-        let runner = ModelicaRunner::new();
+        let runner = test_runner();
         runner.set_max_parallel(1);
         let mut registry = ExperimentRegistry::new();
         let panicking = mint_exp(&mut registry, "PanickingWorker");
         let successor = mint_exp(&mut registry, "Successor");
-        let compiler = {
-            let mut state = runner.state.lock().expect("runner state");
-            state.in_flight.insert(panicking.id);
-            state.compiler.clone()
-        };
+        runner
+            .state
+            .lock()
+            .expect("runner state")
+            .in_flight
+            .insert(panicking.id);
         let (panic_tx, panic_rx) = unbounded();
         let (release_tx, release_rx) = crossbeam_channel::bounded(1);
         start_native_job(runner.state.clone(), panicking.id, panic_tx, move || {
             release_rx.recv().expect("release worker");
-            let _compiler = compiler.lock().expect("compiler starts valid");
             panic!("injected experiment compiler panic");
         });
         let successor_handle = runner.run_fast(&successor, test_source(&successor.model_ref.0));
@@ -2416,7 +1651,7 @@ mod tests {
         let timeout = Duration::from_secs(5);
         assert!(matches!(
             panic_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
+            Ok(RunUpdate::Failed { error })
                 if error.contains("injected experiment compiler panic")
         ));
         assert!(matches!(
@@ -2429,8 +1664,8 @@ mod tests {
         ));
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
-            Ok(RunUpdate::Failed { error, partial: None })
-                if error.contains("compiler is poisoned")
+            Ok(RunUpdate::Failed { error })
+                if error.contains("test compiler rejection")
         ));
         assert!(matches!(
             successor_handle.progress_rx.recv_timeout(timeout),
@@ -2511,7 +1746,7 @@ mod tests {
         assert!(matches!(
             &app.world().resource::<ExperimentRegistry>().get(disconnected.id)
                 .expect("disconnected experiment").status,
-            RunStatus::Failed { error, partial: false }
+            RunStatus::Failed { error }
                 if error.contains("disconnected without a terminal outcome")
         ));
 
@@ -2613,50 +1848,6 @@ mod tests {
                 .drain()
                 .count(),
             0
-        );
-    }
-
-    /// Cache identity includes the exact source body and every extra source.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn dae_cache_key_folds_source_body_and_extras() {
-        let base = ModelSource {
-            model_name: "M".into(),
-            source: "model M Real x = 1; end M;".into(),
-            filename: "M.mo".into(),
-            extras: vec![],
-            runtime: lunco_workspace::DocumentRuntimeOwner::Application,
-            result_limits: Default::default(),
-        };
-
-        // Identical input → identical key (the cache must still HIT on a re-run
-        // that changed nothing, e.g. a sweep varying only overrides).
-        assert_eq!(
-            dae_cache_key(&base),
-            dae_cache_key(&base.clone()),
-            "identical sources must yield the same key"
-        );
-
-        // Edited body, same name/filename → different key (the exact stale-DAE bug).
-        let edited = ModelSource {
-            source: "model M Real x = 2; end M;".into(),
-            ..base.clone()
-        };
-        assert_ne!(
-            dae_cache_key(&base),
-            dae_cache_key(&edited),
-            "editing the source body must change the DAE cache key (CQ-525)"
-        );
-
-        // A changed companion/extra source must also bust the key.
-        let with_extra = ModelSource {
-            extras: vec![("Lib".into(), "package Lib end Lib;".into())],
-            ..base.clone()
-        };
-        assert_ne!(
-            dae_cache_key(&base),
-            dae_cache_key(&with_extra),
-            "a changed extra source must change the key (CQ-525)"
         );
     }
 }

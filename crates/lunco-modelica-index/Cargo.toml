@@ -11,9 +11,13 @@ bevy.workspace = true
 lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
+rumoca-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+rumoca-phase-parse.workspace = true
 
 [lints]
 workspace = true

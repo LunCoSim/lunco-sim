@@ -34,7 +34,7 @@ model name when first admitted.
 - [3. Runtime architecture — background worker](#3-runtime-architecture--background-worker)
 - [4. Execution pipeline](#4-execution-pipeline)
 - [5. Document System integration](#5-document-system-integration)
-- [6. The `output` convention (rumoca workaround)](#6-the-output-convention-rumoca-workaround)
+- [6. Modelica public ports](#6-modelica-public-ports)
 - [7. Type vs. instance distinction](#7-type-vs-instance-distinction)
 - [7a. Document identity — three tiers, one truth](#7a-document-identity--three-tiers-one-truth)
 - [8. New-model workflow (target)](#8-new-model-workflow-target)
@@ -55,9 +55,27 @@ attached to 3D entities (Space Systems) in the USD scene.
 The Modelica runtime is **rumoca**, our fork:
 [`github.com/LunCoSim/rumoca`](https://github.com/LunCoSim/rumoca).
 
-The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/).
-It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
-AST interface projections, and parse-time lint facts. It has no Bevy, document,
+Rumoca's `rumoca-phase-parse` owns strict and recovering parsing, including a
+single leading UTF-8 BOM and source coordinates in the original text. Loaders,
+documents, and editor paste retain the authored bytes.
+The production `modelica_source_encoding.rhai` gate verifies exact text, batch
+output and a parser-owned negative diagnostic for the current source generation.
+Run admission uses the document index's current candidates and `within` metadata
+through the shared `sim_target::resolve_requested_class` resolver. Explicit and
+default targets enter the compiler with one qualified identity; dispatch does
+not reparse source or repair package prefixes. `modelica_class_compile.rhai`
+verifies qualified, relative, bare quoted, default and headless run targets.
+Compiler admission parses each unique URI once with Rumoca's
+`ParsedSourceDocument` and installs the paired source/definition as one batch.
+Single-source and multi-source compilation share that boundary. The definition's
+`qualified_class_name` and `declared_class_names` queries preserve authored scope;
+root boundaries use `qualified_name_segments`. Exact source CIDs permit reuse of
+loaded root definitions; changed owned sources, mixed ownership and conflicting
+contents under one URI fail before overlay installation. New `within` namespaces
+can compile without requiring a filesystem package. Participating source identity
+reads `Session::document_source_text`, which addresses the parser's retained text.
+[`lunco-modelica-ast`](../../crates/lunco-modelica-ast/) owns AST interface
+projections and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless
  document and source-editing seams; `lunco-modelica-compiler` owns the
  headless Rumoca session and compiler-side source admission;
@@ -89,8 +107,9 @@ scene tests and non-UI hosts.
 an explicit document id, parsed class, and source generation. It returns an
 experiment id immediately; callers poll `RunStatus` and read finite `f64`
 series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
-only untitled generated documents and their completed run records; ordinary
-saved-document closing remains an Editor lifecycle operation.
+only untitled generated documents and their run records. It cancels live
+experiments and delegates document and linked execution-entity retirement to
+the shared `CloseDocument` owner.
 
 Fast Run bounds read the current document AST annotation after any explicit
 draft override, then use the documented one-second default if neither is present.
@@ -110,29 +129,62 @@ failure or unexpected worker disconnect travels through the typed worker-wide
 records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
 and step state, and rejects later compiles. This application-owned failure
 survives scene teardown; a buffered success cannot revive a dead worker.
+Participant input, integration, and observation failures are terminal step
+results in both native and browser workers. Only a complete finite observation
+can publish runtime values or a presentation stream. See the
+[checked Rumoca runtime contract](29-rumoca-runtime-contracts.md) for ownership
+and its production negative gate.
 
-Qualified source names share the AST owner's `strip_within_prefix` rule: an
-authored `within` package is removed only at a complete dotted segment boundary.
-Similar package prefixes remain distinct in class lookup and source editing.
-The same AST owner supplies borrowed qualified-name segments. Quoted dots and
-escaped quotes remain inside identifiers in library path resolution, exact class
-selection, duplicate names and enclosing `within` clauses. Source syntax and
-compiler name resolution retain their own validation boundaries.
+Rumoca owns source class identity. `rumoca_core::qualified_name_segments`
+borrows quoted and bracketed path segments without splitting identifier dots.
+`StoredDefinition::relative_class_name` removes only the document's actual
+`within` package at a segment boundary; its read and mutable class queries walk
+that exact path. `Session::class_definition_query` selects the current indexed
+document and borrows its declaration, including pre-parsed library source sets.
+The application keeps no second class-to-document index or negative lookup cache.
 
-Class source slicing shares `lunco-modelica-ast::class_full_text_span`. It starts
-at the parsed class-kind token, includes its declaration qualifiers, and ends
-after the closing semicolon. Enclosing declarations on the same line remain
-outside that span; library documents and duplicate preparation use this owner.
+`DescribeModel` returns the canonical authored class name. Explicit names select
+an exact qualified or document-relative declaration; a bare name is admitted
+only when unique in the owning document. Inherited member facts come from
+Rumoca's complete typed declaration query. Unresolved or cyclic bases are a
+terminal query diagnostic. UI inputs, parameters, icons, source editing, and
+metadata retain the selected class identity; missing metadata cannot select a
+similarly named class.
+
+The source identity production gate covers duplicate leaves, quoted identifiers,
+`within` qualification, empty/unknown requests, and incomplete inheritance
+(`modelica_class_identity.rhai`). `modelica_class_compile.rhai` separately proves
+qualified and quoted class compilation, exact retained trajectories and units,
+and terminal wrong-package admission. The integrated native production build
+passed both gates (13 and 3 assertions) plus retained run metadata (20); the
+browser worker compile check passed. Summer Space School's six authored startup
+assertions passed with all three participants running in the integrated native
+session.
+
+Rumoca's `ClassDef.location` owns complete declaration bounds, including
+qualifiers, terminating semicolons and element constraints. Library source
+slicing and duplicate preparation use that range against its matching source
+text; neither rescans surrounding characters nor clamps invalid coordinates.
+Identifier-token locations remain separate rename spans. Same-line siblings,
+comments and short definitions are covered by the parser's source-span checks.
 Read-only library document loading selects the exact qualified class through
-the shared index lookup; a missing sibling cannot resolve another class with
+Rumoca's stored-definition lookup; a missing sibling cannot resolve another class with
 the same leaf name.
+Deferred edit parsing wakes at its recorded debounce deadline even when the
+document-registry and worker-capacity revisions are unchanged. The source
+generation remains the admission fence; completed runs retain their compiled
+metadata while the replacement draft parses.
 
 Scratch and reserved duplicate documents register their typed creation context
 synchronously at allocation. Deferred document-open delivery cannot rebind them
 to a replacement Twin. Duplication captures the target owner before queued
 command delivery and snapshots resident source bytes with their document owner.
-The existing task resolves library paths, reads selected sources and enclosing
-package imports, and rewrites the exact qualified class from those bytes.
+The task resolves library paths, reads the selected source, and renames only the
+parser-owned class name tokens. The copy retains its explicit `within` scope;
+Rumoca resolves enclosing imports from admitted package sources. Native batch
+and live compilation use the same compiler actor, source roots, and artifact
+cache. Batch replies carry typed immutable DAE and content identity; only the
+background run thread waits for compilation.
 Known-source read, decode, parse, or rewrite failures end the operation visibly;
 source and target retirement cancel it. Failed or cancelled duplicates release
 their pending document metadata, name, tab and busy handle. Successful native
@@ -222,11 +274,11 @@ seated. The source key includes only that closure, with generated wrapper
 class and network-title identity normalized; authored parameters, initial
 values, equations, participating siblings, and admitted contributing library
 bytes remain structural. Unrelated open sibling documents do not invalidate
-prepared solve IR. The captured key travels with the immutable DAE through
+prepared FMI components. The captured key travels with the immutable DAE through
 shared-artifact reuse and participant resets. Precompile DAE admission retains
 the conservative full submitted input-set hash until strict resolution supplies
 the actual participating closure.
-Prepared-solve identity adds the resolved solver and exact parameter-override
+Prepared-solve identity adds the resolved solver and exact parameter-override and initial-input
 bits to that closure key. Admitted-root changes still advance the compiler's
 generation and invalidate compiled artifacts; bounded prepared graphs remain
 available for a fresh compilation that produces the same participating closure.
@@ -236,7 +288,7 @@ Native INFO preparation logs distinguish `cache=memory-hit`, `cache=disk-hit`,
 and `cache=miss` at their actual lookup owners. Disk preparation reports lookup,
 lowering, and total preparation duration plus source key and success.
 The native `modelica_solve_preparation_job` span records the admitted source key,
-solver ID, exact parameter-override bit patterns, cache version and disk
+solver ID, exact parameter-override and initial-input bit patterns, cache version and disk
 eligibility. `admitted_library_revision` records compiler admission context
 separately from the solve key.
 Compare these fields before attributing a miss to retention or repeated work.
@@ -259,7 +311,8 @@ lowering duration, rather than attributing existing source isolation to this key
        │
        ▼
   ECS projection  (Tier 2: runtime)
-    - ModelicaModel component: parameters, inputs, variables, paused, session_id
+    - ModelicaModel component: parameters, inputs, clocks, paused, session_id
+    - Required ModelicaVariables component: full native f64 observable map
     - ModelicaChannels resource: crossbeam channels to background worker
     - Background worker thread: owns SimulationSession instances, async
        │
@@ -369,20 +422,51 @@ the pending unload stays queued and is sent before a later Twin load. A closed
 channel makes unload dispatch terminal: the registry reports a runtime fault,
 retains the queued operation, and rejects later Twin source-root admission
 instead of retrying every update or assuming the old compiler state was cleared.
-Synchronous compiler convenience methods remain for CLI and batch callers. Root
-reads and parsing run on the bounded preparation
-pool. Session installation and ordinary Rumoca DAE compilation remain
-synchronous on the serialized worker owner. A later compile is valid only for
-an actual authored source/topology change or an explicit library-set change;
-normal scene projection and solver stepping do not recompile an unchanged USD
-participant.
+Synchronous compiler convenience methods serve CLI and batch callers. The native
+live host sends root installs and DAE compilation to the single Rumoca actor.
+Root reads, parsing, prepared-FMI cache I/O and lowering use bounded preparation
+workers. Native scene and document session construction/execution use independent
+bounded thread-affine pools. `ModelicaCommand::Compile.execution_domain` captures
+the admitted actor kind: USD participants use `Scene`; document-created actors
+use `Document`. The document dispatcher reads the existing `EditorModelicaActor`
+marker, including when recompiling a linked actor. Cached compilation and reset
+retain that domain. Document construction cannot occupy a scene solver owner.
+These are execution-capacity partitions, not new simulation clocks or policy
+hooks. A later compile requires an authored
+source/topology change or an explicit library-set change; ordinary projection
+and stepping do not recompile an unchanged participant.
 
-Native admission bounds the combined compiler, source-root, and solve-lowering
-pipeline to the solve-pool worker count plus two staged operations. That small
-lookahead lets the serialized Rumoca owner compile later independent programs
-while existing DAE lowerings occupy the pool, without allowing an unbounded
-queue of retained compilation artifacts. Solve results still commit in
-submission order, regardless of worker completion order.
+The combined compiler, source-root, lowering and construction pipeline admits
+at most the largest worker-pool count plus two staged operations. Each new session
+receives a persistent owner in submission order. FIFO mailboxes keep its native
+state, JIT backend, stepping and teardown on that thread. Preparation cannot occupy a live owner thread. Only typed handles, immutable metadata and checked observations
+cross back to the command owner; native sessions never cross threads.
+
+A scheduling round dispatches at most one initialized transaction per entity
+before awaiting results. It transfers the complete owned input vector, retaining
+the existing micro-step math, bounds and checked observation path. Independent
+owners can execute concurrently. The command owner admits results in its
+existing round order, validates session/library-generation fences before
+construction commit, and retains per-entity command order. Repeated commands
+for one entity wait for its preceding transaction. Despawn drops the handle and
+queues retirement on its owner; cancelled construction receipts retire without
+publishing. Explicit pool shutdown retires every context on its constructing
+thread even when mailbox handles remain. A lost owner produces the existing
+structured worker failure; no retry or replacement solver masks that failure.
+
+`modelica_live_plan_admission` measures command-owner admission.
+`modelica_live_construction_job` records queue wait and measures construction;
+its children are `modelica_live_session_construct`,
+`modelica_compiled_scalar_metadata` and `modelica_initial_observation`.
+`modelica_live_construction_commit` measures ordered publication. Compare worker
+execution, overlap, queue wait and end-to-end readiness separately; child and
+parent inclusive times must not be added together. Step service diagnostics
+report the measured solver-owner work, while pending results retain their
+communication points and ordered commit boundary.
+`modelica_live_step_job` records owner-queue wait separately from its execution
+span. Its construction identity connects each step to the session's native
+construction and worker thread. Use these intervals to distinguish preparation
+or construction blocking an owner from solver service and response admission.
 
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
@@ -403,8 +487,9 @@ CIDv1 raw/SHA-256 identity and a URI made relative to its source root before
 the compiler session commit; `PreparedSourceRoot::content_closure()` exposes
 that captured result.
 `ModelicaCompiler::source_root_content_closure(id)` exposes the current root
-content state; a failed latest admission and parsed-only source bundles return
-explicit errors instead of stale or unavailable source text. The existing
+content state; a failed latest admission returns an explicit error. Bundles
+retain exact expanded source text beside the parser-produced syntax, so their
+provenance spans and content identities use the same admitted bytes. The existing
 64-bit library revision remains a cache invalidation fact. These per-root
 closures do not yet join a live participant's document, all admitted
 dependencies, solver state, and initial values into a replay baseline.
@@ -546,7 +631,7 @@ successful resolution state.
 
 ## 3. Runtime architecture — background worker
 
-`SimulationSession` (rumoca's solver; it replaced `SimStepper` in rumoca 0.9.20)
+`SimulationSession` (Rumoca's interactive solver)
 is `!Send` — it can't cross threads. So we own it on a dedicated background
 worker thread; the main Bevy thread communicates via `crossbeam` channels:
 
@@ -563,10 +648,13 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 The response bridge validates the session, step identity and communication
 endpoint before taking the in-flight transaction. Its sampled inputs move into
 the accepted-step record; observable variables reuse existing map keys, with
-step outputs applied after detected symbols. The accepted record retains its
-own output snapshot, while the response's owned outputs and detected symbols
-move into the bounded UI sample queue in that order. These ownership transfers
-preserve the admission boundary, sample order and native `f64` values.
+step outputs applied after detected symbols. The accepted record and bounded
+UI sample queue share one immutable output slice. Detected symbols remain
+separate; `SimSampleBatch::samples` presents outputs followed by symbols without
+joining or copying their names. Reset and subsequent responses cannot mutate
+an earlier slice. The worker wire result still owns its output vector until
+admission. These ownership transfers preserve the admission boundary, sample
+order and native `f64` values.
 
 The shared compiler owns native diagnostic heartbeat threads per compile.
 An RAII guard closes their stop channel and joins them on normal return,
@@ -584,7 +672,7 @@ solver instances, live state, and telemetry remain per entity.
 
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
 capacities, captured before worker admission. Both capacities must be positive;
-defaults retain at most 64 compiled artifacts and 64 prepared solve models per
+defaults retain at most 64 compiled artifacts and 64 prepared FMI components per
 worker. Insert the resource before `ModelicaExecutionPlugin` to change its
 immutable snapshot. `worker/cache.rs` owns one bounded FIFO mechanism for both
 caches: distinct insertions evict the oldest admitted key, while hits and
@@ -644,7 +732,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v8`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v11`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through
@@ -671,23 +759,10 @@ documents retain sibling-document compilation for cross-document definitions.
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
 
-**`SimOptions::t_end` is a hard ceiling on the model clock.** Since rumoca
-0.9.20, `SimulationSession` clamps every `step`/`advance_to` at `t_end` — and
-does it *silently*: the call still returns `Ok`, the clock simply stops
-advancing. The default is `1.0`, so any caller that builds options from
-`SimOptions::default()` parks at t=1s and then reports a frozen model rather
-than an error. Two consequences, both deliberate:
-
-- The batch/offline path builds options **only** through
-  `lunco_modelica_runner::stepper_options_from_bounds`, which carries the run's
-  real horizon through. Nothing else may hand-roll `SimOptions`.
-- The live path is driven by `step(dt)` forever and has no horizon, so
-  `lunco_modelica_worker::worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
-  "no ceiling" sentinel.
-
-`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
-this behaviour with an inline mechanism fixture, so a future rumoca bump that
-drops the clamp fails loudly without coupling the Rust target to shipped assets.
+Live FMI sessions are open-ended. The worker options span sets the root-scan
+scale, and every requested step must reach its public target. Batch experiments
+carry their explicit stop time through `stepper_options_from_bounds`; the
+runner owns bounded output sampling. Fixed RK4 uses the same open live clock.
 
 Panics in the worker are caught (`catch_unwind`) and reported as solver
 errors rather than crashing the app. This tolerance is essential for
@@ -712,7 +787,7 @@ First:
   ClockProjectionSet             — project remaining holds before TimeSystems samples time
 
 FixedUpdate:
-  (sync_modelica_outputs)         — ModelicaModel.variables → SimComponent.outputs
+  (sync_modelica_outputs)         — ModelicaVariables.values → SimComponent.outputs
   CosimSet::Propagate             — propagate_connections
   CosimApplySet::ApplyForces       — apply_sim_forces
   (sync_inputs_to_modelica)       — SimComponent.inputs → ModelicaModel.inputs
@@ -728,6 +803,28 @@ The remaining cross-domain admission and replay requirements are recorded in
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
+Fixed-step publication exposes `modelica_outputs_copy_variables` and
+`modelica_outputs_seed_inputs` trace spans. The copy span runs when the required
+`ModelicaVariables.values` snapshot changes, or a model, USD participant marker,
+or destination component is added. Input seeding and status still follow
+`ModelicaModel` changes. Worker admission commits the map and communication clock
+serially in `First`; it preserves native f64 bits, detected-symbol/output
+precedence, and existing keys. Clock/input writes alone do not dirty the snapshot.
+Compile replacement and reset clear it; model removal retires it. Missing
+variable state on a live participant raises `modelica-variables-missing` and
+rejects buffered results until scene teardown. Per-model terminal state also
+rejects lifecycle results without pending compile/reset work, so the single
+first-fault record does not leave other failed participants exposed.
+Reflection, telemetry, canvas,
+co-simulation and API readers consume this one map. External API variable fields
+retain their existing shape. `ResetActiveModel` completes through command-result
+admission and rejects missing runtime state visibly.
+
+Production gates `modelica_variable_projection` and `modelica_variables_missing`
+cover retained publication while paused, resumed solver replacement,
+and the required-state fault. Exact multi-rover replay checks the fixed-step
+consumer; neither the solver nor communication schedule changes.
+
 Standalone Modelica port topology publication excludes entities with
 `SimComponent`, matching its port backend. The co-simulation port owner
 publishes those entities' topology instead. Live input values do not invalidate
@@ -738,13 +835,30 @@ document registry advances one monotonic revision for document membership or
 source mutations, then the synchronizer compares each document generation
 before parsing or upserting it. Async parse completion remains an explicit
 mutation signal, so a stale completion cannot leave a changed document asleep.
+The parse worker queues an owned `SyntaxCache` with its spawn generation,
+shared AST, and located diagnostics at the session-install boundary. Native
+workers prepare the session's separate owned AST before acquiring its mutex;
+the update-side FIFO moves the queued syntax without cloning a parsed tree.
+The drain checks the generation before document installation and charges both
+queue extraction and index installation to its per-update budget. One result
+can exceed that budget, but subsequent results wait for another update.
+WASM transport and prepared-library results use this same document consumer;
+they do not install the document directly in addition to queuing a completion.
+The production `modelica_parse_completion.rhai` gate exercises a clean scratch
+document, source-located invalid syntax with healthy-index retention, and a
+repaired generation with refreshed classes and cleared parse diagnostics.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
-When document metadata needs refresh, telemetry builds one borrowed component
-name lookup for that model's metadata batch. This preserves exact-name then
-qualified-leaf resolution while avoiding a full document-component scan for
-each runtime variable; settled sample batches reuse cached metadata.
+Live metadata comes from the checked FMI scalar inventory published with worker
+construction. The existing session/source-generation fences admit it together
+with the solver; successful compile, reset, or parameter-update results require
+the inventory. A reinitializing Step moves newly checked facts on its exact
+completion. The runtime retains immutable compiled facts, and telemetry only
+publishes metadata when that inventory or the generated USD identity changes.
+It never walks authoring documents or interprets variable names as units. Draft
+edits do not change an installed solver's unit/description facts. The shared
+signal registry owns comparison, storage, and first/changed publication.
 Generated USD Modelica source metadata has a separate invalidation boundary in
 `lunco_modelica_runtime::generated_source`: the generated source projection and
 its document link/removal lifecycle. Live `ModelicaModel` output and clock
@@ -818,14 +932,10 @@ Verb semantics:
 | `RestartActiveModel` | Composition of `ResetActiveModel` + `RunActiveModel`. |
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
 
-When strict DAE compilation rejects an unbalanced model, the compiler runs
-Rumoca's diagnostic-only unbalanced DAE path and shared structural matcher.
-It appends the unmatched unknown names, categories, and referencing equation
-rows to the compile error when available. This diagnostic DAE never reaches a
-stepper. The complete explanation is part of the ordinary Modelica Error
-status event, which opens in the existing history popup for a terminal fault.
-The same explanation is included in the document's structured diagnostics.
-The author can then add or correct enough independent equations or constraints.
+Strict DAE compilation failures remain terminal. Rumoca's checked phase
+report supplies the balance and source diagnostics, which reach the Modelica
+Error status, history popup, and document diagnostics. The author must correct
+the independent equations or constraints before a solver can be prepared.
 
 The toolbar (`ui/panels/model_view/render.rs`) maps these to one
 Compile button (🚀 → `CompileModel`, compile only), a Run/Pause
@@ -1101,34 +1211,22 @@ See
 [`../../crates/lunco-modelica-document/src/document/core.rs`](../../crates/lunco-modelica-document/src/document/core.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
 
-## 6. The `output` convention (rumoca workaround)
+## 6. Modelica public ports
 
-**Critical.** Every variable in a Modelica model that needs to be
-observable by co-simulation must have explicit `input` or `output`
-causality. Bare `Real` declarations are eliminated by rumoca's DAE
-preparation and disappear from the solver.
+Modelica `input` and `output` declarations define the external port surface.
+USD wires consume that declared interface; internal variables retain their
+Modelica equation and state ownership. See the
+[co-simulation public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
+for initialization, runtime writes, and missing-sample admission.
 
-```modelica
-model Balloon
-  parameter Real mass = 4.5;
-
-  input Real height = 0;            // wired in from Avian
-  input Real velocity = 0;
-
-  Real volume(start = 4.0);         // state — always kept
-
-  output Real temperature;          // MUST be output or it vanishes
-  output Real airDensity;
-  output Real buoyancy;
-  output Real drag;
-  output Real netForce;
-equation
-  // ...
-end Balloon;
-```
-
-Full rationale, including planned upstream fixes to the rumoca fork, in
-[`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crates/lunco-cosim/README.md).
+The USD source dispatcher remains after wiring and authored-default publication
+in the ordered Update chain. Native `PendingModelicaSource` membership and the
+absence of `SceneLoadInFlight` admit its exclusive World boundary. A settled
+scene with no pending sources skips that boundary; deferred source insertion,
+recompile and scene replacement wake it through current component membership.
+While sources or causal producer samples are preparing, admission continues at
+the same boundary. Prim-path dispatch order and initialization sampling are
+unchanged.
 
 ## 7. Type vs. instance distinction
 
@@ -1755,3 +1853,10 @@ metadata only from the selected class. It never seeds input values from the
 document-wide class index. The production gate
 `modelica_scoped_input_defaults.rhai` checks distinct class
 defaults, repeated instances, overrides, reset, and invalid-default diagnostics.
+
+Compose a component with bound inputs through instance modifications when the
+parent supplies those values. An additional equation does not replace the
+declaration binding. The two rover drivetrain models bind guidance inputs in
+their `RoverAutopilotGuidance` instance modifiers, retaining the guidance class's
+standalone defaults and the parent formulas. See the
+[Modelica modification rules](https://specification.modelica.org/maint/3.6/inheritance-modification-and-redeclaration.html).

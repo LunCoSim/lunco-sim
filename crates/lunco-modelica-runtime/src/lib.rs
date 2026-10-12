@@ -13,11 +13,21 @@ use lunco_signal::{SignalExposure, SimStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub mod generated_source;
 pub mod source_asset;
 
 pub use source_asset::{ModelicaSource, ModelicaSourceAssetPlugin, ModelicaSourceLoader};
+
+/// Facts for one scalar identity in the installed checked FMI component.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelicaScalarMetadata {
+    pub unit: Option<String>,
+    pub description: Option<String>,
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+}
 
 /// Maximum interval one live worker transaction may integrate.
 pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.0;
@@ -106,7 +116,8 @@ pub struct ModelicaStepSample {
     pub input_time_s: f64,
     pub output_time_s: f64,
     pub inputs: Vec<(String, f64)>,
-    pub outputs: Vec<(String, f64)>,
+    /// Immutable worker outputs, also read by the presentation sample queue.
+    pub outputs: Arc<[(String, f64)]>,
 }
 
 /// One exact communication transaction awaiting a worker result.
@@ -132,6 +143,21 @@ pub struct ModelicaChannels {
     pub tx_res: Sender<ModelicaResult>,
 }
 
+/// The admitted actor's execution domain, retained through cached rebuilds.
+/// Native document construction must not occupy a scene solver owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelicaExecutionDomain {
+    Scene,
+    Document,
+}
+
+/// Immutable checked batch artifact from the shared native compiler owner.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ModelicaBatchArtifact {
+    pub dae: std::sync::Arc<rumoca_ir_dae::Dae>,
+    pub source_content: lunco_hash::content::Cid,
+}
+
 /// Commands sent to the background simulation worker.
 #[derive(Serialize, Deserialize)]
 pub enum ModelicaCommand {
@@ -148,6 +174,7 @@ pub enum ModelicaCommand {
     Compile {
         entity: Entity,
         session_id: u64,
+        execution_domain: ModelicaExecutionDomain,
         model_name: String,
         source: String,
         realtime_safe: bool,
@@ -155,6 +182,8 @@ pub enum ModelicaCommand {
         extra_sources: Vec<(String, String)>,
         #[serde(default)]
         parameter_overrides: Vec<(String, f64)>,
+        /// Explicit finite input values admitted before solver initialization.
+        initial_inputs: Vec<(String, f64)>,
         #[serde(skip)]
         stream: Option<SimStream>,
     },
@@ -167,6 +196,8 @@ pub enum ModelicaCommand {
     Reset {
         entity: Entity,
         session_id: u64,
+        /// Current admitted inputs, including writes made while paused.
+        initial_inputs: Vec<(String, f64)>,
     },
     Despawn {
         entity: Entity,
@@ -182,6 +213,18 @@ pub enum ModelicaCommand {
         id: String,
         /// Monotonic registry operation identity that fences older loads.
         operation_id: u64,
+    },
+    /// Native batch preparation shares the admitted source roots and cache.
+    /// This typed in-process request never crosses the serialized worker wire.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    CompileBatch {
+        model_name: String,
+        source: String,
+        doc_uri: String,
+        extra_sources: Vec<(String, String)>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reply: Sender<Result<ModelicaBatchArtifact, String>>,
     },
 }
 
@@ -231,6 +274,9 @@ pub struct ModelicaResult {
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
+    /// Exact scalar declaration facts from the checked FMI component.
+    /// Published once when construction installs or replaces a live stepper.
+    pub variable_metadata: Option<BTreeMap<String, ModelicaScalarMetadata>>,
     pub error: Option<String>,
     pub log_message: Option<String>,
     pub is_new_model: bool,
@@ -299,6 +345,7 @@ impl Default for ModelicaResult {
             new_time: 0.0,
             outputs: Vec::new(),
             detected_symbols: Vec::new(),
+            variable_metadata: None,
             error: None,
             log_message: None,
             is_new_model: false,
@@ -385,6 +432,8 @@ pub struct ModelicaLiveSolverSnapshot {
     pub parameters: ModelicaSolverParameters,
     /// Sorted instance overrides passed into DAE lowering.
     pub parameter_overrides: Vec<(String, f64)>,
+    /// Sorted finite input samples admitted before initialization.
+    pub initial_inputs: Vec<(String, f64)>,
 }
 
 /// Bounded aggregate diagnostics for the live Modelica step handoff.
@@ -474,9 +523,21 @@ impl ModelicaStepDiagnostics {
     }
 }
 
+/// Landed observable variables of one Modelica participant.
+///
+/// Native component change detection tracks the output snapshot independently
+/// of input and communication-clock updates. The worker commits this map and
+/// the model clock together at its serial result-admission boundary.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct ModelicaVariables {
+    pub values: HashMap<String, f64>,
+}
+
 /// Component attached to every live Modelica participant.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
+#[require(ModelicaVariables)]
 pub struct ModelicaModel {
     pub model_name: String,
     #[reflect(ignore)]
@@ -493,7 +554,6 @@ pub struct ModelicaModel {
     pub inputs: HashMap<String, f64>,
     #[reflect(ignore)]
     pub compiled_input_names: BTreeSet<String>,
-    pub variables: HashMap<String, f64>,
     #[reflect(ignore)]
     pub last_error: Option<String>,
     #[reflect(ignore)]
@@ -516,6 +576,9 @@ pub struct ModelicaModel {
     /// Exact live solver plan that produced the installed stepper.
     #[reflect(ignore)]
     pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
+    /// Immutable compiled facts admitted with this solver session.
+    #[reflect(ignore)]
+    pub variable_metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
     #[reflect(ignore)]
     pub pending_generation: u64,
     #[reflect(ignore)]
@@ -537,7 +600,6 @@ impl Default for ModelicaModel {
             parameters: HashMap::new(),
             inputs: HashMap::new(),
             compiled_input_names: BTreeSet::new(),
-            variables: HashMap::new(),
             last_error: None,
             document: lunco_doc::DocumentId::default(),
             is_stepping: false,
@@ -548,6 +610,7 @@ impl Default for ModelicaModel {
             is_compiled: false,
             compiled_generation: 0,
             live_solver_snapshot: None,
+            variable_metadata: None,
             pending_generation: 0,
             resume_after_compile: false,
         }
@@ -602,9 +665,18 @@ pub struct SimSampleBatch {
     pub entity: Entity,
     pub document: lunco_doc::DocumentId,
     pub time: f64,
-    pub samples: Vec<(String, f64)>,
+    /// Worker outputs shared with the accepted communication transaction.
+    pub outputs: Arc<[(String, f64)]>,
+    pub detected_symbols: Vec<(String, f64)>,
     pub is_new_model: bool,
     pub is_parameter_update: bool,
+}
+
+impl SimSampleBatch {
+    /// Presentation order: step outputs followed by detected symbols.
+    pub fn samples(&self) -> impl Iterator<Item = &(String, f64)> {
+        self.outputs.iter().chain(&self.detected_symbols)
+    }
 }
 
 /// UI-agnostic queue of live simulation samples awaiting projection.

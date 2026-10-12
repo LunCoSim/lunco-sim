@@ -15,17 +15,24 @@ use std::hash::Hasher;
 use std::path::Path;
 
 fn hash_file(path: &Path, hasher: &mut DefaultHasher) {
-    if let Ok(bytes) = std::fs::read(path) {
-        hasher.write(&bytes);
-        println!("cargo:rerun-if-changed={}", path.display());
-    }
+    println!("cargo:rerun-if-changed={}", path.display());
+    let bytes = std::fs::read(path)
+        .unwrap_or_else(|error| panic!("cannot hash protocol source {}: {error}", path.display()));
+    hasher.write(&bytes);
 }
 
 fn hash_dir(dir: &Path, hasher: &mut DefaultHasher) {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<_> = read.flatten().map(|entry| entry.path()).collect();
+    let read = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("cannot read protocol source {}: {error}", dir.display()));
+    let mut entries: Vec<_> = read
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()
+        .unwrap_or_else(|error| {
+            panic!(
+                "cannot enumerate protocol source {}: {error}",
+                dir.display()
+            )
+        });
     entries.sort();
     for path in entries {
         if path.is_dir() {
@@ -47,6 +54,10 @@ fn main() {
     hash_dir(Path::new(&format!("{manifest}/src")), &mut hasher);
     hash_dir(
         Path::new(&format!("{manifest}/../lunco-modelica-runtime/src")),
+        &mut hasher,
+    );
+    hash_dir(
+        Path::new(&format!("{manifest}/../lunco-experiments/src")),
         &mut hasher,
     );
     hash_file(

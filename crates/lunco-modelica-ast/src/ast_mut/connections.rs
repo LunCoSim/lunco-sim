@@ -2,10 +2,8 @@
 //!
 //! rumoca's `Equation::Connect` carries no `annotation` field, so the routing of
 //! a connection line (`annotation(Line(points={…}))`) does not survive a parse.
-//! Under the old re-emit-the-class scheme that made `set_connection_line` a
-//! **silent no-op** — the canvas let you drag a line, reported success, and
-//! wrote nothing. Splicing works on the source text, where the annotation is
-//! plainly there, so line routing works again without waiting on upstream.
+//! Source splices preserve and update that authored annotation. Endpoint syntax
+//! stays in the parsed AST; routing stays in its exact source statement span.
 
 use std::ops::Range;
 

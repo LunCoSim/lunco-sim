@@ -719,6 +719,12 @@ class "LunCoEnvironmentProbeAPI" (
     double outputs:gravity_z = 0 (
         doc = "Local gravitational acceleration Z component, m/s2."
     )
+    double outputs:sun_visibility (
+        doc = "Fraction of authored probe sampling points with clear Sun-centre rays through admitted terrain and selected optical proxies, 0..1. Independent of panel incidence and direct-normal irradiance."
+    )
+    double outputs:sun_irradiance_w_m2 (
+        doc = "Physical direct-normal solar irradiance, W/m2, before terrain or equipment occlusion and panel incidence. Missing source data publishes no sample."
+    )
 }
 
 class "LunCoDirectionTargetAPI" (

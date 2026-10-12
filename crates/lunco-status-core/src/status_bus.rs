@@ -589,18 +589,19 @@ impl StatusBus {
         }
     }
 
-    /// Wind down all live status state owned by the active Twin.
+    /// Retire the active Twin's status, including its visible event history.
     ///
-    /// The bus deliberately keeps its bounded history: that is an
-    /// application-level audit trail, not an active Twin resource. In-flight
-    /// progress, terminal outcomes, and mirror handles are live state and
-    /// cannot survive a Twin replacement. Clearing `by_id` also makes drops
-    /// from work that finishes after teardown harmless.
+    /// The strip and history popup describe the current session. Outgoing
+    /// events must not become the replacement's fallback status. Monotonic
+    /// publication counters survive retirement; clearing `by_id` makes late
+    /// handle completions harmless.
     pub fn wind_down_twin(&mut self) {
-        let changed = !self.active_progress.is_empty()
+        let changed = !self.history.is_empty()
+            || !self.active_progress.is_empty()
             || !self.by_id.is_empty()
             || !self.mirror_handles.is_empty()
             || !self.last_outcome.is_empty();
+        self.history.clear();
         self.active_progress.clear();
         self.by_id.clear();
         self.mirror_handles.clear();
@@ -1164,17 +1165,31 @@ mod tests {
     }
 
     #[test]
-    fn active_twin_close_winds_down_live_status_without_erasing_history() {
+    fn active_twin_close_retires_status_and_fences_late_completion() {
         let mut app = App::new();
         app.add_plugins((
             lunco_telemetry_core::LunCoTelemetryCorePlugin,
             StatusBusPlugin,
         ));
-        {
+        let outgoing = {
             let mut bus = app.world_mut().resource_mut::<StatusBus>();
-            bus.push("session", StatusLevel::Info, "kept audit event");
+            bus.push("session", StatusLevel::Info, "outgoing Twin event");
             bus.set_progress("scene", "loading", 1, 2);
-        }
+            bus.begin(BusyScope::Document(42), "modelica", "outgoing compile")
+        };
+
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(2),
+            root: std::path::PathBuf::from("/additional"),
+            was_active: false,
+        });
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .resource::<StatusBus>()
+                .is_busy(BusyScope::Global)
+        );
+        assert_eq!(app.world().resource::<StatusBus>().history().count(), 1);
 
         app.world_mut().trigger(lunco_workspace::TwinClosed {
             twin: lunco_workspace::TwinId::new(1),
@@ -1186,6 +1201,20 @@ mod tests {
         let bus = app.world().resource::<StatusBus>();
         assert!(!bus.is_busy(BusyScope::Global));
         assert!(bus.last_outcome(BusyScope::Global).is_none());
-        assert_eq!(bus.history().count(), 1);
+        assert_eq!(bus.history().count(), 0);
+        assert!(bus.display_latest().is_none());
+        assert_eq!(bus.history_total(), 1);
+
+        app.world_mut().resource_mut::<StatusBus>().set_progress(
+            "scene",
+            "replacement loading",
+            0,
+            0,
+        );
+        drop(outgoing);
+        app.update();
+        let bus = app.world().resource::<StatusBus>();
+        assert_eq!(bus.display_latest().unwrap().message, "replacement loading");
+        assert!(bus.last_outcome(BusyScope::Document(42)).is_none());
     }
 }

@@ -604,7 +604,7 @@ pub fn on_duplicate_model_from_read_only(
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
             .or_else(|| {
                 fqn.as_ref().and_then(|q| {
-                    lunco_modelica_ast::qualified_name_segments(q)
+                    rumoca_core::qualified_name_segments(q)
                         .next()
                         .map(String::from)
                 })
@@ -618,7 +618,7 @@ pub fn on_duplicate_model_from_read_only(
             Some(package) if !package.is_empty() => format!("{package}.{top_short}"),
             _ => top_short.clone(),
         });
-        let origin_short = lunco_modelica_ast::qualified_name_segments(&origin_fqn)
+        let origin_short = rumoca_core::qualified_name_segments(&origin_fqn)
             .last()
             .map(String::from)
             .unwrap_or(top_short);
@@ -668,14 +668,7 @@ pub fn on_duplicate_model_from_read_only(
 
     let name_for_task = name.clone();
     let origin_fqn_for_task = origin_fqn;
-    let mut source_for_task = ResolvedClassSource::from_resident(source_full, source_pin.clone());
-    source_for_task.origin_path =
-        registry
-            .host(source_doc)
-            .and_then(|host| match host.document().origin() {
-                DocumentOrigin::File { path, .. } => Some(path.clone()),
-                _ => None,
-            });
+    let source_for_task = ResolvedClassSource::from_resident(source_full, source_pin.clone());
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
         PreparedDuplicate::build(doc_id, name_for_task, &origin_fqn_for_task, source_for_task)
     });
@@ -766,7 +759,7 @@ fn spawn_duplicate_class_task(
         });
         return;
     }
-    let origin_short = lunco_modelica_ast::qualified_name_segments(&qualified)
+    let origin_short = rumoca_core::qualified_name_segments(&qualified)
         .last()
         .map(str::to_string)
         .unwrap_or_else(|| qualified.clone());
@@ -1339,6 +1332,7 @@ pub fn on_document_closed_cleanup(
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
     retire_editor_document_work(
@@ -1348,7 +1342,12 @@ pub fn on_document_closed_cleanup(
         &mut modals,
         &mut pending_save_close,
     );
-    model_tabs.close(doc);
+    for tab in model_tabs.close_all_for_doc(doc) {
+        commands.trigger(lunco_workbench_core::commands::CloseTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab,
+        });
+    }
     cache.in_memory_models.retain(|e| e.doc != doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight
     // projection task) so a later tab reusing the id starts fresh.
@@ -1862,7 +1861,7 @@ mod file_diagnostic_lifecycle_tests {
         let unique = unique_in_memory_name(&cache, &base);
         assert_eq!(unique, "'Part NameCopy2'");
         assert!(
-            !lunco_modelica_ast::parse_to_syntax(
+            !rumoca_phase_parse::parse_to_syntax(
                 &format!("model {unique} end {unique};"),
                 "inline.mo"
             )

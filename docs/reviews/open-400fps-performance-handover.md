@@ -1,5 +1,2481 @@
 # High-quality realtime performance handover
 
+## Scenario source admission before simulation startup — 2026-10-12
+
+On integrated normal artifact
+`23e28e5ed46a9947e9737d6d62d7e7ab863e9794db81e55a7fa34a94fbefcf0c`,
+216 exact replay checks, document metadata and scene replacement pass. The
+observation-failure fixture exposes an admission gap: its file-backed Rhai
+source has no simulation hold before a document exists. Modelica reaches the
+terminal fault at tick 18 before `on_start` checks the initial state or declares
+the expected fault. A faster prepared participant can outrun source loading.
+
+The scripting loader now reserves through `ScenarioPreparationAdmissions`
+before awaiting assets. Document admission and compilation consume that same
+key; initialization/startup release it. Pending sources hold actor activation
+so load completion cannot select startup order. Typed path/handle pairs fence
+replacement, and removed inputs/actors release their source reservations.
+Document-only cancellation preserves loader-owned holds. Load, identity,
+import or attachment failure produces `scenario-source-failed` at the owner.
+This is an engine admission invariant, with no new policy hook or clock.
+
+Normal source-admission artifact
+`cf23bc7899663d384aa5bf9ab99112864c4db2afb812f1f0941dc3632a537e6b`
+builds in 2m 45s and is archived with round-trip hash verification. The unchanged
+observation-failure fixture registers its expected fault at global tick zero
+and passes at the intended tick-18 Modelica failure. The authored missing-source
+gate uses `AttachProgram` through the typed USD runtime layer and passes with
+`scenario-source-failed` at tick zero, exiting normally. Its fixture was created,
+saved and inspected through the USD document API; no source USD text was patched.
+
+The focused reservation seam passes one hold across repeated source admission,
+document handoff and cancellation/retirement. Its first invocation without the
+Rhai feature ran zero tests and is not passing evidence; the actual feature-enabled
+test passes. A 72-check exact replay and the 31-check document lifecycle plus
+scene-replacement gate also pass. Owned API ports are released. Artifact,
+source-creation receipts, logs and images are under
+`.lunco/performance-evidence/entity-tree-perf/scenario-source-*`.
+Whole-app uncontended loading, visual-FPS and physics-performance acceptance
+remain open; the source hold preserves initial state instead of admitting time
+during required I/O.
+
+## Shader-source publication ownership — 2026-10-12
+
+Shader-source reflection is independent of material binding. The render binder
+publishes `ShaderLookSourceInterface` only through its reflection owner; retiring
+or invalidating a material preserves the loaded-source facts. Source admission
+precedes reflection, and material readiness invalidation precedes promotion.
+No clocks, simulation math, rendering quality or external-library code change.
+
+The baseline resource seam fails because readiness invalidation removes a valid
+interface. The corrected seam passes material invalidation/retirement and actual
+source removal. On normal baseline `faee8b646cdacd1e9a9935e97ebbfa20309a89cc6e213ac39d9bab7158b799fb`,
+owned Summer Space School PID 2187473 starts with missing source reflection and
+an invisible continuation. Reloading the unchanged terrain shader restores its
+source facts and drawable continuation. The globe owner admits cutout only
+with a drawable collar; missing reflection leaves the globe under the DEM.
+
+Normal fixed artifact
+`e657368fe23e06eb282229804a42c0c2ea403ff275fdc7fb0ca7370efaa11209`
+builds in 2m 46s. Four startup observations retain valid source reflection and a
+visible continuation; inspected final imagery has no flat patches. Earlier gate
+attempts used WorldRoot without a simulation identity or a one-shot visualization
+hook and are not passing test evidence. The production Rhai gate uses the existing
+Twin-scoped scenario host with declared query reads. It passes all four checks,
+including inactive-path rejection, active reload, preserved source identity and
+reflection across 180 observations, and final drawable state. The 20-rover gate
+passes 72 exact checks against the unchanged reference. Gate/replay PIDs
+2278844/2289523 exit zero and release API 4202. The Twin remains unmodified.
+
+Integration preserves main's original UTF-8 parser and current-document run-target
+admission changes (`50f282252` and `34800c051`). On merged `8f8c4c2bc`, the normal
+production build passes in 2m 15s. Exact artifact
+`c0e390c3f0a9c93f442739aabebab702ea847821303f1b4f008803fe208577c1`
+passes the four-check Twin-scoped source-lifecycle gate and all 72 exact
+20-rover replay checks against the unchanged reference. The inspected Summer
+Space School image has valid source reflection, a ready visible continuation
+and no flat patches. Owned gate/replay PIDs 2466258/2469368 exit zero and release
+API 4202. The exact binary archive is verified; the Twin remains clean.
+
+Verified archives and receipts are under
+`.lunco/performance-evidence/entity-tree-perf/`, with `shader-source-owner-`
+and `summer-source-owner-` prefixes. The independent Modelica pool experiment
+is excluded from this artifact. This resolves a publication failure; whole-app
+loading-time, visual-FPS and physics-performance acceptance remain open.
+
+## Startup rock admission identity — 2026-10-12
+
+Summer Space School Twin `7ac54a2e32ab2254003e1696aee2acdac5127d17`
+loads once on committed normal baseline
+`d55d8e228139bcf5dc60c0fd773a3f8915568d66c61440fecf8579b9a4f268d2`.
+The terrain requests 598 rocks twice, 0.951 seconds apart. The second request
+recycles and hides the first 312 admitted entities while canceling the remaining
+queue. The reproduction on the separate Modelica experiment also requests that
+field twice, recycling its first 136 entities. This is a redundant scatter
+refresh while the field is still loading.
+
+`lunco-terrain-surface` now records `TerrainScatterContent` when the field enters
+the ordered queue. Pending/applied markers retain completion semantics;
+recomposition compares admitted identity throughout loading. Completion no
+longer stores or republishes a second fingerprint. This content-identity
+invariant belongs to the terrain mechanism; it adds no authored policy hook.
+Placement, quality, body/visual batch sizes and simulation clocks are unchanged.
+
+The focused pending-content resource seam passes both unchanged-content
+preservation and a changed-recipe refresh. Normal production artifact
+`ec6f86fb3a79079c8778659f72ddc9939e008a70384ed0a149663e53a7e00efa`
+uses the committed Modelica worker and only the terrain source changes. Its
+actual Twin startup requests the same 598 rocks once; the later analytic
+recomposition skips rebuilding. Readiness settles with no pending work or
+runtime fault, and the inspected settled image retains terrain, rocks and
+shadows. The authored `terrain_rocks.usda` production gate passes three Rhai
+checks at 30 ticks. Owned app/gate PIDs 2010831/2023318 exit zero and release
+API 4202. The Twin stays clean; its authored files are unchanged.
+
+The normal build passes after checkout-only cleanup, with the exact binary
+archived and verified outside `target/`. Receipts, source fingerprints and
+images are under `.lunco/performance-evidence/entity-tree-perf/`, using
+`startup-rocks-` and `summer-startup-` prefixes. Avoided duplicate work is proven;
+this check does not establish a whole-app loading-time or FPS gain.
+
+Integration preserves main's class-identity/complete-declaration change
+`24a037244`. On merged `256f98cd1`, normal artifact
+`faee8b646cdacd1e9a9935e97ebbfa20309a89cc6e213ac39d9bab7158b799fb`
+builds successfully. Two fresh Summer Space School launches each request 598
+rocks once, skip the unchanged terrain rebuild, and reach readiness without a
+runtime fault. The 20-rover production replay passes all 72 exact checks against
+the unchanged reference. Owned Twin/replay/repeat PIDs
+2145688/2150361/2162147 exit zero and release API 4202.
+
+The first integrated startup also exposed missing source reflection and a hidden
+terrain continuation despite complete stream/derived counts; its repeat rendered
+correctly. The shader-source ownership section above records the independent
+root cause, fix and integrated production acceptance for that publication fault.
+
+## Native Modelica execution domains — 2026-10-12
+
+Document constructors previously occupied scene participants' thread-affine
+owners despite command-level step prioritization. The native worker now captures `ModelicaExecutionDomain` at compile dispatch: USD participants use
+`Scene`; the existing document-created actor marker selects `Document`. Cached
+reset/recompile work retains the captured domain. Preparation, scene and document
+execution have independent startup-captured bounds; the default maximum is
+6/6/1 threads. Admission uses the largest pool count plus two staged operations.
+Sessions remain on their constructing thread, and completions retain submission
+order. This is engine capacity isolation; no authored policy hook, new clock,
+solver math, precision or external-library change is introduced.
+
+The production Tracy build passes in 2m 23s. Exact artifact
+`993909d2cb6da36833a24146d684b029f42a31374069603955b38bd00daf96b6`
+runs the same fresh-cache four-model diagnostic on parent `95b87e23d`.
+Document constructors share no thread with the existing scene-step owners,
+and there are no hot-step queue waits overlapping cold construction. During
+mixed loading, queue p50/p95/p99/max is 0.069/1.621/1.757/1.839 ms; the preceding
+preparation-only diagnostic artifact
+`8debe51ca3f1dc8e6a3cc6ad3a7b4905a1b18d95a815e16732c451653ec301da`
+has a 140.093 ms maximum, including 140.081 ms of same-thread constructor work.
+A shared-pool trace also attributes a 27.826 ms wait to 27.818 ms of preparation
+on the same owner. Independent preparation and document capacities address both
+measured sources of interference.
+The new run compiles the four scratch models in 1.860 s versus 1.331 s previously.
+One foreign simulator remains active and Tracy adds overhead, so these are
+diagnostic observations, not clean loading/FPS acceptance.
+
+Owned app/collector PIDs 2569309/2569308 exit zero and release API 4202/Tracy
+8087. The exact candidate archive is verified. Evidence is under
+`.lunco/performance-evidence/entity-tree-perf/modelica-document-domain-*`.
+Normal production artifact
+`f4e90ee52edda40dee49c8f0cdff4a996031c5de1dfb52dbb499ac897f4b361c`
+passes 216 exact replay checks with compute widths 24/1 and a one-CPU run.
+The document metadata gate passes 31 checks through stepping, reset, source
+replacement, recompilation and participant retirement. Scene replacement,
+stable API schema and expected terminal `modelica-step-failed` handling also
+pass. Replay PIDs 2730110/2730423/2730662 and owned API PID 2731249 exit zero
+and release 4202. The inspected replacement image retains scene and shadows.
+
+High-quality fixed-camera View/Build/View frame medians are
+11.394/11.150/11.197 ms. The windows preserve 50 bodies, 33 colliders and
+20 joints and advance 489/487/486 physics steps in about eight seconds each.
+Initial readiness is 3.152 s. A foreign tutorials simulator is active, so
+uncontended loading, visual-FPS and physics-performance acceptance remain open.
+
+The normal build first exhausted disk during compilation and then at linking.
+Checkout-only cleanup preserves source and shared caches. Removing its incomplete
+link output and losslessly archiving 24 historical generated CSV/JSON exports
+reclaims 1,433 MiB; the final normal link passes in 4.63 s. Both focused owner
+tests pass: bounded capacities/visible invalid-budget rejection and terminal
+non-crashing rejection of a parameter update without a cached identity.
+Each archived export is round-trip hash verified and listed in `owned-historical-export-archives-20261012.json`;
+decompress its recorded archive when reusing the historical export. The temporarily
+relocated older task capture is restored to its original regular path with the
+same hash. Both production artifacts are archived and verified outside `target/`.
+
+## Thread-affine native Modelica execution — 2026-10-11
+
+Native live sessions now use persistent application-owned solver workers.
+The committed baseline shares a bounded pool between preparation and live
+construction/execution; no external library or solver math changes. The command owner sends complete
+input transactions and admits checked observations in round order. Each native
+session is constructed, stepped and retired on one thread. Session and library
+generation fences reject stale construction receipts before publication.
+
+The preceding production attribution found native construction responsible for
+99% of live installation time. The candidate's native export contains 18
+construction jobs with exactly one constructor, metadata read and initial
+observation each. Initial/replacement groups overlap at most two/three native
+constructors. Summed work and wall span remain separate; the capture proves
+concurrency, not a product speedup.
+
+Validation passes: focused worker compile; the low-level non-Send ownership,
+concurrent execution, shutdown and panic-isolation seam; 216 exact production
+replay checks with compute widths 24/1 and solver budgets 6/1; terminal
+observation-failure and six variable-projection checks; 18 telemetry-history
+checks and scene replacement. The normal production input-default scenario
+passes 20 checks, including reset preserving current overrides and visible
+invalid-default rejection. Every owned session exits and releases API 4202;
+the Tracy collector also releases 8087.
+
+Normal High-quality fixed-camera View/Build/View comparisons preserve 50 bodies,
+33 colliders and 20 joints and advance about 60 physics steps/s. Baseline frame
+medians are 11.478/11.573/11.551 ms; candidate medians are
+11.155/11.385/11.415 ms. Initial readiness is 4.674/3.462 s and restart readiness
+0.933/0.851 s. Foreign simulator/profiler workloads differ between runs and GPU
+utilization approaches 96%; these observations establish no causal speedup.
+Loading, visual-FPS and physics-performance acceptance remain open. The inspected
+candidate restart image retains the scene and shadows.
+
+Exact normal baseline/candidate artifacts are
+`8fbd34e42eefe098ce94bab93aa35ec2feed3eee302c1708b0f6a19fead278c7` /
+`bf458064ff92b50bf8cb339a5202ae5125da1264889526a0a8f57f137f08861c`.
+The candidate Tracy artifact is
+`c18bcc289c94fbf8820c1345e5d8f49ff9c1cd42474a08191f2c7b351ea3d6df`.
+Verified archives and receipts live under
+`.lunco/performance-evidence/entity-tree-perf/modelica-affine-pool-*`.
+Integration preserves newer local-main commits `17b68238c` and `5c9bbee16`.
+The integrated normal production build passes in 4m 09s. Its exact artifact is
+`d55d8e228139bcf5dc60c0fd773a3f8915568d66c61440fecf8579b9a4f268d2`.
+On that artifact, 72 additional exact 20-rover checks, 31 compiled-metadata
+reset/recompile checks, the expected terminal solver-fault gate, scene
+replacement, and the low-level affinity/shutdown/failure seam pass. The brief
+metadata gate advances physics but does not establish sustained mixed-load
+cadence. Native construction and existing live sessions share their owner; mixed-load cadence
+acceptance remains open alongside uncontended loading and FPS acceptance.
+
+The normal link initially exhausted disk space; the authorized checkout-only
+`cargo clean` removed 13.4 GiB, and the subsequent normal build passed in 2m 43s.
+Source, retained evidence, sibling sessions and shared caches were preserved.
+
+## Admit Modelica source dispatch before its exclusive boundary — 2026-10-11
+
+The USD co-simulation owner uses native pending-source membership and the
+scene-transaction resource to admit source dispatch at its existing ordered
+wiring/defaults boundary. A settled scene with no pending sources skips the
+exclusive system and its World flush. Initial source publication, recompile
+and replacement retain initialization sampling and prim-path compile order.
+This moves an existing engine admission invariant into native run conditions;
+it adds no policy hook, cache, clock, precision conversion or external change.
+
+The focused private ECS test passes deferred source insertion in the same
+Update boundary, held scene transactions, resumption and final-source retirement.
+The normal production artifact is
+`319be0052b4ed35584393d2631239f910c22a3604f57c81d70ff75da47c8da69`.
+Its stable API schema, 18-check telemetry-history gate and scene replacement
+pass. Both 20-rover profiles pass 144 exact checks at widths 24/1 against
+unchanged reference
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+Normal PID 665260 and replay PIDs 666483/666743 exit zero, releasing API 4202.
+Final formatting changes no runtime behavior; source fingerprints and the
+pre-format patch are retained alongside the exact artifacts.
+
+The separate native capture has two source-dispatch calls: initial admission
+and scene replacement. All three settled eight-second View/Build/View windows
+have zero calls; the pending-membership condition averages 2.35/2.11/1.73
+microseconds across 237/219/376 checks. The older native baseline called the
+exclusive dispatcher 513/454/588 times in its corresponding windows, averaging
+103.89/106.23/89.40 microseconds. The changed source bases and workloads do not
+permit a causal elapsed-time comparison. The avoided idle calls are verified;
+whole-app FPS and loading improvement remain unproven.
+
+The 383,668,920-byte capture passes native dispatch, membership and message
+exports. Its 383,596,370-byte compressed payload agrees with reported 365.83
+MiB after container headers. Owned app/collector PIDs 632153/632152 exit zero
+and release API 4202/Tracy 8087. The first unconnected collector attempt is
+invalid profiling evidence; the accepted run explicitly sets `TRACY_PORT=8087`.
+
+The normal High-quality fixed-camera windows preserve 50 bodies, 33 colliders
+and 20 joints, advancing 609/610/606 physics steps. Frame medians are
+10.985/11.421/11.313 ms and readiness is 4.969 seconds. Sibling main/tutorials
+builds overlap; the baseline also overlaps owned offline analysis. These are
+contention-affected observations, not clean FPS or loading acceptance. The
+restart image retains the rendered scene and shadows. The three known authored
+initial-pose pauses remain visible. Broader loading, visual and physics targets
+remain open.
+
+After verifying owned app/build termination, the additional focused
+`cargo clean -p lunco-luncosim` removes 49 files / 4.5 GiB. Source, sibling
+worktrees and shared caches remain intact. Evidence lives under
+`.lunco/performance-evidence/entity-tree-perf/`, with `modelica-source-gate-`
+prefixes. That checkpoint retained the normal production executable in
+`target/debug`; the later cleanup is recorded above.
+
+## Native entity-tree marker admission — 2026-10-11
+
+The scene-edit UI admits `Mesh3d`, `SelectableRoot` and `SceneCamera` additions
+through its existing native source queue. The metadata query retains five
+mutable change filters and admits new names through `Changed<Name>`, then
+fetches typed candidate facts only for changed/admitted identities. It avoids
+three per-entity added-marker checks while preserving direct label edits and
+changes to unpublished worker members. A newly named tracked ancestor now
+introduces its container row without requiring a parent change. Parent-edge
+comparison, removals, active-scene boundaries and active-Twin queue retirement
+remain owned by the existing projection. No new policy hook, simulation action,
+precision conversion or external-library change is introduced.
+
+The focused private resource-seam suite passes all 11 cases, including new
+ancestor names, edits to unpublished worker members and hidden non-candidates.
+The 20,000-name settled benchmark takes 74.99/138.50 microseconds per complete
+update for sparse/rich archetype layouts, compared with 94.74/242.54 microseconds
+in the baseline. These are synthetic update costs, not application FPS.
+
+The integrated normal artifact is
+`d8ea8c552841cfc02674965dd00a95877ccc5c76880556efbc330004426b675d`,
+built on main `99f675e80` with the native admission change. Its stable API schema,
+18-check telemetry-history gate and restart pass. Ten replay profiles pass 360
+checks at compute widths 1/24 against the unchanged reference
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+A bounded live Build run confirms rejected unknown catalog admission preserves
+entity count, `ball_static` admission succeeds, and authoritative selection
+resolves without stale entities or Modelica compile errors. Normal app PIDs
+257631/315024 and every replay process exit zero and release API 4202.
+
+The separate Ackermann catalog-spawn check admits and selects its root but
+Modelica initialization rejects input `shaft_speed_FL`: source port
+`shaft_speed` is undeclared. This diagnostic does not establish working catalog
+rover simulation; the causal port-surface failure remains open at
+`lunco-cosim-core::initialization`. The normal pre-spawn frame windows preserve
+50 bodies, 33 colliders and 20 joints. They observe sibling workloads and the
+sandbox's three reported initial-pose pauses, so whole-app loading/FPS and
+complete catalog-rover acceptance remain open.
+
+The native View/Build/View capture measures the complete tree gate at
+135.51/123.71/158.77 microseconds mean, compared with 100.80/103.35/88.83 in the
+older baseline. Concurrent workloads and different frame cadence prevent a
+causal elapsed-time comparison; no native timing or whole-app FPS gain is
+claimed. The 355,010,913-byte capture passes native CPU/message exports and its
+compressed payload matches the reported 338.50 MiB after container headers.
+Owned app/collector PIDs 354467/354466 exit zero and release API 4202/Tracy 8087.
+The validated normal artifact is restored. Runtime evidence above is on
+`99f675e80`; newer main metadata contracts require separate integrated evidence.
+
+Main's checked FMI metadata change `2de62f2f2` is preserved in the final
+integration. A fresh normal build produces artifact
+`13cbf82a99877751266d96ce1f5ccbec9e03e7ad54ba3b12120d31b14f0392e5`.
+Its 18-check history gate, schema stability and restart pass; PID 400069 exits
+zero and releases API 4202. View/Build/View frame medians are
+11.076/10.959/11.010 ms with no monitored foreign simulator/build workloads.
+All ten latest replay profiles also pass 360 checks at widths 1/24 against the
+unchanged exact reference; every process exits zero and releases API 4202.
+These are absolute observations on the newer metadata owner, not a causal
+comparison of the UI change. Latest evidence uses `entity-tree-admission-latest-`.
+The earlier catalog-spawn fault and native capture remain observations on
+`99f675e80`; they have not been reclassified as newer-main results.
+
+The final merge also preserves main's terminal Modelica failure handling
+`28ce78033`. Artifact
+`a10c4b32f10708023db77d7a58ffc74e92736c69e7b3886e8aa6d7eb84e38dba`
+is rebuilt from merged `15bd61105`; the UI source matches commit `10b1b26cf`
+exactly. Its authored observation-failure scene passes the expected terminal
+`modelica-step-failed` verdict without a process crash (owned PID 493809).
+Both 20-rover reference profiles pass 144 checks at widths 24/1 (owned PIDs
+511607/513031). These processes exit zero and release API 4202. Final-merge
+receipts use `entity-tree-admission-final-merge-`; the normal executable at that
+checkpoint used this merged artifact. Earlier history and frame evidence retain
+their exact
+source bases rather than being claimed as post-merge measurements.
+
+Full `cargo clean` removes 21,581 files / 23.0 GiB after owned sessions close.
+Task evidence and validated artifact archives formerly under
+`target/entity-tree-perf/` are preserved under
+`.lunco/performance-evidence/entity-tree-perf/`; older receipts retain their
+original paths. Source, sibling worktrees, Cargo registry and shared sccache
+remain intact. Integrated final evidence uses the
+`entity-tree-admission-integrated-` prefixes, with the simple consumer under
+`entity-tree-admission-simple-consumer-`.
+
+## Exact-epoch ephemeris cache admission — 2026-10-11
+
+The analytic provider's existing single-epoch cache admits 47 of 143 requests
+in a settled eight-second High-quality sandbox interval. Its 96 misses are
+first requests for their exact `(body_id, epoch_jd.to_bits())` samples: no
+previously evaluated sample is requested again after eviction. The interval
+covers 32 distinct epochs and Earth, EMB and Moon. A larger retained epoch set
+would not eliminate any of these observed misses.
+
+The preceding native baseline ranks `link_snapshot_occlusion_inputs` at
+1.054 ms mean across 163 recomputes in the full capture. The pinned celestial
+library's `Vsop2013Earth::heliocentric_position` privately evaluates EMB and
+Moon operands; the application's exact-epoch cache cannot access those
+intermediate samples through that call. Retain the maintained formula owner
+and native f64 operation order rather than adding a second Earth calculation.
+Continue with measured application-owned work, including the entity-tree gate.
+
+The `ephemeris-epoch-admission-` receipts under `target/entity-tree-perf/`
+retain the 294,027,263-byte capture, successful native CPU/message exports,
+exact source/artifact fingerprints and request classification. Its compressed
+payload matches the collector's reported 280.36 MiB after excluding container
+headers. Owned app/collector PIDs 3909611/3909610 exit zero and release API
+4202/Tracy 8087. The workload snapshots contain sibling builds, so elapsed
+timings are diagnostic only. Instrumentation is removed byte for byte and the
+validated normal artifact
+`195d19025df902d0c19442d61c0f6bce70eb0a19bd554f814bdb03c30b927a88`
+is restored. No simulation, scene, quality or external-library changes remain;
+its existing 360-check replay and 18-check history/restart evidence remains
+valid. This diagnostic establishes no product speedup or loading acceptance.
+
+## Avoid repeated Modelica wire-owner lookups — 2026-10-11
+
+`lunco-modelica-telemetry` caches each channel's owner publication under a
+session cursor for live ownership and the shared registry's catalog revision.
+Unchanged admitted channels skip repeated string-keyed owner lookups. A changed
+batch invalidates every channel's publication, including channels skipped for
+non-finite values or capacity; only actual association acknowledges a channel.
+Reuse also requires a retained scalar sample: preparing an owner or metadata
+alone does not establish admitted wire ownership. New variables, owner changes
+and removal/re-admission publish through `SignalRegistry`, which remains the
+archived wire-identity owner. Sampling, histories, variable iteration, f64 values
+and solver/physics timing retain their existing contracts. This is cache
+admission in the existing projection owner, with no new policy hook or parallel
+identity store; see [the telemetry contract](../architecture/telemetry-subsystem.md).
+
+The focused Rust resource-seam test covers removal before the first scalar,
+removal of an admitted channel, a new variable, changed source identity,
+non-finite values across owner/catalog changes and preservation of archived
+ownership when the live component disappears. The normal production artifact is
+`195d19025df902d0c19442d61c0f6bce70eb0a19bd554f814bdb03c30b927a88`.
+Its 18-check telemetry-history gate, stable API schema and scene restart pass.
+All ten existing replay profiles pass 360 authored checks at compute widths
+1/24, with 4/8/20 rovers, large seeds and jitter, against the unchanged exact
+reference `9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+Owned normal PID 3786863 and all replay processes exit zero and release API
+4202. The `modelica-owner-publication-complete-` receipts under
+`target/entity-tree-perf/` retain exact artifacts/sources, native exports,
+verdicts, workload observations and session closure.
+
+A temporary native admission diagnostic observes 324 settled source batches
+covering 73,692 eligible channel visits with zero owner-publication calls.
+All nine live Modelica sources have a global owner. The 312,615,482-byte capture
+passes native CPU/message exports, and its compressed payload matches the
+collector's reported 298.08 MiB after excluding container headers. Owned
+app/collector PIDs 3874847/3874846 exit zero and release API 4202/Tracy 8087.
+Instrumentation is removed and the validated normal artifact is restored.
+These counts establish admitted reuse, not elapsed-time savings.
+
+High-quality, fixed-camera normal frame medians are 10.851/10.906/10.821 ms
+for View/Builder/View, with 614/606/607 physics steps in the ten-second windows,
+50 bodies and 33 colliders. The first and third windows observe sibling builds;
+the middle window's 38 workload observations are clear. These observations do
+not establish a whole-app speedup. Loading, clean visual-FPS acceptance and
+broader physics-FPS improvement remain open.
+
+## Native preprocessing binding lifetime — 2026-10-11
+
+The native `prepare_preprocess_bind_groups` cost of 0.50–0.61 ms per settled
+frame includes binding allocation, but allocation capacity is not a reuse key.
+Bevy 0.19.1's `collect_buffers_for_phase` exchanges the per-phase resources
+with the frame-level buffer tables, clearing and retaining the old allocations
+for the next preparation. This alternates the actual indirect and phase-buffer
+cohorts even when their sizes and scene counts stay constant. Native view groups
+must also be available on each current extracted view before a preparation can
+be skipped.
+
+Two owned High-quality sandbox captures observe zero consecutive-frame
+admissions: 2,969 and 2,874 misses. The complete binding-fact collection alone
+costs 78.5 and 87.0 microseconds mean across these captures, so retaining that
+gate would add work without removing native preparation. A sampled lifetime
+capture verifies a same-size indirect CPU-metadata buffer changing from
+`BufferId(2246)` to `BufferId(2256)` at 2,808 bytes, and missing native view groups
+before preparation. RenderDevice changes once at startup and remains unchanged
+on the following 3,006 checks. Pipeline-cache change ticks cannot establish
+binding invalidation: its native queue-processing system mutably accesses it
+on every render frame; use actual layout and resource facts.
+
+The `preprocess-bindings-` receipts under `target/entity-tree-perf/` retain the
+three native captures (392,838,102; 393,727,331; 400,289,810 bytes), successful
+native exports, exact artifact/source hashes and owned-process checks. The
+lifetime summary separates the two admission captures from the sampled
+invalidation diagnostic. Each owned app/collector exits zero and releases API
+4202 and Tracy 8087. Instrumentation and the ineffective gate are removed;
+production Rust sources match their admitted revision byte for byte. Package
+cleanup removes only this checkout's root-package outputs, and the verified
+normal artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+is restored. Its unchanged 360-check replay and 18-check history/restart evidence
+remains valid. No product speedup, loading improvement or new determinism
+acceptance is claimed by these diagnostic captures.
+
+The current binding-construction owner remains native. Any future reuse must
+cover the actual buffer cohort, binding offsets/ranges, layout descriptors,
+occlusion textures, work modes/counts and bin-job parameters, and publish
+complete groups to current views at the native deferred boundary. A one-frame
+latch or a capacity-only key does not meet that contract. Continue with measured
+application-owned costs rather than adding that extra per-frame work.
+
+## Measure local-shadow reuse candidacy — 2026-10-11
+
+Native exports show twelve nonempty 4096-by-4096 local maps, with three to six
+multidraw sets per map in the settled integrated capture. The ground and rover
+materials consume native PBR lighting, so these maps have real readers.
+The application delegates depth rendering to Bevy; its native shadow atlas
+allocation cache retains textures, while preparation assigns sorted light
+layers and creates each frame's clearing depth attachments.
+
+An owned diagnostic capture measures sorted native visible caster identities,
+mesh identities, GPU pose/geometry-index bits, skin indices and the light's
+extracted projection/transform. In three settled eight-second View/Builder/View
+intervals, ten maps change this digest every sampled frame. Maps 10 and 11
+repeat it on 232/507, 200/457 and 183/572 frames (46%, 44% and 32%). The
+candidate lists contain 4–73 shadow casters and no skinned instances. These are
+visibility candidates, not an inventory of ready draw items. Stable draw-set
+counts do not establish a static depth image. A cache keyed by these candidates
+would cover only part of two maps, leaving most measured GPU cost in place.
+
+These diagnostic digests do not admit a render cache: material/pipeline state,
+mesh contents, morphing, backing texture identity and atlas-layer assignment
+still require independent invalidation. Native preparation shares the spot
+atlas with directional cascades, so a light-count or cascade change can shift
+layers without changing the light's entity identity. No passes are skipped and
+no scene, shader, simulation, quality or external-library source changes remain.
+
+The 407,955,766-byte capture and successful native exports use the
+`shadow-pose-diagnostic-` prefix under `target/entity-tree-perf/`. Owned app and
+collector PIDs 3374477/3374476 exit zero and release API 4202/Tracy 8087. The
+workload snapshots contain only those processes. Temporary instrumentation is
+removed with exact source-byte checks, and the normal artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+is restored and verified. Its existing 360-check replay and 18-check history/
+restart evidence remains valid. The preceding native CPU export ranks
+`prepare_preprocess_bind_groups` at 0.50–0.61 ms mean per settled frame; inspect
+application view admission and its native binding-resource lifetime next.
+This capture does not establish a product performance gain or complete acceptance.
+
+## Reuse pending-source query metadata — 2026-10-11
+
+`lunco-usd-sim-cosim` retains Bevy's system-local `QueryState` for Modelica
+source admission. Normal iteration refreshes new archetypes and returns current
+pending entities; sampling, source ordering, wiring and initialization stay at
+their existing boundaries. This is an engine metadata mechanism with an existing
+repository consumer pattern, so it adds no policy hook or parallel admission path.
+
+Native Tracy exports compare the same High-quality sandbox and camera in three
+settled eight-second View/Builder/View intervals. The admission system's body
+median falls from 92.162/91.135/81.532 to 1.823/1.744/1.613 microseconds.
+Both owned app/collector pairs exit zero and release API 4202 and Tracy 8087.
+The second capture overlaps a sibling Cargo build and different GPU clocks;
+these are owner-cost diagnostics, not clean loading or FPS gains.
+
+The uncontended prechange capture identifies local-shadow parents at
+6.180/6.248/6.202 ms per camera interval, camera shadows at
+1.849/1.884/1.873 ms and opaque rendering at about 0.41 ms. Child depth-pass
+times are not added to their parents. All twelve spotlights have positive
+intensity and enabled maps; both inspected settled images retain the High
+shadows. No redundant full shading or safe map omission is demonstrated.
+Shadow/terrain performance acceptance remains open.
+
+The normal production artifact
+`3e40a55f3f8c6121508770a8fb977438789f37ad137cf66f0b658e95ef491952`
+passes the 18-check telemetry-history gate and scene restart in owned PID
+3362676/API 4202, then exits zero and releases the port. Readiness is clear;
+diagnostics retain the three existing authored-pose initialization warnings.
+Its High-quality View/Builder/View frame medians are 10.585/10.553/10.614 ms,
+with p99
+12.087/12.227/12.593 ms. Physics-step medians are 1.045/0.987/1.007 ms;
+486/485/484 steps advance over the three eight-second windows and checkpoints.
+The premeasurement inventory contains only the owned app. Frame times are
+consistent with the preceding normal baseline and establish no causal FPS gain.
+All ten uninstrumented replay profiles pass 360 authored checks against the
+unchanged reference digest
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`,
+including serial/24-thread 4/8/20-rover runs, seeded jitter, zero tolerance and
+the altered-row negative control. Every process exits zero and releases API
+4202. Skill catalogue validation passes all 43 entries.
+
+Receipts, captures, native exports and comparisons use the `current-integrated-`
+and `admission-query-cache-` prefixes under `target/entity-tree-perf/`.
+After package cleanup proved insufficient, an authorized checkout-local
+`cargo clean` freed 26.5 GiB. Existing profiling evidence and the exact normal
+production artifact were preserved; source, sibling worktrees and shared
+Cargo/sccache caches were retained. Builds use the normal target and four jobs.
+
+## Complete initial causal admission after main integration — 2026-10-11
+
+Integration of current main's checked Modelica initialization exposed incomplete
+causal admission. `lunco-cosim` owns model-output availability for named and
+resolved reads, independently of native ports on the same entity.
+`lunco-usd-sim-cosim` publishes participant surfaces before wiring, records
+`PendingInputConnections` while sources prepare, and rebuilds child endpoint
+indirection at `UsdSimProcessed`. Initialization retains finite samples, ordered
+affine sums and hold priority. Preparation does not advance simulation clocks.
+These are generic owner and lifecycle mechanisms; no changeable policy or
+additional hook is needed. The two drivetrain models supply guidance inputs
+through instance modifiers, preserving their formulas and standalone defaults.
+
+The normal production build passes at artifact
+`1ddce2ce4cd15c5ab4f6c6bd6c8760682b277248bd2ec1dd0c435eecd75b78eb`.
+Owned PID 3140494/API 4202 reaches readiness in 2.91 seconds, passes the 18-check
+production telemetry-history gate, and passes scene restart readiness and
+diagnostics. It exits zero and releases the port. Two focused generic resource
+seam tests cover output availability and pending connection/finite hold admission.
+
+The uncontended High-quality View/Builder/View windows retain 50 bodies and
+33 colliders. Median frame times are 10.649, 10.600 and 10.571 ms; p99 values
+are 13.348, 12.234 and 12.368 ms. Physics advances 486/487/487 steps over the
+three eight-second windows and their API checkpoints. The workload inventory
+contains only this owned simulator. These are current measurements, without a
+matched healthy pre-integration baseline; they establish no causal FPS gain.
+
+The current replay reference captures admitted authored pose/radius values and
+the composed guidance bindings at t=0. Selected physics, Modelica, articulated
+and final rows match exactly across serial/24-thread execution for 4/8/20 rovers
+and across all four seeded jitter profiles. Temporary row logging is removed
+before production replay. Zero tolerance and the altered-row negative control
+remain required. Reference provenance records the exact artifact and authored
+input digests. All ten uninstrumented production profiles pass 360 authored
+checks against reference digest
+`9d4d03c5864a07d8db782959ab79256297e9d49761b073f4a3a23cd0f406c548`.
+The admission and guidance repairs intentionally change initialized Modelica
+state and the subsequent trajectory; this is exact same-build determinism,
+not unchanged behavior against the earlier reference. Full-scene moving,
+terrain and shadow performance acceptance remain open.
+
+The settled live schema has 262 commands; regeneration agrees with the common
+canonical command surface. The 11 networking commands remain in the canonical
+reference because this normal build omits the opt-in networking feature.
+Source and registration contracts for those commands are unchanged.
+
+Current receipts and diagnostic comparisons use the `metadata-publication-`
+and `admission-` prefixes under `target/entity-tree-perf/`. Package-scoped
+application cleanup preserves source, sibling worktrees and shared caches.
+
+## Pre-integration telemetry metadata evidence — 2026-10-11
+
+`lunco-modelica-telemetry` retains a publication flag per runtime variable and
+moves first or changed metadata into `lunco-signal::SignalRegistry`. The registry
+owns equality checks and storage. This removes the producer's duplicate
+`SignalMeta`, including its owned strings, while retaining the existing
+document-generation/layout invalidation, channel identities, iteration order,
+solver-time sampling and session reset. This is a generic resource ownership
+change; the existing authored telemetry policy and lifecycle remain in place.
+
+The normal production build passes. Its artifact is
+`a86ed1bdde4324ae8880e643c8b259331eab658398c7593a14ad2db486d7cfda`.
+The production `telemetry_recording_history.rhai` gate passes 18 checks,
+including Modelica provenance, model/variable/source metadata, steady histories,
+ordered timestamps, rate/retention and absent-channel rejection. Scene restart,
+readiness and diagnostics pass in owned PID 2854710/API 4202, which exits zero
+and releases the port. All ten profiles pass the unchanged exact replay
+reference, totaling 360 authored checks with serial/default 24-thread execution,
+large seeds, jitter and 4/8/20 rovers. No simulation precision, cadence or quality
+setting changes.
+
+The 312,877,532-byte production Tracy capture passes native CPU exports.
+`modelica_telemetry_channel_metadata` records 4,094 publications totaling
+13.168 ms across loading and replacement, with none in the three settled
+View/Builder/View windows. Its owned app/collector PIDs 2879666/2879665 exit
+zero and release API 4202 and Tracy 8087. Capture and normal measurements overlap
+another simulator and Cargo build, so they establish no causal loading or FPS
+gain. The inspected Builder image retains scene detail and High shadows.
+
+The prior current capture's settled GPU attribution still identifies the larger
+cost: local shadow parents total 6.164–6.174 ms per camera interval, directional
+shadows 1.843–1.851 ms, and opaque rendering about 0.674–0.678 ms. Parent and
+child events are not added together. Application shader specialization keeps
+native depth-only shadow/prepass handling; no unnecessary full shading is
+demonstrated by this inspection. Shadow optimization and clean full-scene
+loading/render/physics acceptance remain open.
+
+Task-owned `metadata-publication-` receipts, logs, capture, exports and normal
+archive are retained under `target/entity-tree-perf/`. Scoped application cleanup
+preserves source and shared caches. The verified normal artifact is restored
+and its digest verified after profiling. Final formatting changes no Rust source.
+
+## Move asynchronous Modelica syntax copies to parse workers — 2026-10-11
+
+`lunco-modelica-core` queues each worker's typed syntax cache at the session
+installation boundary. The update-side consumer moves its shared AST,
+generation and located diagnostics directly, validates the document generation,
+and installs it once. Native workers prepare the session's separate owned AST
+off-lock. The existing FIFO, wake latch, pending admission, index owner and
+class-change consumer remain in place. Completion budgeting now includes the
+index installation and stops the drain after a result exhausts the budget.
+WASM transport and prepared-library results share that document consumer;
+the browser page still performs its session ownership copy. This is a generic
+resource/ownership mechanism, with no new lifecycle policy or Rhai hook.
+
+The 347,594,361-byte production Tracy capture passes native CPU exports.
+Fourteen session-copy events run on parse-worker threads distinct from all
+captured update-side drains: 8.930 ms total, 0.286 ms median, 2.635 ms maximum.
+The 39 completion moves total 0.083 ms, with a 2.244 microsecond median and
+6.092 microsecond maximum. Fourteen document installations total 9.435 ms and
+peak at 1.715 ms. These are captured owner diagnostics, not a complete startup
+sample or a causal overall FPS comparison. The earlier capture's long snapshot
+and index-install tails cannot be paired here: the checkout's entire `target/`
+directory disappeared during the pass. Earlier artifacts referenced below
+under `target/entity-tree-perf/` are no longer locally retained. Current
+`syntax-completion-` receipts, capture, normal backup and logs are retained there.
+
+Native `cargo test -p lunco-modelica-core --lib completion -j 4` passes five
+resource seam checks, including exact shared AST identity after session
+mutation, FIFO draining, located recovery diagnostics and terminal worker
+failure. The `wasm32-unknown-unknown` focused compile passes with the repository
+web cfg flags; browser runtime behavior is unobserved. The production
+`modelica_parse_completion.rhai` gate passes seven checks for clean, invalid
+and repaired generations. The repair reaches the existing `ClassRenamed`
+consumer. Its isolated owned PID 2677833 exits through API `Exit` and releases
+4202. Passing runs use explicit task-owned configuration directories.
+
+Normal artifact
+`6b6da728ef499fe3498e5677186a6f76d40ccc30fa1900ac15af094f9dea9e80`
+passes all ten exact replay profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+Its retained gzip backup is hash-verified after restoration. The final normal
+profile verifies actual `sandbox_view` / `rover_build` activation before
+measuring; earlier attempts with unregistered IDs are explicitly invalid for
+perspective comparisons. Its View/Builder/View medians are
+10.911 / 11.021 / 11.097 ms, with 487 / 487 / 486 physics steps in approximately
+eight-second windows and stable 50-body / 33-collider topology. The screenshot
+audit confirms Builder panels, the live scene and High shadows. The final
+normal run reaches warm readiness in 2.445 seconds and records no other Cargo
+or simulator process in its three windows. The missing paired baseline still
+prevents a causal application FPS claim. The Tracy app and collector exit zero, releasing 4202 and 8087;
+the final unprofiled app also exits zero and releases its API port.
+
+External libraries, solver communication, numerical state, simulation ordering,
+physics fidelity and rendering quality retain their contracts. Full loading,
+visual FPS, physics-throughput acceptance and the pre-existing raycast drive
+failure remain open. Large document index preparation remains update-side and
+needs a complete owner-level design that preserves its live map identities and
+class-change semantics before moving it to workers.
+
+## Serial local-shadow execution and GPU attribution — 2026-10-11
+
+The application-owned `SharedShadowView` schedule uses Bevy's native
+`SingleThreadedExecutor`. Its eight admitted GPU systems form a dependency
+chain; dispatching workers between those stages provides no parallel work.
+The CPU preparation mode retains its two ordered shadow passes. Native
+parameters, early/late admission, final deferred buffer application, map
+quality and draw order keep their owners. Frame-level Render, camera Core3d
+and authoritative simulation schedules retain their existing executors. This
+continuous render mechanism needs no Rhai policy hook.
+
+Valid 258,139,840/256,940,323-byte production captures pass native CPU and GPU
+exports. Settled initial authored-camera windows exclude the explicit camera
+command and replacement. Shared-view inclusive CPU means are 0.565/0.241 ms;
+self means are 0.268/0.045 ms. The native inventory remains twelve shared
+early and twelve shared late passes plus one camera late pass in each of
+157/397 complete camera intervals. All twelve 4,096 × 4,096 map phases are
+non-empty, with identical three-to-six multidraw-set counts.
+Empty-phase suppression cannot skip these views; these admission facts do not
+establish static caster inputs. Shared early GPU
+totals are 8.103/6.582 ms per interval. GPU clocks differ, 1,447/2,205 MHz, and
+concurrent workloads differ; these timings are diagnostics, not a causal
+overall FPS gain. Native schedule seam tests pass with both executors,
+including unrelated-view rejection and final buffer order. Owned candidate
+PID 2225990 and collector close with exit zero, releasing API 4202 and
+Tracy 8087. The inspected image retains High shadows and scene detail.
+Receipts and captures use the `shadow-serial-` prefix under
+`target/entity-tree-perf/`; the paired baseline uses `shadow-detail-baseline-`.
+
+Normal artifact
+`98b32e12ef0b8294f39153528d964ee2906a0ff802f57d3009e0d1bc157e5b12`
+passes all ten determinism profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`,
+including jitter and compute widths 1/24. The owned High-quality normal run
+keeps equal View/Builder/View camera poses, clear readiness/diagnostics and
+50 bodies, 33 colliders and 20 joints. Its eight-second windows advance
+487/488/483 physics steps without discarding simulation time. Sampled app-frame
+medians are 15.010/30.968/10.644 ms; post-step physics medians are
+1.543/1.864/1.631 ms and full fixed-tick service medians are
+3.466/4.921/2.869 ms. Sibling USD Cargo PID 2226592 overlaps every workload
+checkpoint, so this does not establish clean loading, visual FPS or physics
+throughput acceptance. Warm readiness is 4.126 s. Builder inspection retains
+High shadows and the telemetry/hierarchy panels. Owned PID 2311207 closes
+with exit zero and releases API 4202. Normal/Tracy builds and all three
+schedule seam tests pass; unchanged authored behavior gates are reused.
+Scoped application cleanup and retirement of superseded task executable
+backups preserve source, captures, receipts, current comparison binaries and
+shared caches. The final normal executable remains available in `target/debug/`.
+
+Native CPU-self and GPU exports of the preceding 251,446,854-byte
+`wheel-fold-after-tracy-20261011` capture identify shadows as the leading
+render cost. Across 146 complete camera intervals, every interval contains
+12 shared early, 12 shared late and one camera late pass. Shared early GPU
+work averages 8.370 ms per interval; camera early averages 2.161 ms. All four
+shadow lanes together average 10.549 ms. Main opaque rendering averages
+0.544 ms per camera. These are disjoint GPU diagnostics; schedule self time
+and queue-submission time can contain waits and cannot be summed into CPU
+compute cost. The maintained PBR implementation confirms shared point/spot
+roots and camera-owned directional shadows have distinct native delegates.
+
+The owned unprofiled normal run uses unchanged artifact
+`d84101dd9e4f7247a699cb268fdc66191614f7aa3506037ae0c18978cb0d0c28`
+with High quality, no vsync/throttle and equal View/Builder/View camera poses.
+Live reflected light reads identify twelve spotlights, each with 90 m range
+and a 20 degree outer half-angle. The current High policy selects 4,096 px
+directional/spot maps and 2,048 px point maps. The reflection probe does not
+return frustum data; it supplies no evidence that any cone is disjoint from
+the camera. Native spotlight projection and the existing conservative
+render-world relevance filter are already present. Preserve authored light
+intent, range, maps, terrain and physics cadence when investigating redundant
+preparation or shadow reuse; dropping the twelve passes is not an established
+optimization.
+
+Normal frame medians are 12.583/13.284/22.445 ms. The rolling post-step physics
+sample medians are 1.833/1.984/2.032 ms; full fixed-tick service medians are
+4.042/3.911/4.744 ms. Each eight-second window advances 485/487/488 steps with
+50 bodies, 33 colliders and 20 joints. Readiness and diagnostics remain clear;
+no simulation time is discarded by the max-delta limiter. Warm launch readiness
+is 4.895 s. A sibling Cargo process overlaps every window, so these values
+remain contention-affected diagnostics and establish no clean FPS/loading
+acceptance. The GPU is an NVIDIA GeForce RTX 5060 Laptop GPU. The inspected
+View screenshot retains shadows and scene detail. Unchanged behavior/replay
+gates from the preceding mechanism change are reused rather than repeated.
+
+Normal baseline PID 1819899 closes with exit zero and releases API 4202.
+Its original executable is measured separately from the diagnostic extension.
+Receipts, screenshots and logs remain under `target/entity-tree-perf/`, prefixes
+`current-unprofiled-acceptance-`, `current-critical-path-ranking-` and
+`current-shadow-frame-inventory-`. Large domain-synthesis validation spans
+already execute through the owner's background preparation closure; their
+size alone does not establish an application-thread stall. Clean acceptance,
+loading-tail attribution, shadow reuse and the existing raycast drive failure
+remain open.
+
+## Limit raycast mass additions to eligible carriers — 2026-10-11
+
+`lunco-mobility::fold_raycast_wheel_mass` retains the shared ordering validator
+for every wheel and reduced-part source, including already-folded or unavailable
+carriers. Its existing `Mass`/`RaycastWheelMassFolded` query now excludes those
+carriers before allocating and populating per-carrier additions. Eligible
+additions retain their validated order and native values. The unread copied
+key is removed from the addition tuple. Pending parameters, mass, centre of
+mass, parallel-axis inertia, commands and the once-only marker keep their
+existing calculations and boundary. This is preparation inside the mechanical
+owner; no cache, policy hook, public API or external-library change is needed.
+
+The private settled resource benchmark uses 128 folded carriers, 768 ordered
+sources and 2,000 updates. Observed preparation time is 182.331/88.827 ms, a
+51.3% reduction, with exact carrier mass bits and markers unchanged. All seven
+native mechanism checks pass, including pending-parameter deferral and
+mass/inertia assertions. The valid 252,307,291/251,446,854-byte application
+captures pass native exports. Their settled system self costs are 484/551
+calls, 0.052012/0.045483 ms mean and 0.105809/0.086792 ms p95. Export selection
+excludes the separate command-application spans. Warm windows follow the
+inactive visual-projection gap. Concurrent workloads differ, so these timings
+are diagnostics, not clean loading, visual FPS or physics-throughput acceptance.
+
+Normal artifact
+`d84101dd9e4f7247a699cb268fdc66191614f7aa3506037ae0c18978cb0d0c28`
+passes all ten determinism profiles, 360 checks, against unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`,
+including jitter and compute widths 1/24. Production verdicts pass sandbox 7,
+telemetry history 17, mass/island 10 and primitive mesh sharing 42, followed by
+replacement sandbox 7. Readiness, physics progress, same camera, invalid
+assembly pause guards and invalid/valid Modelica resets pass. Inspected Builder
+and Command Deck screenshots retain High quality. Contended frame medians are
+15.773/13.885/15.663 ms; clean throughput acceptance remains open.
+
+The existing drivetrain parity scene fails seven of twenty checks on both
+baseline and candidate: the raycast rover does not drive, while the physical
+rover does. All thirteen mass, geometry and structural checks pass, including
+1,120 kg for each rover. This preserves the observed mass contract; it does
+not establish full drivetrain acceptance or exact equality of every drive
+sample. The pre-existing drive failure remains an open investigation.
+
+Owned normal, replay and Tracy sessions close, releasing API 4202 and Tracy
+8087. No commands are sent to main PID 84260; it is absent at final inspection.
+Normal and Tracy builds pass. Scoped application cleanup removes 3.3 GiB of
+this checkout's outputs; the archived normal executable is verified and
+restored after profiling. Source, sibling sessions and shared caches are
+preserved. Receipts, logs, captures and exports are retained under
+`target/entity-tree-perf/`, prefix `wheel-fold-`; the paired baseline capture
+uses prefix `ui-owner-after-tracy-20261011`.
+
+## Let registered panels own UI snapshots — 2026-10-11
+
+`lunco-ui` initializes shared selection, embodiment roles and the modal host.
+Domain panels own their presentation snapshots: Command Deck handles selected
+control authority, Avatar handles local embodiment state, and the workbench
+toolbar consumes the shared time transport. Caller and registration discovery,
+including the owned production application, identifies an unconsumed native
+widget and unconditional snapshot producer. Their module, public exports,
+local callback and eight unused domain dependencies are removed together.
+No replacement mechanism, hook, compatibility path or simulation policy is
+introduced. The remaining panel consumers and authoritative clocks retain
+their owners.
+
+The accepted baseline capture `visual-transition-after-final-tracy-20261011`
+records 488 settled snapshot calls, 39.831 ms total, 0.081621 ms mean.
+The 252,307,291-byte final capture `ui-owner-after-tracy-20261011` matches the
+collector's reported size and passes native exports; it contains zero such
+calls throughout the capture. This eliminates that application's unconsumed
+per-frame work. Concurrent main and sibling build workloads prevent a clean
+loading, visual FPS or physics-throughput claim.
+
+Normal artifact
+`778876e40aa8bdccd6bec158a35cf4b035bc43eaf83fe011c6398de9b3c52d8c`
+passes all ten production determinism profiles, 360 checks, against unchanged
+reference `276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`
+at compute widths 1/24. Production scene verdicts pass sandbox 7, telemetry
+history 17, mass/island 10, primitive mesh sharing 42 and replacement sandbox 7.
+Readiness, advancing physics, fixed camera, invalid-assembly pause guards,
+invalid-reset rejection and valid Modelica reset pass. Builder inspection
+shows Command Deck, telemetry and hierarchy rows at High quality. Raw frame
+medians are 15.884/17.169/19.163 ms during concurrent build activity; those are
+contended observations, not acceptance numbers.
+
+Owned normal/replay/Tracy sessions close with zero exits and release API 4202
+and Tracy 8087. Main PID 84260 remains untouched. Both production builds pass;
+the exact validated normal executable is archived, verified and restored.
+Scoped application cleanup occurs only after replay closure and removes this
+checkout's stale application outputs. Source, external libraries, sibling
+sessions and shared caches remain intact. Receipts, captures, exports and logs
+are retained under `target/entity-tree-perf/`, prefix `ui-owner-`.
+
+## Group each prim's structural component commits — 2026-10-11
+
+`lunco-usd-bevy` uses native bundles for related projection writes and removals.
+Primitive identity commits with its pending mesh request; grid cell and spatial
+projection commit together. Completion clears both projection markers together,
+and geometry cancellation/rejection removes the complete pending definition set
+in one command. Non-rendered prim cleanup records one removal instead of six.
+Retired entities use the existing fallible command boundary. Prim/entity command
+stream order, projection caps, generation fences, authored values, physics
+admission, solver math and rendering quality retain their owners. Component
+publication is grouped within a prim; this adds no policy or public API.
+
+Final Tracy artifacts
+`8531f5e7520d8c8e6d9797535ae7c93bbf83fc0bf0fe3eb820193261746a8775` and
+`599998bec1d7d46c7ca0bb204123db9c20003a9ee3b2601768c22522043ddbf0`
+produce valid 258,873,264/260,160,080-byte captures and successful native CPU
+exports. Each initial and replacement group contains 27 prim and 26 child
+admission flushes. Warm replacement prim flush total is 32.805/22.498 ms,
+median 0.507/0.409 ms; child total is 23.347/14.138 ms. Mesh publication takes
+1.426/2.103 ms across 20/21 calls. Background jobs change during these runs;
+the observed timings do not establish a causal overall loading or FPS gain.
+Initial prim maxima are 81.913/110.190 ms, so cold startup tails remain open.
+Full event groups use the verified inactive projection gap; an eight-second
+startup slice can omit admitted work under contention.
+
+Normal artifact
+`f2385ba05622e4aadb4a3eb0a6d616a3eb0f2889b8be78e837aef436b3639dcf`
+passes all ten production determinism profiles, 360 checks, with the unchanged
+reference `276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`
+and compute-pool widths 1/24. The windowed run passes sandbox 7, telemetry
+history 17, mass/island 10, primitive mesh sharing 42 and replacement sandbox 7.
+It verifies one mass verdict, invalid-reset rejection, valid Modelica reset,
+physics progress, readiness and the three existing invalid-assembly pause
+guards. View shadows and replacement hierarchy rows are inspected at High
+quality. Frame medians are 11.276/11.262/11.217 ms under contention; clean
+loading, visual FPS and physics-throughput acceptance remain open.
+
+All owned sessions exit zero and release API 4202/Tracy 8087. The normal
+executable is retained. Receipts, captures, native exports and logs remain under
+`target/entity-tree-perf/`, prefix `visual-transition-`. One truncated capture
+is rejected by the size gate. Disk recovery removes superseded task-generated
+executables, archives and intermediate captures after preserving current
+baseline/reference artifacts, native summaries and receipts. Source, external
+libraries, sibling sessions and shared caches are preserved.
+
+## Parse schema sources once and admit them deterministically — 2026-10-11
+
+`lunco-usd-authoring::SchemaRegistry` parses a source once before taking its
+global write lock. It consumes the validated layer in standard spec-path
+order. `lunco-usd-bevy-runtime-core` admits the requested module prefix,
+waiting at unresolved sources and reporting terminal failures before admitting
+later sources. Project-over-core bare-name priority, schema-qualified
+declarations and core linear-unit validation retain their owners. Hash-map
+traversal and worker completion no longer select declaration precedence.
+This remains synchronous startup registration; bounded worker preparation
+and clean loading acceptance remain open.
+
+One inline benchmark pair over 128 classes and 4,096 attributes, with 16
+registrations after warmup, takes 427.058/170.561 ms, a 60.1% reduction.
+The focused authoring and pending-asset seams pass seven checks, including
+that benchmark, invalid-source rejection without mutation, spec-path
+precedence, reversed source readiness and a valid source following rejection.
+These are generic parser and private resource seams, using inline schema text.
+
+Production Tracy artifacts
+`5f8a43deed5258a679e38f2952df144fde84f02c54e29e95b7d8f7b41a3bf23a` and
+`dfcb0526dcbcd61ec8d61ad63bbba715ed8c5e282e551f867d56e84ae06c1626`
+produce valid 261,071,445/259,600,592-byte captures. Native CPU exports each
+contain two startup registrar calls: total 10.696/6.783 ms and maximum
+10.676/6.769 ms, a 36.6% total reduction. Registration sleeps after completion,
+so the complete owner export covers startup only. Owned apps and collectors
+exit zero and release API 4202/Tracy 8086. Another main-worktree simulator
+remains active. Initial readiness is 3.371/4.167 s under contention; these
+captures establish a registrar cost reduction, not faster overall loading or
+clean FPS acceptance.
+
+Normal artifact
+`ca984bc0dc4e9cac14415261dbe2a9b5b95b72269b6a81241f15f9b823c67e09`
+passes all ten authored production determinism profiles, 360 checks, against
+the unchanged reference
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+Observed compute-pool widths remain 1/24; authored inputs remain unchanged.
+The final owned windowed run passes sandbox 7, telemetry history 17, mass and
+island checks 10, and replacement sandbox 7. It verifies one mass verdict,
+invalid-reset rejection, valid Modelica reset, readiness, physics progress and
+the three existing invalid-assembly pause guards. View shadows and replacement
+hierarchy rows are inspected at High quality. Warm readiness is 2.959 s and
+frame p50 values are 17.160/17.353/16.877 ms under contention. The normal
+executable is retained and all owned sessions are closed.
+
+Receipts, captures, logs and native exports remain under
+`target/entity-tree-perf/`, prefix `schema-registration-`. Disk recovery removes
+only completed task-generated test executables and `lunco-luncosim` outputs;
+the validated normal baseline remains in a hash-verified gzip archive. Source,
+external libraries, sibling sessions and shared caches are preserved.
+
+## Admit entity-tree changes before fetching candidate data — 2026-10-11
+
+`lunco-luncosim-edit-ui::ui::entity_list::scene_topology_changed` now filters
+native change ticks into entity identities, then uses indexed candidate reads
+for those identities. Quiet archetypes do not prepare optional label, hierarchy
+and visibility data. Native source admissions cover additions while the five
+mutable metadata filters protect current and pending snapshots. Removals,
+parent edges, scene boundaries and Twin retirement keep their owning checks. The existing dirty worker consumes the same boolean.
+This projection change introduces no new policy,
+revision owner, simulation action, clock admission or ordering.
+
+Three spans expose named changes, removals and parent changes separately:
+`entity_tree_gate_named_changes`, `entity_tree_gate_removals` and
+`entity_tree_gate_parent_changes`. Both artifacts in the final comparison have
+these spans. They run High quality without vsync/throttling, with the same
+explicit `SetCameraLookAt` command, exactly equal camera poses and
+50 bodies/33 colliders/20 joints. Main PID 84260 remains active and untouched.
+Settled six-second View/Build/View windows admit native CPU events by start
+time, rather than aligning their edges to frames.
+
+Complete gate means fall from 0.1564/0.1806/0.1634 ms to
+0.1256/0.1500/0.1323 ms, reductions of 19.7/16.9/19.0 percent. Named-change
+means fall from 0.1171/0.1341/0.1216 ms to 0.0888/0.1079/0.0937 ms. These
+are contended owner diagnostics, not clean application FPS acceptance. Before
+Tracy artifact `beb2fab8bb06e6e52c57e6832a931251c587a6480bda45700d0da0131e07821f`
+and after artifact
+`3eabc391d9f195e2b3670de4c57fe89045ffb7f317b18438f3138deb46fe87ed`
+produce valid 328,573,969/334,675,120-byte captures with matching collector
+sizes and successful native message/CPU exports. Owned apps and collectors
+exit zero and release API 4202/Tracy 8086.
+
+The focused native entity-list run passes nine functional checks plus the
+ignored benchmark. Direct Name and Callsign mutations, hidden-holder edits,
+role insertion, hierarchy changes and Twin cleanup remain covered. One
+600-frame benchmark pair over 20,000 named entities takes 61.813/57.446 ms
+with 17 archetypes. With 14,000 richer candidates and 528 archetypes it takes
+105.168/100.105 ms. Each fixture admits only its initial gate run. These
+synthetic private-query seams do not establish product throughput.
+
+Normal artifact
+`2522c668a039d0711e5d0200a276776de9c5900790a16c82437022bee327b5cf`
+passes all ten existing current-contract determinism profiles, 360 checks,
+with the unchanged reference below and expected compute-pool widths 1/24.
+The final owned windowed run passes sandbox 7, telemetry history 17, mass and
+island checks 10, and replacement sandbox 7. It verifies one mass verdict,
+invalid-reset rejection, valid Modelica reset, readiness, physics progress and
+the three existing invalid-assembly pause guards. View shadows and replacement
+entity rows are inspected. Warm readiness is 3.649 s and frame p50 values are
+17.250/17.002/17.105 ms; contention prevents clean loading/FPS claims.
+The normal executable is restored and all owned sessions are closed.
+
+Receipts, logs, captures and native exports remain under
+`target/entity-tree-perf/`, prefixes `tree-change-fixed-camera-` and
+`tree-change-admission-`. External libraries, f64 simulation values, solver
+math, physics cadence and rendering quality are preserved. Loading
+admission and clean loading, visual FPS and physics-throughput acceptance
+remain open. Disk recovery removes the failed task linker output and cleans
+only `lunco-luncosim`; source and shared caches are preserved, and the validated
+normal executable is retained separately.
+
+## Full current-contract determinism matrix and frame ranking — 2026-10-11
+
+The ten authored production profiles now have a refreshed canonical reference
+in `scripts/tests/fixtures/deterministic-physics-reference.json`, SHA
+`276c9d3cf022047d454169cf96d2e9b1118c02b634d18f5757d41cd10cbab848`.
+The baseline is the preserved Avian-index normal artifact
+`119ee3ad2616ad0b52f0e8d3f75520626be3cd4295d50adbfba0cd1712a2603b`;
+it predates the successful-wiring publication optimization. Its archive is
+decompressed and its SHA verified before launch. Capture adds only row logging
+to the Rhai observer and restores the source before replay. The observer now
+reports its existing typed clock's known compute-pool width at startup.
+
+The baseline independently captures every profile, then replays all ten with
+the normal authored gate. Current normal artifact
+`3e3b0048675018e4a9d9f92fd0f91cf9827956d6179132bb2ac56e1f2cec4dfb`
+replays those same ten profiles. Each artifact passes 360 checks: six four-rover
+profiles with 24 checks each, two eight-rover profiles with 36 each and two
+twenty-rover profiles with 72 each. The two four-rover scheduling profiles and
+four jitter profiles cover 0.25/0.5 jitter and both existing seeds. All runs
+use API 4202 with verified executable/cwd/PID ownership, exit zero and close
+the port. Observed clock facts report width one for serial and 24 for default;
+these describe the compute pool, rather than measuring active CPU execution.
+
+Within each scene size, independently captured serial/default numeric payloads
+are identical. All six four-rover profiles, including both jitter levels and
+seeds, have identical physics, Modelica, articulated and final payloads. Profile
+parameters, widths, checkpoint ticks, identities, first-behavior tick and the
+zero-tolerance comparison contract remain unchanged. The deliberate altered-row
+rejection remains part of every authored gate. The canonical fixture contains
+the exact file bytes used by these replays; its source metadata identifies the
+actual baseline, input hashes and width observation.
+
+The previous fixture predates current physics contracts, including the mounted
+suspension-axis cast repair and collider admission/solver-pose repair. It also
+records a different Modelica variable surface. Initial state fields can match
+while later numeric states differ; this refresh records current-contract state.
+The before/after proof above concerns the successful-wiring optimization and
+cross-profile determinism, without asserting numeric identity to that older
+build. Initial capture runs against the stale fixture intentionally produce
+failed comparison verdicts and are not passing gates. The first baseline driver
+stops after a passing twenty-rover app because it assumes 24 checks for every
+scene; the corrected driver reuses its five valid app results and completes the
+remaining five. The final baseline receipt covers all ten passing apps.
+
+The validated 324,836,276-byte Tracy capture from the wiring-publication section below has
+full CPU self/inclusive and GPU rankings. Native exports contain 10,690,437 CPU
+events in each mode and 73,812 GPU events. Settled View/Build/View windows admit
+events by start time; window edges are not frame-aligned. Schedule self time
+can include executor waits, and inclusive spans across nesting/threads must not
+be summed into an application compute cost.
+
+The entity-tree change gate costs 0.1703/0.1636/0.1518 ms per frame even though
+tree rendering uses a cached view. The workbench render owner costs
+0.4376/1.8175/0.4030 ms inclusively. Render-thread submission means are
+5.0774/4.7656/4.6310 ms; this does not distinguish driver, GPU or scheduling
+causes. GPU shared-shadow early spans average about 0.514 ms per view, with
+roughly twelve shared views per main camera, while camera-shadow early spans
+average 2.13–2.34 ms. Main opaque-pass means are 0.55–0.66 ms. All four shadow
+span names are present. These are contended diagnostic observations with main
+PID 84260 still active and untouched. The first eight seconds separately rank
+queued USD visual processing at 181 ms self time across 27 admissions; this
+is not a load-to-ready measurement.
+
+Full-matrix receipts, logs, the preserved baseline and ranking remain under
+`target/entity-tree-perf/`, prefixes `full-matrix-` and `landing-publication-`.
+The normal executable remains restored and all owned sessions are closed.
+No external library, solver math, ordering, precision, cadence or quality
+changes are made in this step. The entity-tree admission follow-up is recorded
+above. Loading admission and clean loading, visual FPS and physics-throughput
+acceptance remain open.
+
+## Publish successful wiring diagnostics once per fabric — 2026-10-11
+
+The shared `PropagationCache` retains a dense acknowledgement after a target's
+first successful ledger publication in a compiled fabric. Further successful
+writes skip the repeated entity/name lookup; every write, live validation and
+failed-write ledger check still runs. Rebuilding the fabric clears the cursor.
+`SceneTeardown` now clears the entire propagation cache with diagnostics, holds
+and binding state, before entities are reclaimed. The scene-owned diagnostic
+ledger remains authoritative. Fixed and rollback schedules share the same
+cursor. Solver math, f64 values, clock admission, ordering, quality and external
+libraries are unchanged. This is bookkeeping in the exchange mechanism, with
+no new policy or scripting API.
+
+An inline steady-exchange benchmark performs 768,000 writes to 128 surfaces
+after warm admission. One before/after pair takes 284.129/253.533 ms, a 10.77%
+reduction, with identical final bits `4000000000000000`. The ignored benchmark
+is `settled_diagnostic_publication_benchmark`; it isolates exchange and does
+not establish application throughput. The focused native `publication` run
+passes two functional checks and that benchmark. The private cursor seam covers
+a fabric rebuild with a never-landed target, then real scene teardown while
+entities still exist, followed by fresh ledger publication. The other check
+covers unchanged structural publication/removal/re-admission behavior.
+
+Normal production artifact
+`3e3b0048675018e4a9d9f92fd0f91cf9827956d6179132bb2ac56e1f2cec4dfb`
+runs in owned PID 957828/API 4202. Sandbox smoke passes seven checks before and
+seven after replacement, history recording passes 17, and joint-island mass
+passes ten, including negative mass rejection, editing and island splitting.
+The mass gate emits one verdict. Readiness, diagnostics, advancing physics,
+three invalid-assembly pause guards, public metadata and Modelica reset pass.
+High quality, no vsync/throttle, 50 bodies/33 colliders/20 joints and the
+within-run camera remain intact; the inspected View image retains shadows.
+Warm readiness is 3.160 s and View/Build/View frame medians are
+17.031/17.312/17.121 ms. Main PID 84260 overlaps and remains untouched, so these
+observations do not establish a loading or FPS improvement.
+
+This exact normal artifact passes serial/default four-rover replay, 24 checks
+each, in PIDs 958572/958813. Both retain the preceding 56-value sequence.
+The serial reference SHA remains
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`;
+the default reference changes scheduling metadata only, rather than capturing
+a separate parallel baseline or observing actual thread count. Both apps exit
+zero and close API 4202.
+
+Candidate Tracy artifact
+`9abda3782a3fb50994c203f1fb71b8315073ebb73aa77e3982cea2f5efc4cb27`
+runs in PID 961656/API 4202 with collector 961655/8086. The capture contains
+324,836,276 bytes, matches the collector size and passes native message/phase
+exports. Readiness, replacement, physics progress, pause guards, quality and
+topology pass; the inspected View image retains shadows. Its exact serial
+replay passes 24 checks. All owned apps and the collector exit zero and release
+their ports.
+
+Against the validated Avian-index Tracy artifact below, settled six-second
+View/Build/View diagnostic means fall from 0.062199/0.073952/0.061207 to
+0.004061/0.003737/0.003451 ms: reductions of 93.5%/94.9%/94.4%.
+Whole propagation means fall from 0.297394/0.342384/0.285633 to
+0.253415/0.244549/0.227008 ms: reductions of 14.8%/28.6%/20.5%.
+Baseline call counts are 357/360/360; candidate counts are 360/360/361.
+These are nested owner/phase measurements, not additive costs. Main overlap
+and the visual-resource prompt persist during both captures, leaving clean
+product acceptance open despite the consistent diagnostic-owner improvement.
+
+Both production builds pass with only the existing prepared-cache `clear`
+warning. Three touched Rust files are formatted once after validation; the
+core diagnostics changes are comments only. The normal executable is restored
+from its verified Cargo output after owned-session closure. Skills validation
+passes all 43 skills. Native comparisons, runtime/replay receipts and captures
+remain under `target/entity-tree-perf/`, prefix `landing-publication-`; the
+preceding normal artifact is preserved in a compressed archive. Controlled
+loading, visual FPS, physics throughput and the full thread-profile matrix
+remain open.
+
+## Index live Avian port candidates — 2026-10-11
+
+The application-owned `lunco-cosim` backend derives immutable named candidates
+from its authoritative `AVIAN` table. Resolution, named declaration queries and
+metadata selection reuse those candidates in table order and check entity
+membership live. Full inspection retains table enumeration. The index contains
+no entity state, permissions, bounds or samples; the registry still validates
+the live owner and contract for every write. Dependencies, physics ordering,
+solver math, f64 values and scene quality are unchanged.
+
+Five nested exchange spans attribute topology, accumulation, holds, writes and
+diagnostic publication. In the instrumentation baseline, writes account for
+59.7–60.1% of the propagation owner's settled mean and diagnostics for
+18.7–19.5%. Child durations must not be added to their parent. Source inspection
+identified repeated unrelated group-membership probes during named admission,
+including names belonging to other backends; the index removes those probes.
+
+An inline registry benchmark performs 768,000 resolved writes to 128 surfaces
+over 6,000 ticks. One before/after pair takes 298.720/226.606 ms, a 24.14%
+reduction, with identical final bits `40b7700000000000`. This isolates live
+registry admission and writes; it does not establish application throughput.
+The ignored benchmark is `ports::tests::resolved_surface_write_benchmark`.
+Six unchanged native functional checks pass in the initial group run. That
+command exits 101 because the new fixture incorrectly excludes bidirectional
+declarations; the corrected table-order/live-membership fixture then passes its
+focused rerun. Together these cover seven functional checks without claiming
+that the original combined command passed.
+
+Normal production artifact
+`119ee3ad2616ad0b52f0e8d3f75520626be3cd4295d50adbfba0cd1712a2603b`
+runs in owned PID 943207/API 4202. History recording passes 17 checks, sandbox
+smoke passes seven before and seven after replacement, and joint-island mass
+passes ten, including rejected invalid mass, a valid edit and island splitting.
+The separate owner-collision scene passes 11 checks in PID 944279. Readiness,
+diagnostics, advancing physics, three invalid-assembly pause guards, public
+metadata and Modelica reset pass. High quality, no vsync/throttle, 50 bodies,
+33 colliders, 20 joints and the within-run camera remain intact; the inspected
+View image retains shadows. Warm readiness is 2.587 s and View/Build/View frame
+medians are 17.700/17.032/17.149 ms. Main PID 84260 overlaps and remains untouched;
+these observations do not establish a loading or FPS improvement.
+
+The first production driver fails during replacement because the mass gate's
+ordinary finish function mutates a copied state map, repeatedly reporting PASS
+and continuing to query the retired scene. A live Rhai probe confirms copied
+arguments versus receiver mutation. The gate now uses `this.finish(...)` with
+an implicit receiver, records completion before its verdict and emits exactly
+one terminal result, including the additional post-verdict wait and replacement.
+All finish callers and the authoring skill use this contract. The corrected
+production driver passes; the initial driver failure remains excluded evidence.
+
+The exact normal artifact passes serial/default four-rover state replay,
+24 checks each, in PIDs 945125/945302. Serial reference SHA
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`
+retains the preceding 56-value sequence. The default reference changes only
+scheduling metadata; it is not a separately captured parallel baseline or an
+observed thread count. All owned apps exit zero and close API 4202.
+
+Candidate Tracy artifact
+`0957890bc375fe39a7d9c7eac8de92b57132a8d9daaeec1dc2167c46ef816e5c`
+runs in PID 948605/API 4202 with collector 948604/8086. Its 321,511,240-byte
+capture matches the collector size and passes native message/phase exports.
+Readiness, replacement, physics progress, pause guards, quality, topology and
+the inspected shadows pass. This exact artifact also passes 24 serial replay
+checks in PID 949645. App and collector exit zero and release their ports.
+The instrumentation baseline is artifact
+`e058705f333a99d56a19b8ac9c411fdde1637bf0e9f0f18f1d4cb8fb9a9800d3`,
+PID 922004 with collector 922003 and a validated 322,731,014-byte capture.
+
+Settled six-second View/Build/View write-phase means change from
+0.190336/0.180779/0.178131 to 0.169949/0.194611/0.162712 ms:
+10.7% faster, 7.6% slower and 8.7% faster. Whole propagation means change from
+0.318700/0.302862/0.296419 to 0.297394/0.342384/0.285633 ms.
+Baseline calls are 360 per window; candidate calls are 357/360/360. Main overlap
+and the visual-resource prompt persist during both captures. This mixed,
+contended profiler pair does not establish a consistent runtime gain.
+
+Both production builds pass with only the existing prepared-cache `clear`
+warning. The two touched Rust files are formatted once after validation; the
+normal executable is restored from its verified Cargo output after owned-session
+closure. Skills validation passes all 43 skills. Receipts, captures, native
+summaries, benchmark comparison and replay verdicts remain under
+`target/entity-tree-perf/`, prefixes `avian-index-` and `exchange-phases-`.
+Controlled loading, visual FPS, physics throughput and the full thread-profile
+matrix remain open. Diagnostic publication is an attributed next investigation.
+
+## Avoid redundant physics-history admission lookups — 2026-10-11
+
+`lunco-usd-sim-telemetry` now applies the live-count admission approach used by
+the Modelica producer. Below the configured channel limit, settled samples
+proceed directly to the registry's rate-and-append lookup. A full catalog still
+checks live history existence, and successful recording reads the resulting
+scalar count. Metadata discovery retains its diagnostic history lookup.
+`SignalRegistry` remains the history owner; the producer's existing settings
+and admission helper own the limit. Sampling cadence, previous-step velocity
+cursors, metadata, f64 values, physics ordering and dependencies are unchanged.
+
+An inline native resource benchmark records 2,304,000 samples across 384
+channels with settled metadata and 16-point retention. A single before/after
+pair takes 318.092/253.043 ms, a 20.45% reduction, with identical retained-history
+digest `d9716d51526de325`. This isolates the producer/registry loop and does not
+establish application throughput. Eight native checks pass, including the
+resource seam for a full catalog, continued recording above a lowered limit,
+cached-history removal rejection and subsequent admission when capacity returns.
+The benchmark is ignored by default and can be run explicitly with
+`cargo test -p lunco-usd-sim-telemetry --lib settled_retention_benchmark -j 4 -- --ignored --nocapture`.
+
+Normal production artifact
+`7634645ee6ba307abd3e41da108562be3b6138c4f70bf2c8170ac55549d247b8`
+runs in owned PID 911455/API 4202. The production
+`telemetry_recording_history.rhai` gate passes 17 checks and sandbox smoke
+passes seven before and seven after replacement. Readiness, diagnostics,
+advancing physics, three invalid-assembly pause guards and Modelica reset pass.
+High quality, no vsync/throttle, 50 bodies/33 colliders/20 joints and the
+within-run camera are preserved. The inspected View image retains shadows.
+View/Build/View raw-frame medians are 17.710/17.246/17.305 ms; warm readiness
+is 3.016 s. Main PID 84260 overlaps and remains untouched, so these observations
+are contended and do not establish a loading or FPS improvement. The app exits
+zero and releases the API.
+
+This exact normal artifact passes serial/default four-rover replay, 24 checks
+each, in owned PIDs 912159/912392. Both retain the preceding 56-value state
+sequence, exit zero and close API 4202. The serial reference SHA is
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`;
+the default reference changes scheduling metadata only and is not a separately
+captured parallel baseline or an observed thread count.
+
+Tracy artifact
+`94468ad20a116b422feaf1142fef6815b5cd0802abf38951d3daf7a87690d8f1`
+runs in owned PID 915164/API 4202 with collector 915163/8086. It preserves the
+same quality and topology, passes readiness, diagnostics, progress and the
+three pause guards, and the inspected post-dismissal View image retains shadows.
+App and collector exit zero and release their ports. Its 320,839,742-byte capture
+matches the collector size and passes native message and CPU exports. This
+exact artifact also passes 24 serial replay checks in owned PID 915939, exiting
+zero and closing API 4202.
+
+Settled six-second View/Build/View owner means are
+0.240940/0.224311/0.198117 ms versus the preceding validated final-variable
+capture's 0.229013/0.260871/0.215282 ms. Candidate call counts are 361/360/361
+versus 360/362/361. The first window is 5.2% slower; the latter two are
+14.0%/8.0% faster. This mixed, contended profiler pair does not establish a
+consistent runtime timing gain. The visual-resource prompt remains during
+measurement and main PID 84260 overlaps both captures.
+
+Normal and Tracy production builds pass with only the existing prepared-cache
+`clear` warning. The touched Rust file is formatted once after validation; the
+normal executable is restored by relinking its verified Cargo output after
+owned-session closure. Benchmark comparison, runtime receipts, replay verdicts,
+native summaries and capture are retained under `target/entity-tree-perf/`,
+prefix `physics-retention-`. Canonical telemetry documentation and the profiling
+skill describe both producers' live-count admission. Controlled loading, visual
+FPS, physics throughput and the full thread-profile matrix remain open.
+
+## Separate Modelica observable snapshots from clock writes — 2026-10-11
+
+The application-owned output snapshot now lives in the required reflected
+`ModelicaVariables.values` component. `ModelicaModel` retains parameters,
+inputs, clocks, session and status. Worker admission commits both serially;
+co-simulation copies outputs when native variable change detection fires or a
+consumer is admitted. Compile replacement, reset and retirement clear the
+snapshot through their existing owner boundaries. Missing live state faults
+visibly and cannot be revived by a buffered worker result. All reflected,
+telemetry, API, canvas, runner and co-simulation readers use the same component;
+external API variable fields keep their wire shape. Solver math, f64 precision,
+communication periods, tick order, scene quality and dependencies are unchanged.
+
+The normal pre-change production artifact
+`202c637ecd9d5225fd4c363c68c455701a6f2031442ac99e0d647a7ab269d138`
+ran in owned PID 818738/API 4202. During 364 physics ticks, each of nine
+participants admitted 61 samples at its authored 0.1-second communication period.
+The corresponding instrumentation baseline below copies nine snapshots on every
+fixed tick. This establishes repeated publication between accepted samples;
+it does not infer duplicate wire consumers or provider evaluations.
+`output-admission-baseline-20261011.json` records participant names, counts,
+readiness, progress, artifact identity and clean owned-session closure. Main
+PID 84260 remained active and untouched.
+
+The authored `modelica_variable_projection` gate checks snapshot retention
+while a participant is paused, then compares the native reflected map and
+public output against the accepted result after a commanded solver resume.
+`modelica_variables_missing` uses the production runner's expected-fault verdict
+for required state removal. A low-level resource test exercises restoration
+followed by already-buffered lifecycle results for two participants, including
+an exhausted session identity. Per-model terminal state protects the participant
+that is not represented by the scene's first-fault record. Native telemetry, output projection, preparation and Twin
+retirement checks cover the migrated readers and lifecycle seams.
+
+Final normal production artifact
+`2986a6ea4ccfa59295c6df4afee95422118af8f2e19cdcf6ce0210faa7136134`
+passes the six-check projection gate and named required-state fault in owned
+PIDs 886582 and 886625/API 4202. The public RocketEngine reader passes 15 checks
+(PID 886683), and serial/default four-rover replay each passes 24 checks
+(PIDs 886719/886826) against the retained 56-value state sequence. All exit zero
+and release the API. The default reference changes scheduling metadata only;
+it is not a separately captured parallel baseline or proof of an observed
+thread count. The fixtures were authored and their scenario labels normalized
+through exact document operations, with saved-state readback.
+
+Final normal PID 893291/API 4202 checks HTTP 409 rejection of an unknown
+document, then resolves the generated physical participant's document through
+`GeneratedModelicaSource.doc_uri` and its exact recorded workspace origin.
+Reset changes session 2 to 3, rewinds time 8 s to 0, and initializes 321
+variables. Scene replacement passes readiness, diagnostics and seven sandbox
+checks. This session retains High quality, metadata and three invalid-assembly
+pause guards; it exits zero and releases the API. Incomplete lifecycle-driver
+attempts are excluded.
+
+Earlier normal rendered PID 865991 uses artifact
+`cb2d72dc42fdfd0e0b3bd8667f5cca8a4ac75b2395df917cbcd2a51f15b6d9d0`,
+which has the same publication mechanism before the terminal-state refinement.
+It passes readiness, diagnostics, advancing physics, metadata, three pause
+guards and seven sandbox checks at High quality with 50 bodies/33 colliders/
+20 joints. Its camera stays identical across View/Build/View; raw frame p50 is
+17.140/17.619/17.220 ms. The inspected post-dismissal View image retains shadows.
+The windows finish before the driver fails to catch the expected reset
+rejection, so those observations do not prove reset/replacement. No unprofiled
+frame window from the final normal artifact is claimed.
+
+Final Tracy artifact
+`2f73f470f49671b63d6e05ea400e5bdbd2fe30b4a2aeba0c65ef04d6793c06ba`
+runs in owned PID 890161/API 4202 with collector 890160/8086. It retains the same
+High quality, body/collider/joint counts and within-run camera, and passes
+readiness, diagnostics, progress, three pause guards and replacement. The
+inspected post-dismissal View image retains shadows. Warm readiness is 4.189 s.
+The visual-resource prompt remains during measurement; main PID 84260 overlaps
+all rendered runs and remains untouched. App and collector exit zero and
+release their ports. The 326,653,531-byte capture matches the reported
+compressed size and passes native messages and CPU exports. This exact Tracy
+artifact also passes serial/default replay, 24 checks each, in owned
+PIDs 890968/891176 with zero exits and released ports.
+
+Settled six-second windows show the following owner results. Per-call means
+normalize 360/362/361 candidate versus 360/361/360 baseline tick counts.
+Nested phase time is not added to its parent.
+
+| Perspective | Copies before / after | Publication mean before / after (ms) | Mean reduction |
+| --- | --- | --- | --- |
+| View | 3240 / 420 | 0.29600 / 0.10664 | 64.0% |
+| Build | 3249 / 420 | 0.33284 / 0.10901 | 67.2% |
+| View | 3240 / 427 | 0.29367 / 0.10401 | 64.6% |
+
+Variable-copy totals fall from 75.789/86.731/74.702 ms to
+10.609/10.912/10.335 ms. Input-seeding totals are
+17.084/17.256/16.603 ms. Worker-admission totals are
+74.021/81.012/66.934 ms versus 74.959/75.672/68.632 ms;
+telemetry totals are 92.097/111.511/75.359 ms versus
+90.496/99.562/78.624 ms. Builder's adjacent totals increase, so neither adjacent
+owner is claimed faster. The new required-state guard totals
+2.051/1.731/2.147 ms, averaging 5.3–6.3 microseconds per call across First/Update.
+Publication, worker admission, telemetry and the new guard are separate
+scheduled owners. Their combined totals are 206.558/233.717/181.986 ms versus
+272.015/295.389/252.976 ms, a 20.9–28.1% reduction across these measured owners.
+These diagnostics establish reduced publication cost and net measured work
+across this boundary, not overall application throughput.
+`modelica-variables-final-tracy-20261011-publication-summary.json` records native
+exports and exact settled windows; earlier candidate captures are superseded.
+
+Focused native checks pass: six worker-admission/fault seams, seven telemetry
+checks, seven Modelica co-simulation checks, preparation and Twin retirement.
+Normal and Tracy production builds pass with only the existing prepared-cache
+`clear` warning. The final normal artifact is preserved in a verified gzip and
+restored after owned runtime closure by relinking its verified Cargo output,
+which leaves the normal and Tracy output files intact. Sixteen touched Rust
+files were formatted once; the final terminal-state refinement and two-actor
+fixture retain that formatting. Skill validation covers 43 skills.
+
+Controlled loading, visual FPS, physics throughput and the full thread profile
+matrix remain open. These contended/profiler runs do not establish those outcomes.
+
+## Attribute fixed output publication and link preparation — 2026-10-11
+
+The fixed exchange and connectivity owners expose phase-level trace spans.
+`modelica_outputs_copy_variables` and `modelica_outputs_seed_inputs` separate
+variable-map projection from omitted-input seeding. Link spans distinguish
+endpoint collection, occlusion-input snapshots, pair evaluation, nonempty-DEM
+marching and typed-hook construction/execution. Their existing loops, f64
+values, cadence, serial publication and reflected state remain unchanged.
+These are diagnostics, not a claimed performance improvement. Canonical
+Modelica/connectivity documentation and the profiling skill name the spans
+and their nesting.
+
+Production Tracy artifact
+`a630f31b87cf113ccd3f9b0ea179f1a3f6273b9cf5bc0d96cc47dd1252100f73`
+was captured in owned PID 808204/API 4202, collector 808203/profiler 8086.
+It passes readiness, diagnostics, advancing physics, three invalid-assembly
+pause guards and scene replacement. High quality, no vsync/throttle,
+50 bodies/33 colliders/20 joints and the within-run camera pose are retained.
+The inspected post-dismissal View screenshot shows shadows. A visual-resource
+prompt remains visible during the measurement windows. Main PID 84260 overlaps
+this run and remains untouched. Warm readiness is 4.525 s; this is not controlled
+loading acceptance. The app and collector exit zero and release their ports.
+The 318,677,618-byte capture matches the reported compressed size and passes
+native message and CPU exports.
+
+Each settled window spans +1.5 to +7.5 seconds after View/Build/View activation.
+There are 360/361/360 output-publication calls and nine participant copies per
+call. Total variable-copy time is 75.789/86.731/74.702 ms, or
+71.12/72.18/70.66 percent of the respective output-system totals
+106.559/120.155/105.720 ms. Input seeding totals 17.336/18.904/17.923 ms.
+These nested phase totals establish attribution within this instrumented
+artifact; they must not be added to their enclosing system time or interpreted
+as an unprofiled throughput gain.
+
+Each window has 22 link sweeps. Snapshot preparation totals
+31.140/33.673/31.521 ms, or 65.12/68.04/67.87 percent of link-system totals
+47.821/49.492/46.441 ms. Policy construction/execution totals
+9.436/8.912/8.454 ms across 330 direct-pair calls per window. Native ephemeris
+zones fully contained in the same-thread snapshot span account for Earth
+25.684/28.116/26.002 ms and Moon 4.739/4.724/4.792 ms. Counts are 22/22/21
+per body; cache hits do not emit evaluation spans. These are inclusive native
+provider costs, not evidence of duplicate evaluations. The provider already
+reuses final positions and EMB/Earth operands at one exact epoch. The windows
+contain no nonempty-DEM march spans; terrain LOS cost remains unmeasured.
+
+The same Tracy artifact passes serial PID 808902 and default-Compute PID
+809458 exact four-rover replay: 24 authored checks each, 780 ticks/13 simulated
+seconds, with the deliberate-mismatch negative control. Serial uses the
+unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Default uses those same state rows with profile metadata adapted for default
+admission, SHA
+`98a768728903e6d2285e8237a3e932d43370f551162f5eb82822d646dab8a922`;
+it is not a separately captured default-width baseline. Both exit zero and
+close API 4202. The full ten-profile matrix remains open.
+
+Normal artifact
+`202c637ecd9d5225fd4c363c68c455701a6f2031442ac99e0d647a7ab269d138`
+passes the 15-check authored `rocket_engine_observables` public-reader gate
+in PID 815910, completing 180 ticks/3 simulated seconds with exit zero and
+API 4202 closed. Both production builds pass with only the existing unused
+`PreparedSolveCache::clear` warning. Skill validation passes all 43 entries.
+The current normal executable, its hash-verified gzip archive, the validated
+Tracy capture, phase exports, receipts, replay references and verdict logs are
+retained. The normal build replaces the Tracy executable; its exact hash and
+capture provenance remain recorded above.
+
+A separate settled windowed BindingStatus inspection of the prior normal
+artifact finds 104 bound wires and 102 distinct source entity/port/direction
+tuples. Only two repeated reads exist, so that workload provides little
+support for a new fanout cache. Its owned PID 774588 exits zero and closes
+API 4202. Earlier unsettled inspections are excluded from this conclusion.
+Evidence lives under `target/entity-tree-perf/`, prefixes `exchange-owner-`
+and `source-fanout-windowed-baseline-`. Loading, visual FPS and physics
+throughput acceptance remain open; official Trello tools are unavailable.
+
+## Share admitted Modelica output snapshots — 2026-10-11
+
+`lunco-modelica-runtime` owns immutable output slices shared by the accepted
+communication transaction and the bounded presentation queue. The worker
+bridge converts its owned result vector after session and transaction fencing;
+retaining the accepted record clones only the slice's `Arc`. Observable
+variables still reuse their existing keys and apply outputs after detected
+symbols. `SimSampleBatch::samples` reads outputs followed by detected symbols
+without joining those buffers. Subsequent responses and reset cannot mutate
+an earlier snapshot. The serialized worker protocol, reflected variable map,
+solver inputs, native f64 values, clocks, ordering and fixed-step publication
+remain unchanged. This is generic payload ownership, with no changeable
+policy or hook and no external-library edit.
+
+`cargo test -p lunco-modelica-worker --lib accepted_step_reuses_variable_keys_and_transfers_sample_buffers -j 4`
+passes one check (64 filtered). The existing resource-seam check now verifies
+shared allocation identity and original string ownership, exact sample order,
+reset isolation, signed-zero preservation and stale-result rejection. Both
+production builds pass; their only warning is the existing unused
+`PreparedSolveCache::clear` method. Architecture and profiling guidance use
+the shared slice and chained presentation reader.
+
+Normal artifact
+`750f96d5b58c9efd9adccb11e24e2960665ccb6820cb8f3895ac5ac4ea7417c8`
+passes 15 authored `rocket_engine_observables` checks in PID 742303, including
+the public accepted-step input/output reader and first-command consumption.
+It completes 180 ticks/3 simulated seconds and exits zero. Serial replay PID
+742556 passes 24 exact checks over 780 ticks/13 simulated seconds against the
+unchanged 56-row four-rover reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Default-Compute PID 742793 also passes 24 exact checks against those same
+serial state rows, using a derived reference with only profile metadata
+adapted for default-width admission. This tests width independence; it is not
+a separately captured default-width baseline. Derived reference SHA-256:
+`98a768728903e6d2285e8237a3e932d43370f551162f5eb82822d646dab8a922`.
+Both replays retain the deliberate-mismatch negative control. All three
+processes exit zero and close API 4202. The ten-profile matrix remains open.
+
+Normal windowed PID 743048 passes seven sandbox checks before and after
+replacement, readiness, diagnostics, advancing physics and three invalid
+assembly pause checks. High quality, no vsync/throttle and topology of
+50 bodies/33 colliders/20 joints remain unchanged. Camera poses remain fixed
+within the run, and the inspected screenshot shows shadows. Warm readiness
+is 3.875 s; raw View/Build/View medians are
+16.952555/16.632176/16.487246 ms, with maxima
+24.288615/46.524439/23.065261 ms. Main PID 84260 overlaps the run; it remains
+untouched. GPU observation is 96% utilization at 2782 MHz. This is not a
+controlled loading or FPS improvement. The process exits zero and API 4202
+closes.
+
+Tracy PID 664319, collector 664318, passes readiness, diagnostics, advancing
+physics, invalid-assembly guards and replacement. The inspected screenshot
+retains shadows. Its 312,160,893-byte capture matches the reported size and
+passes native message and response-owner CPU exports. Across settled six-second
+View/Build/View windows, response-system mean costs are
+1.148384/0.694328/1.488523 ms versus the retained gravity baseline's
+0.546197/0.610923/0.469815 ms. Calls are 88/112/65 versus 168/150/186;
+total owner time is 101.058/77.765/96.754 ms versus
+91.761/91.638/87.386 ms. This mixed comparison establishes no measured owner
+speedup. Main PID 84260 and USD Cargo PID 664080 are recorded at launch;
+exact workload overlap across the windows is unknown. The shared-allocation
+check proves eliminated output-name copies, not a throughput gain.
+App and collector exit zero and close API 4202/profiler 8086. Tracy SHA-256:
+`1ca75d6d6f57a0060567aaa19d20f6e7a58025b04341e9d049899238634c5d6d`.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `shared-step-outputs-`.
+The installed normal artifact and hash-verified 273,227,877-byte gzip archive
+are retained, alongside validated raw baseline/candidate captures, receipts,
+exports, comparisons, authored verdict logs and both replay references.
+The prior normal rollback archive remains. Completed test executables were
+retired. After the Tracy build left 41 MB free, its executable was preserved
+while `cargo clean --profile dev` removed only this checkout's generated debug
+outputs, then restored unchanged for capture. The normal build regenerated
+those outputs; source, lockfile, sibling worktrees and shared caches were
+preserved. The Tracy executable is replaced by the normal artifact after
+capture; its hash remains recorded above. This retention statement supersedes
+older dated inventories. Overall loading, visual FPS, physics throughput,
+clean acceptance and the existing detach/fall failure remain open. Official
+Trello tools remain unavailable.
+
+## Admit only relevant gravity work — 2026-10-11
+
+`lunco-environment` separates flat-field admission from surface-field
+invalidation. Steady surface work selects linked consumers and existing
+fields; unlinked spatial entities without `LocalGravity` cannot produce a
+field or remove one. A flat field admits only missing spatial fields between
+owner invalidations. Gravity, active-frame, provider and link-removal changes
+still check all spatial entities. Native-position changes, body-relative
+surface math, f64 precision, deferred publication and simulation cadence
+remain unchanged. This is an engine derivation mechanism over the existing
+typed gravity facts, with no changeable policy or new hook. Dependencies are
+unchanged.
+
+`cargo test -p lunco-environment --lib gravity -j 4` passes all three checks
+(12 filtered). The existing flat-field check also covers late admission,
+field recreation, resource edits and unresolved surface cleanup. The native
+surface check retains astronomical-ancestor/render-pose isolation and native
+position invalidation, and now covers link removal and re-admission.
+
+The valid Tracy candidate PID 602467 passes readiness, diagnostics, advancing
+physics, three invalid-assembly pause checks and scene replacement; the
+post-dismissal High-quality screenshot shows shadows. Its 321,260,566-byte
+capture matches the collector report and passes native message and gravity
+CPU exports. The sandbox log confirms site selection of surface gravity.
+Across settled View/Build/View windows, gravity-system means are
+0.061513/0.058843/0.058989 ms versus the retained owner-slot baseline's
+0.155416/0.150718/0.153747 ms: a 60–62% reduction in this profiled owner.
+Both retain about 360 calls per six-second window. Deferred-flush means remain
+similar at 0.018373/0.017853/0.016722 ms versus
+0.019169/0.018285/0.018210 ms. This is owner attribution, not a product FPS or
+physics-throughput claim. Main PID 84260 overlaps both captures. Candidate
+launch also records USD PID 602143, while the baseline records USD PID 546786;
+their exact overlap with each window is unknown. App and collector 602466
+exit zero and release API 4202/profiler 8086. Tracy SHA-256:
+`1e115c148229af357a23887ee2b35db8db84859de3e3a1d4ec55cfcd993c6d24`.
+
+Normal candidate PID 619443 passes seven authored sandbox checks before and
+after replacement, readiness, diagnostics, advancing physics and all three
+invalid-assembly pause checks. High quality, no vsync/throttle, 50 bodies,
+33 colliders and 20 joints remain unchanged. Camera poses remain fixed within
+the run; the post-dismissal screenshot shows shadows. Warm readiness is
+6.465 s, with raw View/Build/View frame medians
+18.599387/17.958181/17.912846 ms and maxima
+42.675175/40.954084/98.137291 ms. Main PID 84260 and USD Cargo PID 609672 are
+recorded at launch; their exact overlap with each window is unknown. This
+run does not establish product FPS or loading acceptance.
+
+Using the same production artifact, spawned-body PID 621091 passes four
+authored `SPAWN_FOLLOWS_PHYSICS` checks over 202 ticks/3.37 simulated seconds:
+`luncosim test --scene assets/scenes/tests/spawn_follows_physics.usda --threads 1 --api 4202`.
+Replay PID 621272 passes 24 exact checks over 780 ticks/13 simulated seconds,
+four rovers and one compute thread against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+All three normal sessions exit zero and release API 4202. Normal SHA-256:
+`915870cf2e2d685151ffcabaeff10944df75017fbb6dce38f77c83a8f1d765a9`.
+The full ten-profile determinism matrix remains open.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `gravity-admission-`.
+The current normal binary and hash-verified normal gzip archive are retained,
+alongside validated baseline/candidate raw captures, receipts, exported
+comparisons and the unchanged replay reference. Older sample-borrow and
+shared-shadow raw captures, superseded owner-slot binary archives and the
+completed native-test executable are retired; their receipts, logs and
+extracted measurements remain. The superseded flat-only trial capture is also
+retired, with its receipt and exported comparison retained. The current Tracy
+executable is replaced by the normal build after profiling, with its exact SHA
+recorded above.
+This retention statement supersedes older dated artifact inventories. Overall
+loading, visual FPS, physics throughput, clean acceptance and the existing
+detach/fall failure remain open. Official Trello tools remain unavailable.
+
+## Retain live owner resolution — 2026-10-11
+
+`lunco-port-core` retains the winning backend's optional slot during live
+ownership selection. Handle creation, input-write preparation and batch
+preflight consume that result within the same immutable World borrow. This
+removes a second call to the winning resolver without a persistent owner
+cache. Declared owners without slots still block lower-precedence owners;
+metadata, revision, slot identity, rejection ordering and atomic batch
+admission remain live. The mechanism serves all registry consumers and adds
+no changeable policy or hook. External libraries, numeric precision and
+simulation ordering are unchanged.
+
+The existing low-level admission check now counts resolver calls. It fails
+against the original implementation (two calls instead of one); all 23
+`cargo test -p lunco-port-core --lib -j 4` checks pass after the change,
+including stale handles, metadata edits, declared unsampled owners, readable
+input-side sources and atomic rejection. This proves reduced duplicate work,
+not a throughput gain.
+
+Normal candidate PID 559364 passes seven authored sandbox checks before and
+after replacement, readiness, diagnostics, advancing physics and three
+invalid-assembly pause checks. High quality, no vsync/throttle, 50 bodies,
+33 colliders and 20 joints remain unchanged. Camera poses remain fixed within
+the run. The post-dismissal screenshot shows shadows.
+Warm readiness is 2.757 s; raw View/Build/View frame medians are
+17.609321/17.761304/17.496740 ms. Main PID 84260 overlaps this run; these
+numbers do not establish a normal-artifact performance improvement.
+Production negative-fixture PID 559977 passes all 11 authored
+`PORT_OWNER_COLLISION` checks using
+`luncosim test --scene assets/scenes/tests/port_owner_collision.usda --threads 1 --api 4202`.
+Both sessions exit zero and release API 4202. Normal SHA-256:
+`e9b4ad6a1b42d7c08163f554cc3d6228c9cbaf12b15a67e9e080bed307aa0962`.
+Replay PID 560316 passes 24 exact checks over 780 ticks/13 simulated seconds,
+four rovers and one compute thread against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+It exits zero and releases API 4202. The full ten-profile determinism matrix
+remains open.
+
+Candidate Tracy PID 548237 passes readiness, diagnostics, advancing physics,
+three invalid-assembly pause checks and scene replacement. The High-quality
+shadow screenshot remains visible. Its 318,562,050-byte capture matches the
+collector report and passes native message and connection-owner CPU exports.
+Across settled View/Build/View windows, `propagate_connections` mean costs
+are 0.307731/0.320466/0.315869 ms versus the retained shared-shadow baseline's
+0.291683/0.330188/0.300956 ms. Each window contains 360–362 fixed-step calls.
+This mixed pair establishes no measured owner speedup. Main PID 84260 overlaps
+both; candidate launch also records USD PID 546786, while the baseline records
+USD PID 520184. Their exact overlap with each window is unknown. Profiler
+overhead and contention prevent a product-performance claim. The app and
+collector 548236 exit zero and release API 4202/profiler 8086.
+Tracy SHA-256:
+`9c904b1d8b48c546c76efe6bc9962a5a8d032771862434e4c95514588f4ab3ff`.
+Evidence lives under `target/entity-tree-perf/`, prefix `owner-slot-`.
+These normal/Tracy binary archives are retired at the gravity-admission
+checkpoint. This checkpoint's validated raw capture remains as its comparison
+baseline; receipts, logs and the replay reference remain. Overall loading,
+visual FPS, physics throughput, clean acceptance and the existing detach/fall
+failure remain open.
+Official Trello tools remain unavailable in this session.
+
+## Native shared-shadow schedule — 2026-10-11
+
+`lunco-render-bevy` routes native Core3d point/spot roots to SharedShadowView
+after native light preparation. It composes native GPU preparation and shared
+shadow delegates, retaining plugin/device admission, global indirect-prepass
+filters and final deferred-buffer order. Cameras, directional cascades and
+custom labels retain their selected schedules. This render mechanism changes
+neither simulation admission nor authoritative state and needs no policy hook.
+External dependencies are unchanged. The focused routing check failed against
+the original implementation; all three shadow-schedule mechanism checks now
+pass, including implicit/system-owned edges and both deferred-flush modes:
+`cargo test -p lunco-render-bevy --lib shadow_view_schedule -j 4` (3 passed,
+82 filtered). Normal and Tracy production builds pass with only the existing
+unused preparation-cache `clear` warning.
+
+Normal candidate PID 512368 and unchanged control PID 519055 each pass seven
+authored sandbox checks before and after replacement, readiness, diagnostics,
+advancing physics and the three invalid-assembly pause checks. Both use High
+quality, no vsync/throttle, the fixed cadence and 50 bodies/33 colliders/20
+joints. Camera poses match exactly across the normal runs and remain fixed
+within each run. Candidate screenshots after
+the optional popup dismissal show visible sandbox shadows. Raw normal frame
+medians are 16.800920/20.772068/23.357918 ms after and
+23.278790/16.900887/16.929340 ms before. The pair does not establish an overall
+frame-rate improvement. Warm readiness is 3.198/4.286 s after/before, not a
+cold-loading comparison. Main PID 84260 overlaps both runs. Control launch also
+records USD Cargo PID 512483; its exact overlap with each window is unknown.
+
+Candidate replay PID 516041 passes 24 exact checks over 780 ticks/13 simulated
+seconds, four rovers and one compute thread against the unchanged 56-row
+reference `ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+All three normal sessions exit zero and release API 4202. This does not replace
+the full ten-profile determinism matrix. Normal SHA-256:
+`84e30e021432516130b69b265beb7acafb479c3d466386abdd756124ecea683c`.
+
+The readable Tracy candidate PID 523239 retains readiness, diagnostics,
+advancing physics, replacement and visible-shadow checks. Its 318,460,155-byte
+capture matches the collector report and passes native message, CPU and GPU
+exports. Baseline PID 361791 uses the earlier validated capture. Each of 462
+baseline and 488 candidate complete frame intervals contains 12 shared early,
+12 shared late and one camera late pass between successive camera early
+markers. Partial boundary frames are excluded from this inventory.
+Shared early GPU means remain about 0.543–0.544 ms per root across both captures;
+camera early means remain about 2.05–2.23 ms. Late spans retain their existing
+small or empty work. No shadow pass was removed.
+
+Candidate shared CPU schedule means are 0.471883/0.531086/0.480993 ms; camera
+Core3d means are 2.723121/3.126953/2.781963 ms. Weighting the disjoint root
+schedules by the verified 12-shared-plus-one-camera inventory gives
+8.385723/9.499991/8.553877 ms per frame, versus baseline
+11.101183/11.721830/11.351421 ms. This is a 19–25% root-schedule reduction in
+Tracy diagnostics, not a normal-artifact FPS claim. Main PID 84260 overlaps
+both captures. Candidate launch also records USD PID 520184; its exact overlap
+with each window is unknown. Profiler overhead and contention limit attribution.
+Both apps/collectors exit zero and API 4202/profiler 8086 are released.
+Tracy candidate SHA-256:
+`317b78bbcaf26016ffe1d49659a962d59254c7f90ff5ee572e308ab8b5721ce5`.
+
+Evidence lives under `target/entity-tree-perf/`, prefix `shared-shadow-`.
+These normal/Tracy binary archives and raw captures are retired; receipts,
+exported CPU/GPU comparisons and the replay reference remain. Overall loading,
+visual FPS, physics throughput, clean acceptance and the existing detach/fall
+failure remain open. Official Trello tools remain unavailable in this session.
+
+## Auxiliary shadow-root scheduling investigation — 2026-10-11
+
+The validated export from the retired
+`sample-borrow-after-tracy-20261011.tracy` capture identifies 13
+Core3d roots per rendered frame: one camera and 12 local light-shadow roots.
+Across three settled windows, Core3d appears 6,045 times for 465 rendered
+frames. The camera pipeline averages about 2.82 ms; individual auxiliary roots
+average about 0.62–0.72 ms. RenderGraph averages 17.72 ms and camera_driver
+12.28 ms. These are inclusive, overlapping Tracy spans under concurrent main
+PID 84260; they must not be summed or treated as clean frame acceptance.
+The complete CPU-owner extraction is
+`target/entity-tree-perf/sample-borrow-all-cpu-owners-20261011.json`.
+
+The fixed-loop owner returns when its Modelica admission barrier is closed;
+it does not block waiting for a worker. Native Avian physics and substep
+schedules already use the single-thread executor. A global single-thread
+Core3d executor trial passed the native shadow instrumentation dependency and
+buffer-order test, but its normal View/Build/View frame medians were
+16.595808/17.452488/16.461627 ms. The fresh unchanged run measured
+16.752612/20.972754/17.053684 ms, with a noisy Builder window; the earlier
+unchanged run measured 16.389593/16.953769/15.715703 ms. This does not establish
+a repeatable overall improvement. The executor trial was removed completely.
+No global executor, physics, solver, dependency or simulation-order change
+remains from that trial.
+
+Normal unchanged PID 385457 and trial PID 467314 each passed seven authored
+sandbox checks before and after replacement, readiness and error checks,
+advancing physics and the three invalid-assembly pause checks. Both retained
+High quality, the fixed cadence and 50 bodies/33 colliders/20 joints. Main
+PID 84260 overlapped all sampling windows. Trial screenshot inspection after
+dismissing the optional dataset popup confirms the rendered sandbox and
+shadows; it does not establish pixel equality. Both exited zero and released
+API 4202. No trial replay was needed after restoring the unchanged source.
+
+The trial Tracy file is unusable: the collector reported 238.32 MiB, while
+the saved file contained only 16,420,864 bytes and native CSV export failed.
+The unchanged control file matched its reported compressed size at 305,663,087
+bytes, but native export stalled with idle decompression workers and a busy
+reader. The exact owned exporter was inspected and terminated. Neither file
+supports a zone comparison, despite zero collector exits. Both profiled apps
+passed readiness, diagnostics, physics and replacement checks, exited zero
+and released API 4202 and profiler 8086. Logs and receipts remain under
+`target/entity-tree-perf/`, prefix `view-executor-`.
+
+Only task-owned older binary archives and raw captures were retired; their
+logs, receipts and extracted measurements remain. The validated current
+normal/Tracy archives and readable current capture remain. Live owned runtime
+runs temporarily reduced free disk space by about 1.3 GiB; the allocation
+owner has not been identified. Capture integrity now requires both a size
+check and a successful native export, with disk space checked while the app
+is live. The validated normal binary is restored from its verified archive,
+SHA-256 `149fd9e7b4c83c5c51c9404e1b20572c55109808014783468b3ac2163fc36b1c`.
+Its existing 24-check exact replay remains valid.
+
+The native routing and GPU-preparation contract identified here is implemented
+and verified in the shared-shadow schedule above. Overall loading, visual FPS,
+physics throughput and clean acceptance remain open.
+
+## Single-borrow snapshot slot updates — 2026-10-11
+
+`lunco-port-core::ScalarPortMap::upsert_samples` validates the retained slot's
+layout and exact name through one mutable borrow, then compares and updates the
+native f64 bits through that same borrow. It does not resolve the checked handle
+a second time. The existing generic slot owner supplies that borrow; no snapshot
+revision, parallel output store, API, dependency or policy hook is introduced.
+Modelica's reflected variable map, status/input projection and fixed-step copy
+boundary remain unchanged. Source reordering and destination retirement still
+resolve names through the canonical index. All 23 native port-core checks pass,
+including the existing sample-copy name/layout/precision cases.
+
+Owned Tracy candidate PID 361791 and unchanged control PID 362909 pass sandbox
+readiness, diagnostics, advancing physics and full scene replacement. Both use
+High quality, no vsync/throttle, the same fixed cadence and 50 bodies/33
+colliders/20 joints. Each camera remains fixed within its run. Across artifacts,
+position and scale match; rotation differs by at most 1.4901161193847656e-8.
+Main simulator PID 84260 overlaps both runs. Candidate Builder screenshot
+inspection confirms the rendered sandbox behind the optional visual-resource
+consent popup. These are contention-affected owner diagnostics, not clean FPS
+acceptance or a loading-time gain.
+
+Settled View/Build/View (+1.5 to +7.5 s after activation) output-copy mean is
+0.314410/0.312596/0.274217 ms before and 0.278842/0.302328/0.270872 ms after.
+P50 is 0.301369/0.306314/0.236662 ms before and
+0.260478/0.299701/0.244247 ms after; the last median increases slightly.
+Samples are 360/360/361 before and 360/360/359 after. This single pair does not
+establish a statistical throughput improvement. App and collector exits are
+zero and owned API 4202/profiler 8086 close after both runs.
+Candidate Tracy SHA-256:
+`8ca6e71c49b67f8548dc524cd4931615905e3e9a6acbd68d4c1ade825c79bff3`.
+Control SHA-256:
+`37704d35abf4af51934e6b9120e1cb34eda625893d8d7a2fedfc50dff0e8a80c`.
+Evidence lives under `target/entity-tree-perf/`, prefix `sample-borrow-`.
+
+Normal build and runtime pass with the existing unused preparation-cache `clear`
+warning. Owned PID 380129 passes all seven authored sandbox checks before and
+after scene replacement. The three invalid assemblies remain paused; readiness,
+error diagnostics and advancing physics checks pass. Replacement Builder
+screenshot inspection confirms the scene behind the optional visual-resource
+popup. Raw normal frame p50 is 16.389593/16.953769/15.715703 ms under main
+PID 84260; no normal-artifact A/B or uncontended acceptance is established.
+Replay PID 380983 passes 24 checks over 780 ticks/13 simulated seconds, four
+rovers and one compute thread, against the unchanged 56-row reference
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Both exit zero and close API 4202. This is not the full ten-profile matrix.
+Normal SHA-256:
+`149fd9e7b4c83c5c51c9404e1b20572c55109808014783468b3ac2163fc36b1c`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open. The 43-skill catalogue check passes. Scoped cleanup preserves
+verified normal/Tracy archives and restores the normal binary; source, shared
+caches, sibling worktrees and the other session remain untouched.
+Trello tracking remains unavailable because no official Trello MCP tools are
+exposed in this session.
+
+## Borrowed port metadata labels — 2026-10-11
+
+Live port-write validation constructs owner metadata on every propagated
+target. `lunco-port-core::PortMetadata` stores static source/authority labels as
+borrowed native `Cow<'static, str>` and retains owned storage for dynamic text.
+Static labels therefore require no heap allocation during construction or
+metadata cloning. Metadata remains live: owner precedence, declared direction,
+slot identity, topology revision, permissions, units, native f64 bounds and
+value validation still run through the same registry operations. This changes
+text storage, not policy; no hook, intern pool, validation cache, new dependency
+or alternate reader path is needed. API and lint-hook projections own their
+output strings; the Ports panel borrows them for painting. Failure diagnostics
+retain owned strings. Metadata equality and ordering remain content-based.
+
+All 23 focused port-core mechanism tests pass. The existing resolved-input
+test also verifies borrowed static labels, a borrowed clone, owned dynamic text
+and equality across both representations. Its invalid-value, read-only,
+stale-slot/revision, owner retirement and atomic-batch rejection checks pass.
+The production normal build passes with the existing unused cache `clear`
+warning. Owned normal PID 311931 passes seven authored sandbox checks before
+and after scene replacement. `ReadPorts` returns the expected source/authority
+strings, direction and writability for the oscillator output and both root
+throttle owners. High-quality View/Build/View windows advance physics with
+50 bodies/33 colliders/20 joints; camera stays fixed within the run, readiness
+is complete, retained error diagnostics are empty and invalid assemblies remain
+paused. Screenshot inspection confirms the Builder layout and scene behind the
+optional visual-resource consent popup. Normal frame p50 is
+18.423249/22.649424/17.840570 ms under main PID 84260 and USD Cargo PID 311350;
+these are contended samples, not an overall FPS comparison.
+
+The authored `port_owner_collision` gate passes all 11 checks on PID 317251,
+including the negative duplicate-owner lint and exact owner/provenance text.
+Replay PID 319216 passes 24 exact checks over 780 ticks/13 simulated seconds
+against the unchanged 56-row reference, four rovers and one compute thread.
+These apps exit zero and close API 4202. This is not the ten-profile replay
+matrix. Normal artifact SHA-256:
+`74cde36df2ba964fb987c0c1553a6bee1687b1d849a3e3633de022999a8d923e`.
+
+Tracy candidate PID 336932 and unchanged control PID 339168 use the same
+sandbox and High/no-vsync/no-throttle configuration. Both pass settled readiness,
+diagnostics, advancing physics and replacement checks, and hold their own camera
+fixed. The sampled public port metadata matches exactly across artifacts.
+In settled View/Build/View windows (+1.5 to +7.5 s after activation), propagation
+p50 is 0.305416/0.369381/0.361135 ms before and
+0.296825/0.311587/0.276527 ms after. Mean is
+0.321273/0.386503/0.379578 ms before and 0.312087/0.321289/0.294906 ms after;
+sample counts are 360/359/353 and 362/358/360. This is a wall-clock owner
+comparison, not clean overall FPS acceptance. Both runs overlap main PID 84260;
+candidate launch also records USD Cargo PID 325294, which is gone at a later
+in-window process check. Recorded camera poses match exactly across runs. The
+allocation reduction is independently established by native borrowed-label
+storage; the samples do not isolate every timing influence. App and collector
+exits are zero, and API 4202/profiler 8086 close after each run.
+Tracy candidate SHA-256:
+`37704d35abf4af51934e6b9120e1cb34eda625893d8d7a2fedfc50dff0e8a80c`.
+Control SHA-256:
+`398640eb44f5d8aa11a69376caa80ff4fe3a039819218ecab9751ca577b893bb`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open.
+
+Evidence is under `target/entity-tree-perf/`, prefix `port-metadata-`.
+Scoped cleanup removes affected package outputs after preserving the verified
+normal archive. Earlier six-worker and port-snapshot normal binary archives
+are retired; their logs, receipts and captures remain. Source, sibling worktrees,
+shared caches and other sessions remain untouched.
+After the paired captures, the previously tested normal artifact is restored
+and hash-verified; both current binary archives remain available.
+
+## Endpoint lifecycle query reuse — 2026-10-11
+
+`lunco-cosim::sync_model_endpoint_lifecycle` retains Bevy's native exclusive
+`QueryState` for changed `SimComponent` owners instead of constructing the
+query on every admitted frame. `iter(world)` refreshes current archetype
+membership and uses the same exclusive-system change ticks. Status mapping,
+immediate component insertion, binding revision
+requests, the existing change condition and `PostUpdate` binding position
+remain unchanged. This is generic engine query reuse; no authored policy hook,
+new cache owner, API, dependency edit or numerical change is needed. Native
+query traversal order is not an API contract; endpoint mirrors have no
+component lifecycle observers, and the complete batch lands before its binding
+consumer. Authoritative port propagation and solver scheduling are unchanged.
+
+The existing native same-update ready-transition test passes. Owned normal
+PID 275274 passes the production sandbox's seven authored checks both before
+and after full scene replacement, including the real Modelica/Python/Avian
+bindings. View/Build/View windows preserve the same camera within the run and
+advance physics with 50 bodies/33 colliders/20 joints. Readiness remains complete
+with zero retained error diagnostics; invalid assemblies remain paused.
+Replacement screenshot inspection confirms the Builder layout and rendered
+scene, with the optional visual-resource consent popup still open. The app
+exits zero and closes API 4202.
+
+Normal frame p50 is 17.579829/19.824557/15.803465 ms. Main simulator PID 84260
+and USD-checkout Cargo PID 273782 overlap the run; these are contended samples,
+not clean acceptance or an overall FPS gain. Replay PID 277471 passes 24 exact
+checks over 780 ticks/13 simulated seconds, four rovers and one compute thread,
+against the unchanged 56-row reference. It exits zero and closes API 4202.
+This does not cover the ten-profile replay matrix. Normal artifact SHA-256:
+`036bb8f14bf5afd978206ebb2cdadda5c53e6b8a21dde064519f00d27f0d46ac`.
+
+Tracy PID 290473 and collector PID 290472 use the owned API 4202 and profiler
+8086, with both listener and connection verified against the app. Compare the
+retained island-mass capture's settled View/Build/View windows (+1.5 to +7.5 s
+after activation) with this capture. Lifecycle-system p50 falls from
+0.133488/0.134570/0.140081 ms to 0.010750/0.014527/0.016611 ms; sample counts
+are 159/150/189 before and 130/101/68 after. Mean is
+0.153111/0.159458/0.146035 ms before and 0.011855/0.014370/0.017474 ms after.
+These are wall-clock owner diagnostics, not a controlled overall FPS A/B:
+the new capture overlaps main PID 84260 and USD Cargo PID 283455, whereas the
+retained capture records only that main simulator. Native preparation capacity
+also differs between artifacts, and camera rotation differs slightly across
+runs. Each run holds its own camera fixed. Both captures preserve High quality,
+the sandbox graph and advancing physics. App and collector exit zero; both
+owned ports close. Tracy artifact SHA-256:
+`398640eb44f5d8aa11a69376caa80ff4fe3a039819218ecab9751ca577b893bb`.
+Retained comparison artifact SHA-256:
+`83af8a618df67ffa1c9ff015a7924722cf882834841923700137e7d0bd585159`.
+Overall loading, visual FPS, physics FPS and the existing detach/fall failure
+remain open.
+
+Evidence is under `target/entity-tree-perf/`, prefix `endpoint-query-`.
+Disk recovery retires three superseded task binary archives (both port-snapshot
+Tracy binaries and the four-worker loading control), preserving their captures,
+logs and receipts. Scoped `cargo clean -p lunco-cosim` removes 381.2 MiB of this
+checkout's generated package outputs after the passing native test and normal
+runtime gates. After capture, scoped `cargo clean -p lunco-luncosim` removes
+3.3 GiB of generated application outputs; both current binary archives are
+verified first, and the exact previously tested normal artifact is restored
+and hash-verified. Source, shared caches and other sessions remain untouched.
+
+## Native preparation CPU budget — 2026-10-11
+
+The native execution host captures the physics-independent
+`lunco_modelica_worker::worker::ModelicaWorkerLimits` before launch. Its
+preparation budget defaults to six workers with two reported CPU threads
+reserved; scene and document owner budgets isolate their mailboxes as described
+in the execution-domain section above. Smaller hosts retain at least one worker per pool; zero maximum
+capacity and unavailable host capacity fail through structured worker errors.
+The existing compiler/root/lowering admission bound remains worker count plus
+two staged operations. Source-root FIFO, full-key in-flight coalescing, result
+commit order, session/library fences, live stepper thread, native values,
+equations and solver settings remain unchanged. This configures bounded engine
+capacity; no scenario policy hook or external-library change is needed.
+
+A fresh cold-cache probe on unchanged PID 112324 takes 19.425354 s to become
+ready. Five distinct rover lowerings dominate; the final job waits 9.416603 s
+behind four preparation workers. Cargo and another simulator overlap this
+probe, so it is attribution evidence rather than a comparison. Equivalent
+requests already share in-flight preparation; adding another deduplication
+mechanism would duplicate the owner.
+
+The paired uninstrumented runs use fresh isolated caches, the same authored
+sandbox and High/no-vsync/no-throttle configuration. Both record the same
+competing `main` simulator PID 84260 and no Cargo at launch. Four-worker
+control PID 156284 becomes ready in 15.732962 s; six-worker PID 155527 in
+14.543849 s. Maximum preparation queue wait falls from 7.817445 s to 72 us.
+Each performs eight lowerings with matching source/solver/override/version
+identities, then all nine replacement participants are memory hits.
+Replacement readiness is 1.391696/1.379831 s. Both have complete readiness,
+zero retained error diagnostics and 50 bodies/33 colliders/20 joints. Apps
+exit zero and close API 4202. Screenshots retain scene geometry and shadows;
+the optional visual-resource consent popup stays open.
+
+Readiness sampling also reads real engine-health revisions and process memory.
+Distinct sampled frame p50 is 18.388176/16.383409 ms, maxima
+30.105517/37.843247 ms, and two-command API p50 is 29.062139/26.222731 ms.
+Peak process RSS is 1,771,164/1,868,972 KiB, about 95.5 MiB higher with six
+workers. This establishes ongoing UI/API response during preparation, without
+an overall FPS-gain or statistical loading-gain claim from one contended pair.
+The long queue wait is removed in the observed six-worker run; cold lowering
+itself remains expensive.
+
+Six-worker PID 159078 passes 24 authored exact-state checks over 780 ticks/
+13 simulated seconds against the preceding unchanged 56-row reference.
+It exits zero and closes API 4202. This is four rovers with one compute thread,
+not the ten-profile determinism matrix. Artifact SHA-256:
+`8aa01d5c1fbf3d73c172b9dd4e73fd8de31f1d2d58fcb2dceefc53c2bca83dbf`.
+The four-worker control uses the preceding integrated normal artifact
+`2206482aa463d4267448c96341fda209d6145dfbca671e24fcb1c1f8092e0d31`.
+
+The production build passes with the existing unused cache `clear` warning.
+Six focused native preparation tests pass, including the real pool admission
+bound, small-host reservation, zero-capacity worker failure, compile/rebuild/
+source-root fences and causal participant holds. The initial Cargo attempt
+successfully links that worker test binary but fails on the application's
+empty test harness when the disk fills; its exit 101 is not passing evidence.
+After recovery, the verified worker binary runs the `preparation` filter
+directly and exits zero. No test result is inferred from the failed harness.
+
+Logs, sampled receipts, full-key comparison, screenshots and both binary
+archives are under `target/entity-tree-perf/`, prefixes `cold-preparation-`
+and `preparation-budget-`. The initial retained warm Tracy attribution has
+several overlapping 54–68 ms wall-clock zones beginning together; these do not
+prove independent CPU hotspots. Analysis recovers disk space by deleting only
+superseded task-owned binary archives and one empty failed output, preserving
+captures, source, shared caches and other sessions. Superseded admission,
+dataset and pre-integration island-mass binary archives are retired; current
+four/six-worker archives remain. Two orphaned linker temporaries are also
+removed after verifying no live build from this checkout. Overall loading, visual FPS,
+physics FPS, submission tails and the existing detach/fall failure remain open.
+
+## Derived joint-island mass cache — 2026-10-11
+
+`lunco-physics::assembly::DynamicJointIslandMassPlugin` retains structural
+invalidation for the existing derived mass resource. Native lifecycle observers
+cover body modes, effective masses, joint links and admission/disabled markers,
+including edits while simulation refresh is paused. Native change detection
+covers mutable effective masses and link endpoints. Normal and rollback
+co-simulation refresh at their existing exchange boundaries. Quiet ticks retain
+the result instead of allocating body sets and rebuilding adjacency and island
+totals. Aggregation, sorted member order, native `f64` sums and invalid-member
+semantics are unchanged. This is a generic physics resource mechanism with no
+changeable policy or hook; no external dependency or solver settings change.
+
+Eight focused native assembly tests pass. The quiet-cache test then passes
+again after adding normal/rollback schedule coverage; the other unchanged
+results are reused. Coverage includes paused lifecycle edits beyond event
+retention, body/mass removal, despawn, mutable link endpoints and admission
+markers. Normal and Tracy production builds pass with the existing native
+unused `PreparedSolveCache::clear` warning. The skill catalogue passes (43).
+
+Normal PID 69808/API 4202 passes 7 authored sandbox smoke checks and 22
+mass-scenario checks, including helper assertions. The new
+`joint_island_mass.rhai` uses the admitted physical rover's real ports to
+verify rejected negative mass, accepted mass updates, shared island totals
+and separation after joint retirement. Scene replacement returns ready.
+High quality, exact camera pose within the run, 50 bodies/33 colliders/20 joints,
+and advancing physics remain during the measurement windows. Readiness is
+2.545029 s; frame p50 is 12.553096/12.670936/12.779348 ms for View/Build/View.
+Another simulator from `main` is active, and the visual-resource consent popup
+remains open. These samples do not establish a product FPS or loading gain.
+The app exits zero and closes its API port.
+
+Tracy PID 85803 and collector PID 85802 also exit zero after scene replacement;
+API 4202 and profiler 8086 close. Another simulator is active here too. At
++1.5 to +7.5 s after View/Build/View activation, the retained baseline owner
+p50 is 0.036578/0.037049/0.037144 ms; changed p50 is
+0.014226/0.013865/0.012328 ms. The new rebuild span has zero calls in those
+settled windows and six across the entire admission/replacement capture.
+The baseline predates that span. Different concurrent workloads and GPU clocks
+limit the timing comparison; avoiding steady rebuilds is directly observed.
+
+Unchanged normal PID 32677 and changed normal PID 73108 each pass 24 authored
+checks over 780 ticks/13 simulation seconds against the same fresh 56-row
+exact-state reference. Both exit zero and close API 4202. This covers four
+rovers and one compute thread, not the ten-profile matrix. Reference SHA-256:
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+
+The worktree fast-forwards to newer local `main` commit `8be2f97d4`, preserving
+its Modelica editor and controller changes without conflicts. A new integrated
+normal build passes, and PID 92500 repeats the 24-check/780-tick exact replay
+against the same reference, exits zero and closes API 4202. The integrated
+normal executable remains at `target/debug/luncosim`, SHA-256:
+`2206482aa463d4267448c96341fda209d6145dfbca671e24fcb1c1f8092e0d31`.
+
+The original `joint.rhai` detach-and-fall fixture fails two of eight checks on
+the unchanged artifact (PID 68176); the linked body remains suspended while
+the independent body falls. That failure predates this cache change. Its
+tracked scenario is unchanged, and the passing mass gate does not claim that
+falling-body contract is repaired. Overall loading, visual FPS, physics FPS
+and intermittent submission stalls remain open.
+
+Receipts, native checks, traces, owner comparison, screenshots and archived
+artifacts are under `target/entity-tree-perf/`, prefix `island-mass-`.
+Measured normal SHA-256:
+`18979de5b9b4dda37217d58e84a6e8955f8bc056705e68576397910776c4945e`.
+Measured Tracy SHA-256:
+`83af8a618df67ffa1c9ff015a7924722cf882834841923700137e7d0bd585159`.
+
+## Long-frame attribution follow-up — 2026-10-10
+
+Retained port-snapshot traces localize two stalls to native
+`queue_submit{count=130}`: 187.676 ms during settled Builder in the baseline
+and 132.181 ms beginning 92 ms after Builder activation in the changed capture.
+The latter is transition cost and is excluded from settled comparisons.
+The surrounding render/extraction schedules include that wait; their inclusive
+times do not identify additional work. This identifies the submission boundary,
+without establishing why the driver blocked or explaining the earlier
+uninstrumented half-second tails. Screenshot delivery and authored test
+`on_tick` spans are separate measurement work and are excluded.
+
+A longer diagnostic uses the same archived artifacts, High quality and
+View/Build/View, with three twenty-second sample windows. Tracy PID 3087469
+and normal PID 3089658 each retain the same camera within the run,
+50 bodies/33 colliders/20 joints, readiness and advancing physics. Neither
+records another simulator or Cargo at launch. Browser/desktop processes remain
+active; half-second GPU/process/CPU-pressure samples are retained. The visual
+resource consent popup remains open, so these are observations of that UI state.
+Screenshots show the rendered scene and shadows. Both apps exit zero, the
+Tracy collector exits zero, and API 4202/profiler 8086 close. The exact normal
+artifact is restored afterward; no runtime source or authored assets change.
+
+Normal sampled frame p50 is 10.384831/10.554227/10.478185 ms, with
+p99 15.817540/16.109174/15.140808 ms and maxima
+49.885877/24.422784/16.415535 ms. Readiness clears at 2.528400 s.
+These after-only samples establish neither a performance gain nor a fix for
+the intermittent large stalls. No behavior gates or replay are repeated for
+this diagnostic-only follow-up; the preceding checkpoint retains that evidence.
+
+At +1.5 to +20.5 s after each perspective activation, Tracy shared early shadow
+p50 is 0.528128/0.525824/0.525056 ms per spotlight view; camera early shadow
+p50 is 1.693184/1.696256/1.696384 ms. Counts remain approximately twelve shared
+views per camera frame, with partial frames at window boundaries. Inclusive
+GPU sums are not GPU frame time. Workbench paint p50 is
+0.202057/0.849624/0.208920 ms, and propagation p50 is
+0.153446/0.154774/0.157274 ms. No application-owned CPU zone exceeds 30 ms
+inside those windows. The larger stalls do not reproduce here; stable shadow
+cost and submission-tail causes remain distinct optimization investigations.
+
+Receipts, trace, monitoring, screenshots, windowed owner summaries and the
+analysis helper are under `target/entity-tree-perf/`, prefix `long-frames-`.
+Artifact hashes match the preceding port-admission checkpoint.
+
+## Shared port-admission allocations — 2026-10-10
+
+`lunco-port-core` registry clones share an immutable backend table; registration
+uses copy-on-write to preserve each snapshot's precedence. Canonical input-write
+preparation accepts an `Arc<str>` identity, and resolved writes retain their
+locator's name allocation. This removes a backend-table allocation per registry
+clone and a name allocation per admitted resolved write. Live owner discovery,
+metadata, writable/range checks, revision and slot validation, rejection order
+and batch admission remain unchanged. Metadata can still allocate. This is
+generic memory ownership, without a changeable policy decision or new hook.
+Summation order, f64 values, solver, substeps and external dependencies are unchanged.
+
+Twenty-one focused native port tests pass, including snapshot sharing and
+registration isolation, shared name identity, invalid values, read-only owners,
+stale revisions, retired slots and all-or-none batch rejection. Native normal
+and Tracy builds pass with the existing unused `PreparedSolveCache::clear`
+warning. The skill catalogue passes (43).
+
+Tracy baseline PID 2859442 and changed PID 2883696/API 4202 each pass 30 authored
+smoke/history/consent checks and scene replacement. Both apps and collectors exit
+zero and close their ports. Settled propagation p50 over +1.5 to +7.5 s after
+View/Build/View activation is 0.263747/0.279526/0.255201 ms before and
+0.254894/0.252069/0.233334 ms after. The first View mean rises slightly while
+the other two means fall; different clocks and workload prevent a causal
+product-performance claim.
+
+Normal baseline PID 2870871 and changed PID 2885256 each pass another 30 authored
+checks and replacement, exit zero and close API 4202. High quality, the same
+authored camera, 50 bodies/33 colliders/20 joints and advancing physics remain.
+Camera poses stay exact within each run; cross-run render-coordinate differences
+are below five micrometres and 1e-7 per quaternion component. Changed
+normal PID 2886447 passes the 24-check exact replay against the retained fresh
+56-row baseline reference at 780 ticks, including deliberate mismatch rejection.
+This covers four rovers and one compute thread, not the ten-profile matrix.
+PID 2886492 passes all 11 authored port-owner collision checks, including the
+expected negative loaded-stage lint verdict and visible winning-owner precedence.
+Both test processes exit zero and close API 4202.
+
+Overall FPS remains unresolved: the first changed normal run has half-second
+frame spikes, and a separate unchanged control reproduces spikes up to 660 ms.
+The follow-up changed control overlaps Cargo PID 2895400 in the `usd` worktree;
+that build is left untouched. Both controls exit zero and close their port.
+These runs do not establish loading, frame-time or physics-performance gains.
+The initial shadow audit identifies twelve spotlight maps, zero point lights,
+and no duplicate standard/shader material bindings among 206 registered meshes.
+Authored shadows and quality remain intact; long-frame attribution remains open.
+
+Receipts, traces, comparisons and archived artifacts are under
+`target/entity-tree-perf/`, prefix `port-snapshot-`. Normal SHA-256:
+`25dbca3dee81ba798b889be9d9b0054ada36e5981c23b436253142957309b676`;
+Tracy: `bf9bca7c13f8f81bf707e6d5d46398f620abf886f8ce2f500bfb0db743696f5e`.
+
+## Eligible dynamic-body admission gate — 2026-10-10
+
+`lunco-usd-sim` shares one native archetype filter between dynamic admission and
+its schedule gate. Initialization-pending, invalid or paused bodies retain
+`ShouldBeDynamic` but do not trigger a full stable-identity scan when no body
+can be promoted. The admission body retains stable stage/instance/path
+validation, duplicate-identity faults, preview checks, ordered promotion,
+authored velocity seeding and joint holds. No solver, precision, external
+dependency or physics cadence changes are made.
+
+The unchanged normal binary identifies three paused sandbox assemblies:
+RedBalloon and both Skid_Raycast rovers, each with its existing initialization
+warning. Six native admission tests pass on the integrated tree, including
+membership transitions, duplicate-source/body faults and joint admission holds.
+Native normal/Tracy builds pass with the existing unused
+`PreparedSolveCache::clear` warning; the skill catalogue passes (43).
+
+Pre-integration Tracy PID 2811022/API 4202 and its collector exit zero and
+close their ports. Thirty authored checks pass, paused assembly flags remain
+visible, and scene replacement succeeds. At +1.5 to +7.5 s after View/Build/View
+activation, admission body calls fall from 356/295/380 (p50
+0.087398/0.098725/0.085690 ms) to zero. Admission still runs 26 times over
+loading and replacement. This removes an idle scan; it is not a causal overall
+FPS or loading claim across different clocks and workloads.
+
+The tracked replay reference rejects the unchanged baseline because it expects
+434 Modelica variables while the current model has 438. The tracked reference
+and scenario remain unchanged. A separate reference captures 56 current
+physics, Modelica and articulated rows from the unchanged normal artifact;
+its uninstrumented baseline replay passes 24 checks at 780 ticks, including
+deliberate mismatch rejection. Reference SHA-256:
+`ced93428eb9cfd278ea0556b2e1c644376020caf08bc351c1fcf97679eacb369`.
+Evidence is under `target/entity-tree-perf/`, prefix `admission-`.
+
+After fast-forwarding to main `97d8e2bb7`, normal PID 2819892/API 4202 passes
+another 30 authored checks, retains the paused assembly flags, replaces the
+scene, exits zero and closes its port. High quality, equal camera poses,
+50 bodies/33 colliders/20 joints and advancing physics remain. Sampled frame
+p50 is 10.810/11.197/10.958 ms; physics-ring p50 is 1.000/1.176/1.241 ms,
+with 487/486/484 ticks advanced per eight-second window. Readiness clears at
+2.917 s; no concurrent app/Cargo process is recorded at launch. These after-only
+observations do not establish overall loading or FPS gains. PID 2820635 passes
+the same 24-check exact replay against the fresh baseline reference and exits
+zero with its port closed. This covers four rovers, one compute thread and
+780 ticks, not the ten-profile determinism matrix.
+The existing ramp-placement scene passes nine authored checks in PID 2820922
+through 1800 ticks: both invalid rovers remain paused at their authored poses
+with warnings, while the admitted rover climbs the inclined support. That
+process also exits zero and closes API 4202.
+
+Normal artifact SHA-256:
+`cfd6b348ec442b8769c5aeeda9a05eae3d86bfc7a975222835ea5e7d34004944`;
+pre-integration Tracy:
+`bffc83cab97e92a10017c06b506e6346759fc95c088063daa370a127fdabd973`.
+The retained GPU export identifies shared and camera shadow spans as the next
+render attribution target; overlapping span totals are not GPU frame time.
+
+## Dataset catalog notification discipline — 2026-10-10
+
+Dataset failure-outbox drains in `lunco-assets-datasets` and `lunco-assets`
+preserve catalog resource change ticks. They still emit the same typed failure
+events in the same order; actual registry mutations retain their notifications.
+This removes false per-frame invalidation of the Rhai-owned consent projection.
+The UI bridge also tracks interactive-window availability explicitly, so adding
+or removing the last window refreshes policy facts without incidental registry
+writes. Policy selection, authored rows/actions, async admission, solver and
+physics mechanisms, precision and external dependencies remain unchanged.
+
+Two focused native resource/lifecycle tests pass: quiet publication and registry
+refresh, window insertion/removal, quiet diagnostic draining and exactly-once
+failure delivery. The isolated UI test fails before the window-input fix and
+passes afterwards. Native normal/Tracy builds pass; both report the existing
+unused `PreparedSolveCache::clear` warning. The skill catalogue passes (43).
+
+Tracy PID 2703340/API 4202 and collector 2703339 pass 30 authored checks:
+sandbox smoke (7), telemetry history (17), and consent surface (6). The consent
+gate verifies rows/actions, unrelated-scope dismissal, active dismissal and
+retired-property clearing. Scene replacement clears readiness/diagnostics;
+both processes exit zero and the port closes. Settled publisher p50 falls from
+0.272814/0.266708/0.280068 ms to 0.004909/0.005871/0.004048 ms in View/Build/View,
+using +1.5 to +7.5 s after each activation. This is owner attribution, not a
+causal overall-FPS claim across different hardware clocks/workloads.
+
+Normal PID 2710646/API 4202 passes another 30 authored checks and replacement,
+exits zero and closes its port. No concurrent app/Cargo process is recorded at
+launch. High quality, equal camera poses, 50 bodies/33 colliders/20 joints and
+advancing physics are retained. Sampled frame p50 is 10.841/10.794/10.921 ms;
+physics-ring p50 is 1.117/1.063/1.137 ms, and readiness first clears at 2.758 s.
+These after-only observations do not establish loading or physics-FPS gains.
+Screenshots show the optional consent prompt before dismissal and an unobstructed
+populated Builder after replacement. No download is requested. No new exact-state
+replay claim is made for this notification/presentation checkpoint.
+
+Evidence and hash-verified archives are under `target/entity-tree-perf/`, prefix
+`dataset-`, including `dataset-tracy-comparison-20261010.json`. Normal SHA-256:
+`3fdfbf0c94adec0c3f600edf0b233e14400f2af00cdfbce9cc426057d3a5acf0`;
+Tracy: `b83b25682bf08a60b1438342f601f915335edba169950f84778e722ea45ccb8c`.
+
+## Native hierarchy insertion delivery — 2026-10-10
+
+The derived entity-tree gate receives immutable `ChildOf` insertions through
+Bevy lifecycle messages. It coalesces entity identities and compares current
+edges with the cached ancestry instead of scanning every hierarchy component's
+change tick each frame. Mutable labels, marker membership, scene boundaries,
+removals and identical-edge suppression retain their existing readers. Active
+Twin closure clears queued insertions. This is the UI projection's generic
+invalidation mechanism; visibility policy, worker revision fences and
+authoritative simulation paths remain unchanged. No external library changes.
+
+Eight focused generic lifecycle/resource tests pass, covering active-scene and
+preview membership, unchanged edge replacement, reparenting, unnamed candidate
+ancestors, removal/despawn, stable duplicate labels and Twin-close retirement.
+The normal and Tracy production builds pass without warnings. Changed Tracy
+PID 2561815/API 4202 and collector 2561814 pass 24 authored smoke/history checks;
+both exit zero and the API port closes. Listener and connection ownership are
+verified. Normal PID 2586102/API 4202 passes another 24 authored checks and scene
+replacement, exits zero and closes its port. Screenshots show the populated
+entity tree before and after replacement. The optional visual-resource prompt
+remains visible in the compared screenshots.
+
+The trace slices span +1.5 to +7.5 s after each perspective activation, excluding
+startup, authored checks and replacement. Gate p50 is 0.132162/0.131946/0.121607
+ms before and 0.098800/0.102672/0.101644 ms after in View/Build/View. No insertion
+callback runs within those settled slices. Comparison and observer exports are
+in `target/entity-tree-perf/hierarchy-tracy-comparison-20261010.json` and
+`after-insert-cpu-20261010.csv`. These are observed owner timings; different
+hardware clocks and overlapping main-worktree activity prevent a causal
+product-FPS claim. The other session is left untouched.
+
+The normal run preserves High quality, stable camera pose and advancing
+50-body/33-collider/20-joint topology. Sampled frame p50 is
+11.116/10.888/10.883 ms and physics-ring p50 is 1.069/1.173/1.029 ms;
+readiness first clears at 3.003 s. These after-only observations do not establish
+loading or FPS improvement. No new exact-state replay claim is made for this
+UI-only checkpoint. Normal SHA-256 is
+`981ececb06c961cf96c2b4bbd104f4fa821d4aa578ca3a9b477d09862e48ab9d`;
+changed Tracy is
+`9bc06af1f7142e7409383d2e12aa25c1d0cd7a2b49d5205262ec80aa77e38c28`.
+
+Baseline Tracy PID 2448227 completes all timing windows, 24 authored checks
+and replacement, then the helper force-reaps it after a 15-second API Exit
+timeout. Collector 2448226 saves the capture and exits zero; this supplies
+timing evidence, not successful shutdown acceptance. An earlier helper uses
+an unavailable perspective command and supplies no measurement window.
+The corrected driver uses `ActivatePerspective` and disconnects its collector
+before app shutdown. Artifact hashes and timing receipts are recorded under
+`target/entity-tree-perf/`.
+
+Evidence availability on 2026-10-10: this checkout's `target/` directory was
+removed outside this task's commands during the follow-up. Earlier
+`target/image-loader-perf/` and `target/perf/` artifacts referenced below are
+therefore unavailable locally. Their descriptions record historical results;
+new entity-tree timing receipts and accepted traces are retained under
+`target/entity-tree-perf/`. Later task-owned space recovery removes superseded
+entity-tree binary archives and rejected/failed diagnostic captures. Current
+dataset and admission binary archives remain available. The all-owner CPU
+export is compressed; its source trace and settled summary remain available.
+
 ## Participating-closure prepared-solve reuse — 2026-10-10
 
 `lunco-modelica-worker` keys prepared solve IR by the strict compiler's
@@ -1347,13 +3823,8 @@ tails and full replay acceptance remain open.
 
 ## Worker response ownership and current trajectory comparison — 2026-10-09
 
-`lunco-modelica-worker::worker::bridge` now transfers validated in-flight input
-samples into the accepted-step record and moves response samples into the
-bounded UI queue. Existing observable-variable names reuse their map keys.
-The accepted record still owns a separate output snapshot. Session/step/endpoint
-validation, detected-symbol/output precedence, UI sample order and `f64` values
-are unchanged; this is buffer ownership within the existing admission mechanism,
-with no policy hook, scheduling or equation change.
+The current response-ownership contract is documented in
+[Modelica runtime](../architecture/20-domain-modelica.md).
 
 The nine worker bridge lifecycle tests pass, including stale-session rejection,
 exact signed-zero/full-precision values, input/output buffer transfer and reset
@@ -1979,7 +4450,7 @@ captured exactly. Readiness remained clear at 02:45:47.715. This misses the
 acceptance were not measured.
 
 The 90.4-second trace contains 4,848 frames and 20,779,197 zones. Five
-`modelica_solve_preparation_lower_for_live` worker spans took 7.90–13.50 seconds
+FMI preparation worker spans took 7.90–13.50 seconds
 (the other measured spans were 0.84 seconds and 0.036 seconds). These ran on
 the dedicated Modelica solve-preparation pool, which logged four workers.
 Physics admission completed around 1.5 seconds; slow solve lowering remained
@@ -2057,7 +4528,7 @@ readiness evidence for that Twin; the exact full-readiness transition was not
 timestamped in this run.
 
 The Tracy capture recorded six prepared solver lookups: five persistent-cache
-hits and one worker-side `lower_for_live` miss lasting 422.064 ms, followed by
+hits and one worker-side FMI preparation miss lasting 422.064 ms, followed by
 a 4.373 ms cache save. Solver lookup work totaled 58.09 ms with a 37.60 ms
 maximum. The miss remained on the worker path. Two other simulator sessions
 were active on ports 4113 and 49376, so the capture is diagnostic under
@@ -2454,7 +4925,7 @@ five-second stable interval were not sampled; this does not establish the 5 s
 target. The scene-mount time is under 2 s in this diagnostic, but is not a clean
 acceptance result.
 
-New worker zones isolate `lower_for_live` as the long Modelica preparation
+New worker zones isolate FMI preparation as the long Modelica preparation
 stage. Rumoca compile calls took 0.05–0.15 s; solver lowering took 4.370 s for
 Ackermann, 0.481 s for Rover, 8.159 s and 8.446 s for the two rocker-bogie
 systems, 9.446 s for Electrical, and 0.056 s for CommsLink. Repeated
@@ -2474,7 +4945,7 @@ separate admitted-library content revision and hashes primary and sorted
 sibling source text without runtime document IDs. A corrected-key run
 generated new entries and therefore still paid cold lowering. The following
 warm Tracy run confirmed persistent reuse: there were no
-`modelica_solve_preparation_lower_for_live` zones, and eight disk lookups
+FMI preparation zones, and eight disk lookups
 averaged 2.30 ms (6.96 ms max). This removes repeated warm-lowering cost; cold
 lowering remains part of first-open startup. The Tracy zones bracket job queue
 wait, cache lookup, lowering, result delivery, and the live-stepper commit.
@@ -2510,10 +4981,10 @@ health sample at the startup boundary, so app readiness remains unverified.
 
 The corrected cache keys were exercised in two Tracy runs of the same authored
 Apollo scene. The first run generated entries for the new identity and recorded
-seven `lower_for_live` jobs totaling about 30.7 s; it is a cold-cache run for
+seven FMI preparation jobs totaling about 30.7 s; it is a cold-cache run for
 those corrected keys. The warm follow-up,
 `scripts/perf/captures/sss-modelica-cache-key-fix-warm-20260927.tracy` (40.3 s,
-2,410 frames), recorded no `modelica_solve_preparation_lower_for_live` zones
+2,410 frames), recorded no FMI preparation zones
 and eight persistent disk lookups (2.30 ms mean, 6.96 ms max). Scene
 participants became lifecycle-ready 6.08 s after Twin-open. The first sampled
 clear full-readiness state was at 11.35 s after Twin-open and stayed clear for
@@ -2669,7 +5140,7 @@ ms over its 240-sample window, with 56 service-budget exceedances. That is
 another contended diagnostic and is not the Avian solver measurement.
 
 The same trace's five persistent Modelica solve-cache lookups totaled 7.02 ms.
-Two missed and ran lower_for_live: preparation 3 for Traverse_Rover_System
+Two missed and ran FMI preparation: preparation 3 for Traverse_Rover_System
 took 0.370 s, and preparation 4 for Traverse_Rover_Electrical_System took
 9.144 s. Preparation 4 waited only 26 microseconds in the worker queue; the
 slow time was solver lowering, not queue admission. Its persistent cache entry
@@ -3468,55 +5939,11 @@ not this point-light filter, the next measured target.
   preview camera are inactive. The main opaque pass also ran once per Tracy
   frame. Rendering several full output cameras is therefore not the root cause.
 - Preserve the persisted overlay and all six headlight shadows while testing
-  camera-only stage admission on auxiliary roots. Measure the 48-buffer submit
+  the shared-shadow schedule on auxiliary roots. Measure the 48-buffer submit
   boundary and shadow-pass cost before considering any further render-path
   change; the existing GPU timestamp table does not cover shadow passes.
   Do not infer the full GPU/CPU split from that incomplete table. The 150 FPS
   target remains open.
-
-### 2026-09-25 — auxiliary shadow-view stage admission
-
-Bevy's camera driver runs `Core3d` for point/spot shadow roots as well as output
-cameras. `lunco-render-bevy` now gates `Prepass`, `MainPass`, `EarlyPostProcess`,
-and `PostProcess` stage sets off for `LightEntity` roots. Source inspection of
-Bevy 0.19.1 confirms its early/late shared and per-view shadow passes are
-separate systems outside those stage sets, so the depth-map path remains active.
-The shared `prepare_preprocess_bind_groups` pass remains active too: it builds
-view-specific bindings for each phase's work-item buffers and is needed by GPU
-preprocessing/culling for shadow draws. The measured pre-change cost was about
-0.514 ms/frame; this app-level gate does not bypass or cache it.
-
-The same pre-change Tracy capture recorded one `wgpu::Queue::submit` call per
-frame, with 48 pending command buffers, at 1.277 ms mean (about 1.936 ms p95).
-The new gate may prevent camera-only systems on shadow roots from contributing
-buffers, but it cannot remove the shared queue call. Post-change capture
-`scripts/perf/captures/sss-shadow-schedule-after-20260925.tracy` contains 45.31 s,
-861 profiler frames, and 5.32 million zones. The bundled CSV exporter did not
-finish its first filter after 15 minutes and was stopped; the capture is
-preserved, but no post-change submission count/time or schedule delta is
-claimed.
-
-The production UI binary built with the change, and the focused
-`camera_stages_are_skipped_only_for_light_shadow_roots` test passed. A headful
-High-quality Apollo run reached `/api/ready` with no pending work, and its
-2560×1568 API screenshot showed the scene rendering. Under the two pre-existing
-simulator sessions on ports 43117 and 43126, its diagnostics averaged about
-89.9 FPS / 12.37 ms per frame and 1.05 ms per Avian step. Those sessions were
-left untouched; this is contention-affected and not an acceptance comparison.
-The separate unprofiled run and Tracy run both exited through typed API `Exit`,
-and owned ports 43602, 43603, and 8091 were verified free. Clean post-change FPS,
-buffer-count reduction, shadow pass inventory from the new capture, and the 150
-FPS target remain unverified.
-
-A later owned non-Tracy Apollo diagnostic run on API port 43604 reached
-`/api/ready` with zero pending work and exited through typed `Exit`. It ran
-while the existing sessions on 43117 and 43126 were still active; immediately
-before launch, host load averages were 10.36/11.87/8.84 and NVIDIA GPU
-utilization was 78%. Its rolling diagnostics reported 63.2 FPS / 18.67 ms,
-with individual samples as low as 32.9 FPS / 30.40 ms; Avian averaged 1.13 ms
-per step. This is severe contention evidence only, not a post-change acceptance
-comparison or a clean estimate of the gate's effect. Port 43604 was released;
-the other sessions were untouched.
 
 ### 2026-09-25 — Bevy render-queue submission boundary
 
@@ -3530,9 +5957,8 @@ neither subsystem has pending work, those helpers append no commands, but the
 empty encoder is still submitted. That second call is outside the measured
 `queue_submit` span, so its cost is currently unknown.
 
-The local shadow-root stage gate reduces camera-only Core3d work before the
-batched graph submit. Safely removing the unconditional screenshot/readback
-submission is a Bevy render-system ownership change: replacing Bevy's wrapper
+Safely removing the unconditional screenshot/readback submission is a Bevy
+render-system ownership change: replacing Bevy's wrapper
 from the application would also take ownership of frame presentation,
 screenshot capture, and GPU readback ordering. Do not fork or duplicate that
 wrapper in LunCoSim. A focused upstream change should submit the secondary
@@ -3808,7 +6234,7 @@ composed-reader selection and physics extraction. Rebuild the Tracy production
 binary before the next capture; this span is not in the saved trace.
 
 The same capture links the late participant-ready event to cold Modelica
-solver preparation. `lower_for_live` took 9.037/9.168 s for the two rocker
+solver preparation. FMI preparation took 9.037/9.168 s for the two rocker
 bogie systems, 5.658 s for Ackermann, 0.529 s for Rover, and 8.209 s for the
 Electrical system. Their worker queue waits were 26–94 µs, while the associated
 Modelica compiler calls logged 0.04–0.14 s. Electrical lowering ended at about
@@ -3817,7 +6243,7 @@ worker path, these spans point to lowering time rather than queue admission as
 the dominant cold-start cost. Persistent-cache hits remain a separate warm
 path; the cold full-readiness target is still open.
 
-The capture identifies the total `lower_for_live` wall time but does not show
+The capture identifies the total FMI preparation wall time but does not show
 which Rumoca phase dominates. Rumoca emits per-phase `elapsed_seconds` debug
 events on the `rumoca_sim::solve_lowering` target; the default app filter hid
 them in this run. For the next CPU diagnostic, launch with
@@ -4176,7 +6602,7 @@ spawned 1.76 s after Twin-open. The first `/api/health` response was about
 3.05 s after process launch. Readiness first appeared clear at that early
 sample, later regressed, and remained pending around 20 s; the later clear
 sample was near capture end, so the exact stable transition was not captured.
-Four `modelica_solve_preparation_lower_for_live` worker jobs took 14.3–16.3 s
+Four FMI preparation worker jobs took 14.3–16.3 s
 each, with only 39–157 microseconds of queue wait. This is a startup-readiness
 lead to investigate separately from the steady render cost.
 
@@ -4839,7 +7265,7 @@ not establish the 5 s app or Twin readiness targets; the observed full-Twin
 readiness was later than 5 s. Sandbox was not measured.
 
 The warm run confirmed persistent Modelica solve-cache reuse: eight disk
-lookups averaged 2.81 ms (5.29 ms max), with no `lower_for_live` spans. Cold
+lookups averaged 2.81 ms (5.29 ms max), with no FMI preparation spans. Cold
 lowering remains part of first-open work. `sync_twin_overlays` did not reproduce
 the earlier long calls in this sample (nine calls, 29 microseconds maximum).
 The first run's Tracy-only physics diagnostics were 2.47 ms p50, 3.24 ms p95,
@@ -5080,14 +7506,11 @@ acceptance measurements, and miss the 0.5 ms physics and 150 FPS targets.
 
 Tracy recorded `lunco_modelica_telemetry::retain_modelica_runtime_state` at
 248.80 ms during Sandbox readiness and 87.57 ms during Summer Space School
-readiness. Source attribution found a repeated linear
-`ModelicaIndex::find_component_by_leaf` scan for each solver variable while
-document metadata was refreshed, making the dirty batch proportional to
-variables times document components. The index now exposes a borrowed
-`ComponentNameLookup` for bulk exact/qualified-leaf resolution, and telemetry
-builds it once for each metadata refresh batch. Settled samples keep using the
-session metadata cache. This preserves first-match and exact-before-leaf
-resolution semantics. The focused telemetry crate check passed. A post-change
+readiness. Live telemetry consumes the checked
+FMI scalar inventory admitted with its solver; no document-name lookup remains
+in that producer. Retained experiment plots read exact per-run units and
+descriptions published by Rumoca and stored with the trajectory. The historical source profile below measures batching of the
+document lookup and is not a performance measurement of the FMI cutover. That
 source profile was captured at the Tracy listener on port 8086:
 `main/target/sss-sandbox-modelica-lookup-2d386e156-20260928.tracy` (60.3 s,
 4,595 frames, 20,006,355 zones, 125.19 MB). Its telemetry system had 4,317
@@ -5408,7 +7831,7 @@ warning handler. No identity allocation or lifecycle ordering changed.
 `cargo +nightly-2026-02-27 check --locked --tests -j 4 -p lunco-core-session`
 passed as a compile-only check; no tests were executed. This path has not yet
 been reprofiled, so no timing gain is claimed. The same capture's remaining
-startup lead is worker-side `modelica_solve_preparation_lower_for_live` (six
+startup lead is worker-side FMI preparation (six
 calls, 5.09 s mean, 6.82 s maximum).
 
 ### 2026-09-28 — batch procedural terrain-rock components
@@ -5435,7 +7858,7 @@ and <5 s full readiness targets remain open.
 
 ### 2026-09-28 — coalesce identical Modelica solve preparation
 
-The existing Sandbox capture shows separate `lower_for_live` jobs for
+The existing Sandbox capture shows separate FMI preparation jobs for
 `Skid_Raycast_1_System` (6.225 s) and `Skid_Raycast_2_System` (6.301 s). Both
 reference the same skid-rover asset, and the existing structural solve key
 normalizes generated instance names; the Sandbox scene authors no per-instance
@@ -6598,13 +9021,242 @@ sample and is contention-affected.
 The 35.38 s capture
 `scripts/perf/captures/sss-lookahead-open-20260930.tracy` shows the six compile
 jobs entering the pipeline by 6.47 s from capture start while one cold
-`lower_for_live` occupied a solve worker for 7.65 s. The other five jobs were
+FMI preparation occupied a solve worker for 7.65 s. The other five jobs were
 prepared-solve cache hits (about 1–6 ms); this profile therefore does not
 isolate the performance effect of the new lookahead limit. The warm Twin-open
 capture `scripts/perf/captures/sss-lookahead-warm-20260930.tracy` instead
-recorded one cache miss taking 9.16 s in `lower_for_live`, with cache lookups
+recorded one cache miss taking 9.16 s in FMI preparation, with cache lookups
 of at most 6 ms. These are worker-side readiness costs, not measured UI or
 physics-thread stalls. Tracy and the concurrent simulator workloads make all
 timings diagnostic only; clean FPS, physics, and readiness acceptance remain
 open. The owned sessions were closed, and the other active sessions were left
 untouched. This handover remains uncommitted.
+
+
+## Summer Twin solar ray sample reuse — 2026-10-12
+
+The actual Summer Space School Twin exposed a fixed-update terrain-query cost.
+The native Tracy capture ranks `publish_sun_visibility` at 11.915 ms mean
+(2,947 calls), against 12.458 ms for FixedUpdate and 0.292 ms for native
+PhysicsSchedule. Temporary child attribution puts input preparation at 0.019 ms,
+geometry-index update at 0.001 ms, and each of nine terrain rays at 1.548 ms.
+The retained enclosure cache is warm: only 54 new bounds were admitted across
+512 measured ticks, while actual height evaluations accumulated about 19,800
+per tick. Shared cell and refinement endpoints repeat the same pure oracle work.
+
+`SurfaceOracle::occludes_ray` now retains point heights by exact x/z f64 bit
+identity within that immutable ray. The existing oracle remains the calculation
+owner and physical solar visibility remains its consumer. The map retires on
+return and contains at most three entries per admitted interval. Traversal,
+breadth-first refinement, interval admission, conservative clear certificates,
+blocker comparisons, non-finite diagnostics and fault boundaries are unchanged.
+This is reuse of continuous-math results, with no routing or scenario policy,
+new public API, hook, external-library change, approximation or clock change.
+
+The candidate native capture measures solar visibility at 6.841 ms mean
+(2,190 calls) and FixedUpdate at 7.396 ms; native physics is 0.339 ms. These
+whole-capture owner observations show about 43% less solar span time. The owned
+PID/port and collector connection were verified, the saved capture matches its
+reported compressed size, and native CPU export succeeds. All temporary spans
+and counters were removed before the candidate build; the solar publisher's
+original bytes were verified exactly.
+
+Four focused certified-occlusion mechanism tests pass, including exact shared
+endpoint reuse, unchanged work quotas, narrow features, grazing/error boundaries,
+moving rays and surface replacement. The production positive solar gate passes
+8/8 with all six observation rows exactly equal to the unchanged production
+artifact; partial, blocked, restored and elevated power remain identical.
+The invalid-admission gate produces the expected terminal `solar-sample-unavailable`
+fault. The unchanged 20-rover production determinism reference passes 72/72
+checks through tick 780 with compute width 24.
+
+The separate normal Summer runs observe frame p50 39.773 ms before and
+13.465 ms after, with 614/610 physics steps advanced in their ten-second windows.
+Another agent's tutorials simulator remained active and GPU load varied, so
+these are contention-affected observations, not clean FPS acceptance. The
+candidate checks terrain residency and derived-map readiness throughout its
+window: 256 wanted/resident, zero pending, one ready/total, no active bake.
+Screenshots retain rocks and their shadows. Startup creates the 598-rock field
+once; the later identical analytic composition skips terrain rebuilding. The
+Twin's authored worktree stays clean.
+
+The normal artifacts are `cf23bc7899663d384aa5bf9ab99112864c4db2afb812f1f0941dc3632a537e6b`
+and `0086c4b3a99c31991eaf669345d409a15cc46b325ca9cf4a4897993a11e93971`.
+Evidence is under `.lunco/performance-evidence/entity-tree-perf/` with prefixes
+`solar-owner-attribution`, `solar-ray-counters`, `solar-fixture-normal`, and
+`solar-exact-reuse`; the acceptance receipt records artifacts, windows and
+concurrent workloads. Owned apps and collectors exit zero, API 4202 and Tracy
+8087 are closed. Clean overall loading, visual FPS and physics FPS acceptance
+remains open.
+
+
+The integration preserves main `41512e5d1` and its existing Rumoca
+`e9b58b63c4d4a3e7adc0db247af11bf718745580` dependency and native Editor-query
+changes. After task-owned package cleanup and checkout `cargo clean`, the
+combined tree rebuilds without warnings in 3m 42s using normal sccache and `-j 4`.
+The fresh normal artifact is
+`55a9ae6ba87b3d64c351b7b5cefb2e09ad0b3a8e2e0180a9154de90e0b9f3407`.
+It repeats all four mechanism tests, 8/8 solar checks with six identical
+observation rows, the expected invalid-probe fault, and 72/72 exact replay checks.
+The final Summer run advances 633 physics steps, passes nine settled terrain
+quality checkpoints and creates the 598 rocks once. Its frame p50/p99 are
+50.807/97.915 ms with two other tutorials simulator sessions active; these
+cannot be compared as a clean speedup to the earlier one-session observations.
+The inspected final image retains terrain, rocks and shadows. The authored
+Twin remains clean, the owned app exits zero and API 4202 is released.
+The integrated acceptance receipt and verified compressed executable are retained
+with prefix `solar-exact-reuse-integrated` beside the earlier evidence.
+
+
+## Query-local procedural density preparation — 2026-10-12
+
+The settled Summer solar window samples 8,512 height evaluations across 600
+fixed calls. Native sampled child spans put Overzoom above raster interpolation
+and curvature. A separate pure-math diagnostic attributes about three quarters
+of synthesis to crater-population generation. Adjacent cells share their 4x4
+macro-group density, making its hashed lambda and initial Poisson mass reusable.
+
+`lunco-terrain-core::Overzoom` now prepares one immutable Poisson distribution
+for the current density group within a band traversal. Each cell still uses its
+own uniform hash and starts its inverse-CDF walk from the same exact f64 mass.
+The traversal, draw cap, operation order, crater parameters, warp, noise,
+Nyquist gates and field content keys are unchanged. The descriptor retires with
+the query; no population cache, RNG state, public API, policy hook, extra
+setting or external-library change is introduced. Continuous synthesis remains
+at its existing mathematical owner, consumed by surface queries and bake workers.
+
+The math diagnostic improves from 757.783 to 665.640 ns per point, with all
+4,096 height bit patterns identical. Ten final Overzoom mechanism tests pass,
+including repeat/reordered draws, density variance, bounds and Nyquist behavior.
+Temporary instrumentation and the diagnostic test were removed. The real Twin
+Tracy capture observes solar visibility at 6.418 ms mean (2,130 calls), versus
+6.841 ms in the preceding capture; FixedUpdate is 6.977 ms versus 7.396 ms.
+Native physics is 0.350 ms. Captures retain the owned PID/ports, saved-size
+checks and successful native CSV exports; these are diagnostic owner timings.
+
+The normal production artifact
+`f0fd275613862e6d72c3feaa86c3b9bfa76ed4665ded25d8498c00a16849d334`
+passes 8/8 solar checks with all six observation rows equal to the unchanged
+artifact, the expected invalid-sampling terminal fault, and 72/72 exact
+20-rover replay checks through tick 780. The High-quality Summer window passes
+ten terrain quality checkpoints and advances 608 physics steps with 624 bodies
+and 618 colliders. Frame p50/p99 are 14.091/34.407 ms with another tutorials
+simulator active; clean overall FPS acceptance remains open. The inspected image
+retains terrain, rocks and shadows. Authored Twin files remain clean.
+
+Evidence uses prefixes `terrain-point-attribution`, `overzoom-phase` and
+`overzoom-density-reuse` under `.lunco/performance-evidence/entity-tree-perf/`.
+Exact production executables are compressed and hash-verified there. Owned API
+4202 and Tracy 8087 are released; foreign sessions and shared caches are preserved.
+
+
+Integration preserves main `065834644`'s removal of the unused Modelica
+compile-picker walker. No callers remain, and the focused
+`cargo check -p lunco-modelica-ast -j 4` passes in 41.23s. Runtime evidence above
+is retained for the tested terrain implementation; that non-behavioral AST
+removal was compile-checked without repeating unchanged scene inputs.
+
+## Completion-driven preparation refill — 2026-10-12
+
+The Summer startup trace contains 257 tile preparations with 575.416 ms of
+combined CPU work spread across 3,067.107 ms. The shared admission queue dispatched
+only in PostUpdate, leaving completed worker slots idle until another host frame.
+There were 63 fully idle tile gaps above 5 ms. A mechanism test reproduces the
+failure with eight queued jobs, one worker slot and only one host update.
+
+`lunco-core-runtime::AsyncWorkAdmission` now refills released slots on worker or
+external-permit completion. Queue selection and slot reservation are serialized
+under the existing queue lock; job execution starts after releasing it. Limits,
+semantic priorities, fairness and owner-selected ordering retain one owner.
+Completion guards hold a weak queue reference. Resource retirement stops refill
+and discards queued captures outside the lock, as does owner cancellation.
+Running jobs remain non-preemptible. Inputs and outputs remain immutable typed
+preparation; live World evaluation, source fences, logical clocks and ordered
+authoritative commitment remain at their domain owners. This is a generic
+scheduling mechanism, with no new scenario policy, hook or external-library edit.
+
+The candidate trace records the same 257 jobs across 575.132 ms, with 595.321 ms
+combined CPU work and eight fully idle gaps above 5 ms. The improvement removes
+host-frame waiting; it does not reduce terrain math or change quality. Native
+capture size checks and CPU CSV exports pass. A separate normal Summer run
+reaches settled readiness in 2.522 s versus 3.992 s in the preceding run.
+Both normal runs had a concurrent tutorials simulator, so these readiness
+observations and frame timings are not clean product-performance acceptance.
+The candidate reaches all 256 resident tiles while Modelica initialization is
+still pending. Its log creates the 598-rock field once and skips the later
+identical analytic composition; the inspected startup image retains rocks and
+shadows. The motion audit's final image is below the terrain after flying forward
+with a downward camera pitch. Residency and diagnostics pass, but that image
+does not establish acceptable moving-camera presentation.
+
+All 15 focused async-work mechanism tests pass, including completion refill
+without another host update, retirement and cancellation of captured permits.
+They pass again after checkout cleanup. The normal production executable passes
+72/72 exact checks against the unchanged 20-rover reference through tick 780,
+31/31 compiled metadata checks, and scene restart with restored readiness and no
+runtime diagnostics. The scenario-source and Modelica-observation negative
+fixtures both return their authored expected terminal faults. A driver initially
+expected the wrong Modelica fault string; its receipt was corrected against the
+authored verdict without rerunning the passing scene.
+
+The verified normal artifact is
+`b9a2f76abc5ce44c53d72eb542e2b54609656bb1176a92f950e0e872d7c458c0`;
+the Tracy artifact is
+`09e91f13afde3aa7c290549034dfdfcd2611ad09f86f7425e4dddd74f105d6b8`.
+Both compressed executables and the current native capture are retained under
+`.lunco/performance-evidence/entity-tree-perf/`, with prefixes
+`async-worker-refill` and baseline `summer-motion-audit-normal`.
+Integration preserves main `fc7c35264`, including its current Rumoca context and
+declaration contracts. Builds use the normal target, sccache and `-j 4`.
+Owned applications and collector exit zero; API 4202 and Tracy 8087 are released.
+The authored Twin stays clean. Overall clean loading, visual FPS and physics FPS
+acceptance remains open.
+
+Disk recovery removed this checkout's generated target outputs and ten older
+task-owned native captures. Their hashes, sizes and retained related exports are
+recorded in `owned-gpu-experiment-trace-retirement-20261012.json` and
+`owned-historical-trace-retirement-20261012.json`; those historical raw captures
+are no longer retained. Source, sibling worktrees, shared caches and foreign
+sessions were preserved. The validated normal executable is restored to
+`target/debug/luncosim` after the profiling build.
+
+## Settled Summer acceptance measurement — 2026-10-12
+
+After integrating `7dcb10b92`, the same verified normal artifact runs Summer
+at High quality, 1280x720, without vsync, throttling or Tracy. The ten-second
+settled window and all ten quality checkpoints observe only the owned simulator;
+there is no concurrent Cargo build or simulator in those checkpoints. A foreign
+tutorials build overlaps startup, so this run does not certify clean startup
+latency. Early green readiness at 0.208/0.597 s regresses to pending; the first
+later clear sample is 2.195 s. All 256 terrain tiles are resident at 2.741 s.
+
+The 258 revision-distinct frame samples have median 11.906 ms, p95 14.591 ms,
+p99 25.665 ms and maximum 35.613 ms: approximately 84 FPS at the median, below
+the 150 FPS target. Physics advances 614 steps with 624 bodies and 618 colliders.
+The final retained 120-step physics history has p50 0.413 ms, p95 0.501 ms,
+p99 0.521 ms and maximum 0.579 ms; its upper tail exceeds the 0.5 ms target.
+The final 240-tick timing window has fixed-tick service p50 7.379 ms,
+p95 8.043 ms, p99 8.393 ms and maximum 8.925 ms. Clipped simulation demand is
+zero; pending duration is 0.015143 s, below one 60 Hz tick. Modelica reports no
+held causal barrier. GPU utilization at settled checkpoints is 21–36%, with
+variable graphics clocks. API sampling contributes measurement overhead.
+
+Readiness, runtime diagnostics and complete terrain residency pass throughout
+the settled window. The inspected final image retains terrain, rocks and shadows;
+the log scatters 598 rocks once and skips identical analytic recomposition.
+The owned PID 3898432 exits zero and releases API 4202. Evidence uses prefixes
+`clean-summer-normal` and `clean-summer-summary` in the evidence directory above.
+This measurement leaves loading and FPS acceptance open and identifies the
+solar terrain-query service, rather than native solver time alone, as the next
+application-owned fixed-tick cost to address.
+
+A separate pure-math diagnostic prepares immutable crater populations for
+1,039 queried neighborhoods. Its 4,096 height bit patterns match over 16 passes;
+sampling measures 1,171 ns per point versus 1,937 ns without preparation, with
+3.308 ms preparation cost and 6,273 retained crater records. This is candidate
+attribution, not a production optimization or an FPS result. The existing
+`HeightModifier::for_region` and `SurfaceOracle::detail_limited_region` contracts
+already own footprint preparation for bake consumers; any further work must
+reuse those owners and preserve exact values, fold order, query bounds and
+bounded lifetime. The temporary diagnostic is removed and original source
+bytes are verified. Its evidence is `region-preparation-diagnostic-20261012.log`.

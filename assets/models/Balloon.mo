@@ -26,7 +26,6 @@
 // rho = rho0 · (T0/T) · (1 − L·h/T0)^5.255. Same curve, with the sea-level value
 // factored out where a scene can state it.
 //
-// RUMOCA RULES: branch-free equations — `max`/`min` clamps only, no `if`/`when`.
 // The clamps are also what keep the profile finite: above ~44 km the pressure
 // base goes negative and a fractional power of it is NaN, which would reach Avian
 // as a NaN force. `max(…, 0)` makes the model return zero density up there

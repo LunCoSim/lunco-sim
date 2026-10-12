@@ -8,7 +8,8 @@ use std::collections::{HashMap, VecDeque};
 
 /// The worker's two-lane command scheduler.
 ///
-/// This thread owns live steppers and command ordering. A separate single-owner
+/// This thread owns command ordering and admitted session handles. Persistent
+/// solver workers retain live steppers and FIFO per-session execution. A separate single-owner
 /// actor owns the mutable Rumoca session and compiled-artifact cache. Native
 /// source-root reads and parsing run on the bounded
 /// preparation pool; source-root installs and ordinary compiles are sent to the
@@ -137,6 +138,9 @@ pub(super) fn take_runnable_compile_command(
 ) -> Option<ModelicaCommand> {
     let command = compile_lane.front()?;
     let runnable = match command {
+        ModelicaCommand::CompileBatch { .. } => {
+            preparation_capacity_available && !source_root_preparation_pending
+        }
         ModelicaCommand::Compile { entity, .. } => {
             preparation_capacity_available
                 && !source_root_preparation_pending
@@ -196,6 +200,7 @@ mod tests {
 
     fn compile(e: Entity, session_id: u64) -> ModelicaCommand {
         ModelicaCommand::Compile {
+            execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
             entity: e,
             session_id,
             model_name: "M".into(),
@@ -204,6 +209,7 @@ mod tests {
             doc_uri: "doc.mo".into(),
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
+            initial_inputs: Vec::new(),
             stream: None,
         }
     }
@@ -356,6 +362,7 @@ mod tests {
         let mut compile_lane = VecDeque::from([ModelicaCommand::Reset {
             entity: ent(2),
             session_id: 4,
+            initial_inputs: Vec::new(),
         }]);
 
         assert!(
@@ -364,7 +371,7 @@ mod tests {
         assert_eq!(compile_lane.len(), 1);
         assert!(matches!(
             take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
-            Some(ModelicaCommand::Reset { entity, session_id: 4 }) if entity == ent(2)
+            Some(ModelicaCommand::Reset { entity, session_id: 4, .. }) if entity == ent(2)
         ));
     }
 

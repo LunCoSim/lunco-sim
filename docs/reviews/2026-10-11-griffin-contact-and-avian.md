@@ -254,8 +254,10 @@ hold while their root/import assets loaded. Compilation had a hold, leaving a
 gap before the program document existed.
 
 `lunco-scripting-rhai-runtime` owns source admission for USD paths and
-`RunScenarioAsset`. It acquires an exact `ScriptSourcePreparation` key using the
-existing scripting allocator. The shared source-closure owner validates the
+`RunScenarioAsset`. It reserves actor-owned source admission in
+`ScenarioPreparationAdmissions` and retains the same key through document and
+compilation handoff. Independent asset requests acquire exact
+`ScriptSourcePreparation` keys from that same allocator. The shared source-closure owner validates the
 complete published graph before writing source or prepared-AST registries. Root
 and import publication gaps retain the request and hold, including Twin tool
 libraries. Prelude activation uses the same closure readiness boundary. A
@@ -279,7 +281,7 @@ The production spring gate passed
 unbroken subsequent ticks. The missing-source gate was authored through
 `NewDocument`, typed USD operations, `AttachProgram`, `SaveAsDocument` and
 `SaveDocument`, with source readback. Its live stimulus raised the expected
-`scenario-source-load-failed` fault at tick one and the production runner
+`scenario-source-failed` fault at tick one and the production runner
 exited zero. The current one-thread and default-pool runs report identical rover
 endpoint, velocity, contact penetration and impulse values. This endpoint
 comparison does not establish full-state replay.

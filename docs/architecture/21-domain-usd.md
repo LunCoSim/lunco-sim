@@ -114,6 +114,14 @@ deterministic projection order.
 separately bounded (32 and 128 per Update by default); zero limits raise a
 runtime fault before consuming queued work. Neither limit changes physics
 substeps or tick admission.
+Dynamic-body admission uses one archetype eligibility filter for its query and
+schedule gate: a body needs `ShouldBeDynamic`, `RigidBody`, and `UsdPrimPath`,
+without initialization-pending, initialization-invalid, or object-paused markers.
+Blocked assemblies retain their markers and initialization diagnostics. Native
+membership changes reopen the gate; eligible admission still validates stable
+identities against admitted bodies, orders promotion by logical USD identity,
+and holds solver integration until authored constraints are ready. Preview
+ancestry is checked inside admission and does not bypass these validations.
 The shared `PhysicalWheel` component is registered for normal typed reflection
 by the vehicle plugin, so authored vessel inspection reads the same runtime
 radius contract used by render/editor consumers rather than a parallel query.
@@ -189,11 +197,18 @@ revision-fenced preparation gate before the sink consumes them; its
 through that projection. See the [asset admission owner](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 
 Core USD schema assets register incrementally through
-`lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
-facts as declarations arrive and validates missing entries only after all
-vendored core schema sources load successfully. The registration pass sleeps
-after every source reaches a terminal load state and that validation completes;
-it does not clone or rescan the manifest entries on settled frames.
+`lunco-usd-bevy-runtime-core`, in requested module order. An unresolved source
+holds later admission; a reported terminal failure permits later sources to
+proceed. `lunco-usd-authoring` parses each source once before taking the global
+registry write lock, then folds declarations in standard spec-path order.
+Bare-name lookup retains project-over-core priority and the last admitted
+declaration within each tier; neither hash traversal nor I/O completion chooses
+that precedence. Schema-qualified lookup retains every declaration. The owner
+applies matching linear-unit facts as declarations arrive and validates missing
+entries only after all vendored core schema sources load successfully. The
+registration pass sleeps after every source reaches a terminal load state and
+that validation completes; it does not clone or rescan the manifest entries on
+settled frames.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
@@ -216,6 +231,16 @@ do not rebuild the core library's inline test modules. Shipped-asset behavior is
 asserted through the production scene/Rhai tests under `assets/scenes/tests/`
 and `assets/scenarios/tests/`; the Rust target retains only generic USD
 composition and reader seams.
+
+The `lunco-usd-bevy` structural projector commits each prim's related component
+facts through native bundles. Primitive shape identity accompanies its pending
+mesh request, and grid cell and spatial projection publish together. Projection
+completion removes both waiting markers in one operation; cancelled or rejected
+geometry removes its complete pending definition set together. These groups
+remain within the same prim's ordered command stream. Stable prim/direct-child
+queues, `UsdVisualProjectionSettings`, generation checks and scene replacement
+fences continue to own admission; physics consumes `UsdSceneProjected` at the
+existing boundary.
 
 ## Scope
 

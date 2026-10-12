@@ -416,7 +416,7 @@ pub trait DomainEngine: Send + Sync + 'static {
 
     /// Domain-specific parsed-input type — what the engine accepts as
     /// authoritative document content. Modelica:
-    /// `Arc<rumoca_session::parsing::ast::StoredDefinition>`. USD:
+    /// `Arc<rumoca_compile::parsing::ast::StoredDefinition>`. USD:
     /// `UsdStage`. SysML: `SyntaxTree`. Etc.
     ///
     /// The parsing step that produces a value of this type is **not**

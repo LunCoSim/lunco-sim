@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
 use lunco_celestial::CelestialBody;
-use lunco_time::{CelestialTime, Clocks, SetCelestialClock, TimeDomain};
+use lunco_time::{CelestialTime, Clocks, SceneTimeState, SetCelestialClock, TimeDomain};
 use lunco_workbench_core::MenuCtx;
 
 fn sky_clock_state(clocks: Clocks, domain: Option<TimeDomain>) -> Option<f64> {
@@ -38,6 +38,7 @@ fn sky_clock_ui(
     utc: &str,
     epoch_jd: f64,
     scale: f64,
+    scene: lunco_core::SceneTransitionId,
 ) -> Option<SetCelestialClock> {
     let mut request = None;
 
@@ -59,11 +60,13 @@ fn sky_clock_ui(
     // The buffer lives in egui memory keyed by the widget id, not in a `Local`:
     // this body is drawn from BOTH the Time menu and the floating pill, and a
     // per-caller `Local` would give the two surfaces different half-typed text.
-    // Seeded from the displayed time, so opening it shows where you are and the
-    // string is already in the format it accepts.
+    // A replacement scene seeds a new draft from its installed clock. Edits
+    // remain shared across both surfaces within that scene.
     let buf_id = egui::Id::new("sky_clock_seek_buf");
-    let mut buf: String = ui
-        .data(|d| d.get_temp::<String>(buf_id))
+    let mut buf = ui
+        .data(|d| d.get_temp::<(lunco_core::SceneTransitionId, String)>(buf_id))
+        .filter(|(owner, _)| *owner == scene)
+        .map(|(_, text)| text)
         .unwrap_or_else(|| utc.trim_end_matches(" UTC").to_string());
 
     ui.horizontal(|ui| {
@@ -113,7 +116,7 @@ fn sky_clock_ui(
             });
         }
     });
-    ui.data_mut(|d| d.insert_temp(buf_id, buf));
+    ui.data_mut(|d| d.insert_temp(buf_id, (scene, buf)));
 
     ui.horizontal_wrapped(|ui| {
         ui.label(
@@ -160,6 +163,14 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         ui.label(egui::RichText::new("No sky in this scene").weak());
         return;
     }
+    let Some(scene) = ctx
+        .resource::<SceneTimeState>()
+        .filter(|state| state.is_ready())
+        .and_then(|state| state.transition_id)
+    else {
+        ui.label(egui::RichText::new("Scene clock loading…").weak());
+        return;
+    };
     let (Some(clocks), Some(celestial)) = (
         ctx.resource::<Clocks>().copied(),
         ctx.resource::<CelestialTime>().copied(),
@@ -173,7 +184,7 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     };
 
     let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
-    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale) {
+    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
         ctx.trigger(req);
     }
 }
@@ -187,11 +198,15 @@ pub(crate) fn draw_celestial_time(
     clocks: Option<Res<Clocks>>,
     q_domains: Query<&TimeDomain>,
     celestial: Option<Res<CelestialTime>>,
+    scene_time: Res<SceneTimeState>,
     mut commands: Commands,
 ) {
     if q_bodies.is_empty() {
         return;
     }
+    let Some(scene) = scene_time.transition_id.filter(|_| scene_time.is_ready()) else {
+        return;
+    };
     let (Some(clocks), Some(celestial)) = (clocks, celestial) else {
         return;
     };
@@ -212,7 +227,7 @@ pub(crate) fn draw_celestial_time(
             egui::Frame::popup(ui.style())
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale) {
+                    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
                         commands.trigger(req);
                     }
                 });

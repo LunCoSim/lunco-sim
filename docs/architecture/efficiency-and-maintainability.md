@@ -305,9 +305,12 @@ plane uses process-local slots.
   `PortDeclarationQuery`; indexed owners do not enumerate their other ports. They
   use the canonical input-write preparation to verify the live precedence-winning
   owner, metadata, topology revision, slot, and proposed value once, then commit
-  directly within the same exclusive World boundary. A single resolved write does not allocate
+  directly within the same exclusive World boundary. Input-write preparation
+  accepts a shared `Arc<str>` name or a name that converts to it; resolved writes
+  retain the locator's name allocation. A single resolved write does not allocate
   a prepared batch or duplicate its validation; batch writes retain all-or-none
-  admission before any commit.
+  admission before any commit. Registry snapshots share the immutable backend
+  table; registration uses copy-on-write to preserve each snapshot's precedence.
 - Dynamic name/value surfaces use `PortMap<T>`: one shared name allocation is
   indexed by `Arc<str>` and stored beside a dense value slot. Existing-name
   sample updates do not touch topology identity. Adds/removes advance the
@@ -324,6 +327,15 @@ plane uses process-local slots.
   retires these copy hints; changed source order and destination structure
   resolve at the existing map owner. The copy reports native-bit value or
   topology changes independently of its hint bookkeeping.
+- `lunco-physics::assembly::DynamicJointIslandMassPlugin` owns persistent
+  lifecycle invalidation of the derived island-mass resource. Body modes,
+  effective masses, joint links and enabled/admission markers invalidate it
+  on insert/remove, including during a simulation pause. Refresh checks native
+  mutable mass/link changes and recomputes only at the existing normal or
+  rollback co-simulation exchange boundary. Quiet steps retain the resource
+  without allocating body sets or rebuilding adjacency and island totals.
+  The aggregation's sorted member order, native `f64` sums and missing/invalid
+  member semantics remain authoritative; poses are not mass/topology inputs.
 - Structural publication observes each owning component's change tick.
   `PortTopologyState::observe_if_changed` derives auxiliary declaration and
   unit-contract fingerprints on initial observation or source changes, then

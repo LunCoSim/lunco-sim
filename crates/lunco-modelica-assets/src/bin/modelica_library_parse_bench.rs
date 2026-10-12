@@ -2,8 +2,7 @@
 //!
 //! - `perfile` → `indexer::parse_native_library_bundle` (one file at a time —
 //!   what `modelica_library_indexer` and the workbench cold path now both use).
-//! - `batch`   → rumoca's `parse_source_root_with_cache_in` (the old
-//!   workbench cold path — a single all-files rayon batch).
+//! - `batch`   → rumoca's `parse_source_root_with_cache_in` (one rayon batch).
 //!
 //! One mode per process so each cold run starts with an empty in-memory
 //! cache. Clear `<cache>/rumoca` between cold runs from the shell. Pair

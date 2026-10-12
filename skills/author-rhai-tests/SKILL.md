@@ -48,6 +48,15 @@ source, then use the generic helpers in
 `assets/scripting/tools/sysml_requirements.rhai` and the public query/command
 surface to evaluate it.
 
+For Modelica observable publication, use the required `ModelicaVariables.values`
+reflection surface and public output ports. `modelica_variable_projection`
+checks snapshot retention while paused, then resumes the solver after a public
+input command to compare the native snapshot, output port and accepted result.
+`modelica_variables_missing` removes
+required state and uses the runner's expected-runtime-fault verdict for
+`modelica-variables-missing`; a stopped clock must not leave the test waiting
+for another tick. Buffered-result rejection remains a low-level lifecycle seam.
+
 ## Authoring workflow
 
 1. Split the behavior into the smallest independently verifiable component
@@ -140,6 +149,29 @@ contract. The Bash and PowerShell matrices in
 `scripts/test-deterministic-physics-profiles.ps1` invoke the production test
 for each profile and stop on a nonzero exit; they do not parse logs or compare
 JSON. Rhai print/log lines remain diagnostics.
+
+When refreshing that reference, capture an identified pre-change production
+artifact, then require its uninstrumented authored gate to replay every profile
+before testing the candidate against those same rows. Preserve profile inputs,
+checkpoint ticks, identities, zero tolerance and the deliberate mismatch check.
+Review drift from an older fixture against the current physics/Modelica owners;
+a fresh capture alone is not proof that the candidate preserves behavior.
+Record pool width from `clock_snapshot().physics_compute_threads` with
+`physics_profile_known=true`; CLI `threads=0` alone does not observe the width.
+
+For an intentional owner-contract repair that changes initialized state, first
+demonstrate the fault and trace state differences to the authored inputs and
+equations. Compare complete selected rows across Compute widths and jitter
+before replacing the reference, then replay every profile with diagnostic
+instrumentation removed. Keep zero tolerance and the negative control, identify
+the artifact and inputs, and report the behavior change explicitly; paired
+determinism does not imply preservation of the previous trajectory.
+
+A finish helper must update the actor's actual state before reporting. For a
+script-defined receiver method, use `this` in its body and call
+`this.finish(...)`; passing the state map as an ordinary function argument
+copies it. Verify a runtime gate emits one terminal verdict and stops querying
+or mutating its completed scenario during subsequent ticks and scene replacement.
 
 A fresh-scene startup test asserts that `on_start` observes tick 0 and the first
 `on_tick` observes tick 1; startup readiness must hold the shared clock until

@@ -5,19 +5,39 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 type ModelicaDocuments =
     lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
 
+#[derive(Resource, Default)]
+pub struct PendingCompileAdmissions(Vec<CompileRequested>);
+
 /// Consume compile intent in the execution layer so headless and interactive
 /// hosts share one document-to-worker dispatch path.
 pub fn dispatch_modelica_compile_requests(
     mut requests: MessageReader<CompileRequested>,
     mut commands: Commands,
+    pending: Option<ResMut<PendingCompileAdmissions>>,
 ) {
-    let mut requests: Vec<_> = requests.read().cloned().collect();
-    requests.sort_unstable_by_key(|request| {
+    let mut queued = pending
+        .map(|mut pending| std::mem::take(&mut pending.0))
+        .unwrap_or_default();
+    queued.extend(requests.read().cloned());
+    let mut requests = queued;
+    requests.sort_by_key(|request| {
         (
             request.source.document.raw(),
             request.entity.map(Entity::to_bits),
             request.class.clone(),
         )
+    });
+    requests.dedup_by(|later, earlier| {
+        if later.source == earlier.source
+            && later.entity == earlier.entity
+            && later.class == earlier.class
+        {
+            earlier.force |= later.force;
+            earlier.resume_after_compile |= later.resume_after_compile;
+            true
+        } else {
+            false
+        }
     });
     for request in requests {
         commands.queue(move |world: &mut World| dispatch_one(world, request));
@@ -148,8 +168,12 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
 
     let candidates = document.index().simulation_candidates();
     let model_name = match request.class.as_deref() {
-        Some(class) => lunco_modelica_core::sim_target::resolve_requested_class(class, &candidates)
-            .map_err(|error| format!("class `{class}` {error}")),
+        Some(class) => lunco_modelica_core::sim_target::resolve_requested_class(
+            class,
+            &candidates,
+            document.index().within_path.as_deref(),
+        )
+        .map_err(|error| format!("class `{class}` {error}")),
         None if candidates.len() == 1 || document.index().simulation_preferred_count() == 1 => {
             candidates
                 .first()
@@ -283,6 +307,39 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             )
         })
     });
+    let connected_inputs = if target_entity.is_some_and(|entity| {
+        world
+            .get::<lunco_cosim_core::UsdSourcedCosim>(entity)
+            .is_some()
+    }) {
+        let entity = target_entity.expect("selected USD participant");
+        let admission = world
+            .try_run_schedule(lunco_cosim_core::schedule::InitializationSampling)
+            .map_err(|error| format!("initial sampling schedule unavailable: {error}"))
+            .and_then(|()| lunco_cosim_core::initialization::initialization_inputs(world, entity));
+        match admission {
+            Ok(Some(inputs)) => inputs,
+            Ok(None) => {
+                if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                    model.is_compiling = true;
+                    model.last_error = None;
+                }
+                world.init_resource::<PendingCompileAdmissions>();
+                world
+                    .resource_mut::<PendingCompileAdmissions>()
+                    .0
+                    .push(request);
+                return;
+            }
+            Err(error) => {
+                fail_request(world, doc, Some(entity), &model_name, &error);
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     let communication_period = existing
         .as_ref()
         .map(|(_, _, period, _, _, _, _)| *period)
@@ -305,10 +362,16 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
 
     // Retain explicit runtime values. Omitted inputs are initialized by the
     // compiled DAE, never by an index spanning multiple declaring classes.
-    let inputs = existing
+    let mut inputs = existing
         .as_ref()
         .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
         .unwrap_or_default();
+
+    inputs.extend(connected_inputs);
+    let initial_inputs = inputs
+        .iter()
+        .map(|(name, value)| (name.clone(), *value))
+        .collect();
 
     let previous_session = existing
         .as_ref()
@@ -374,7 +437,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         parameters: parameters.clone(),
         inputs,
         compiled_input_names: BTreeSet::new(),
-        variables: HashMap::new(),
         last_error: None,
         document: doc,
         is_stepping: true,
@@ -387,6 +449,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             .as_ref()
             .map_or(0, |(_, _, _, _, _, generation, _)| *generation),
         live_solver_snapshot: None,
+        variable_metadata: None,
         pending_generation: generation,
         resume_after_compile,
     };
@@ -394,7 +457,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     if !entry.contains::<Name>() {
         entry.insert(Name::new(model_name.clone()));
     }
-    entry.insert(model);
+    entry.insert((model, super::ModelicaVariables::default()));
     if let Some(mut diagnostics) = world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>() {
         diagnostics.mark_started(doc);
     }
@@ -420,6 +483,14 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         .map(|mut registry| registry.get_or_insert(entity));
     if tx
         .send(ModelicaCommand::Compile {
+            execution_domain: if world
+                .get::<lunco_modelica_runtime::EditorModelicaActor>(entity)
+                .is_some()
+            {
+                lunco_modelica_runtime::ModelicaExecutionDomain::Document
+            } else {
+                lunco_modelica_runtime::ModelicaExecutionDomain::Scene
+            },
             entity,
             session_id,
             model_name: model_name.clone(),
@@ -427,6 +498,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             doc_uri: source_uri,
             extra_sources,
             parameter_overrides: Vec::new(),
+            initial_inputs,
             stream,
             realtime_safe: false,
         })
@@ -457,6 +529,7 @@ fn fail_request(
             model.is_stepping = false;
             model.is_compiled = false;
             model.live_solver_snapshot = None;
+            model.variable_metadata = None;
             model.resume_after_compile = false;
             model.last_error = Some(message.clone());
         }
