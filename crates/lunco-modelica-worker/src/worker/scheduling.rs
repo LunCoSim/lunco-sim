@@ -197,6 +197,7 @@ mod tests {
 
     fn compile(e: Entity, session_id: u64) -> ModelicaCommand {
         ModelicaCommand::Compile {
+            execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
             entity: e,
             session_id,
             model_name: "M".into(),

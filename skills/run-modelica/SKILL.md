@@ -238,12 +238,17 @@ native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
 
 Native preparation uses the startup-captured
-`lunco_modelica_worker::worker::SolvePreparationLimits` resource: a maximum
-of six workers and two reserved CPU threads by default, bounded by reported
-host capacity with at least one worker on small hosts. Insert it before
+`lunco_modelica_worker::worker::ModelicaWorkerLimits` resource. Its independent
+`preparation` and `live_execution` budgets each default to six maximum workers
+and two reserved reported CPU threads, retaining one worker on small hosts.
+Its `document_execution` budget defaults to one owner. The three pools can
+therefore total thirteen workers. The typed compile command captures `Scene`
+or `Document` from the admitted actor kind and cached rebuilds retain it;
+document construction and preparation never run on a scene session owner.
+Insert it before
 `ModelicaExecutionPlugin` to configure capacity. Invalid zero capacity fails
 visibly through the worker diagnostic; changing the resource after launch
-does not resize the pool or change live solver execution.
+does not resize the pools or alter solver clocks.
 
 Shared immutable RAM caches use the captured
 `lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and

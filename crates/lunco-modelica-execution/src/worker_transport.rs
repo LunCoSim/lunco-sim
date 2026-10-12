@@ -1523,6 +1523,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         source.len()
     );
     let cmd = ModelicaCommand::Compile {
+        execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Document,
         entity: bevy::prelude::Entity::PLACEHOLDER,
         session_id: 1,
         model_name: model_name.to_string(),

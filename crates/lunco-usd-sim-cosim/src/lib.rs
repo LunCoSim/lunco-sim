@@ -1966,6 +1966,7 @@ fn dispatch_admitted_modelica_sources(
                 channels
                     .tx
                     .send(ModelicaCommand::Compile {
+                        execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
                         entity,
                         session_id: pending.session_id,
                         model_name: model_name.clone(),

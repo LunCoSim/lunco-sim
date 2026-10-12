@@ -93,11 +93,68 @@ terrain continuation despite complete stream/derived counts; its repeat rendered
 correctly. The shader-source ownership section above records the independent
 root cause, fix and integrated production acceptance for that publication fault.
 
+## Native Modelica execution domains — 2026-10-12
+
+Document constructors previously occupied scene participants' thread-affine
+owners despite command-level step prioritization. The native worker now captures `ModelicaExecutionDomain` at compile dispatch: USD participants use
+`Scene`; the existing document-created actor marker selects `Document`. Cached
+reset/recompile work retains the captured domain. Preparation, scene and document
+execution have independent startup-captured bounds; the default maximum is
+6/6/1 threads. Admission uses the largest pool count plus two staged operations.
+Sessions remain on their constructing thread, and completions retain submission
+order. This is engine capacity isolation; no authored policy hook, new clock,
+solver math, precision or external-library change is introduced.
+
+The production Tracy build passes in 2m 23s. Exact artifact
+`993909d2cb6da36833a24146d684b029f42a31374069603955b38bd00daf96b6`
+runs the same fresh-cache four-model diagnostic on parent `95b87e23d`.
+Document constructors share no thread with the existing scene-step owners,
+and there are no hot-step queue waits overlapping cold construction. During
+mixed loading, queue p50/p95/p99/max is 0.069/1.621/1.757/1.839 ms; the preceding
+preparation-only diagnostic artifact
+`8debe51ca3f1dc8e6a3cc6ad3a7b4905a1b18d95a815e16732c451653ec301da`
+has a 140.093 ms maximum, including 140.081 ms of same-thread constructor work.
+A shared-pool trace also attributes a 27.826 ms wait to 27.818 ms of preparation
+on the same owner. Independent preparation and document capacities address both
+measured sources of interference.
+The new run compiles the four scratch models in 1.860 s versus 1.331 s previously.
+One foreign simulator remains active and Tracy adds overhead, so these are
+diagnostic observations, not clean loading/FPS acceptance.
+
+Owned app/collector PIDs 2569309/2569308 exit zero and release API 4202/Tracy
+8087. The exact candidate archive is verified. Evidence is under
+`.lunco/performance-evidence/entity-tree-perf/modelica-document-domain-*`.
+Normal production artifact
+`f4e90ee52edda40dee49c8f0cdff4a996031c5de1dfb52dbb499ac897f4b361c`
+passes 216 exact replay checks with compute widths 24/1 and a one-CPU run.
+The document metadata gate passes 31 checks through stepping, reset, source
+replacement, recompilation and participant retirement. Scene replacement,
+stable API schema and expected terminal `modelica-step-failed` handling also
+pass. Replay PIDs 2730110/2730423/2730662 and owned API PID 2731249 exit zero
+and release 4202. The inspected replacement image retains scene and shadows.
+
+High-quality fixed-camera View/Build/View frame medians are
+11.394/11.150/11.197 ms. The windows preserve 50 bodies, 33 colliders and
+20 joints and advance 489/487/486 physics steps in about eight seconds each.
+Initial readiness is 3.152 s. A foreign tutorials simulator is active, so
+uncontended loading, visual-FPS and physics-performance acceptance remain open.
+
+The normal build first exhausted disk during compilation and then at linking.
+Checkout-only cleanup preserves source and shared caches. Removing its incomplete
+link output and losslessly archiving 24 historical generated CSV/JSON exports
+reclaims 1,433 MiB; the final normal link passes in 4.63 s. Both focused owner
+tests pass: bounded capacities/visible invalid-budget rejection and terminal
+non-crashing rejection of a parameter update without a cached identity.
+Each archived export is round-trip hash verified and listed in `owned-historical-export-archives-20261012.json`;
+decompress its recorded archive when reusing the historical export. The temporarily
+relocated older task capture is restored to its original regular path with the
+same hash. Both production artifacts are archived and verified outside `target/`.
+
 ## Thread-affine native Modelica execution — 2026-10-11
 
 Native live sessions now use persistent application-owned solver workers.
-Preparation, construction and execution share the captured bounded CPU budget;
-no external library or solver math changes. The command owner sends complete
+The committed baseline shares a bounded pool between preparation and live
+construction/execution; no external library or solver math changes. The command owner sends complete
 input transactions and admits checked observations in round order. Each native
 session is constructed, stepped and retired on one thread. Session and library
 generation fences reject stale construction receipts before publication.
@@ -141,7 +198,7 @@ On that artifact, 72 additional exact 20-rover checks, 31 compiled-metadata
 reset/recompile checks, the expected terminal solver-fault gate, scene
 replacement, and the low-level affinity/shutdown/failure seam pass. The brief
 metadata gate advances physics but does not establish sustained mixed-load
-cadence. Preparation and live work share FIFO workers; mixed-load cadence
+cadence. Native construction and existing live sessions share their owner; mixed-load cadence
 acceptance remains open alongside uncontended loading and FPS acceptance.
 
 The normal link initially exhausted disk space; the authorized checkout-only
@@ -1990,9 +2047,10 @@ and hash-verified. Source, shared caches and other sessions remain untouched.
 ## Native preparation CPU budget — 2026-10-11
 
 The native execution host captures the physics-independent
-`lunco_modelica_worker::worker::SolvePreparationLimits` before launch. The
-default maximum is six immutable-preparation workers with two reported CPU
-threads reserved. Smaller hosts retain at least one worker; zero maximum
+`lunco_modelica_worker::worker::ModelicaWorkerLimits` before launch. Its
+preparation budget defaults to six workers with two reported CPU threads
+reserved; scene and document owner budgets isolate their mailboxes as described
+in the execution-domain section above. Smaller hosts retain at least one worker per pool; zero maximum
 capacity and unavailable host capacity fail through structured worker errors.
 The existing compiler/root/lowering admission bound remains worker count plus
 two staged operations. Source-root FIFO, full-key in-flight coalescing, result

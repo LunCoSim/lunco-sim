@@ -32,7 +32,7 @@ impl<C> Lane<C> {
     }
 }
 
-/// Shares the existing bounded solver budget between preparation and live work.
+/// A bounded pool for one execution domain with thread-local owner state.
 /// Shutdown is explicit, so retained mailbox handles cannot keep workers alive.
 pub(super) struct ThreadAffinePool<C> {
     lanes: Vec<Lane<C>>,
@@ -43,6 +43,7 @@ pub(super) struct ThreadAffinePool<C> {
 
 impl<C: 'static> ThreadAffinePool<C> {
     pub(super) fn new(
+        name: &'static str,
         count: usize,
         factory: impl Fn() -> C + Send + Sync + 'static,
         failure: impl Fn(String) + Send + Sync + 'static,
@@ -63,7 +64,7 @@ impl<C: 'static> ThreadAffinePool<C> {
             let factory = Arc::clone(&factory);
             let failure = Arc::clone(&pool.failure);
             let thread = std::thread::Builder::new()
-                .name(format!("modelica-solve-{index}"))
+                .name(format!("{name}-{index}"))
                 .stack_size(16 * 1024 * 1024)
                 .spawn(move || {
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -81,10 +82,10 @@ impl<C: 'static> ThreadAffinePool<C> {
                             .copied()
                             .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                             .unwrap_or("unknown panic payload");
-                        failure(format!("Modelica solver owner {index} panicked: {message}"));
+                        failure(format!("{name} owner {index} panicked: {message}"));
                     }
                 })
-                .map_err(|error| format!("cannot start Modelica solver owner {index}: {error}"))?;
+                .map_err(|error| format!("cannot start {name} owner {index}: {error}"))?;
             pool.lanes.push(Lane { tx });
             pool.threads.push(thread);
         }
@@ -136,6 +137,44 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn preparation_wait_does_not_block_a_live_owner() {
+        let (started_tx, started_rx) = crossbeam_channel::bounded(1);
+        let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+        let mut preparation =
+            ThreadAffinePool::new("isolation-prepare", 1, || (), |e| panic!("{e}")).unwrap();
+        let mut live = ThreadAffinePool::new(
+            "isolation-live",
+            1,
+            || Rc::new(Cell::new(0)),
+            |e| panic!("{e}"),
+        )
+        .unwrap();
+        preparation.spawn(move || {
+            started_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        live.next_lane()
+            .submit(move |context| {
+                context.set(context.get() + 1);
+                tx.send(context.get()).unwrap();
+            })
+            .unwrap();
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            1
+        );
+        release_tx.send(()).unwrap();
+        drop(preparation);
+        drop(live);
+    }
+
+    #[test]
     fn jobs_retain_non_send_context_and_retire_on_the_owner_thread() {
         struct LocalContext {
             owner: std::thread::ThreadId,
@@ -151,6 +190,7 @@ mod tests {
         let retired = Arc::new(Mutex::new(Vec::new()));
         let factory_retired = Arc::clone(&retired);
         let mut pool = ThreadAffinePool::new(
+            "affinity-test",
             2,
             move || LocalContext {
                 owner: std::thread::current().id(),
@@ -226,6 +266,7 @@ mod tests {
         let (failure_tx, failure_rx) = crossbeam_channel::unbounded();
         let failure_retired = Arc::clone(&retired);
         let failed_pool = ThreadAffinePool::new(
+            "affinity-failure",
             1,
             move || LocalContext {
                 owner: std::thread::current().id(),

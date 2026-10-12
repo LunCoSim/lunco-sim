@@ -343,16 +343,37 @@ fn build_prepared_stepper(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Native preparation capacity captured before the Modelica worker starts.
-/// Insert before `ModelicaExecutionPlugin` to set the bounded CPU budget.
+/// Independent native preparation and live-owner budgets captured at startup.
 #[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
-pub struct SolvePreparationLimits {
+pub struct ModelicaWorkerLimits {
+    pub preparation: WorkerThreadBudget,
+    pub live_execution: WorkerThreadBudget,
+    pub document_execution: WorkerThreadBudget,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for ModelicaWorkerLimits {
+    fn default() -> Self {
+        Self {
+            preparation: WorkerThreadBudget::default(),
+            live_execution: WorkerThreadBudget::default(),
+            document_execution: WorkerThreadBudget {
+                max_worker_threads: 1,
+                reserved_cpu_threads: 2,
+            },
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerThreadBudget {
     pub max_worker_threads: usize,
     pub reserved_cpu_threads: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Default for SolvePreparationLimits {
+impl Default for WorkerThreadBudget {
     fn default() -> Self {
         Self {
             max_worker_threads: 6,
@@ -362,10 +383,10 @@ impl Default for SolvePreparationLimits {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl SolvePreparationLimits {
+impl WorkerThreadBudget {
     fn worker_threads(&self, available: std::num::NonZeroUsize) -> Result<usize, String> {
         if self.max_worker_threads == 0 {
-            return Err("Modelica solve-preparation worker capacity must be positive".to_owned());
+            return Err("Modelica worker capacity must be positive".to_owned());
         }
         Ok(available
             .get()
@@ -376,11 +397,13 @@ impl SolvePreparationLimits {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Owns the bounded CPU budget for source/FMI preparation and live sessions.
+/// Isolates source/FMI preparation from bounded thread-affine live owners.
 /// Each session is constructed, stepped and retired on one persistent thread;
 /// the command owner admits only typed observations in command order.
-struct SolvePreparationPool {
-    pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
+struct ModelicaWorkerPools {
+    pool: ThreadAffinePool<()>,
+    live_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
+    document_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
     disk_limits: PreparedSolveDiskLimits,
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
@@ -457,28 +480,63 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl SolvePreparationPool {
+impl ModelicaWorkerPools {
     fn new(
         disk_limits: PreparedSolveDiskLimits,
-        limits: SolvePreparationLimits,
+        limits: ModelicaWorkerLimits,
     ) -> Result<Self, String> {
         disk_limits.validate()?;
-        // Preparation and live execution share the captured bounded CPU budget.
-        // Small hosts retain one owner when the reserved budget covers capacity.
-        let available = std::thread::available_parallelism().map_err(|error| {
-            format!("cannot determine Modelica preparation CPU capacity: {error}")
-        })?;
-        let threads = limits.worker_threads(available)?;
+        let available = std::thread::available_parallelism()
+            .map_err(|error| format!("cannot determine Modelica worker CPU capacity: {error}"))?;
+        let preparation_threads = limits
+            .preparation
+            .worker_threads(available)
+            .map_err(|error| format!("invalid preparation budget: {error}"))?;
+        let live_threads = limits
+            .live_execution
+            .worker_threads(available)
+            .map_err(|error| format!("invalid live-execution budget: {error}"))?;
+        let document_threads = limits
+            .document_execution
+            .worker_threads(available)
+            .map_err(|error| format!("invalid document-execution budget: {error}"))?;
         let (tx, rx) = crossbeam_channel::unbounded();
         let failure_tx = tx.clone();
-        let pool = ThreadAffinePool::new(threads, HashMap::new, move |error| {
-            let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
-        })?;
+        let pool = ThreadAffinePool::new(
+            "modelica-prepare",
+            preparation_threads,
+            || (),
+            move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            },
+        )?;
+        let failure_tx = tx.clone();
+        let live_pool =
+            ThreadAffinePool::new("modelica-live", live_threads, HashMap::new, move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            })?;
+        let failure_tx = tx.clone();
+        let document_pool = ThreadAffinePool::new(
+            "modelica-document",
+            document_threads,
+            HashMap::new,
+            move |error| {
+                let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
+            },
+        )?;
         bevy::log::info!(
-            "[modelica-runtime] solve preparation pool ready: {threads} worker thread(s)"
+            "[modelica-runtime] solve preparation pool ready: {preparation_threads} worker thread(s)"
+        );
+        bevy::log::info!(
+            "[modelica-runtime] live execution pool ready: {live_threads} worker thread(s)"
+        );
+        bevy::log::info!(
+            "[modelica-runtime] document execution pool ready: {document_threads} worker thread(s)"
         );
         Ok(Self {
             pool,
+            live_pool,
+            document_pool,
             disk_limits,
             tx,
             rx,
@@ -495,11 +553,17 @@ impl SolvePreparationPool {
     }
 
     /// Bound the full compile-to-solve pipeline while leaving two entries of
-    /// lookahead beyond the workers currently preparing FMI components. This lets
+    /// lookahead beyond the largest preparation/scene/document worker count. This lets
     /// the serialized Rumoca owner prepare later independent programs while
     /// the solve pool is busy, without allowing an unbounded DAE backlog.
     fn can_admit(&self, pending_operations: usize) -> bool {
-        pending_operations < self.pool.worker_count().saturating_add(2)
+        pending_operations
+            < self
+                .pool
+                .worker_count()
+                .max(self.live_pool.worker_count())
+                .max(self.document_pool.worker_count())
+                .saturating_add(2)
     }
 
     fn submit(&mut self, work: &CompileWork, runtime_tx: &Sender<ModelicaResult>) -> u64 {
@@ -707,6 +771,7 @@ enum SolveCompletion {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingCompile {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     entity: Entity,
     session_id: u64,
     cancelled: bool,
@@ -780,6 +845,7 @@ struct SourceRootPreparationResult {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct CompileWork {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     entity: Entity,
     session_id: u64,
     /// The entity was despawned while this immutable preparation was still
@@ -890,7 +956,7 @@ fn dispatch_live_construction(
     realtime_models: &std::collections::HashSet<Entity>,
     prepared_solve_cache: &mut PreparedSolveCache,
     tx: &Sender<ModelicaResult>,
-    pool: &mut SolvePreparationPool,
+    pool: &mut ModelicaWorkerPools,
     order: &mut VecDeque<u64>,
     pending: &mut HashMap<u64, CompileWork>,
 ) {
@@ -923,7 +989,10 @@ fn dispatch_live_construction(
         return;
     };
     let id = pool.allocate_id();
-    let lane = pool.pool.next_lane();
+    let lane = match work.execution_domain {
+        lunco_modelica_runtime::ModelicaExecutionDomain::Scene => pool.live_pool.next_lane(),
+        lunco_modelica_runtime::ModelicaExecutionDomain::Document => pool.document_pool.next_lane(),
+    };
     if let Err(error) = live_session::construct(id, lane, component, plan, pool.tx.clone()) {
         let _ = tx.send(ModelicaResult::worker_failure(error));
         return;
@@ -950,6 +1019,7 @@ fn install_compile_work(
     match stepper_result {
         Ok((stepper, live_solver_snapshot, variable_metadata, symbols)) => {
             let CompileWork {
+                execution_domain,
                 entity,
                 session_id,
                 cancelled: _,
@@ -978,6 +1048,7 @@ fn install_compile_work(
             cached_models.insert(
                 entity,
                 CachedModel {
+                    execution_domain,
                     model_name: model_name.clone(),
                     source: Arc::from(source),
                     extra_sources: raw_extras,
@@ -1056,7 +1127,7 @@ fn install_compile_work(
 #[cfg(not(target_arch = "wasm32"))]
 fn complete_preparation(
     preparation: SolvePreparationResult,
-    pool: &mut SolvePreparationPool,
+    pool: &mut ModelicaWorkerPools,
     order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
     current_sessions: &HashMap<Entity, u64>,
@@ -1180,7 +1251,7 @@ fn stage_preparation_result(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn commit_ready_solve_preparations(
-    pool: &mut SolvePreparationPool,
+    pool: &mut ModelicaWorkerPools,
     order: &mut VecDeque<u64>,
     ready: &mut HashMap<u64, SolveCompletion>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
@@ -1250,7 +1321,7 @@ fn dispatch_ready_source_roots(
     compiler: &mut CompilerActor,
     compiler_order: &mut VecDeque<u64>,
     pending_solve_preparations: usize,
-    solve_preparation_pool: &SolvePreparationPool,
+    solve_preparation_pool: &ModelicaWorkerPools,
     pending_installs: &mut HashSet<u64>,
     latest_source_root_operations: &HashMap<String, u64>,
     tx: &Sender<ModelicaResult>,
@@ -1367,7 +1438,7 @@ fn commit_ready_compiler_completions(
     library_gen: &mut u64,
     library_revision: &mut u64,
     prepared_solve_cache: &mut PreparedSolveCache,
-    solve_preparation_pool: &mut SolvePreparationPool,
+    solve_preparation_pool: &mut ModelicaWorkerPools,
     solve_preparation_order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -1497,6 +1568,7 @@ fn commit_ready_compiler_completions(
                     }
                 };
                 let work = CompileWork {
+                    execution_domain: pending.execution_domain,
                     entity: pending.entity,
                     session_id: pending.session_id,
                     cancelled: false,
@@ -1563,6 +1635,8 @@ use std::sync::Arc;
 /// every `LoadSourceRoot`). Native rebuilds validate both before reusing the
 /// artifact; wasm rebuilds refresh it through [`rebuild_from_cache`].
 struct CachedModel {
+    #[cfg(not(target_arch = "wasm32"))]
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     model_name: String,
     source: Arc<str>,
     /// Sibling docs the model was compiled with, raw like `source`. Replayed
@@ -1948,6 +2022,7 @@ fn rebuild_from_cache(
 
 #[cfg(not(target_arch = "wasm32"))]
 struct NativeCachedRebuild {
+    execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     model_name: String,
     source: Arc<str>,
     raw_extras: Vec<(String, String)>,
@@ -1982,6 +2057,7 @@ impl NativeCachedRebuild {
     ) -> (PendingCompile, CompileUnit) {
         (
             PendingCompile {
+                execution_domain: self.execution_domain,
                 entity,
                 session_id,
                 cancelled: false,
@@ -2014,6 +2090,7 @@ impl NativeCachedRebuild {
             Some(self.library_revision),
         )?;
         Ok(CompileWork {
+            execution_domain: self.execution_domain,
             entity,
             session_id,
             cancelled: false,
@@ -2044,6 +2121,7 @@ fn native_cached_rebuild(
     let unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
     let unit_key = cached.compiled.prepared_source_key;
     Some(NativeCachedRebuild {
+        execution_domain: cached.execution_domain,
         model_name: cached.model_name.clone(),
         source: Arc::clone(&cached.source),
         raw_extras: cached.extra_sources.clone(),
@@ -2126,7 +2204,7 @@ fn submit_cached_solve_preparation(
     library_gen: u64,
     profile: solver::RuntimeProfile,
     intent: CompileIntent,
-    solve_preparation_pool: &mut SolvePreparationPool,
+    solve_preparation_pool: &mut ModelicaWorkerPools,
     solve_preparation_order: &mut VecDeque<u64>,
     pending_compile_works: &mut HashMap<u64, CompileWork>,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -2560,7 +2638,7 @@ pub fn modelica_worker(
     tx: Sender<ModelicaResult>,
     disk_limits: PreparedSolveDiskLimits,
     cache_limits: ModelicaCacheLimits,
-    preparation_limits: SolvePreparationLimits,
+    worker_limits: ModelicaWorkerLimits,
 ) {
     let (compiled_capacity, prepared_capacity) = match cache_limits.validate() {
         Ok(capacities) => capacities,
@@ -2584,16 +2662,15 @@ pub fn modelica_worker(
     // overrides so two USD instances do not lower identical networks twice
     // during scene startup.
     let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
-    // Source/FMI preparation and live sessions share these bounded workers.
+    // Source/FMI preparation and live sessions have independent bounded workers.
     // The mutable Rumoca compiler has its own single-thread actor.
-    let mut solve_preparation_pool =
-        match SolvePreparationPool::new(disk_limits, preparation_limits) {
-            Ok(pool) => pool,
-            Err(error) => {
-                let _ = tx.send(ModelicaResult::worker_failure(error));
-                return;
-            }
-        };
+    let mut solve_preparation_pool = match ModelicaWorkerPools::new(disk_limits, worker_limits) {
+        Ok(pool) => pool,
+        Err(error) => {
+            let _ = tx.send(ModelicaResult::worker_failure(error));
+            return;
+        }
+    };
     let mut compiler =
         match CompilerActor::new(solve_preparation_pool.tx.clone(), compiled_capacity) {
             Ok(compiler) => compiler,
@@ -3134,11 +3211,19 @@ pub fn modelica_worker(
                         // compiled with. The actor owns the mutable Rumoca session;
                         // the command owner records this continuation and remains
                         // available for other entities while it compiles.
-                        let doc_uri = cached_models
-                            .get(&entity)
-                            .map(|c| c.doc_uri.clone())
-                            .unwrap_or_else(|| model_name.clone());
+                        let Some(cached) = cached_models.get(&entity) else {
+                            let mut result = result_ok(entity, session_id);
+                            result.is_parameter_update = true;
+                            result.error = Some(
+                                "Parameter update requires a cached compiled model".to_owned(),
+                            );
+                            let _ = tx_inner.send(result);
+                            return;
+                        };
+                        let execution_domain = cached.execution_domain;
+                        let doc_uri = cached.doc_uri.clone();
                         let pending = PendingCompile {
+                            execution_domain,
                             entity,
                             session_id,
                             cancelled: false,
@@ -3147,10 +3232,7 @@ pub fn modelica_worker(
                             doc_uri,
                             raw_extras: Vec::new(),
                             parameter_overrides: Vec::new(),
-                            initial_inputs: cached_models
-                                .get(&entity)
-                                .map(|c| c.initial_inputs.clone())
-                                .unwrap_or_default(),
+                            initial_inputs: cached.initial_inputs.clone(),
                             library_gen,
                             intent: CompileIntent::UpdateParameters,
                         };
@@ -3165,6 +3247,7 @@ pub fn modelica_worker(
                         );
                     }
                     ModelicaCommand::Compile {
+                        execution_domain,
                         entity,
                         session_id,
                         model_name,
@@ -3201,6 +3284,7 @@ pub fn modelica_worker(
                         let raw_extras = extra_sources.clone();
                         let unit = assemble_compile_unit(&source, extra_sources);
                         let pending = PendingCompile {
+                            execution_domain,
                             entity,
                             session_id,
                             cancelled: false,
@@ -3848,6 +3932,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             }
         }
         ModelicaCommand::Compile {
+            execution_domain: _,
             entity,
             session_id,
             model_name,
@@ -4321,47 +4406,111 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod preparation_budget_tests {
+mod worker_budget_tests {
     use super::*;
 
     #[test]
-    fn preparation_budget_admission_bounds_workers_and_rejects_zero_capacity() {
+    fn parameter_update_without_a_cached_identity_is_terminal() {
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        let one = WorkerThreadBudget {
+            max_worker_threads: 1,
+            reserved_cpu_threads: 0,
+        };
+        let owner = std::thread::spawn(move || {
+            modelica_worker(
+                command_rx,
+                result_tx,
+                PreparedSolveDiskLimits::default(),
+                ModelicaCacheLimits::default(),
+                ModelicaWorkerLimits {
+                    preparation: one,
+                    live_execution: one,
+                    document_execution: one,
+                },
+            )
+        });
+        let entity = Entity::from_raw_u32(7).unwrap();
+        command_tx
+            .send(ModelicaCommand::UpdateParameters {
+                entity,
+                session_id: 1,
+                model_name: "Uncompiled".to_owned(),
+                source: "model Uncompiled end Uncompiled;".to_owned(),
+            })
+            .unwrap();
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result.entity, entity);
+        assert_eq!(result.session_id, 1);
+        assert!(result.is_parameter_update);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Parameter update requires a cached compiled model")
+        );
+        assert!(result.worker_failure.is_none());
+        drop(command_tx);
+        assert!(owner.join().is_ok());
+        assert!(result_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn worker_budgets_bound_all_pools_and_reject_zero_capacity() {
         let available = |count| std::num::NonZeroUsize::new(count).unwrap();
-        let limits = SolvePreparationLimits::default();
+        let limits = WorkerThreadBudget::default();
         assert_eq!(limits.worker_threads(available(32)).unwrap(), 6);
         assert_eq!(limits.worker_threads(available(4)).unwrap(), 2);
         assert_eq!(limits.worker_threads(available(1)).unwrap(), 1);
-        let custom = SolvePreparationLimits {
-            max_worker_threads: 3,
-            reserved_cpu_threads: 0,
+        let custom = ModelicaWorkerLimits {
+            preparation: WorkerThreadBudget {
+                max_worker_threads: 3,
+                reserved_cpu_threads: 0,
+            },
+            live_execution: WorkerThreadBudget {
+                max_worker_threads: 2,
+                reserved_cpu_threads: 0,
+            },
+            document_execution: WorkerThreadBudget {
+                max_worker_threads: 1,
+                reserved_cpu_threads: 0,
+            },
         };
-        let pool = SolvePreparationPool::new(PreparedSolveDiskLimits::default(), custom).unwrap();
+        let pool = ModelicaWorkerPools::new(PreparedSolveDiskLimits::default(), custom).unwrap();
         let count = pool.pool.worker_count();
         assert!((1..=3).contains(&count));
+        assert!((1..=2).contains(&pool.live_pool.worker_count()));
+        assert_eq!(pool.document_pool.worker_count(), 1);
         assert!(pool.can_admit(count + 1));
         assert!(!pool.can_admit(count + 2));
 
-        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (result_tx, result_rx) = crossbeam_channel::unbounded();
-        modelica_worker(
-            command_rx,
-            result_tx,
-            PreparedSolveDiskLimits::default(),
-            ModelicaCacheLimits::default(),
-            SolvePreparationLimits {
-                max_worker_threads: 0,
-                ..Default::default()
-            },
-        );
-        let result = result_rx.try_recv().unwrap();
-        assert!(
-            result
-                .worker_failure
-                .as_deref()
-                .unwrap()
-                .contains("worker capacity must be positive")
-        );
-        assert!(result_rx.try_recv().is_err());
+        for domain in 0..3 {
+            let mut limits = ModelicaWorkerLimits::default();
+            match domain {
+                0 => limits.preparation.max_worker_threads = 0,
+                1 => limits.live_execution.max_worker_threads = 0,
+                2 => limits.document_execution.max_worker_threads = 0,
+                _ => unreachable!(),
+            }
+            let (_command_tx, command_rx) = crossbeam_channel::unbounded();
+            let (result_tx, result_rx) = crossbeam_channel::unbounded();
+            modelica_worker(
+                command_rx,
+                result_tx,
+                PreparedSolveDiskLimits::default(),
+                ModelicaCacheLimits::default(),
+                limits,
+            );
+            let result = result_rx.try_recv().unwrap();
+            assert!(
+                result
+                    .worker_failure
+                    .as_deref()
+                    .unwrap()
+                    .contains("worker capacity must be positive")
+            );
+            assert!(result_rx.try_recv().is_err());
+        }
     }
 }
 
@@ -4635,6 +4784,7 @@ mod macro_step_tests {
         let entity = Entity::from_raw_u32(7).expect("valid test entity");
         let compile = panic_result_for_command(
             &ModelicaCommand::Compile {
+                execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
                 entity,
                 session_id: 4,
                 model_name: "Balloon".into(),

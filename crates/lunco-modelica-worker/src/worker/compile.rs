@@ -483,6 +483,14 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         .map(|mut registry| registry.get_or_insert(entity));
     if tx
         .send(ModelicaCommand::Compile {
+            execution_domain: if world
+                .get::<lunco_modelica_runtime::EditorModelicaActor>(entity)
+                .is_some()
+            {
+                lunco_modelica_runtime::ModelicaExecutionDomain::Document
+            } else {
+                lunco_modelica_runtime::ModelicaExecutionDomain::Scene
+            },
             entity,
             session_id,
             model_name: model_name.clone(),

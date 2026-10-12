@@ -899,7 +899,7 @@ mod tests {
             result_tx,
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
-            super::super::SolvePreparationLimits::default(),
+            super::super::ModelicaWorkerLimits::default(),
         );
         assert!(
             result_rx
@@ -1141,7 +1141,7 @@ mod tests {
             result_tx,
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
-            super::super::SolvePreparationLimits::default(),
+            super::super::ModelicaWorkerLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();
         assert!(
@@ -1288,7 +1288,7 @@ mod reuse_tests {
                 compiled_artifact_entries: 0,
                 ..Default::default()
             },
-            super::super::SolvePreparationLimits::default(),
+            super::super::ModelicaWorkerLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();
         assert!(

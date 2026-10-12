@@ -719,26 +719,36 @@ compiler's effective root set and defaults from the remaining contributions.
 If the Modelica channel is temporarily unavailable, unloads remain queued ahead
 of later root installs. Application roots stay installed across Twin closure.
 Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
-and writes share bounded persistent workers with live construction and execution.
+and writes run on a bounded preparation pool, isolated from the persistent
+scene and document construction/execution owners. The typed compile command
+captures its actor's `ModelicaExecutionDomain`; cached rebuilds preserve it.
+The document dispatcher uses the existing document-actor marker, while USD
+participants admit the scene domain. This partitions execution capacity without
+changing clocks, runtime source attribution or authoritative result ordering.
 Native sessions are constructed, stepped and retired on their assigned thread;
 the command owner receives typed handles and checked observations. One complete
 transaction per initialized entity can execute concurrently within a round, but
 results admit in round order with unchanged communication points and micro-steps.
 Actor admission is bounded across submitted compiles, root installs, lowerings
-and constructions to the solver-worker count plus two
+and constructions to the largest pool count plus two
 staged operations. This lookahead keeps the serialized Rumoca owner preparing
 later independent programs while the pool lowers existing DAEs, while keeping
 retained compilation state bounded. Solve results still commit in submission
 order.
 
-The native execution host captures `lunco_modelica_worker::worker::SolvePreparationLimits`
-before launching its worker. The default budget is at most six solver threads,
-reserving two reported CPU threads for the app and host; a small host retains
-at least one solver worker. A zero maximum or unavailable host
-capacity produces a structured worker failure before preparation admission.
-The budget applies to preparation, construction and live execution; it does
-not change solver clocks, micro-step math or authoritative commit order. Hosts configure the typed resource before installing
-`ModelicaExecutionPlugin`; changing it after launch does not resize the pool.
+The native execution host captures `lunco_modelica_worker::worker::ModelicaWorkerLimits`
+before launching its worker. `preparation` and scene `live_execution` each use a typed
+`WorkerThreadBudget`: at most six threads, subtracting two reported CPU threads
+before applying the cap, and retaining one worker on small hosts. The defaults
+include one `document_execution` owner, admitting up to thirteen threads. Hosts can tune
+each budget independently before installing `ModelicaExecutionPlugin`; changes
+after launch do not resize the pools. Zero capacity or unavailable host CPU
+capacity fails visibly before the pools start. Preparation cannot block a
+live mailbox through cache I/O, source parsing or lowering. Document construction
+cannot block a scene mailbox. Construction can share a thread with other sessions
+in its own domain; scene topology admission retains its existing simulation hold.
+Pool capacity does not change clocks, micro-step math
+or authoritative commit order.
 
 Parameter updates, resets, and cache-invalidating Step auto-init are
 continuations on that same FIFO. The command owner keeps servicing other

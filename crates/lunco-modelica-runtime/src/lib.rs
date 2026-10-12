@@ -143,6 +143,14 @@ pub struct ModelicaChannels {
     pub tx_res: Sender<ModelicaResult>,
 }
 
+/// The admitted actor's execution domain, retained through cached rebuilds.
+/// Native document construction must not occupy a scene solver owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelicaExecutionDomain {
+    Scene,
+    Document,
+}
+
 /// Commands sent to the background simulation worker.
 #[derive(Serialize, Deserialize)]
 pub enum ModelicaCommand {
@@ -159,6 +167,7 @@ pub enum ModelicaCommand {
     Compile {
         entity: Entity,
         session_id: u64,
+        execution_domain: ModelicaExecutionDomain,
         model_name: String,
         source: String,
         realtime_safe: bool,

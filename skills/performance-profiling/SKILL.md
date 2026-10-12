@@ -276,8 +276,9 @@ For loading, separate prepared-FMI lookup/lowering, live construction and ordere
 publication. `modelica_live_plan_admission` runs on the command owner;
 `modelica_live_construction_job` records queue wait and measures the native session,
 metadata and initial-observation children. `modelica_live_construction_commit`
-measures publication. Preparation and live sessions share the captured bounded
-worker budget; each session retains its construction thread through stepping
+measures publication. Preparation and live sessions use separate captured bounded
+worker budgets. Scene and document actors have separate live-owner pools;
+each session retains its construction thread through stepping
 and retirement. Compare concurrent construction intervals and end-to-end
 readiness, not only summed worker time. A round transfers complete input buffers
 once, runs independent participants concurrently, and admits checked results in
@@ -286,6 +287,11 @@ replacement evidence before a scheduling gain claim. Keep solver clocks,
 micro-step math, metadata and generation retirement unchanged. The native
 compiler already shares its DAE and source map; additional metadata caches do
 not address dominant native construction cost.
+For mixed loading and live execution, inspect `modelica_live_step_job` queue
+wait and execution separately. Match its construction identity and thread to
+preparation/construction spans before attributing a response-latency rise to
+mailbox blocking; response latency also includes transport and main-thread
+admission. Preserve the fixed-tick backlog and barrier state alongside timings.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable
@@ -482,13 +488,16 @@ For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 same structural solve key, coalesce in-flight lowering instead of occupying a
 second worker; preserve one result position per participant in the existing
 stable commit queue. Keep the combined compiler/root/lowering admission bounded
-to the solve-pool worker count plus two staged operations, so the serialized
+to the largest pool count plus two staged operations, so the serialized
 Rumoca owner can compile later programs while solve workers are busy without
 building an unbounded DAE backlog.
 Measure preparation queue waits separately from lowering. The native host
-captures the typed `SolvePreparationLimits` resource before worker launch;
-its default maximum is six workers with two reported CPU threads reserved,
-and small hosts retain at least one worker. Preserve ordered result commits
+captures the typed `ModelicaWorkerLimits` resource before worker launch;
+its `preparation` and `live_execution` budgets each cap workers at six after
+reserving two reported CPU threads; small hosts retain one worker per pool.
+Its `document_execution` budget defaults to one owner; the default total can
+reach thirteen threads. Confirm all three pool counts in the
+production log and distinguish preparation from construction blocking. Preserve ordered result commits
 when changing that budget. Compare fresh isolated cold caches and the same
 exact scene/solver/override identities; retain sampled UI/API latency and peak
 process memory alongside readiness. A cache-hit replacement does not measure

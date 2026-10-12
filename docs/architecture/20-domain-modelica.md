@@ -409,16 +409,22 @@ retains the queued operation, and rejects later Twin source-root admission
 instead of retrying every update or assuming the old compiler state was cleared.
 Synchronous compiler convenience methods serve CLI and batch callers. The native
 live host sends root installs and DAE compilation to the single Rumoca actor.
-Root reads, parsing, prepared-FMI cache I/O, lowering and session construction
-use the captured bounded solver workers. A later compile requires an authored
+Root reads, parsing, prepared-FMI cache I/O and lowering use bounded preparation
+workers. Native scene and document session construction/execution use independent
+bounded thread-affine pools. `ModelicaCommand::Compile.execution_domain` captures
+the admitted actor kind: USD participants use `Scene`; document-created actors
+use `Document`. The document dispatcher reads the existing `EditorModelicaActor`
+marker, including when recompiling a linked actor. Cached compilation and reset
+retain that domain. Document construction cannot occupy a scene solver owner.
+These are execution-capacity partitions, not new simulation clocks or policy
+hooks. A later compile requires an authored
 source/topology change or an explicit library-set change; ordinary projection
 and stepping do not recompile an unchanged participant.
 
 The combined compiler, source-root, lowering and construction pipeline admits
-at most the solver-worker count plus two staged operations. Each new session
+at most the largest worker-pool count plus two staged operations. Each new session
 receives a persistent owner in submission order. FIFO mailboxes keep its native
-state, JIT backend, stepping and teardown on that thread. Preparation uses the
-same CPU budget. Only typed handles, immutable metadata and checked observations
+state, JIT backend, stepping and teardown on that thread. Preparation cannot occupy a live owner thread. Only typed handles, immutable metadata and checked observations
 cross back to the command owner; native sessions never cross threads.
 
 A scheduling round dispatches at most one initialized transaction per entity
@@ -442,6 +448,10 @@ execution, overlap, queue wait and end-to-end readiness separately; child and
 parent inclusive times must not be added together. Step service diagnostics
 report the measured solver-owner work, while pending results retain their
 communication points and ordered commit boundary.
+`modelica_live_step_job` records owner-queue wait separately from its execution
+span. Its construction identity connects each step to the session's native
+construction and worker thread. Use these intervals to distinguish preparation
+or construction blocking an owner from solver service and response admission.
 
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
