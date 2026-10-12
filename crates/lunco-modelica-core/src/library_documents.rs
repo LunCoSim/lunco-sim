@@ -93,8 +93,8 @@ fn selected_class_source(
     let class_def = ast
         .get_class_by_qualified_name(qualified)
         .ok_or_else(|| format!("class `{qualified}` not found"))?;
-    let (full_start, full_end) =
-        lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
+    let full_start = class_def.location.start as usize;
+    let full_end = class_def.location.end as usize;
     if full_start > full_end
         || full_end > full_source.len()
         || !full_source.is_char_boundary(full_start)

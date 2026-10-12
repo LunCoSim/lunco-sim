@@ -1550,7 +1550,7 @@ end CompositeFixture;
         let class = ast_full
             .get_class_by_qualified_name("CompositeFixture.RocketStage")
             .expect("RocketStage in package");
-        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
+        let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let ast =
@@ -1692,7 +1692,7 @@ end Unit_One;
         let class = ast_full
             .get_class_by_qualified_name("CompositeFixture.RocketStage")
             .unwrap();
-        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
+        let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let slim_none = project(&slim, None);
