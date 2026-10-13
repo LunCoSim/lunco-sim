@@ -132,9 +132,8 @@ pub(super) fn brighten(c: egui::Color32) -> egui::Color32 {
     egui::Color32::from_rgb(lift(c.r()), lift(c.g()), lift(c.b()))
 }
 
-/// Paint a dashed rectangle outline. Used for icon-only classes so
-/// users see at a glance that the node is decorative (no
-/// connectors). Dashes are expressed in screen pixels because the
+/// Paint a dashed rectangle outline. Used for partial classes so
+/// the source template remains distinguishable. Dashes are expressed in screen pixels because the
 /// caller has already transformed to screen-space — so the dash
 /// pattern stays the same visual size regardless of zoom. `radius`
 /// is currently unused (corners are sampled as-if straight for

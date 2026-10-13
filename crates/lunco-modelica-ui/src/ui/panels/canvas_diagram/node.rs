@@ -27,9 +27,8 @@ use super::theme::{canvas_theme_from_ctx, modelica_icon_palette_from_ctx};
 pub struct IconNodeData {
     /// Fully-qualified type name (e.g. `Modelica.Electrical.Analog.Basic.Resistor`).
     pub qualified_type: String,
-    /// `Icons.*` package class — rendered with a dashed border so
-    /// users see at a glance the component is decorative.
-    pub icon_only: bool,
+    /// Modelica partial class, rendered with a dashed border.
+    pub partial: bool,
     /// `expandable connector` (MLS §9.1.3) — accent dashed border.
     pub expandable_connector: bool,
     /// Decoded `Icon(graphics={...})` annotation merged across the
@@ -84,21 +83,19 @@ pub struct IconNodeData {
 ///    across the `extends` chain — the only icon source. Painted via
 ///    [`lunco_modelica_icon_ui::paint_graphics`] with lyon-tessellated
 ///    fills (EvenOdd, matching OMEdit/Dymola).
-/// 2. An explicit diagnostic card when the resolved class has no `Icon`
-///    annotation anywhere in its inheritance chain. The canvas never invents
-///    a generic component visual: a class must author a standard Modelica icon
-///    or the missing contract is visible and actionable.
+/// 2. A neutral named component when the resolved class has no authored Icon.
+///    Missing and loading declarations retain their explicit diagnostic cards.
 ///
 /// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 pub(super) struct IconNodeVisual {
-    /// Type name used in the missing-icon diagnostic.
+    /// Type name displayed below the source instance label.
     pub(super) type_label: String,
-    /// Pure-icon class (zero connectors, `.Icons.*` subpackage).
-    /// Rendered with a dashed border so users can tell at a glance
-    /// the component is decorative. Set by the projector via the
-    /// node's `data.icon_only` flag.
-    pub(super) icon_only: bool,
+    /// Modelica partial class, projected from its parsed declaration prefix.
+    /// Rendered with a dashed border to identify a source template.
+    /// Set by the projector via the
+    /// node's `data.partial` flag.
+    pub(super) partial: bool,
     /// `expandable connector` class (MLS §9.1.3). Rendered with a
     /// dashed border in an accent colour so users can distinguish
     /// them from regular connectors — expandable connectors collect
@@ -147,7 +144,20 @@ pub(super) struct IconNodeVisual {
     pub(super) port_connector_icons: Vec<Option<lunco_modelica_ast::annotations::Icon>>,
 }
 
-fn painter_rect_diagnostic(
+fn scoped_icon_value(
+    values: &std::collections::HashMap<String, f64>,
+    instance: &str,
+    name: &str,
+) -> Option<f64> {
+    let key = if name == "time" || instance.is_empty() {
+        name.to_string()
+    } else {
+        format!("{instance}.{name}")
+    };
+    values.get(&key).copied()
+}
+
+fn painter_rect_label(
     painter: &egui::Painter,
     rect: egui::Rect,
     title: &str,
@@ -221,7 +231,7 @@ impl NodeVisual for IconNodeVisual {
                 }
                 lunco_modelica_index::index::ClassResolutionState::Resolved => unreachable!(),
             };
-            painter_rect_diagnostic(
+            painter_rect_label(
                 &clipped_painter,
                 rect,
                 title,
@@ -249,12 +259,8 @@ impl NodeVisual for IconNodeVisual {
             &clipped_painter
         };
 
-        // No always-on card fill. Icons that need a body (Resistor's
-        // white rectangle, Inertia's gray cylinder, …) author it
-        // themselves. A resolved class without an Icon is an authoring
-        // error, not an invitation for the canvas to guess a visual.
-        // Matches Dymola/OMEdit — they never paint a "competing"
-        // card behind authored icons.
+        // Standard Icon annotations supply authored graphics. A valid class
+        // without one uses a neutral source-instance label.
 
         // Authored graphics from the class's `Icon` annotation,
         // merged across the `extends` chain at index time.
@@ -280,18 +286,12 @@ impl NodeVisual for IconNodeVisual {
             // instance path (`tank.m`, `tank.port.m_flow`). We
             // prefix with `instance_name.` and look it up — that
             // covers both top-level state vars and dotted refs into
-            // sub-components / ports. Falls back to the bare name
-            // for cases like global `time`.
+            // sub-components / ports. Only Modelica's built-in `time`
+            // reads the participant clock outside that instance scope.
             let node_state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
             let instance = self.instance_name.clone();
             let resolver = move |name: &str| -> Option<f64> {
-                if !instance.is_empty() {
-                    let qualified = format!("{instance}.{name}");
-                    if let Some(&v) = node_state.values.get(&qualified) {
-                        return Some(v);
-                    }
-                }
-                node_state.values.get(name).copied()
+                scoped_icon_value(&node_state.values, &instance, name)
             };
             let resolver_ref: &dyn Fn(&str) -> Option<f64> = &resolver;
             let palette = modelica_icon_palette_from_ctx(ctx.ui.ctx());
@@ -329,16 +329,12 @@ impl NodeVisual for IconNodeVisual {
         }
 
         if !drew_icon {
-            painter_rect_diagnostic(
+            painter_rect_label(
                 painter,
                 rect,
-                "Icon missing",
-                if self.type_label.is_empty() {
-                    "author a standard Modelica Icon annotation"
-                } else {
-                    &self.type_label
-                },
-                theme_snap.error_stroke,
+                &self.instance_name,
+                &self.type_label,
+                theme_snap.inactive_stroke,
                 theme_snap.card_fill,
                 theme_snap.type_label,
             );
@@ -346,10 +342,9 @@ impl NodeVisual for IconNodeVisual {
 
         // Border policy:
         //   - Selection ring: always drawn (functional feedback).
-        //   - Icon-only / expandable connector accents: always drawn
-        //     (carry semantic info — "decorative" / "expandable").
-        //   - Missing-icon diagnostic outline: always drawn so the
-        //     invalid visual contract cannot disappear into the canvas.
+        //   - Partial-class / expandable connector accents: always drawn
+        //     (carry semantic info — "partial" / "expandable").
+        //   - Named component outline: drawn when no Icon is authored.
         //   - Authored-icon hairline: opt-in via the theme snapshot's
         //     `show_authored_icon_border` flag, off by default. The
         //     icon's own primitives carry its bounds; the workbench
@@ -357,8 +352,8 @@ impl NodeVisual for IconNodeVisual {
         //     noise. Power users can flip the flag in Settings later.
         let stroke = if selected {
             Some(egui::Stroke::new(2.0, theme_snap.select_stroke))
-        } else if self.icon_only {
-            Some(egui::Stroke::new(1.0, theme_snap.icon_only_stroke))
+        } else if self.partial {
+            Some(egui::Stroke::new(1.0, theme_snap.partial_stroke))
         } else if self.expandable_connector {
             Some(egui::Stroke::new(1.5, theme_snap.select_stroke))
         } else if !drew_icon {
@@ -372,7 +367,7 @@ impl NodeVisual for IconNodeVisual {
             None
         };
         if let Some(stroke) = stroke {
-            let wants_dashed = (self.icon_only || self.expandable_connector) && !selected;
+            let wants_dashed = (self.partial || self.expandable_connector) && !selected;
             if wants_dashed {
                 paint_dashed_rect(painter, rect, 6.0, stroke);
             } else {
@@ -786,8 +781,23 @@ pub(super) fn paint_flow_dots(
 
 #[cfg(test)]
 mod tests {
-    use super::hover_card_rect;
+    use super::{hover_card_rect, scoped_icon_value};
     use bevy_egui::egui;
+
+    #[test]
+    fn dynamic_icon_values_stay_in_the_component_scope() {
+        let values = [
+            ("demand".to_string(), 9.0),
+            ("device.demand".to_string(), 3.0),
+            ("time".to_string(), 7.0),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(scoped_icon_value(&values, "device", "demand"), Some(3.0));
+        assert_eq!(scoped_icon_value(&values, "other", "demand"), None);
+        assert_eq!(scoped_icon_value(&values, "device", "time"), Some(7.0));
+        assert_eq!(scoped_icon_value(&values, "", "demand"), Some(9.0));
+    }
 
     #[test]
     fn hover_card_stays_inside_canvas_at_each_edge() {

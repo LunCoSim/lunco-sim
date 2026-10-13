@@ -485,9 +485,9 @@ pub(super) fn render_empty_menu(
     // Basic → Resistor). Matches how OMEdit and Dymola present
     // the library: user drills down by package instead of
     // scanning a flat list. Tree is built once, cached.
-    let show_icons = ctx
+    let show_partial = ctx
         .resource::<PaletteSettings>()
-        .map(|s| s.show_icon_only_classes)
+        .map(|s| s.show_partial_classes)
         .unwrap_or(false);
     let active_doc = active_doc_from_world_ctx(ctx);
     palette::render_library_package_menu(
@@ -498,7 +498,7 @@ pub(super) fn render_empty_menu(
         palette::library_package_tree(),
         click_world,
         editing_class,
-        show_icons,
+        show_partial,
         out,
     );
     ui.separator();

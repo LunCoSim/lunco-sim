@@ -465,7 +465,6 @@ pub fn drive_duplicate_loads(
 pub fn drive_drill_in_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
     mut registry: bevy::prelude::ResMut<ModelicaDocuments>,
-    mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
@@ -549,22 +548,9 @@ pub fn drive_drill_in_loads(
                 continue;
             }
         };
-        // Capture file path for the install log + smart-view decision
-        // before moving the doc into the registry.
-        let (file_path_display, has_components) = {
-            let path = match doc.origin() {
-                lunco_doc::DocumentOrigin::File { path, .. } => path.display().to_string(),
-                _ => String::from("<no path>"),
-            };
-            // Smart default view for the drilled-in tab. Matches
-            // OMEdit/Dymola: icon-only class or class with zero
-            // instantiated components → Icon view; otherwise Canvas
-            // (the user drilled FROM a canvas, expects a canvas).
-            let has_components = doc.strict_ast().and_then(|ast| {
-                ast.get_class_by_qualified_name(&qualified)
-                    .map(|c| !c.components.is_empty())
-            });
-            (path, has_components)
+        let file_path_display = match doc.origin() {
+            lunco_doc::DocumentOrigin::File { path, .. } => path.display().to_string(),
+            _ => String::from("<no path>"),
         };
         let origin = doc.origin().clone();
         if let Err(error) = registry.install_prebuilt(doc_id, doc) {
@@ -577,16 +563,6 @@ pub fn drive_drill_in_loads(
             lunco_modelica_core::doc_ops::register_document_context(
                 workspace, doc_id, origin, runtime, false,
             );
-        }
-        let land_in_icon_view = crate::ui::class_display::is_icon_only_class(&qualified)
-            || has_components == Some(false);
-        if land_in_icon_view {
-            // Update the drilled-in tab's view mode. Multiple tabs
-            // may now point at the same doc (sibling drill-ins);
-            // scope by `(doc, qualified)`.
-            if let Some(tab) = tabs.find_for_mut(doc_id, Some(qualified.as_str())) {
-                tab.view_mode = crate::model_tabs_types::ModelViewMode::Icon;
-            }
         }
         info!(
             "[CanvasDiagram] drill-in: installed `{}` from `{}`",

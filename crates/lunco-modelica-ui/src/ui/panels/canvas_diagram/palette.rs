@@ -29,9 +29,9 @@ pub(super) struct LibraryPackageNode {
     /// context-menu navigation).
     classes: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     /// Pre-computed: `true` if this subtree contains at least one
-    /// non-icon-only class. Lets the menu skip empty branches in O(1)
+    /// concrete class. Lets the menu skip empty branches in O(1)
     /// instead of recursively walking on every render.
-    has_non_icon_class: bool,
+    has_concrete_class: bool,
 }
 
 impl LibraryPackageNode {
@@ -39,23 +39,16 @@ impl LibraryPackageNode {
         Self {
             subpackages: Default::default(),
             classes: Vec::new(),
-            has_non_icon_class: false,
+            has_concrete_class: false,
         }
     }
 }
 
-/// User-facing toggles for the source library add-component menu. Default
-/// values are tuned for the common case ("a user dropping a
-/// component expects a functional block, not an icon shell").
-/// Persisted as a Bevy resource; the Settings dropdown flips the
-/// `show_icon_only_classes` flag to override.
+/// Add-component menu visibility for classes that cannot be instantiated.
 #[derive(Resource, Debug, Clone, PartialEq, Default)]
 pub struct PaletteSettings {
-    /// When `true`, pure-icon classes (matched by
-    /// [`crate::ui::class_display::is_icon_only_class`]) appear in the
-    /// source library add-component submenus. Default `false` — matches
-    /// Dymola's "hide `.Icons.*`" default.
-    pub show_icon_only_classes: bool,
+    /// Include classes carrying Modelica's `partial` prefix.
+    pub show_partial_classes: bool,
 }
 
 /// Soft guards for the canvas projection. Prevent accidental
@@ -91,7 +84,7 @@ impl Default for DiagramProjectionLimits {
 }
 
 /// True if the subtree contains any class that would be visible
-/// with the icon-only filter OFF (i.e. has a real, non-icon-only
+/// with the partial-class filter OFF (i.e. has a real, concrete
 /// class somewhere). Reads the precomputed flag set at tree-build
 /// time so the menu can skip empty branches in O(1).
 ///
@@ -99,7 +92,7 @@ impl Default for DiagramProjectionLimits {
 /// when called on every render for every visible submenu (the
 /// right-click menu re-runs every frame the pointer is over it).
 pub(super) fn package_has_visible_classes(node: &LibraryPackageNode) -> bool {
-    node.has_non_icon_class
+    node.has_concrete_class
 }
 
 /// Lazily-built package tree. Walks every entry in
@@ -131,7 +124,7 @@ pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
             node.classes.push(comp);
         }
         // Post-pass: sort classes alphabetically by short name and
-        // precompute the `has_non_icon_class` rollup. Done once here
+        // precompute the `has_concrete_class` rollup. Done once here
         // so the right-click menu's recursive renderer is purely
         // O(visible-items) per frame instead of repeatedly cloning,
         // sorting, and walking subtrees.
@@ -142,15 +135,12 @@ pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
 
 pub(super) fn finalize_tree(node: &mut LibraryPackageNode) {
     node.classes.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut any_visible = node
-        .classes
-        .iter()
-        .any(|c| !crate::ui::class_display::is_icon_only_class(&c.name));
+    let mut any_visible = node.classes.iter().any(|c| !c.partial);
     for child in node.subpackages.values_mut() {
         finalize_tree(child);
-        any_visible = any_visible || child.has_non_icon_class;
+        any_visible = any_visible || child.has_concrete_class;
     }
-    node.has_non_icon_class = any_visible;
+    node.has_concrete_class = any_visible;
 }
 
 /// Recursively render a package node as egui submenus.
@@ -170,15 +160,15 @@ pub(super) fn render_library_package_menu(
     node: &LibraryPackageNode,
     click_world: lunco_canvas::Pos,
     editing_class: Option<&str>,
-    show_icons: bool,
+    show_partial: bool,
     out: &mut Vec<ModelicaOp>,
 ) {
     for (name, child) in &node.subpackages {
         // Skip subtrees that would be entirely empty after the
-        // icon-only filter. Cheap recursive walk; avoids showing
+        // partial-class filter. Cheap recursive walk; avoids showing
         // dead-end submenus the user can click into only to find
         // nothing.
-        if !show_icons && !package_has_visible_classes(child) {
+        if !show_partial && !package_has_visible_classes(child) {
             continue;
         }
         ui.menu_button(name, |ui| {
@@ -190,7 +180,7 @@ pub(super) fn render_library_package_menu(
                 child,
                 click_world,
                 editing_class,
-                show_icons,
+                show_partial,
                 out,
             );
         });
@@ -202,10 +192,8 @@ pub(super) fn render_library_package_menu(
     // Iterating directly avoids a clone + sort on every render frame.
     for comp in &node.classes {
         let comp = *comp;
-        // Hide icon-only classes unless the user explicitly enabled
-        // them in Settings. Path-based detection via `is_icon_only_class`
-        // (currently `.Icons.` subpackage check).
-        if !show_icons && crate::ui::class_display::is_icon_only_class(&comp.name) {
+        // Partial classes are source templates rather than concrete instances.
+        if !show_partial && comp.partial {
             continue;
         }
         // Display: icon character (if any) + short name. The
@@ -254,5 +242,27 @@ pub(super) fn render_library_package_menu(
             }
             ui.close();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_visibility_uses_partial_metadata_without_namespace_guesses() {
+        let source = "package Icons model Device Real state; end Device; partial class Template end Template; end Icons;";
+        let ast = rumoca_phase_parse::parse_to_ast(source, "palette.mo").unwrap();
+        let mut index = lunco_modelica_index::index::ModelicaIndex::new();
+        index.rebuild_from_ast(&ast, source);
+        let device = index.classes.get("Icons.Device").unwrap();
+        let template = index.classes.get("Icons.Template").unwrap();
+        assert!(!device.partial);
+        assert!(template.partial);
+        let mut root = LibraryPackageNode::new();
+        root.classes.push(Box::leak(Box::new(device.clone())));
+        root.classes.push(Box::leak(Box::new(template.clone())));
+        finalize_tree(&mut root);
+        assert!(root.has_concrete_class);
     }
 }

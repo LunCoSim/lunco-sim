@@ -317,16 +317,9 @@ pub fn import_model_to_diagram_from_ast(
                             .parameter_values
                             .insert(k.clone(), v.to_string());
                     }
-                    // `Component X if <cond>` — only dim when the
-                    // condition evaluates FALSE against the parent's
-                    // Boolean parameter defaults. Active conditional
-                    // components (e.g. `addSat if with_I` with
-                    // `with_I=true`) render at full opacity, matching
-                    // OMEdit which only dims runtime-absent ones.
-                    if let Some(cond) = &comp.condition {
-                        let active = eval_condition(cond, &comp_by_short);
-                        diagram_node.is_conditional = !active;
-                    }
+                    // The source diagram marks the authored conditional clause.
+                    // Rumoca owns evaluation and instance presence at compile time.
+                    diagram_node.is_conditional = comp.condition.is_some();
                 }
             }
         }
@@ -439,66 +432,6 @@ fn project_class_entry(
     entry
 }
 
-/// Evaluate a Boolean component-condition expression against the
-/// parent class's component defaults. Handles the shapes source library uses
-/// for `Component X if <cond>` declarations:
-///   - `Terminal{Bool, "true"|"false"}`            → literal
-///   - `ComponentReference(<param>)`               → resolve `param`
-///     in `params_map`, parse its default as Bool
-///   - `Unary{Not, inner}`                         → !eval(inner)
-///   - `Parenthesized{inner}`                      → eval(inner)
-///   - `Binary{And/Or, lhs, rhs}`                  → short-circuit
-///
-/// Anything we can't reason about returns `true` so we err on the
-/// side of NOT dimming an active component (over-dimming would hide
-/// real components from the user).
-fn eval_condition(
-    expr: &rumoca_compile::parsing::ast::Expression,
-    params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
-) -> bool {
-    use lunco_modelica_ast::OpBinary;
-    use lunco_modelica_ast::OpUnary;
-    use rumoca_compile::parsing::ast::Expression;
-    match expr {
-        Expression::Terminal { token, .. } => {
-            // Accept any terminal whose text reads "true"/"false"; the
-            // exact `TerminalType` variant rumoca chooses for boolean
-            // literals isn't reliably `Bool` (Identifier/Bool both
-            // appear in the wild).
-            match token.text.as_ref() {
-                "true" => true,
-                "false" => false,
-                _ => true,
-            }
-        }
-        Expression::ComponentReference(cref) => {
-            let leaf = cref
-                .parts
-                .last()
-                .map(|p| p.ident.text.as_ref())
-                .unwrap_or("");
-            params_map
-                .get(leaf)
-                .and_then(|comp| comp.binding.as_ref())
-                .map(|d| eval_condition(d, params_map))
-                .unwrap_or(true)
-        }
-        Expression::Unary {
-            op: OpUnary::Not,
-            rhs,
-            ..
-        } => !eval_condition(rhs, params_map),
-        Expression::Unary { .. } => true,
-        Expression::Parenthesized { inner, .. } => eval_condition(inner, params_map),
-        Expression::Binary { op, lhs, rhs, .. } => match op {
-            OpBinary::And => eval_condition(lhs, params_map) && eval_condition(rhs, params_map),
-            OpBinary::Or => eval_condition(lhs, params_map) || eval_condition(rhs, params_map),
-            _ => true,
-        },
-        _ => true,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Diagram ↔ Snarl Sync
 // ---------------------------------------------------------------------------
@@ -608,6 +541,34 @@ end Unselected;
         let parameter = &diagram.nodes[0].component_def.parameters[0];
         assert_eq!(parameter.param_type, "Facts.Torque");
         assert_eq!(parameter.unit.as_deref(), Some("V"));
+    }
+
+    #[test]
+    fn source_diagram_marks_conditional_declarations_without_evaluating_them() {
+        let source = "model Root parameter Boolean enabled=true; Device plain; Device selected if enabled; Device always if true; Device unresolved if outside.flag; end Root; model Device input Real demand; output Real delivered; end Device;";
+        let ast = Arc::new(rumoca_phase_parse::parse_to_ast(source, "conditional.mo").unwrap());
+        let diagram = project_fixture(
+            ast,
+            source,
+            DEFAULT_MAX_DIAGRAM_NODES,
+            Some("Root"),
+            &DiagramAutoLayoutSettings::default(),
+            source,
+        )
+        .unwrap();
+        assert_eq!(
+            diagram
+                .nodes
+                .iter()
+                .map(|node| (node.instance_name.as_str(), node.is_conditional))
+                .collect::<Vec<_>>(),
+            vec![
+                ("plain", false),
+                ("selected", true),
+                ("always", true),
+                ("unresolved", true)
+            ]
+        );
     }
 
     const COMPOSITE_SOURCE: &str = "\

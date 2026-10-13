@@ -112,7 +112,7 @@ fn build_registry() -> VisualRegistry {
         IconNodeVisual {
             type_label: type_label.clone(),
             class_name: type_label,
-            icon_only: d.icon_only,
+            partial: d.partial,
             expandable_connector: d.expandable_connector,
             icon_graphics: d.icon_graphics.clone(),
             resolution: d.resolution,

@@ -25,12 +25,12 @@ pub struct CanvasThemeSnapshot {
     pub port_stroke: egui::Color32,
     pub select_stroke: egui::Color32,
     pub inactive_stroke: egui::Color32,
-    pub icon_only_stroke: egui::Color32,
+    pub partial_stroke: egui::Color32,
     pub warning_stroke: egui::Color32,
     pub error_stroke: egui::Color32,
     /// When false (default), authored source library icons render without a
     /// workbench-drawn hairline frame around them. The icon's own
-    /// primitives are the bounds. Selection / icon-only / expandable
+    /// primitives are the bounds. Selection / partial / expandable
     /// rings still draw — they carry semantic info, not just bounds.
     pub show_authored_icon_border: bool,
 }
@@ -52,7 +52,7 @@ impl CanvasThemeSnapshot {
             port_stroke: c.surface2,
             select_stroke: t.accent,
             inactive_stroke: c.overlay0,
-            icon_only_stroke: t.warning,
+            partial_stroke: t.warning,
             warning_stroke: t.warning,
             error_stroke: t.error,
             show_authored_icon_border: false,

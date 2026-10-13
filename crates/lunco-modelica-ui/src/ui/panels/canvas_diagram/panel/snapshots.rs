@@ -106,6 +106,7 @@ pub(crate) fn stash_snapshots(
                     );
                     return;
                 };
+                state.values.clear();
                 for (k, v) in &model.parameters {
                     state.values.insert(k.to_string(), *v);
                 }
@@ -116,6 +117,7 @@ pub(crate) fn stash_snapshots(
                     state.values.insert(k.to_string(), *v);
                 }
                 project_target_unit_scope(&mut state.values, target_unit_instance);
+                state.values.insert("time".to_string(), model.current_time);
             }
         }
         lunco_viz::kinds::canvas_plot_node::stash_node_state(ui, state);
@@ -205,6 +207,7 @@ fn seed_state_from_latest_experiment(
         }
         None => result.times.len() - 1,
     };
+    state.values.insert("time".to_string(), result.times[idx]);
     for (name, samples) in &result.series {
         if let Some(v) = samples.get(idx) {
             if v.is_finite() {

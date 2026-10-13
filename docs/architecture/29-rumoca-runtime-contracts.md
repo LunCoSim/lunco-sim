@@ -63,13 +63,33 @@ requests a new projection. Admission selects the bundled-package inventory or
 the installed source-library bundle; an absent root stays a visible failure.
 A complete current snapshot does not request unrelated library roots. Document generations still reject superseded work.
 
+The add-component palette filters Modelica's typed `partial` prefix. Namespace
+spelling does not classify a component as decorative. Drill-in tabs start in
+diagram view and retain the user's selected view when their document loads.
+Document installation does not run semantic queries on the UI thread.
+
+Inherited icon projection receives each base identity from Rumoca's scoped type
+candidates and exact class lookup. The annotation layer merges graphics and
+coordinate systems only; it does not expand imports or construct scope paths.
+Boolean visibility defaults are restricted to scalar Boolean parameters.
+The background diagram snapshot projects and caches icons from those resolved
+declarations; document opening does not schedule a separate type-name warm walk.
+
 Block and expanded connection graphs consume the same declaration ports. Wires
 come only from the selected class's equations; authored route annotations decorate
 those edges. Connector icon lookup uses the exact resolved identity. Parameter label units
 come from declaration metadata; type-name unit tables do not participate. A class
 without authored placement uses the configured deterministic grid; a class
 without an icon uses the renderer's named component presentation. These are
-presentation defaults and do not supply missing semantic facts.
+presentation defaults and do not supply missing semantic facts. A conditional
+source declaration is marked as conditional, including a literal `if true`;
+Rumoca owns condition evaluation and compiled instance presence. The diagram
+performs no Boolean-expression interpretation or active-instance inference.
+
+Dynamic icon references read only the component's qualified runtime path. The
+Modelica built-in `time` reads the participant clock or selected experiment
+sample time. A missing component value cannot read a similarly named root value;
+live values replace the experiment snapshot when a participant is present.
 
 Canvas wires consume the projected `PortKind`. Rumoca's short-form class
 causality supplies signal connector direction, and resolved flow members supply

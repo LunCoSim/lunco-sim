@@ -48,8 +48,12 @@ Canvas diagrams consume the shared engine's resolved declaration snapshot.
 The source-library indexer uses the same snapshot. Missing or cyclic types
 reject projection visibly; indexed classes retain their diagnostic state. Wait for source-root admission
 and inspect the projection diagnostic; a type's spelling cannot supply ports,
-causality or an `Interfaces` package. Routes decorate edges from the selected
+causality or an `Interfaces` package. Inherited icon bases use Rumoca's
+lexical/import scope, including imports on enclosing packages. Routes decorate edges from the selected
 class's equations. Diagram placement defaults are configured presentation only.
+Dynamic icon values use the component's exact runtime path; only Modelica's
+built-in `time` reads the participant or selected experiment clock. A missing
+component value cannot read an unrelated root variable with the same leaf name.
 
 Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
 including inherited units and scalar array entries. Editing a draft does not
