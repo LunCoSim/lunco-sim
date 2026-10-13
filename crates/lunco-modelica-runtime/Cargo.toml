@@ -21,7 +21,7 @@ web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rumoca-ir-dae.workspace = true
-lunco-hash = { path = "../lunco-hash" }
+lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 
 [lints]
 workspace = true

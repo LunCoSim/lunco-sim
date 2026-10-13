@@ -21,6 +21,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 rumoca-compile.workspace = true
+rumoca-core.workspace = true
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 web-time.workspace = true
 

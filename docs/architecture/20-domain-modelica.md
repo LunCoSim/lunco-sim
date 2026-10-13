@@ -275,10 +275,9 @@ completion, or the required participant admission hold.
 
 Prepared-solver reuse captures `ModelicaCompiler::compiled_source_content_identity`
 while the successful strict compilation's participating overlays are still
-seated. The source key includes only that closure, with generated wrapper
-class and network-title identity normalized; authored parameters, initial
-values, equations, participating siblings, and admitted contributing library
-bytes remain structural. Unrelated open sibling documents do not invalidate
+seated. The source key includes the exact selected target and participating
+source closure: declarations, parameters, initial values, equations, siblings,
+and contributing library bytes. Unrelated open sibling documents do not invalidate
 prepared FMI components. The captured key travels with the immutable DAE through
 shared-artifact reuse and participant resets. Precompile DAE admission retains
 the conservative full submitted input-set hash until strict resolution supplies
@@ -674,10 +673,9 @@ optional diagnostic unavailable while the actual compile continues. Browser
 compilation creates no native heartbeat thread. Generic `compile_heartbeat_`
 tests cover periodic progress, resource release, and normal/error/unwind exit.
 
-The worker shares immutable compiled DAE artifacts across participants whose
-assembled equations are structurally identical. Generated USD wrappers keep
-instance-qualified names for diagnostics, but those names and their runtime
-root suffix are excluded from the structural cache key. Parameter bindings,
+The worker reuses immutable compiled DAE artifacts for the same exact target,
+document URI, assembled source bytes, and source-root revision. Generated
+wrappers use the same cache contract as authored source. Parameter bindings,
 solver instances, live state, and telemetry remain per entity.
 
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
@@ -742,7 +740,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v11`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v12`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through

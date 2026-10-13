@@ -45,7 +45,8 @@ simulation target. Component metadata uses Rumoca's complete expression
 rendering and already-decoded string values; preserve literal quotes,
 backslashes, and description concatenation when inspecting authored facts.
 Canvas diagrams consume the shared engine's resolved declaration snapshot.
-The source-library indexer uses the same snapshot. Missing or cyclic types
+The source-library indexer captures the selected class interface and connector
+facts through the same native queries; it does not instantiate component internals. Missing or cyclic types
 reject projection visibly; indexed classes retain their diagnostic state. Wait for source-root admission
 and inspect the projection diagnostic; a type's spelling cannot supply ports,
 causality or an `Interfaces` package. Inherited icon bases use Rumoca's
@@ -54,6 +55,11 @@ class's equations. Diagram placement defaults are configured presentation only.
 Dynamic icon values use the component's exact runtime path; only Modelica's
 built-in `time` reads the participant or selected experiment clock. A missing
 component value cannot read an unrelated root variable with the same leaf name.
+
+Compiled reuse requires the exact target and source unit. Prepared solver reuse
+uses the compiler's exact participating-source identity, including generated
+identifiers and literals. Class documentation uses qualified declaration ownership
+and Rumoca-decoded strings. Optional prepared disk records use version 12.
 
 Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
 including inherited units and scalar array entries. Editing a draft does not
@@ -221,9 +227,9 @@ the same root definition while preserving the root's authority.
 The policy list does not replace composed USD facts for member-class
 discovery. The worker's prepared-solve cache includes contributing library
 content in the source key captured from the successful strict compiler's
-participating-source closure before clearing user overlays. Generated class/network-title identity is
-normalized; equations, parameters, initial values, participating siblings, and
-contributing library bytes remain structural. Unrelated sibling edits and runtime
+participating-source closure before clearing user overlays. The exact selected
+target, declarations, equations, parameters, initial values, participating siblings,
+and contributing library bytes determine that identity. Unrelated sibling edits and runtime
 document IDs do not invalidate prepared FMI components. The captured key remains with
 the immutable DAE through shared reuse and resets; the precompile DAE cache uses
 the full submitted input set until the strict closure is known. It does not scan
@@ -236,8 +242,8 @@ duration plus the source key. Stepper construction is not evidence of cache reus
 
 Generated USD networks compile their complete synthesized source plus admitted
 source roots; unrelated editor documents are not sibling inputs. The reserved
-bundled `generated/` filename namespace drives provenance and structural cache
-classification. Verify repeat-load cache reuse while changing document-open
+bundled `generated/` filename namespace records provenance. Cache identity uses
+exact declarations and participating bytes. Verify repeat-load cache reuse while changing document-open
 order; authored Modelica documents retain their multi-document source sets.
 
 Domain discovery does not resynthesize ordinary scene-owned networks when a
@@ -1024,3 +1030,5 @@ Modelica draft reparsing is paced by that document's source-edit timestamp and
 bounded worker admission. API edits waive the typing debounce; unrelated UI
 activity cannot block parsing. `modelica_run_metadata.rhai` verifies that a
 replacement draft compiles while earlier runs retain their checked facts.
+
+For library execution acceptance, run `modelica_library_smoke.rhai` through the production scene runner. It checks an acausal electrical circuit, a dynamic block trajectory, units, and terminal rejection of a missing declaration. Experiments admit required source roots through the same registry as interactive compilation.

@@ -556,8 +556,8 @@ mission after reassociation, then compare preparation and settled-step profiles.
 
 Confirm generated-network source-set stability across launches: identical
 generated text must not acquire unrelated open documents as compile siblings.
-Use the runtime-owned bundled `generated/` provenance classifier for structural
-identity, and retain authored multi-document compilation. Inspect typed
+Preserve exact generated target and source bytes in cache identity, and retain
+authored multi-document compilation. Inspect typed
 persistent-cache rejection warnings and the native preparation owner logs.
 `cache=memory-hit`, `cache=disk-hit`, and `cache=miss` identify the actual lookup;
 compare lookup, lowering, and total preparation durations for the same admitted

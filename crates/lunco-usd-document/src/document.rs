@@ -1801,10 +1801,11 @@ impl UsdDocument {
                     })?
                     .identifier()
                     .to_owned();
+                // Native sub_layers includes the session parent before its children.
                 let layers = stage.sub_layers(&session_id);
                 let index = match target {
-                    TargetLayer::View => 0,
-                    TargetLayer::Runtime => 1,
+                    TargetLayer::View => 1,
+                    TargetLayer::Runtime => 2,
                     TargetLayer::Base => unreachable!(),
                 };
                 layers.get(index).cloned().ok_or_else(|| {

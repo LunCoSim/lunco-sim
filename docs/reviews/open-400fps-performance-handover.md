@@ -3943,13 +3943,6 @@ These runs establish a cadence improvement, not completion of the loading,
 visual FPS, raw physics-cost or determinism objectives. The selective declaration
 discovery section above records the subsequent port-propagation improvement.
 
-## Griffin compile and load measurements — 2026-10-07
-
-Prepared-solver reuse now keys the successfully seated strict source closure, with generated runtime identities normalized and participating library bytes exact. An unrelated authored overlay no longer invalidates this solver cache. Native logs distinguish memory hits, disk hits and lowering misses.
-
-In the owned Griffin runs, the identical FLIP source key `0bfee35bccb31102` lowered in 4.373 s on a miss and loaded from disk in 13.4 ms on a subsequent process. The warm full visual scene materialized in 5.7 s; individual prepared-solver disk lookups were approximately 12–26 ms. Cold AttitudePropulsion lowering took 105.6 s during a concurrent focused Cargo check, so that value is diagnostic rather than uncontended acceptance. Compilation itself was about 0.1–0.2 s per generated model; cold solver lowering remains the dominant preparation cost. The API responded during the preparation hold, and simulation remained at tick zero. These measurements do not establish sustained FPS or faster cold lowering. Further optimization should profile the lowering owner and measure a clean cold/warm pair, preserving deterministic admission and the actual model equations.
-
-
 > Status: Open · Worktree: optimization · Scene: Summer Space School Apollo
 
 ## Objective
@@ -4140,26 +4133,6 @@ self-time/rebuild exports are in `target/*self.tsv` and
 `editor_preview` window requested an incorrect source path and is excluded;
 its four View/Builder/Editor/return windows are valid. Unprofiled acceptance and
 production behavior checks are recorded separately below when complete.
-
-### 2026-10-05 — sandbox loading priority
-
-Loading was the first acceptance gate, before FPS or Griffin ramp unfolding
-work. The sandbox baseline reached full readiness in 12.170 s from
-launch. Repeated warm launches varied from 3.033 to 9.611 s despite identical
-generated source text: generated compile requests captured unrelated open
-Modelica documents as siblings, so asynchronous publication changed the
-persistent solve-cache key. The production document origin also uses the
-reserved `generated/` filename namespace. Structural sharing now recognizes
-that authoritative runtime provenance, and generated compiles carry only their
-complete generated source plus the existing admitted class roots. Authored
-multi-document compilation remains unchanged. Numeric equations and graphic
-coordinates remain part of structural identity.
-
-Both focused `lunco-modelica-worker` tests selected by `generated_` pass. Warm
-diagnostic launches use disk solver IR without lowering. The subsequent owned,
-unprofiled High-quality sandbox run still took 5.290 s from launch, so the
-two-second loading target is not accepted. A sibling simulator remained live;
-no other session was stopped to improve this number.
 
 The vehicle projector now checks its existing current-generation topology
 classification before charging ordinary visual-only prims to simulation

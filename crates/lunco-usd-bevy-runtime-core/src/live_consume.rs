@@ -1244,6 +1244,7 @@ pub(crate) fn reconcile_structural_live(
     )
     .entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
+    let mut visited = BTreeSet::new();
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else {
             crate::twin_projection::fail_pending_instance_projection(
@@ -1254,6 +1255,11 @@ pub(crate) fn reconcile_structural_live(
             );
             continue;
         };
+        let sp = sp.prim_path();
+        if !visited.insert(sp.clone()) {
+            continue;
+        }
+        let path = sp.as_str();
         // Program source is projected onto the existing owner, while the
         // program prim itself still follows the normal USD structural path.
         let program_owner = if let Some(owner) = find_program_owner(world, id, path) {

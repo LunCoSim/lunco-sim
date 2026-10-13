@@ -21,6 +21,8 @@
 //! workspace folder becomes a data change, not new plumbing.
 
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_runtime::library::LibraryLoadState;
 #[cfg(target_arch = "wasm32")]
 use lunco_modelica_runtime::source_asset::read_text_sync;
 use lunco_modelica_runtime::{LoadSourceRootPayload, ModelicaChannels, ModelicaCommand};
@@ -54,6 +56,8 @@ pub enum LoadState {
 /// The source-root loader matches on this enum to pick the correct strategy.
 #[derive(Debug, Clone)]
 pub enum SourceRootKind {
+    /// The installed library artifact, with namespaces from its declaration index.
+    SourceLibrary,
     /// On-disk source root explicitly registered by the application or Twin.
     Disk {
         /// Absolute path to the package root directory containing
@@ -251,14 +255,6 @@ impl SourceRootRegistry {
         }
     }
 
-    /// Query: does the dep-scanner's root segment refer to a known
-    /// source root? Useful for telling apart real library deps from
-    /// typos / unknown packages (which should let compile fall
-    /// through to rumoca's error path).
-    pub fn contains(&self, id: &str) -> bool {
-        self.roots.contains_key(id)
-    }
-
     /// Register one explicitly configured disk source root.
     pub fn register_disk_root(&mut self, id: impl Into<String>, root_dir: PathBuf) {
         let id = id.into();
@@ -311,7 +307,10 @@ impl SourceRootRegistry {
     pub fn register_open_doc_root(&mut self, id: String, path: Option<PathBuf>) {
         // Don't let an opened document shadow an explicit disk root.
         if let Some(existing) = self.roots.get(&id) {
-            if matches!(existing.kind, SourceRootKind::Disk { .. }) {
+            if matches!(
+                existing.kind,
+                SourceRootKind::Disk { .. } | SourceRootKind::SourceLibrary
+            ) {
                 return;
             }
         }
@@ -432,6 +431,117 @@ impl SourceRootRegistry {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+pub struct NativeLibraryIndexLoad {
+    task: Option<
+        bevy::tasks::Task<Result<lunco_modelica_index::visual_diagram::LibraryIndex, String>>,
+    >,
+    failed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeLibraryIndexLoad {
+    pub fn new() -> Self {
+        Self {
+            task: None,
+            failed: false,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn drive_native_library_index(
+    index_load: Option<ResMut<NativeLibraryIndexLoad>>,
+    state: Option<ResMut<LibraryLoadState>>,
+    mut commands: Commands,
+) {
+    use bevy::tasks::futures_lite::future;
+
+    let Some(mut index_load) = index_load else {
+        return;
+    };
+
+    if index_load.failed || lunco_modelica_index::visual_diagram::library_index_available() {
+        return;
+    }
+
+    if index_load.task.is_some() {
+        let result = {
+            let task = index_load
+                .task
+                .as_mut()
+                .expect("source library index task disappeared while being polled");
+            future::block_on(future::poll_once(task))
+        };
+        let Some(result) = result else {
+            return;
+        };
+        index_load.task = None;
+        match result {
+            Ok(index) => {
+                if lunco_modelica_index::visual_diagram::install_library_index(index) {
+                    info!("[source library] editor index loaded off-thread");
+                    commands.trigger(
+                        lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady,
+                    );
+                }
+            }
+            Err(error) => {
+                index_load.failed = true;
+                error!("[source library] editor index load failed: {error}");
+                if let Some(mut state) = state {
+                    *state = LibraryLoadState::Failed(error);
+                }
+            }
+        }
+        return;
+    }
+
+    if !state.is_some_and(|state| state.is_ready()) {
+        return;
+    }
+
+    info!("[source library] loading editor index off-thread");
+    index_load.task =
+        Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async {
+            lunco_modelica_index::visual_diagram::load_library_index_from_assets()
+        }));
+}
+
+/// Publish installed library namespaces from its parsed declaration index.
+fn register_indexed_library_source_root(
+    _trigger: On<lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady>,
+    mut registry: ResMut<SourceRootRegistry>,
+) {
+    let namespaces = lunco_modelica_index::visual_diagram::library_class_library()
+        .iter()
+        .filter_map(|class| {
+            rumoca_core::qualified_name_segments(&class.name)
+                .next()
+                .map(str::to_owned)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if namespaces.is_empty() {
+        bevy::log::error!("[source-roots] installed library index has no declared namespaces");
+        return;
+    }
+    let id = "source-bundle";
+    registry.roots.insert(
+        id.to_owned(),
+        SourceRoot {
+            id: id.to_owned(),
+            namespaces,
+            kind: SourceRootKind::SourceLibrary,
+            owner: SourceRootOwner::Application,
+            operation_id: 0,
+            state: LoadState::NotLoaded,
+        },
+    );
+}
+
 #[derive(Resource, Default)]
 struct PendingSourceRootUnloads {
     queued: VecDeque<(String, u64)>,
@@ -450,6 +560,14 @@ impl Plugin for ModelicaSourceRootsPlugin {
         }
         app.init_resource::<PendingSourceRootUnloads>();
         app.add_observer(register_open_document_source_root);
+        app.add_observer(register_indexed_library_source_root);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_systems(Update, drive_native_library_index);
+            if lunco_assets_runtime::library::has_library_source() {
+                app.init_resource::<NativeLibraryIndexLoad>();
+            }
+        }
         app.add_observer(unload_twin_modelica_source_roots);
         app.add_systems(PreUpdate, flush_pending_source_root_unloads);
         register_twin_modelica_commands(app);
@@ -735,6 +853,10 @@ pub fn ensure_loaded(
     // The browser keeps its storage reads on the host that owns WebStorage and
     // sends the resulting text to the Modelica Web Worker.
     let (payload, summary) = match &entry.kind {
+        SourceRootKind::SourceLibrary => (
+            LoadSourceRootPayload::SourceLibrary,
+            "installed paired source library".to_owned(),
+        ),
         SourceRootKind::Disk { root_dir } => {
             let summary = format!("disk {}", root_dir.display());
             (

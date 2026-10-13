@@ -2991,6 +2991,43 @@ fn runtime_add_prim_under_nested_parent_in_composed() {
 }
 
 #[test]
+fn runtime_sibling_edits_preserve_specs_for_removal() {
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(42),
+        "#usda 1.0\ndef Xform \"Root\" {}\n",
+        DocumentOrigin::writable_file("/tmp/runtime-siblings.usda"),
+    );
+    for name in ["First", "Second"] {
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/Root".into(),
+            name: name.into(),
+            type_name: Some("Shader".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: format!("/Root/{name}"),
+            name: "info:sourceAsset".into(),
+            type_name: "asset".into(),
+            value: "@probe.mo@".into(),
+        })
+        .unwrap();
+    }
+    assert!(runtime_prim_exists(&doc, "/Root/First"));
+    assert!(runtime_prim_exists(&doc, "/Root/Second"));
+    for name in ["First", "Second"] {
+        doc.apply(UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: format!("/Root/{name}"),
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn base_and_runtime_ops_are_independent() {
     let mut doc = UsdDocument::new(DocumentId::new(33), TINY_USDA);
     // Author into base.

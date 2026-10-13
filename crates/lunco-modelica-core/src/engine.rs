@@ -603,6 +603,17 @@ impl ModelicaEngine {
         Ok(snapshot)
     }
 
+    /// Capture one declaration's ports, parameters, and icon for class indexing.
+    pub fn class_interface_snapshot(
+        &mut self,
+        target: &str,
+    ) -> Result<crate::diagram::ClassInterfaceSnapshot, String> {
+        let mut snapshot =
+            crate::diagram::DiagramSnapshot::capture_interface(&mut self.session, target)?;
+        snapshot.class.icon = self.icon_for(target);
+        Ok(snapshot)
+    }
+
     /// Read-only access to the underlying session for advanced queries
     /// not yet wrapped here. Use sparingly — prefer growing this
     /// crate's API over leaking the session through panels.

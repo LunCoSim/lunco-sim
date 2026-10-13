@@ -40,27 +40,18 @@ pub struct DiagramClass {
     pub members: Arc<Vec<ClassComponentDeclaration>>,
 }
 
+/// The selected declaration's source interface, without component internals.
+#[derive(Debug, Clone)]
+pub struct ClassInterfaceSnapshot {
+    pub class: DiagramClass,
+    pub ports: Vec<lunco_modelica_index::visual_diagram::PortDef>,
+}
+
 impl DiagramSnapshot {
     /// Capture only the selected class, its instantiated types and connector
     /// declarations. Rumoca caches member results by session revision.
     pub fn capture(session: &mut Session, target: &str) -> Result<Self, String> {
-        let equations = session
-            .class_definition_query(target)
-            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?
-            .equations
-            .clone();
-        let members = session
-            .class_component_declarations_query(target)
-            .ok_or_else(|| {
-                format!("Modelica diagram declarations for `{target}` are unresolved or cyclic")
-            })?;
-        let mut snapshot = Self {
-            target: target.to_owned(),
-            members,
-            equations,
-            classes: HashMap::new(),
-        };
-        snapshot.capture_class(session, target)?;
+        let mut snapshot = Self::capture_selected(session, target)?;
         let types: Vec<String> = snapshot
             .members
             .iter()
@@ -83,6 +74,52 @@ impl DiagramSnapshot {
             }
         }
         Ok(snapshot)
+    }
+
+    fn capture_selected(session: &mut Session, target: &str) -> Result<Self, String> {
+        let equations = session
+            .class_definition_query(target)
+            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?
+            .equations
+            .clone();
+        let members = session
+            .class_component_declarations_query(target)
+            .ok_or_else(|| {
+                format!("Modelica diagram declarations for `{target}` are unresolved or cyclic")
+            })?;
+        let mut snapshot = Self {
+            target: target.to_owned(),
+            members,
+            equations,
+            classes: HashMap::new(),
+        };
+        snapshot.capture_class(session, target)?;
+        Ok(snapshot)
+    }
+
+    pub(crate) fn capture_interface(
+        session: &mut Session,
+        target: &str,
+    ) -> Result<ClassInterfaceSnapshot, String> {
+        let mut snapshot = Self::capture_selected(session, target)?;
+        let types: Vec<String> = snapshot
+            .members
+            .iter()
+            .map(|member| member.type_name.clone())
+            .collect();
+        for name in types {
+            if session
+                .class_definition_query(&name)
+                .is_some_and(|class| class.class_type == ClassType::Connector)
+            {
+                snapshot.capture_class(session, &name)?;
+            }
+        }
+        let class = snapshot.class(target).expect("captured target");
+        Ok(ClassInterfaceSnapshot {
+            class: class.clone(),
+            ports: snapshot.class_ports(class),
+        })
     }
 
     fn capture_class(&mut self, session: &mut Session, name: &str) -> Result<(), String> {

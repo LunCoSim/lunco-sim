@@ -289,6 +289,54 @@ impl PreparedSourceRoot {
         self.content_closure.clone()
     }
 
+    /// Prepare the installed paired artifact on the source-preparation worker.
+    pub fn from_source_library(id: impl Into<String>) -> Self {
+        let id = id.into();
+        let label = lunco_assets_runtime::library::primary_filesystem_library_root()
+            .map(|root| root.display().to_string())
+            .unwrap_or_else(|| "installed source library".to_owned());
+        match lunco_modelica_library::source_library::parsed_source_bundle() {
+            Some(documents) => Self::from_parsed_documents(id, label, (**documents).clone()),
+            None => Self::prepare(
+                id,
+                label,
+                Vec::new(),
+                vec!["installed paired source library is unavailable".to_owned()],
+            ),
+        }
+    }
+
+    /// Admit paired parsed records without reparsing their retained source bytes.
+    fn from_parsed_documents(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        mut parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    ) -> Self {
+        let id = id.into();
+        let label = label.into();
+        parsed.sort_unstable_by(|left, right| left.uri().cmp(right.uri()));
+        let files = parsed
+            .iter()
+            .map(|document| (document.uri().to_owned(), document.source().to_owned()))
+            .collect::<Vec<_>>();
+        let diagnostics = if files.is_empty() {
+            vec![format!("source root `{id}` contains no Modelica files")]
+        } else {
+            Vec::new()
+        };
+        let parsed_roots = source_roots_from_parsed_docs(&parsed);
+        let content_closure = source_root_content_closure(&id, &label, &files, &diagnostics);
+        Self {
+            id,
+            label,
+            files,
+            parsed,
+            parsed_roots,
+            diagnostics,
+            content_closure,
+        }
+    }
+
     /// Prepare a complete source set without touching a compiler session.
     /// Files are canonicalized by URI so parser input and diagnostics
     /// do not depend on filesystem enumeration or
@@ -360,8 +408,6 @@ pub struct ModelicaCompiler {
     /// namespace is what lets later package-member compiles use the already
     /// seated root instead of registering a second URI.
     installed_roots: std::collections::HashSet<String>,
-    /// Root names owned by the resident application bundle.
-    resident_source_roots: std::collections::HashSet<String>,
     /// Admitted source-set contributions retained so unloading one set can
     /// recompute roots, revisions, and content closures accurately.
     source_set_contributions: std::collections::HashMap<String, SourceSetContribution>,
@@ -424,7 +470,6 @@ impl ModelicaCompiler {
         Self {
             session: Session::new(SessionConfig::default()),
             installed_roots: std::collections::HashSet::new(),
-            resident_source_roots: std::collections::HashSet::new(),
             source_set_contributions: std::collections::HashMap::new(),
             source_set_order: Vec::new(),
             requested_source_roots: std::collections::HashSet::new(),
@@ -439,39 +484,12 @@ impl ModelicaCompiler {
     /// may contain any number of authored libraries; root identities are
     /// derived from their `within` declarations rather than selected by name.
     pub fn ensure_source_bundle_installed(&mut self) -> bool {
-        let Some(parsed) = lunco_modelica_library::source_library::parsed_source_bundle() else {
-            return false;
-        };
-        let Some(bundle_revision) =
-            lunco_modelica_library::source_library::parsed_source_bundle_revision()
-        else {
-            log::error!("[ModelicaCompiler] could not compute source-bundle content revision");
-            return false;
-        };
-        let docs = (**parsed).clone();
-        let roots = source_roots_from_parsed_docs(&docs);
-        if roots.is_empty() {
-            return false;
+        if self.source_set_contributions.contains_key("source-bundle") {
+            return true;
         }
-        let inserted = self.session.replace_in_memory_source_set(
-            "source-bundle",
-            rumoca_compile::compile::SourceRootKind::DurableExternal,
-            docs,
-            None,
-        );
-        self.resident_source_roots = roots;
-        self.rebuild_source_set_indexes();
-        self.library_revisions
-            .insert("source-bundle".to_string(), bundle_revision);
-        let files = parsed
-            .iter()
-            .map(|document| (document.uri().to_owned(), document.source().to_owned()))
-            .collect::<Vec<_>>();
-        self.source_root_content_closures.insert(
-            "source-bundle".to_string(),
-            source_root_content_closure("source-bundle", "source-bundle", &files, &[]),
-        );
-        inserted > 0
+        let report =
+            self.install_source_root(PreparedSourceRoot::from_source_library("source-bundle"));
+        report.diagnostics.is_empty() && report.inserted_file_count > 0
     }
 
     /// Seat a shipped Modelica library into this session by its TOP-LEVEL name,
@@ -1032,8 +1050,7 @@ impl ModelicaCompiler {
     }
 
     /// Remove one previously installed source set and recompute all derived
-    /// source-root metadata without disturbing the resident application bundle
-    /// or other loaded sets.
+    /// source-root metadata without disturbing other loaded sets.
     pub fn remove_source_root(&mut self, source_set_id: &str) -> bool {
         self.session.remove_source_set(source_set_id);
         self.source_root_content_closures.remove(source_set_id);
@@ -1049,11 +1066,9 @@ impl ModelicaCompiler {
     }
 
     fn rebuild_source_set_indexes(&mut self) {
-        self.installed_roots = self.resident_source_roots.clone();
-        self.library_revisions
-            .retain(|source_set_id, _| source_set_id == "source-bundle");
-        self.source_root_content_closures
-            .retain(|source_set_id, _| source_set_id == "source-bundle");
+        self.installed_roots.clear();
+        self.library_revisions.clear();
+        self.source_root_content_closures.clear();
 
         for source_set_id in &self.source_set_order {
             let Some(contribution) = self.source_set_contributions.get(source_set_id) else {
@@ -1103,16 +1118,12 @@ impl ModelicaCompiler {
     }
 
     /// Portable identity of the successfully seated compile input closure.
-    /// Includes the target, actual transformed overlays, and admitted library
+    /// Includes the exact target, seated source bytes, and admitted library
     /// bytes. Runtime mount IDs and host paths never contribute to this CID.
-    /// `normalize_overlay` removes caller-owned generated identity from the
-    /// target and participating user overlays; authored callers pass `str::to_owned`.
-    /// Library bytes remain exact and are never normalized.
     /// Capture before clearing the admitted user-document overlay.
     pub fn compiled_source_content_identity(
         &self,
         compiled: &rumoca_compile::compile::DaeCompilationResult,
-        normalize_overlay: impl Fn(&str) -> String,
     ) -> Result<lunco_hash::content::Cid, String> {
         fn field(bytes: &mut Vec<u8>, value: &[u8]) {
             bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
@@ -1126,7 +1137,7 @@ impl ModelicaCompiler {
             return Err("strict compile has no participating source files".into());
         }
         let mut bytes = b"LunCoModelicaCompileClosure\0\x01".to_vec();
-        field(&mut bytes, normalize_overlay(&closure.target).as_bytes());
+        field(&mut bytes, closure.target.as_bytes());
         let mut overlays = Vec::new();
         let mut contributing_roots = std::collections::HashSet::new();
         for participant in &closure.files {
@@ -1135,9 +1146,7 @@ impl ModelicaCompiler {
                     .session
                     .document_source_text(&participant.uri)
                     .ok_or("participating overlay no longer has seated text")?;
-                overlays.push(lunco_hash::content::cid(
-                    normalize_overlay(&document).as_bytes(),
-                ));
+                overlays.push(lunco_hash::content::cid(document.as_bytes()));
             } else {
                 if participant.source_set_keys.is_empty() {
                     return Err(format!(
@@ -2021,7 +2030,7 @@ end Controls;"
             1
         );
         let identity = compiler
-            .compiled_source_content_identity(&first, str::to_owned)
+            .compiled_source_content_identity(&first)
             .expect("unused source root is excluded");
         compiler.clear_user_documents();
         let second = compiler
@@ -2030,7 +2039,7 @@ end Controls;"
         assert_eq!(
             identity,
             compiler
-                .compiled_source_content_identity(&second, str::to_owned)
+                .compiled_source_content_identity(&second)
                 .expect("portable identity")
         );
         let changed = source.replace("start=1", "start=2");
@@ -2040,7 +2049,7 @@ end Controls;"
         assert_ne!(
             identity,
             compiler
-                .compiled_source_content_identity(&third, str::to_owned)
+                .compiled_source_content_identity(&third)
                 .expect("changed identity")
         );
         let required = "model RequiredProbe Unused.Part part; end RequiredProbe;";
@@ -2048,7 +2057,7 @@ end Controls;"
             .compile_str("RequiredProbe", required, "RequiredProbe.mo")
             .expect("source-bearing dependency compiles");
         let dependent_identity = compiler
-            .compiled_source_content_identity(&compiled, str::to_owned)
+            .compiled_source_content_identity(&compiled)
             .expect("participating source bytes retain provenance");
         assert_ne!(identity, dependent_identity);
         assert_eq!(

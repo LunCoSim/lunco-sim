@@ -210,7 +210,11 @@ is `document_composition`. Native prim validity, composition arcs, and spec
 sites determine existence and edit scope; a derived live projection does not
 decide whether a committed document target exists. The authored base retains its
 admitted root identity and receives native Sdf spec copies; session layer inputs
-use the native binary writer.
+use the native binary writer. The native session sublayer stack includes the
+session parent before the view and runtime layers; edit-target selection accounts
+for that ordering so successive overlay edits preserve the same authored layer.
+Structural notices address their owning prim through native `SdfPath::prim_path`;
+property resyncs update that prim and cannot create separate property entities.
 Binary source preparation retains parsed data without requiring text export.
 Source display, text snapshots, and USDA export report native writer failures
 at their respective consumer boundaries.

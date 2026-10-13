@@ -184,9 +184,9 @@ pub fn parsed_source_bundle()
         }
         let bundle_rel = std::path::Path::new(PARSED_LIBRARY_BUNDLE_FILE_NAME);
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
-        // raw bincode it replaced). A stale/foreign bundle that fails to decode
-        // returns `Err` below → the caller cold-parses and rewrites it. The
-        // decode streams — it never holds the whole file as a `Vec<u8>`.
+        // uncompressed representation). Missing or invalid artifacts are not
+        // installed; provisioning must regenerate them through the indexer.
+        // Decoding streams without retaining the complete compressed input.
         match read_parsed_bundle_file() {
             Ok(Some(docs)) => {
                 info!(
@@ -197,14 +197,13 @@ pub fn parsed_source_bundle()
                 );
                 install_global_parsed_source_bundle(docs);
             }
-            // No bundle on disk yet (indexer hasn't run) — caller parses source.
+            // Provisioning has not published the paired artifact yet.
             Ok(None) => {}
             Err(e) => {
-                // Stale/format-mismatched bundle (e.g. after a rumoca bump) —
-                // caller falls back to a direct parse.
+                // Reject artifacts that do not satisfy the current record contract.
                 warn!(
                     "[source library] parsed bundle at `{}` failed to decode ({e}); \
-                     drill-in will parse source directly",
+                     library admission requires a regenerated artifact",
                     bundle_rel.display()
                 );
             }
@@ -218,8 +217,8 @@ pub fn parsed_source_bundle()
 /// `Vec<u8>`.
 ///
 /// `Ok(None)` = no/empty file (indexer hasn't run); `Err` = a present-but-
-/// undecodable bundle (rumoca-version-stale, truncated, or a pre-zstd raw
-/// bundle) so the caller cold-parses the source root and rewrites it.
+/// undecodable bundle. Provisioning must publish a valid current artifact
+/// before source-library admission can succeed.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file()
 -> Result<Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>, String> {
