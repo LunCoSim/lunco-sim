@@ -1038,31 +1038,15 @@ pub(crate) fn refresh_edited_prims_live(
             "info:implementationSource" | "info:sourceCode" | "info:sourceAsset"
         ) {
             let projected_owner = find_program_owner(world, id, prim);
-            let authored_generic_program = if projected_owner.is_none() {
-                SdfPath::new(prim)
-                    .ok()
-                    .and_then(|path| {
-                        world
-                            .get_non_send::<CanonicalStages>()
-                            .and_then(|stages| stages.get(id))
-                            .and_then(|stage| {
-                                let view = stage.view();
-                                lunco_usd_bevy_core::program::resolve_program(&view, &path)
-                                    .ok()
-                                    .filter(|program| {
-                                        lunco_usd_bevy_core::program::is_generic_program_backend(
-                                            program.backend,
-                                        )
-                                    })
-                            })
-                    })
-                    .is_some()
-            } else {
-                false
-            };
-            if projected_owner.is_none() && !authored_generic_program {
+            let Some(projected_owner) = projected_owner else {
+                // Continuous programs have no ScenarioProgramPrim owner. Reproject
+                // their source prim so its existing teardown boundary retires the
+                // installed worker before the replacement source is admitted.
+                if !prims.iter().any(|path| path == prim) {
+                    prims.push(prim.to_string());
+                }
                 continue;
-            }
+            };
             let Ok(sp) = SdfPath::new(prim) else {
                 continue;
             };
@@ -1082,9 +1066,7 @@ pub(crate) fn refresh_edited_prims_live(
                         }
                     }
                 });
-            if let Some(owner) = projected_owner {
-                program_updates.push((owner, resolved));
-            }
+            program_updates.push((projected_owner, resolved));
             continue;
         }
         if is_transform_attribute(attr) {

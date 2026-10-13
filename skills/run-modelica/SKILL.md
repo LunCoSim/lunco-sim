@@ -50,6 +50,12 @@ change live units or descriptions; recompile to install a new inventory. A name
 such as `p.v` alone implies no electrical unit. Use
 `modelica_compiled_metadata.rhai` for that lifecycle contract.
 
+Library-only sources remain inspectable documents. USD program admission rejects
+them before creating a solver participant; replacing a live program with such a
+source stops that participant and retains the source diagnostic. Exercise
+`modelica_source_target.rhai` against `modelica_runtime_contracts.usda` for the
+valid-source, missing-target, replacement, recovery and retirement cases.
+
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
 the physical vehicle identity after compile and reload.

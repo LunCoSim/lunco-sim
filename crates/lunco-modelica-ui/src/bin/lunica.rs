@@ -334,11 +334,6 @@ struct WebWorkbenchRequest {
 #[derive(Resource)]
 struct WebWorkbenchStarted;
 
-/// Marker component for the initial workbench entity.
-#[cfg(all(target_arch = "wasm32", feature = "ui"))]
-#[derive(Component)]
-struct WebWorkbench;
-
 /// Resolve the explicitly named Modelica deep link against the runtime asset
 /// manifest. The URL names a model, not a storage directory: the manifest is
 /// the authority for which `.mo` assets exist in this bundle.
@@ -425,12 +420,10 @@ fn request_web_workbench(
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 fn setup_web_workbench(
     mut commands: Commands,
-    channels: Res<lunco_modelica_runtime::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica_ui::ui::workbench_state::WorkbenchState>,
     mut doc_registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     >,
-    compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica_ui::model_tabs::ModelTabs>,
     model_info: Option<Res<BundledModelInfo>>,
     sources: Res<Assets<ModelicaSource>>,
@@ -457,11 +450,7 @@ fn setup_web_workbench(
     commands.insert_resource(WebWorkbenchStarted);
     let model_path = PathBuf::from(&model_info.asset_path);
     let source = asset.text.clone();
-    let model_name = asset
-        .interface
-        .model_name
-        .clone()
-        .unwrap_or_else(|| "Model".to_string());
+    let model_name = asset.interface.model_name.clone();
     let initial_params = asset.interface.parameters.clone();
 
     workbench_state.editor_buffer = source.clone();
@@ -481,27 +470,24 @@ fn setup_web_workbench(
         }
     }
 
-    let entity = commands
-        .spawn((
-            WebWorkbench,
-            Name::new("Modelica_Sandbox"),
-            ModelicaModel {
-                model_name: model_name.clone(),
-                parameters: initial_params,
-                paused: true, // Start paused; compile result will unpause
-                document: doc_id,
-                ..default()
-            },
-        ))
-        .id();
-
-    doc_registry
-        .link(entity, doc_id)
-        .expect("initial Modelica document link");
-    // Leave CompileStates at Idle — setting Compiling here without a
-    // matching `Compile` send would stick the toolbar on the sandglass.
-    let _ = compile_states;
-
+    let entity = model_name.map(|model_name| {
+        let entity = commands
+            .spawn((
+                Name::new(model_name.clone()),
+                ModelicaModel {
+                    model_name,
+                    parameters: initial_params,
+                    paused: true,
+                    document: doc_id,
+                    ..default()
+                },
+            ))
+            .id();
+        doc_registry
+            .link(entity, doc_id)
+            .expect("initial Modelica document link");
+        entity
+    });
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
     commands.trigger(lunco_workbench_core::commands::OpenTab {
@@ -510,11 +496,10 @@ fn setup_web_workbench(
     });
 
     // Select this entity so panels default to viewing it.
-    workbench_state.selected_entity = Some(entity);
+    workbench_state.selected_entity = entity;
 
     // No automatic compile on boot: the user clicks Compile when ready.
     // Avoids racing the source library fetch (lands seconds later on web).
-    let _ = (entity, model_name, channels);
 }
 
 /// Auto-opens the most recently opened Twin on native GUI startup.

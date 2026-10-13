@@ -1015,6 +1015,9 @@ composed generation and instance, with unchanged runtime edges retained across
 unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
 share a lifecycle-coalesced pending-prim set. Pending Modelica source admission
 reuses Bevy's system-local query state across updates and scene replacements.
+Standalone Modelica programs consume `UsdSceneProjectionReset` before
+rediscovery, delegating worker and observation retirement to Modelica component
+teardown. Source admission rejects an absent runnable target at this owner.
 Generic scene commands and mount/teardown mechanics live in
 `lunco-usd-bevy-runtime-core`; `sync` owns the
 fixed-step port exchange and authored event projection. Its optional API query
