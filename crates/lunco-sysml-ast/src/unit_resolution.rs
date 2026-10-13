@@ -41,7 +41,55 @@ pub(super) struct SysmlUnitResolver {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::SysmlAnalysis;
+
+    #[test]
+    fn scale_resolution_prefers_exact_paths_and_rejects_conflicts() {
+        let unit = sysml_model::Model::new().create(ElementKind::Feature);
+        let mut scales = HashMap::new();
+        let mut conflicts = HashSet::new();
+        assert!(record_scale(
+            unit,
+            ResolvedScale {
+                value: 1.0 + 1.0e-13,
+                is_exact: false
+            },
+            &mut scales,
+            &mut conflicts
+        ));
+        assert!(record_scale(
+            unit,
+            ResolvedScale {
+                value: 1.0,
+                is_exact: true
+            },
+            &mut scales,
+            &mut conflicts
+        ));
+        assert!(!record_scale(
+            unit,
+            ResolvedScale {
+                value: 1.0 + 1.0e-13,
+                is_exact: false
+            },
+            &mut scales,
+            &mut conflicts
+        ));
+        assert_eq!(scales[&unit].value, 1.0);
+        assert!(scales[&unit].is_exact);
+        assert!(record_scale(
+            unit,
+            ResolvedScale {
+                value: 2.0,
+                is_exact: true
+            },
+            &mut scales,
+            &mut conflicts
+        ));
+        assert!(conflicts.contains(&unit));
+        assert!(!scales.contains_key(&unit));
+    }
 
     #[test]
     fn standard_watt_literal_carries_its_resolved_engineering_unit() {
@@ -294,15 +342,11 @@ fn record_scale(
                 scales.remove(&unit);
                 true
             } else {
-                let is_exact = current.is_exact && candidate.is_exact;
-                if current.is_exact != is_exact {
-                    scales.insert(
-                        unit,
-                        ResolvedScale {
-                            value: current.value,
-                            is_exact,
-                        },
-                    );
+                // An approximate path may confirm an exact scale, but cannot
+                // weaken it. When an exact path arrives, retain its value as
+                // well as its provenance instead of the approximate estimate.
+                if candidate.is_exact && !current.is_exact {
+                    scales.insert(unit, candidate);
                     true
                 } else {
                     false
@@ -332,9 +376,12 @@ fn resolve_scales(
         .map(|(&unit, &scale)| (unit, scale))
         .collect::<HashMap<_, _>>();
     let mut conflicts = HashSet::new();
+    let mut units = declarations.keys().copied().collect::<Vec<_>>();
+    units.sort_unstable();
     loop {
         let mut changed = false;
-        for (&unit, declaration) in declarations {
+        for &unit in &units {
+            let declaration = &declarations[&unit];
             if blocked.contains(&unit) || conflicts.contains(&unit) {
                 continue;
             }

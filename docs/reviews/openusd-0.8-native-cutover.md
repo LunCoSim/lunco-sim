@@ -121,14 +121,14 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   explicit USDA snapshot rejection. The settled binary run emitted no
   `scene-file-preparation-failed` diagnostic. Source display, preview mounting,
   and session text snapshots still report the native inheritance-writer guard.
-- `ASSEMBLY_EDITOR_PROPOSAL` remains FAIL. Its scenario now declares the query
-  reads used by its imported tools and includes the producer diagnostic in a
-  generation failure. Creation, mute/unmute, commit, undo, and redo completed;
-  the later SysML-to-Modelica generation was rejected because resolved
-  `SI::metre` reports `scale_is_exact: false`. A separate owned Rhai probe on
-  port 4158 confirmed length dimension `[1, 0, 0, 0, 0, 0, 0]` and that flag.
-  The SysML measurement owner is unchanged by this cleanup. No full proposal
-  or cross-domain solve acceptance is claimed.
+- `ASSEMBLY_EDITOR_PROPOSAL`: PASS, fifteen authored checks, in the windowed
+  production Editor on owned port 4159. The SysML unit resolver preserves exact
+  scale evidence when a compatible approximate conversion reaches the same
+  unit; conflicting scales remain rejected and propagation uses stable element
+  order. The focused resolver check passed. The production binary rebuilt, and
+  creation, mute/unmute, commit, undo/redo, SysML-to-Modelica generation, and the
+  coincident-point translation solve completed. API Exit and port release were
+  verified.
 
 Logs are in `/tmp/luncosim-openusd-*.log` and
 `/tmp/luncosim-native-*.log`. Agent-owned sessions and ports were released.
@@ -157,7 +157,3 @@ is claimed.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
-4. The broader proposal scene needs the SysML measurement owner's metre-scale
-   exactness resolved before its Modelica generation can proceed. Keep the
-   rejection at `sysml_modelica_constraints::position_m`; do not substitute a
-   guessed exact unit or bypass the authored policy.
