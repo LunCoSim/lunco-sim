@@ -12,10 +12,8 @@ use bevy_egui::egui;
 use lunco_canvas::{DrawCtx, EdgeVisual, Pos as CanvasPos};
 
 use super::node::paint_flow_dots;
-use super::paint::{
-    brighten, dist_point_to_segment, paint_wire_tooltip, segment_dist_sq, wire_color_for,
-};
-use super::theme::modelica_icon_palette_from_ctx;
+use super::paint::{brighten, dist_point_to_segment, paint_wire_tooltip, segment_dist_sq};
+use super::theme::connection_color_from_ctx;
 
 /// Typed payload for `"modelica.connection"` edges. Same purpose as
 /// [`IconNodeData`](super::IconNodeData).
@@ -104,7 +102,7 @@ pub(super) fn port_edge_dir(x: f32, y: f32) -> PortDir {
 /// hints baked in by the projector so each edge knows which axis to
 /// extend before bending.
 pub(super) struct OrthogonalEdgeVisual {
-    pub(super) color: egui::Color32,
+    pub(super) color: Option<egui::Color32>,
     pub(super) from_dir: PortDir,
     pub(super) to_dir: PortDir,
     pub(super) is_causal: bool,
@@ -129,7 +127,7 @@ pub(super) struct OrthogonalEdgeVisual {
 impl Default for OrthogonalEdgeVisual {
     fn default() -> Self {
         Self {
-            color: wire_color_for(""),
+            color: None,
             from_dir: PortDir::None,
             to_dir: PortDir::None,
             is_causal: false,
@@ -155,8 +153,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         waypoints_screen: &[CanvasPos],
         selected: bool,
     ) {
-        let palette = modelica_icon_palette_from_ctx(ctx.ui.ctx());
-        let mapped = palette.remap(self.color);
+        let mapped = connection_color_from_ctx(ctx.ui.ctx(), self.color);
         let col = if selected { brighten(mapped) } else { mapped };
         let base_width = if selected {
             if self.is_causal { 2.2 } else { 1.7 }

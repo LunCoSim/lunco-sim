@@ -238,8 +238,8 @@ pub(super) fn project_scene(
             .unwrap_or_default();
         // Wire color sourced from the connector class's Icon
         // (populated by the projector for both local & source library types).
-        // Falls back to `null` so the edge factory uses the leaf-name
-        // palette in `wire_color_for`. The source-level
+        // Omitted color stays absent until painting uses the neutral theme wire.
+        // The source-level
         // `Line(color={r,g,b})` annotation wins over the
         // connector-derived colour so the wire properties dialog's
         // colour pick lands immediately in the visual.

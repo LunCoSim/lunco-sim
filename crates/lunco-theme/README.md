@@ -159,46 +159,14 @@ workbench status bar wires this to a 🌙/☀ button.
 
 ### 6. Domain-specific translation (the extension-trait pattern)
 
-When a domain has type names (Modelica connector types, SysML stereotypes)
-that need mapping to schematic colours, **define an extension trait on
-`Theme` inside the domain crate** — never inline palette picks at call
-sites.
+Typed domain facts select semantic schematic tokens through an extension
+trait on `Theme` inside the domain crate. Modelica's parsed `ClassType`
+selects its class badge through `ModelicaThemeExt::class_badge_bg`.
 
-```rust
-// lunco-modelica-ui/src/ui/theme.rs
-use lunco_theme::Theme;
-use bevy_egui::egui::Color32;
-
-pub trait ModelicaThemeExt {
-    fn wire_color(&self, connector_type: &str) -> Color32;
-    fn class_badge_bg(&self, kind: &ClassType) -> Color32;
-}
-
-impl ModelicaThemeExt for Theme {
-    fn wire_color(&self, connector_type: &str) -> Color32 {
-        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
-        let s = &self.schematic;
-        match leaf {
-            "Pin" | "Plug" => s.wire_electrical,
-            "Flange_a" | "Flange_b" => s.wire_mechanical,
-            "RealInput" | "RealOutput" => s.wire_signal,
-            _ => s.wire_unknown,
-        }
-    }
-    fn class_badge_bg(&self, kind: &ClassType) -> Color32 {
-        match kind {
-            ClassType::Model => self.schematic.class_model_badge,
-            ClassType::Block => self.schematic.class_block_badge,
-            ClassType::Package => self.schematic.class_package_badge,
-            // ...
-        }
-    }
-}
-```
-
-Consumers then call `theme.wire_color("Pin")` and
-`theme.class_badge_bg(&kind)` — zero palette picks in consumer code.
-
+Modelica connections preserve authored `Line.color`, then the resolved
+connector `Icon` color, remapped through `theme.modelica_icons.remap(color)`.
+An omitted color uses `theme.schematic.wire_unknown`. Declaration names do
+not determine physical domains or connection colors.
 ### 7. User overrides (pinning a specific value)
 
 When a theme author or end-user wants to pin a colour that should
@@ -223,12 +191,10 @@ for.
 | Body / muted text             | `theme.tokens.{text,text_subdued}`              |
 | Panel background              | `theme.colors.mantle`                           |
 | Widget surface                | `theme.colors.surface0..surface2`               |
-| Electrical wire               | `theme.schematic.wire_electrical`               |
-| Mechanical flange             | `theme.schematic.wire_mechanical`               |
-| Control signal (Real)         | `theme.schematic.wire_signal`                   |
+| Uncolored Modelica connection | `theme.schematic.wire_unknown`                  |
 | Class-kind badge              | `theme.schematic.class_{model,block,package,…}_badge` |
 | Schematic muted / heading     | `theme.schematic.{text_muted,text_heading}`     |
-| Domain type → schematic colour| extension trait in the domain crate             |
+| Authored Modelica color       | `theme.modelica_icons.remap(color)`              |
 | User override                 | `theme.get_token(domain, token, fallback)` with prior `register_override` |
 
 ## Adding a new token

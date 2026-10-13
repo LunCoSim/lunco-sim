@@ -73,3 +73,14 @@ pub(super) fn modelica_icon_palette_from_ctx(
 ) -> lunco_theme::ModelicaIconPalette {
     lunco_theme::active(ctx).modelica_icons.clone()
 }
+
+/// Render an authored connection color, or the theme's neutral wire token.
+pub(super) fn connection_color_from_ctx(
+    ctx: &egui::Context,
+    authored: Option<egui::Color32>,
+) -> egui::Color32 {
+    let theme = lunco_theme::active(ctx);
+    authored
+        .map(|color| theme.modelica_icons.remap(color))
+        .unwrap_or(theme.schematic.wire_unknown)
+}

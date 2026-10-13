@@ -1434,10 +1434,12 @@ are undoable and journalled like code-editor edits.
 - Connector graphics, color, causality, placement, and `flow` metadata come
   from the resolved connector AST. The renderer is not a battery/motor/solar
   palette.
-- Generated-network route annotations carry geometry only; connector colour
-  remains the resolved connector `Icon` colour. When edges are present, the
-  canvas legend lists the observed connector leaf, physical domain, and
-  causality, while wire hover exposes endpoint values and declared flow.
+- Authored connection `Line.color` takes precedence over the resolved
+  connector `Icon` color; an omitted color uses the neutral theme wire token.
+  Generated-network route annotations carry geometry only. The canvas legend
+  lists exact qualified connector identities and resolved causality. Wire hover
+  exposes endpoint values and declared flow. Names do not classify physical
+  domains or select colors.
 - A live non-zero declared `flow` value animates directional dots on the
   actual routed polyline. Multiple flow variables are supported; the first
   active declared flow is selected, and a missing/non-flow scalar stays idle.
