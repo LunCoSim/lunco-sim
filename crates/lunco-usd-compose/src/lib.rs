@@ -169,13 +169,13 @@ pub fn is_usd_layer(path: &Path) -> bool {
     )
 }
 
-/// Extract every raw dependency declared by a USDA layer, including
+/// Extract every raw dependency declared by a native USD layer, including
 /// asset-valued attributes as well as composition arcs.
 ///
 /// This is USD interpretation only. Traversal and storage access remain in
 /// `lunco-assets-core`.
-pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
-    authored_dependencies("lunco://__dependency_source__.usda", text.as_bytes()).ok()
+pub fn layer_dependency_arcs(bytes: &[u8]) -> Result<Vec<String>> {
+    authored_dependencies("lunco://__dependency_source__.usd", bytes)
 }
 
 /// Compose a native USDA file using the canonical LunCo asset traversal.
@@ -395,6 +395,28 @@ fn authored_dependencies(id: &str, raw: &[u8]) -> Result<Vec<String>> {
         validate_usda_nesting(std::str::from_utf8(raw)?)?;
     }
     let mut layer = openusd::sdf::Layer::from_bytes(id, raw.to_vec())?;
+    dependency_paths(&mut layer)
+}
+
+/// Inspect dependencies in parsed authored opinions without requesting a text
+/// representation. Native Sdf copying and the asset visitor own this analysis;
+/// normalization affects only the private analysis layer.
+pub fn layer_dependency_paths(data: &dyn openusd::sdf::AbstractData) -> Result<Vec<String>> {
+    let root = openusd::sdf::Path::abs_root();
+    if data.spec_type(&root) != Some(openusd::sdf::SpecType::PseudoRoot) {
+        return Err(anyhow!(
+            "dependency analysis requires a USD layer pseudo-root"
+        ));
+    }
+    let mut layer = openusd::sdf::Layer::new_anonymous("dependencies");
+    layer.edit(|edit| {
+        openusd::sdf::copy_spec(data, &root, edit.data_mut(), &root)?;
+        Ok(())
+    })?;
+    dependency_paths(&mut layer)
+}
+
+fn dependency_paths(layer: &mut openusd::sdf::Layer) -> Result<Vec<String>> {
     layer.edit(|edit| {
         let data = edit.data_mut();
         for path in data.spec_paths() {
@@ -424,7 +446,7 @@ fn authored_dependencies(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     })?;
     let mut paths = Vec::new();
     openusd::usd_utils::modify_asset_paths(
-        &mut layer,
+        layer,
         |path| {
             paths.push(path.to_owned());
             path.to_owned()

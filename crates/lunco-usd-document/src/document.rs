@@ -1,27 +1,11 @@
-//! `UsdDocument` — the canonical Document representation of one text-based USD
-//! source layer (`.usda` or `.usd`). Binary `.usdc` files are routed by the
-//! document boundary so an unsupported encoding produces an explicit load
-//! diagnostic instead of being silently treated as another file type.
+//! Canonical authored USD document layers, decoded and encoded by native OpenUSD.
 //!
-//! ## Why data-canonical (Phase C2/C3)
-//!
-//! Earlier phases treated the `.usda` **source text** as canonical and
-//! mutated it by splicing byte ranges ([`crate::text_edit`], now deleted).
-//! That is the CQ-503 nested-child corruption class: editing
-//! `/World/Box.radius` could clobber `/World/Box/Inner.radius` because the
-//! splicer reasoned about text, not structure.
-//!
-//! The document now holds an [`sdf::Data`] — the **root layer's authored
-//! specs** — as its canonical representation. This is *not* the flattened
-//! composition: references, payloads, and sublayer opinions survive verbatim,
-//! so the document still round-trips losslessly with external USD tools
-//! (Omniverse, USDView, Blender). Edits route through openusd's authoring
-//! engine: [`lunco_usd_authoring::author`] opens the data as a transient `Stage`,
-//! authors the op **by SDF path** (which cannot touch a sibling/nested prim
-//! that shares a name), and extracts the updated root layer back out.
-//!
-//! The serialized `.usda` text is produced on demand ([`UsdDocument::source`])
-//! for saving to disk, the viewport preview, and session snapshots.
+//! Root specs retain references, payloads, variants, and sublayer opinions.
+//! Typed Sdf authoring changes only the selected layer; native stage composition
+//! resolves current root/runtime/view opinions over the admitted dependency
+//! recipe. Save writes the authored base through the destination's native codec.
+//! Original USDA text remains available until a structural edit requires
+//! serialization. Serialization failures reject the operation at the owner.
 //!
 //! ## Edit target
 //!
@@ -45,7 +29,7 @@
 //!   persist the runtime layer; the typed journal records user-authored ops.
 //!   The disposable view layer is excluded from save, persistence, and journal
 //!   history.
-//! - **The `CanonicalStage`** (in `lunco_usd_bevy_core`) — the live, *composed*
+//! - **The `CanonicalStage`** (in `lunco_usd_bevy_stage`) — the live, *composed*
 //!   openusd `Stage` with references / sublayers / variants resolved. It is
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
 //!   the projection engine — authoring onto it fires the openusd change sink that
@@ -90,7 +74,7 @@ use lunco_usd_authoring::author::{
     self, extract_edit_layer_data, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
-use lunco_usd_data::units::{ConventionTransform, StageMetadataReader, StageMetrics, UpAxis};
+use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
 use openusd::usd::Stage;
@@ -1543,9 +1527,8 @@ impl UsdDocument {
     /// alone would apply USD's centimetre default when the scene metadata is
     /// authored on the base layer.
     fn composed_stage_convention(&self) -> Result<ConventionTransform, DocumentError> {
-        let data = self.composed_arc();
-        let reader = ComposedDocumentMetadata(data.as_ref());
-        let metrics = StageMetrics::from_reader(&reader).map_err(author_err)?;
+        let stage = self.open_composed_stage()?;
+        let metrics = StageMetrics::from_stage(&stage).map_err(author_err)?;
         Ok(ConventionTransform::from_stage_metrics(&metrics))
     }
 
@@ -4272,16 +4255,6 @@ impl Document for UsdDocument {
 /// document validation failure.
 fn author_err<E: std::fmt::Display>(e: E) -> DocumentError {
     DocumentError::ValidationFailed(format!("authoring failed: {e}"))
-}
-
-/// Stage metadata after the document's base, runtime, and view layers compose.
-/// The edit target itself is only an overlay and has no independent unit frame.
-struct ComposedDocumentMetadata<'a>(&'a sdf::Data);
-
-impl StageMetadataReader for ComposedDocumentMetadata<'_> {
-    fn stage_metadata_value(&self, name: &str) -> Option<sdf::Value> {
-        self.0.field(&SdfPath::abs_root(), name).cloned()
-    }
 }
 
 #[cfg(test)]

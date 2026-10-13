@@ -16,7 +16,7 @@ The mandate above is **honoured for USD geometry and transforms**. Two types:
 
 | Type | What it is |
 |---|---|
-| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by `StageMetrics::from_reader`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
+| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by the `StageMetrics::from_reader` adapter or native `StageMetrics::from_stage`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
 | **`ConventionTransform`** | the precomputed stage→canonical **similarity** `S = k·Q` (uniform scale `k = metersPerUnit`, rotation `Q` = identity for Y-up, `Rx(−90°)` for Z-up). Built solely by `ConventionTransform::from_stage_metrics`. `#[must_use]`. |
 
 **The conversion is baked into the shared decoders, not applied to a root
@@ -83,8 +83,9 @@ stating plainly:
 > **A `UsdOp`'s spatial values are always canonical. Stage frame exists only
 > inside the layer.**
 
-The document resolves that frame from its composed authoring stage. Runtime and
-view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
+The document resolves that frame from its native composed authoring stage
+through `StageMetrics::from_stage`. Native metadata errors reject the edit.
+Runtime and view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
 can substitute USD's centimetre default and move a transient presentation prim
 100× away from its authored points.
 

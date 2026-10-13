@@ -62,7 +62,8 @@ fn on_tick(me, ctx) {
 
         let document = query("InspectUsdDocument", #{ doc_id: this.doc, path: ROOT + "/Assembly" });
         if document == () || document.ok == false || document.prim == ()
-            || !document.prim.exists || document.prim.type != "Xform" {
+            || !document.prim.exists || document.prim.type != "Xform"
+            || to_int(document.layers.root.spec_count) <= 0 {
             fail(this, "InspectUsdDocument did not return the authored assembly prim");
             return;
         }
@@ -85,6 +86,37 @@ fn on_tick(me, ctx) {
         if arc.status != "resolved" || arc.source != "document_composition" || !arc.authored_here || !arc.under_arc
             || arc.edit_scope != "authored_layer" {
             fail(this, "ResolveUsdTarget lost the authored target's reference-arc scope");
+            return;
+        }
+
+        let inherited = query("InspectUsdDocument", #{ doc_id: this.doc, path: ARC_TARGET });
+        if inherited == () || inherited.ok == false || !inherited.prim.exists
+            || inherited.prim.type != "Xform" || !inherited.prim.active {
+            fail(this, "InspectUsdDocument lost the referenced prim type beneath a local over");
+            return;
+        }
+        let visibility = ();
+        for attribute in inherited.prim.attributes {
+            if attribute.name == "visibility" { visibility = attribute; }
+        }
+        if visibility == () || visibility.type != "token"
+            || visibility.value != "\"inherited\"" {
+            fail(this, "InspectUsdDocument did not resolve the native schema fallback attribute");
+            return;
+        }
+        let site = query("InspectUsdDocument", #{ doc_id: this.doc, path: ROOT + "/Site" });
+        if site == () || site.ok == false || site.prim.references.composed.source != "document_composition"
+            || site.prim.references.composed.items.len() != 1
+            || site.prim.references.composed.sites.len() != 1
+            || site.metadata.defaultPrim.composed.source != "document_composition"
+            || site.metadata.defaultPrim.composed.value != "UsdQueryApi" {
+            fail(this, "InspectUsdDocument did not report native document reference and metadata composition");
+            return;
+        }
+        let absent = query("InspectUsdDocument", #{ doc_id: this.doc, path: ROOT + "/MissingPrim" });
+        if absent == () || absent.ok == false || absent.prim.exists || absent.prim.active
+            || absent.prim.type != () || absent.prim.attributes.len() != 0 {
+            fail(this, "InspectUsdDocument did not distinguish a missing prim from a composition failure");
             return;
         }
 
@@ -122,6 +154,13 @@ fn on_tick(me, ctx) {
         if resolved == () || resolved.ok == false || resolved.status != "resolved"
             || !resolved.authored_here || !resolved.authored_in_document {
             fail(this, "ResolveUsdTarget did not resolve the newly authored local target");
+            return;
+        }
+
+        let inspected = query("InspectUsdDocument", #{ doc_id: this.doc, path: DELTA_TARGET });
+        if inspected == () || inspected.ok == false || !inspected.prim.exists
+            || inspected.prim.type != "Xform" {
+            fail(this, "InspectUsdDocument did not observe the committed document edit");
             return;
         }
 
@@ -208,7 +247,7 @@ fn on_tick(me, ctx) {
 
     finish(this, [
         t_true(true, "document inspection is explicit and reads composed USD facts"),
-        t_true(true, "reference-arc target resolution uses the mounted OpenUSD stage"),
+        t_true(true, "reference inspection and target resolution use native document composition"),
         t_true(true, "document synchronization returns typed deltas and rejects future cursors"),
         t_true(true, "expired operation history returns the complete authored layer snapshot"),
     ]);

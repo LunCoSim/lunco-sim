@@ -364,11 +364,10 @@ pub fn validate_proposal(
             }
         }
         if diagnostics.is_empty() {
-            match candidate.source() {
-                Ok(source) if lunco_usd_compose::layer_dependency_arcs(&source).is_some() => {}
-                Ok(_) => diagnostics
-                    .push("candidate authored layer is not valid USD composition".to_owned()),
-                Err(error) => diagnostics.push(document_error(error)),
+            if let Err(error) = lunco_usd_compose::layer_dependency_paths(candidate.data()) {
+                diagnostics.push(format!(
+                    "candidate authored dependency analysis failed: {error}"
+                ));
             }
         }
     }

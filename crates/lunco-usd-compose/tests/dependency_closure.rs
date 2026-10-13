@@ -26,7 +26,7 @@ fn follows_composition_and_asset_attribute_dependencies() {
         &[scene],
         &lunco_assets_core::FileClosureLimits::default(),
         is_usd_layer,
-        layer_dependency_arcs,
+        |bytes| layer_dependency_arcs(bytes).map_err(|error| error.to_string()),
     )
     .expect("valid fixture closure");
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
@@ -52,7 +52,7 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
         &lunco_assets_core::FileClosureLimits::default(),
         |arc| lunco_assets_core::parse_lunco_uri(arc).map(|relative| assets.join(relative)),
         is_usd_layer,
-        layer_dependency_arcs,
+        |bytes| layer_dependency_arcs(bytes).map_err(|error| error.to_string()),
     )
     .expect("valid fixture closure");
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
@@ -122,6 +122,17 @@ def Xform "Root" (
     asset info:sourceAsset = @Program.mo@
 }
 "#;
-    let dependencies = layer_dependency_arcs(source).unwrap();
+    let dependencies = layer_dependency_arcs(source.as_bytes()).unwrap();
     assert_eq!(dependencies, ["Program.mo", "active.usda"]);
+    let layer =
+        openusd::sdf::Layer::from_bytes("dependencies.usda", source.as_bytes().to_vec()).unwrap();
+    let parsed = lunco_usd_compose::layer_dependency_paths(layer.data()).unwrap();
+    assert_eq!(parsed, dependencies);
+    let format = openusd::sdf::LayerRegistry::find_by_extension("usdc").unwrap();
+    let binary = format.write_bytes(layer.data()).unwrap();
+    assert_eq!(
+        layer_dependency_arcs(binary.bytes.as_ref()).unwrap(),
+        dependencies
+    );
+    assert!(lunco_usd_compose::layer_dependency_paths(&openusd::sdf::Data::default()).is_err());
 }

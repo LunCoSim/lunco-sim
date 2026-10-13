@@ -94,7 +94,9 @@ fn vector_matches(value, expected) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["GetDocumentSource", "ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["AnalyzeSysml", "CompileStatus", "GetDocumentSource", "GetExperimentResult",
+                     "InspectUsdDocument", "InspectUsdEditSession", "ListOpenDocuments",
+                     "QueryUsdPrim", "ResolveUsdTarget", "RunStatus", "SyncUsdDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -255,7 +257,7 @@ fn on_tick(me, ctx) {
             this.constraint_report,
             "ConstraintProjection::StrutAssembly::alignMount");
         if generated == () || generated.ok != true {
-            fail(this, "Rhai did not assemble the bound CoincidentPointTranslation model");
+            fail(this, "Rhai did not assemble the bound CoincidentPointTranslation model: " + generated.to_string());
             this.done = true;
             return;
         }

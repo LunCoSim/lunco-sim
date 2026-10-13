@@ -10843,7 +10843,6 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-compose",
  "lunco-usd-core",
- "lunco-usd-data",
  "lunco-usd-document",
  "openusd",
  "openusd-schemas",

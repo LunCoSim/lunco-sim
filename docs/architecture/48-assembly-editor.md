@@ -566,9 +566,17 @@ causal predecessor pass `null`; they do not use a second edit path.
 
 `InspectUsdDocument` is the read-only agent/human inspection query. It requires
 an explicit `doc_id` and can accept a USD `path`; it reports the document's
-authored layers and revisions, local composed prim topology, dependency arcs
-from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
-active document or constructs another resolver/cache.
+authored layers and revisions, native composed prim topology, dependency arcs
+from `lunco-usd-compose`, diagnostics, and journal cursor. It opens the current
+root/runtime/view layers through the admitted dependency recipe. Prim types,
+children, attributes (including schema defaults), reference lists/sites, and
+metadata come from that one native stage and use `document_composition` as
+the composed source. Native failures reject the query; missing prims report
+`exists: false`. Dependency inspection reads parsed authored data through the
+native asset visitor; layer statistics report authored `spec_count`. This query
+never requests USDA text, so binary layers with inheritance remain inspectable.
+It never infers an active document or reads a derived preview
+as a substitute for the committed document.
 
 `InspectUsdViewport` is the read-only presentation query for the same
 headful session. It reports the focused preview/view pair and every explicit
@@ -623,9 +631,9 @@ The editor should keep the lint action pending until the current
 `usd.document-lint` channel is ready, focus the finding's `subject`, and offer
 source-path reveal/frame; it must not present an incomplete report as clean.
 
-Transform commands validate referenced children through the document's loaded
-dependency closure, supplied by the existing canonical stage. The document
-recomposes its current authored opinions with that closure for each operation,
+Transform commands validate referenced children through the document's admitted
+dependency recipe. The document recomposes its current authored opinions with
+that closure for each operation,
 so a rename followed by a child transform in one proposal uses the new path.
 Inherited `xformOpOrder` comes from that composition; the edit authors only an
 `over` and the changed properties in the selected layer. Dependency data is
@@ -637,9 +645,9 @@ and `ApplyUsdOp`. Each arc carries an asset identity and optional target prim;
 the operation authors the requested OpenUSD `prepend`, `append`, `add`, `delete`,
 or `explicit` list-op on the selected layer. Non-explicit forms preserve weaker
 opinions, while an empty explicit list is the deliberate clear operation. The
-`InspectUsdDocument` prim response reports root/runtime authored opinions and the
-document-composed list, plus canonical-stage stack sites when the preview is
-mounted. Invalid asset identities, non-prim target paths, composed-only targets,
+`InspectUsdDocument` prim response reports root/runtime/view authored opinions
+and the native composed list with its spec sites in `references.composed`.
+Invalid asset identities, non-prim target paths, composed-only targets,
 and stale generations fail at the typed command boundary. The operation is
 journalled, undoable, and treated as a composition resync so the live projection
 rebuilds the affected composition rather than replaying a flattened delta.
@@ -650,9 +658,9 @@ the value may be a root-relative or absolute prim path and must resolve to an
 existing non-root prim. `UsdOp::SetPrimKind` authors a USD identifier such as
 `component`, `assembly`, or `group` on an existing prim. Passing `None` to
 either operation clears only that layer's opinion, so weaker metadata remains
-visible through composition. `InspectUsdDocument` reports root/runtime,
-document-composed, and (when mounted) canonical-stage values with their source
-labels. Invalid paths, invalid kind identifiers, composed-only prims, and stale
+visible through composition. `InspectUsdDocument` reports root/runtime/view
+authored values and native composed values with their source labels. Invalid
+paths, invalid kind identifiers, composed-only prims, and stale
 generations fail before journaling; each metadata edit triggers the required
 composed projection refresh.
 
@@ -748,17 +756,12 @@ commands. The browser exposes the same review actions for humans; agents use
 the query and commands through the shared Rhai library.
 
 `ResolveUsdTarget` requires `doc_id`, a prim `path`, and an explicit `edit_target`
-(`@root@`, `@runtime@`, or `@view@`). Local authored and runtime opinions are
-resolved by `UsdDocument`; referenced or payloaded paths are resolved by the
-already-mounted `CanonicalStage` when the composed projection is available, and
-the returned OpenUSD prim stack identifies the actual composed opinions. The
-disposable `@view@` layer is also resolvable by exact target identity so transient
-presentation tools can verify their own authored prims. A path authored in the
-current document remains an editable document-layer target while its canonical
-projection catches up; a path absent from a mounted composition returns a
-`missing` record, including when its parent is referenced. Composed-only paths
-still require the mounted canonical stage. The query never guesses a
-composed-only target from a flat authored layer. `SyncUsdDocument` uses the
+(`@root@`, `@runtime@`, or `@view@`). It resolves current root/runtime/view
+opinions through one native stage over the admitted dependency recipe. The
+returned `document_composition` source and OpenUSD prim stack identify the
+actual composed opinions, including references, payloads, variants, and local
+overs. A missing prim returns a `missing` record, including when its parent is
+referenced. Native failures reject the query. `SyncUsdDocument` uses the
 document's bounded typed-op ring: a covered generation returns an
 ordered delta, while an expired cursor returns the complete base/runtime layer
 snapshot needed to resync. A future cursor is rejected. Neither query creates a

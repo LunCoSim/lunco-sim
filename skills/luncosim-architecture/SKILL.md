@@ -720,7 +720,11 @@ Keep the ownership split explicit:
 Use exact `DocumentId`, `UsdPreviewId`, `UsdPreviewViewId`, edit target, and
 projection generation at every boundary. A document-local Editor fork may be
 queried through its composed document stage even when it has no mounted Twin
-projection; a stale mapped Twin document must still fail visibly. Missing
+projection; a stale mapped Twin document must still fail visibly.
+`InspectUsdDocument` reads one current native document composition for types,
+schema defaults, children, metadata, and reference lists/spec sites. Composed
+facts use `document_composition`; root/runtime/view authored opinions stay
+separate. Native read failures reject the query. Missing
 collision or provenance is an explicit diagnostic record, not a fabricated
 default. Keep positive and negative contracts in the production Rhai scene
 gate; do not duplicate these observable assertions in Rust unit tests.

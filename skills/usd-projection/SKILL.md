@@ -136,6 +136,9 @@ native Sdf operations; separate runtime and view layers use native USDC buffers.
 Binary document
 preparation does not serialize text; a source-display or USDA-export failure is
 reported by the consumer requesting that representation.
+Scene Files dependency traversal passes bounded raw bytes to the native USD
+format owner, so USDC is decoded by OpenUSD rather than a UTF-8 gate. Native
+format diagnostics remain terminal at the traversal owner.
 Referenced stage closures follow the same event boundary before a reference is
 authored onto the live stage. Each instance retains the real source handle and
 one shared `UsdReferenceSnapshot` containing the canonical recipe, unscoped plan
@@ -285,9 +288,14 @@ generation without adding a fabricated authored operation. Reject future cursors
 To edit a composed path, call
 `ResolveUsdTarget` with the explicit document id, prim path, and `@root@` or
 `@runtime@` target. A referenced or payloaded path that has a local authored
-opinion in the current document is valid from that document layer while the
-existing `CanonicalStage` projection catches up; a composed-only path still
-requires the mounted canonical stage. Use the returned `edit_scope` and
+opinion in the current document is valid from that document layer. Resolution
+uses the current native document layer stack and its admitted dependency recipe;
+`InspectUsdDocument` uses the same composition for types, schema defaults,
+metadata, and reference lists/spec sites. Both report `document_composition`
+and observe committed edits before the preview projection settles. Document
+inspection reads parsed authored dependencies and native authored spec counts;
+it does not require USDA text serialization, including for binary inheritance.
+Use the returned `edit_scope` and
 typed-operation validation rather than treating a composed read as permission
 to move or remove a referenced/variant prim. Do not inspect flat layer data as
 a replacement for OpenUSD PCP resolution or use it to invent a composed-only

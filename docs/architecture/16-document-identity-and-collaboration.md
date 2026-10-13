@@ -340,11 +340,13 @@ persistently-stale file nags once, and re-arms when the file re-syncs.
 A document's dependencies are found by walking `subLayers`, `references`,
 `payload`, and asset-valued attributes. There must be one filesystem traversal:
 `lunco_assets_core::transitive_file_closure*` owns its queue, normalized paths,
-bounded native storage reads, and fallible result. `lunco-usd-compose` supplies the format facts:
+bounded native storage reads, and fallible result. It passes raw bytes to the
+format owner; native USD decoding admits USDA and USDC and preserves format
+diagnostics. `lunco-usd-compose` supplies the format facts:
 
 ```rust
 is_usd_layer(path)
-layer_dependency_arcs(text)
+layer_dependency_arcs(bytes)
 ```
 
 The scenario manifest and live scene browser call those APIs directly. Thus
@@ -356,7 +358,7 @@ operation; it reuses `child_layer_ids` because it needs only parseable layers.
 Every native closure call supplies the owner resource `FileClosureLimits`:
 4096 unique paths, 16 MiB per document and 64 MiB aggregate document source by
 default. Limits must be positive. Reads enforce the byte budget before parsing;
-missing/unreadable documents, invalid UTF-8, failed parsing and budget overflow
+missing/unreadable documents, native decoding/parse failures and budget overflow
 reject the operation. Missing non-document leaves remain explicit paths. These
 limits bound path count and source bytes, not parser-internal allocation or
 binary payload sizes. The host also caps its indexed-file/dependency union at

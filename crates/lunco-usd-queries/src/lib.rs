@@ -23,7 +23,6 @@ use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, stage_convention};
 use lunco_usd_bevy_twin::{
     DocBackedTwinScenes, canonical_stage_for_document, stage_asset_for_document,
 };
-use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 use openusd_schemas::physics::CollisionApprox;
 
@@ -105,6 +104,31 @@ fn document_stage_recipe<'a>(
         .get(stage_id)?
         .recipe
         .as_deref()
+}
+
+fn native_query_error(error: impl std::fmt::Display) -> ApiQueryError {
+    ApiQueryError::new(
+        ApiErrorCode::InternalError,
+        format!("OpenUSD document query failed: {error}"),
+    )
+}
+
+fn open_document_stage(
+    world: &World,
+    doc: DocumentId,
+    document: &UsdDocument,
+) -> Result<openusd::usd::Stage, ApiQueryError> {
+    if document.parse_error().is_some() {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "cannot query composition of an invalid USD document source",
+        ));
+    }
+    match document_stage_recipe(world, doc) {
+        Some(recipe) => document.open_composed_stage_with_recipe(recipe),
+        None => document.open_composed_stage(),
+    }
+    .map_err(native_query_error)
 }
 
 /// Installs the public USD document query providers.
@@ -454,10 +478,10 @@ fn document_snapshot(
     if let Some(error) = document.parse_error() {
         diagnostics.push(error.to_owned());
     }
-    let dependencies = match lunco_usd_compose::layer_dependency_arcs(&source) {
-        Some(dependencies) => dependencies,
-        None => {
-            diagnostics.push("document source is not valid USDA".to_owned());
+    let dependencies = match lunco_usd_compose::layer_dependency_arcs(source.as_bytes()) {
+        Ok(dependencies) => dependencies,
+        Err(error) => {
+            diagnostics.push(format!("document dependency analysis failed: {error}"));
             Vec::new()
         }
     };
@@ -499,83 +523,55 @@ fn document_snapshot(
 }
 
 fn composed_attribute_inspection(
-    world: &World,
-    doc: DocumentId,
-    document: &UsdDocument,
+    stage: &openusd::usd::Stage,
     path: &SdfPath,
-) -> (bool, Option<String>, bool, Vec<String>, Vec<ApiValue>) {
-    // The document is the synchronous authoring boundary. The canonical stage
-    // is a derived projection and may still be settling the newest generation.
-    // Read document-owned paths here so a command response and its immediate
-    // inspection observe the same committed USD composition.
-    let composed = document.composed_arc();
-    if composed.spec(path).is_some() {
-        let attributes = composed
-            .iter()
-            .filter_map(|(property, spec)| {
-                if property.prim_path() != *path || spec.ty != openusd::sdf::SpecType::Attribute {
-                    return None;
-                }
-                let type_name = match spec.get("typeName") {
-                    Some(openusd::sdf::Value::Token(type_name)) => type_name.to_string(),
-                    _ => return None,
-                };
-                let value = spec.get("default").cloned().and_then(|value| {
-                    lunco_usd_authoring::author::value_to_literal(&type_name, value)
-                });
-                Some(api_value!({
-                    "name": property.name(),
-                    "type": type_name,
-                    "value": value,
-                }))
-            })
-            .collect();
-        return (
-            true,
-            composed.prim_type_name(path),
-            composed.prim_is_active(path),
-            composed
-                .prim_children(path)
-                .into_iter()
-                .map(|child| child.to_string())
-                .collect(),
-            attributes,
-        );
+) -> Result<(bool, Option<String>, bool, Vec<String>, Vec<ApiValue>), ApiQueryError> {
+    let prim = stage.prim(path).map_err(native_query_error)?;
+    if !prim.is_valid().map_err(native_query_error)? {
+        return Ok((false, None, false, Vec::new(), Vec::new()));
     }
-
-    // Paths introduced by references and other external composition arcs are
-    // available only on the fully resolved live stage.
-    if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
-        let reader = stage.view();
-        let attributes = reader
-            .attr_names(path)
+    let attributes = prim
+        .attributes()
+        .map_err(native_query_error)?
+        .into_iter()
+        .map(|attribute| {
+            let type_name = attribute
+                .type_name()
+                .map_err(native_query_error)?
+                .ok_or_else(|| {
+                    native_query_error(format!("attribute `{}` has no USD type", attribute.path()))
+                })?
+                .to_string();
+            let value = attribute
+                .get::<SdfValue>()
+                .map_err(native_query_error)?
+                .map(|value| {
+                    lunco_usd_authoring::author::value_to_literal(&type_name, value).ok_or_else(
+                        || {
+                            native_query_error(format!(
+                                "attribute `{}` has no USDA literal form",
+                                attribute.path()
+                            ))
+                        },
+                    )
+                })
+                .transpose()?;
+            Ok(api_value!({ "name": attribute.name(), "type": type_name, "value": value }))
+        })
+        .collect::<Result<Vec<_>, ApiQueryError>>()?;
+    Ok((
+        true,
+        prim.type_name()
+            .map_err(native_query_error)?
+            .map(|name| name.to_string()),
+        prim.is_active().map_err(native_query_error)?,
+        prim.children()
+            .map_err(native_query_error)?
             .into_iter()
-            .filter_map(|name| {
-                let type_name = reader.attr_type_name(path, &name)?;
-                let value = reader.attr_value(path, &name).and_then(|value| {
-                    lunco_usd_authoring::author::value_to_literal(&type_name, value)
-                });
-                Some(api_value!({
-                    "name": name,
-                    "type": type_name,
-                    "value": value,
-                }))
-            })
-            .collect();
-        return (
-            reader.has_prim(path),
-            reader.type_name(path),
-            reader.is_active(path),
-            reader
-                .children(path)
-                .into_iter()
-                .map(|child| child.to_string())
-                .collect(),
-            attributes,
-        );
-    }
-
-    (false, None, false, Vec::new(), Vec::new())
+            .map(|child| child.path().to_string())
+            .collect(),
+        attributes,
+    ))
 }
 
 fn reference_api_value(reference: &openusd::sdf::Reference) -> ApiValue {
@@ -593,24 +589,16 @@ fn references_api_value(references: &[openusd::sdf::Reference]) -> Vec<ApiValue>
     references.iter().map(reference_api_value).collect()
 }
 
-fn reference_list_api_value(data: &dyn openusd::sdf::AbstractData, path: &SdfPath) -> ApiValue {
-    let Some(value) = data
-        .try_field(path, openusd::sdf::FieldKey::References.as_str())
-        .ok()
-        .flatten()
-    else {
-        return api_value!({
-            "present": false,
-            "items": [],
-        });
+fn reference_list_value(value: Option<&SdfValue>) -> Result<ApiValue, ApiQueryError> {
+    let Some(value) = value else {
+        return Ok(api_value!({ "present": false, "items": [] }));
     };
-    let SdfValue::ReferenceListOp(op) = value.as_ref() else {
-        return api_value!({
-            "present": false,
-            "items": [],
-        });
+    let SdfValue::ReferenceListOp(op) = value else {
+        return Err(native_query_error(
+            "references metadata is not a USD reference list-op",
+        ));
     };
-    api_value!({
+    Ok(api_value!({
         "present": true,
         "explicit": op.explicit,
         "explicit_items": references_api_value(&op.explicit_items),
@@ -620,187 +608,106 @@ fn reference_list_api_value(data: &dyn openusd::sdf::AbstractData, path: &SdfPat
         "deleted_items": references_api_value(&op.deleted_items),
         "ordered_items": references_api_value(&op.ordered_items),
         "items": references_api_value(&op.flatten()),
-    })
-}
-
-/// Read reference opinions from the canonical PCP stack when the document is
-/// mounted. The document-layer view above remains the synchronous authoring
-/// source; this additional view reports the composed sites and list result
-/// after external references and local overrides have been resolved.
-fn canonical_reference_api_value(
-    world: &World,
-    doc: DocumentId,
-    path: &SdfPath,
-) -> Option<ApiValue> {
-    let stage = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)?;
-    let prim = stage
-        .stage()
-        .prim(path.clone())
-        .expect("validated USD path");
-    if !prim.is_valid().ok()? {
-        return None;
-    }
-    let stack = prim.prim_stack().ok()?;
-    let mut sites = Vec::new();
-    let mut list_ops = Vec::new();
-    for openusd::usd::SpecSite {
-        layer: layer_id,
-        path: authored_path,
-        ..
-    } in stack
-    {
-        let Some(layer) = stage.stage().layer(&layer_id) else {
-            continue;
-        };
-        let Some(value) = layer
-            .data()
-            .try_field(&authored_path, openusd::sdf::FieldKey::References.as_str())
-            .ok()
-            .flatten()
-        else {
-            continue;
-        };
-        let SdfValue::ReferenceListOp(op) = value.as_ref() else {
-            continue;
-        };
-        sites.push(api_value!({
-            "layer": layer_id,
-            "path": authored_path.to_string(),
-            "list": reference_list_api_value(layer.data(), &authored_path),
-        }));
-        list_ops.push(op.clone());
-    }
-    let mut composed = Vec::new();
-    for op in list_ops.iter().rev() {
-        composed = op.compose_over(&composed);
-    }
-    Some(api_value!({
-        "source": "canonical_stage",
-        "sites": sites,
-        "items": references_api_value(&composed),
     }))
 }
 
-fn token_metadata_api_value(
+fn reference_list_api_value(
     data: &dyn openusd::sdf::AbstractData,
     path: &SdfPath,
-    field: &str,
-    source: &str,
-) -> ApiValue {
-    let Some(value) = data.try_field(path, field).ok().flatten() else {
-        return api_value!({
-            "present": false,
-            "value": ApiValue::Unit,
-            "source": source,
-        });
-    };
-    match value.as_ref() {
-        SdfValue::Token(token) => api_value!({
-            "present": true,
-            "value": token.to_string(),
-            "source": source,
-        }),
-        _ => api_value!({
-            "present": true,
-            "value": ApiValue::Unit,
-            "source": source,
-            "error": "metadata is not a USD token",
-        }),
-    }
+) -> Result<ApiValue, ApiQueryError> {
+    let value = data
+        .try_field(path, openusd::sdf::FieldKey::References.as_str())
+        .map_err(native_query_error)?;
+    reference_list_value(value.as_deref())
 }
 
-fn variant_selection_metadata_api_value(
-    data: &dyn openusd::sdf::AbstractData,
+/// Native composed reference metadata and the authored spec sites that supply it.
+fn composed_reference_api_value(
+    stage: &openusd::usd::Stage,
     path: &SdfPath,
-    source: &str,
-) -> ApiValue {
-    let Some(value) = data
-        .try_field(path, openusd::sdf::FieldKey::VariantSelection.as_str())
-        .ok()
-        .flatten()
-    else {
-        return api_value!({
-            "present": false,
-            "value": ApiValue::Unit,
-            "source": source,
-        });
-    };
-    match value.as_ref() {
-        SdfValue::VariantSelectionMap(map) => {
-            let selections = map
-                .iter()
-                .map(|(set, variant)| (set.to_string(), api_value!(variant.to_string())))
-                .collect::<Vec<(String, ApiValue)>>();
-            api_value!({
-                "present": true,
-                "value": ApiValue::Map(selections),
-                "source": source,
-            })
+) -> Result<ApiValue, ApiQueryError> {
+    let prim = stage.prim(path).map_err(native_query_error)?;
+    let value = stage
+        .field::<SdfValue>(path, openusd::sdf::FieldKey::References)
+        .map_err(native_query_error)?;
+    let mut sites = Vec::new();
+    for site in prim.prim_stack().map_err(native_query_error)? {
+        let layer = stage.layer(&site.layer).ok_or_else(|| {
+            native_query_error(format!("missing native spec-site layer `{}`", site.layer))
+        })?;
+        let value = layer
+            .data()
+            .try_field(&site.path, openusd::sdf::FieldKey::References.as_str())
+            .map_err(native_query_error)?;
+        if value.is_some() {
+            sites.push(api_value!({ "layer": site.layer, "path": site.path.to_string(), "list": reference_list_value(value.as_deref())? }));
         }
-        _ => api_value!({
-            "present": true,
-            "value": ApiValue::Unit,
-            "source": source,
-            "error": "metadata is not a USD variant-selection map",
-        }),
     }
+    let ApiValue::Map(mut entries) = reference_list_value(value.as_ref())? else {
+        return Err(native_query_error(
+            "reference inspection must produce a map",
+        ));
+    };
+    entries.push(("source".to_owned(), api_value!("document_composition")));
+    entries.push(("sites".to_owned(), api_value!(sites)));
+    Ok(ApiValue::Map(entries))
 }
 
-fn variant_selection_stack_api_value(document: &UsdDocument, path: &SdfPath) -> ApiValue {
-    api_value!({
-        "authored": {
-            "root": variant_selection_metadata_api_value(
-                document.data(), path, "@root@",
-            ),
-            "runtime": variant_selection_metadata_api_value(
-                document.runtime_data(), path, "@runtime@",
-            ),
-            "view": variant_selection_metadata_api_value(
-                document.view_data(), path, "@view@",
-            ),
-        },
-        "composed": variant_selection_metadata_api_value(
-            document.composed_arc().as_ref(), path, "document_composed",
-        ),
-    })
+fn metadata_api_value(
+    value: Option<&SdfValue>,
+    source: &str,
+    variant_selections: bool,
+) -> ApiValue {
+    let Some(value) = value else {
+        return api_value!({ "present": false, "value": ApiValue::Unit, "source": source });
+    };
+    let decoded = match value {
+        SdfValue::Token(token) if !variant_selections => Some(api_value!(token.to_string())),
+        SdfValue::VariantSelectionMap(map) if variant_selections => Some(ApiValue::Map(
+            map.iter()
+                .map(|(set, variant)| (set.to_string(), api_value!(variant.to_string())))
+                .collect(),
+        )),
+        _ => None,
+    };
+    match decoded {
+        Some(value) => api_value!({ "present": true, "value": value, "source": source }),
+        None => api_value!({ "present": true, "value": ApiValue::Unit, "source": source,
+            "error": if variant_selections { "metadata is not a USD variant-selection map" } else { "metadata is not a USD token" } }),
+    }
 }
 
 fn metadata_stack_api_value(
     document: &UsdDocument,
+    stage: &openusd::usd::Stage,
     path: &SdfPath,
     field: &str,
-    canonical_value: Option<String>,
-) -> ApiValue {
-    let mut metadata = vec![
-        (
-            "authored".to_owned(),
-            api_value!({
-                "root": token_metadata_api_value(document.data(), path, field, "@root@"),
-                "runtime": token_metadata_api_value(document.runtime_data(), path, field, "@runtime@"),
-                "view": token_metadata_api_value(document.view_data(), path, field, "@view@"),
-            }),
-        ),
-        (
-            "composed".to_owned(),
-            token_metadata_api_value(
-                document.composed_arc().as_ref(),
-                path,
-                field,
-                "document_composed",
-            ),
-        ),
-    ];
-    if let Some(value) = canonical_value {
-        metadata.push((
-            "canonical_stage".to_owned(),
-            api_value!({
-                "present": true,
-                "value": value,
-                "source": "canonical_stage",
-            }),
+) -> Result<ApiValue, ApiQueryError> {
+    let variant_selections = field == openusd::sdf::FieldKey::VariantSelection.as_str();
+    let mut authored = Vec::new();
+    for (name, id, data) in [
+        ("root", "@root@", document.data()),
+        ("runtime", "@runtime@", document.runtime_data()),
+        ("view", "@view@", document.view_data()),
+    ] {
+        let value =
+            openusd::sdf::AbstractData::try_field(data, path, field).map_err(native_query_error)?;
+        authored.push((
+            name.to_owned(),
+            metadata_api_value(value.as_deref(), id, variant_selections),
         ));
     }
-    ApiValue::Map(metadata)
+    let value = if path == &SdfPath::abs_root() {
+        stage.stage_metadata(field).map_err(native_query_error)?
+    } else {
+        stage
+            .field::<SdfValue>(path, field)
+            .map_err(native_query_error)?
+    };
+    Ok(api_value!({
+        "authored": ApiValue::Map(authored),
+        "composed": metadata_api_value(value.as_ref(), "document_composition", variant_selections),
+    }))
 }
 
 /// Read-only query for one explicit open USD document.
@@ -815,7 +722,9 @@ fn metadata_stack_api_value(
 /// authored layers, revisions, dependencies, and journal position. With it,
 /// the response additionally reports the composed prim type, activity,
 /// immediate children, and each composed attribute's exact USD declaration
-/// and default literal. The declaration comes from OpenUSD's `typeName`,
+/// and default literal, including schema defaults. Layer statistics count
+/// authored specs; inspection never serializes a layer to count bytes. The
+/// declaration comes from OpenUSD's `typeName`,
 /// preserving roles and array shape that are not represented by `sdf::Value`
 /// variants.
 pub struct InspectUsdDocumentProvider;
@@ -843,30 +752,12 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             );
         };
         let document = host.document();
-        let source = document
-            .source()
-            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error.to_string()))?;
-        let runtime_bytes = runtime_source(document)
-            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
-            .len();
-        let view_bytes = view_source(document)
-            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
-            .len();
-        let mut diagnostics = Vec::new();
-        if let Some(error) = document.parse_error() {
-            diagnostics.push(error.to_owned());
-        }
-        let dependencies = match lunco_usd_compose::layer_dependency_arcs(&source) {
-            Some(dependencies) => dependencies,
-            None => {
-                diagnostics.push("document source is not valid USDA".to_owned());
-                Vec::new()
-            }
-        };
+        let stage = open_document_stage(world, doc, document)?;
+        let dependencies = lunco_usd_compose::layer_dependency_paths(document.data())
+            .map_err(native_query_error)?;
+        let diagnostics: Vec<String> = Vec::new();
         let journal = journal_position(world, doc)?;
         let root_path = SdfPath::abs_root();
-        let canonical_default_prim = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
-            .and_then(|stage| stage.view().default_prim());
 
         let mut response = vec![
             ("doc_id".to_owned(), api_value!(doc.raw())),
@@ -883,19 +774,19 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                         "id": "@root@",
                         "persistent": true,
                         "revision": document.base_revision(),
-                        "bytes": source.len(),
+                        "spec_count": document.data().len(),
                     },
                     "runtime": {
                         "id": "@runtime@",
                         "persistent": "twin_policy",
                         "revision": document.runtime_revision(),
-                        "bytes": runtime_bytes,
+                        "spec_count": document.runtime_data().len(),
                     },
                     "view": {
                         "id": "@view@",
                         "persistent": false,
                         "revision": document.view_revision(),
-                        "bytes": view_bytes,
+                        "spec_count": document.view_data().len(),
                     },
                 }),
             ),
@@ -911,10 +802,10 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 api_value!({
                     "defaultPrim": metadata_stack_api_value(
                         document,
+                        &stage,
                         &root_path,
                         openusd::sdf::FieldKey::DefaultPrim.as_str(),
-                        canonical_default_prim,
-                    ),
+                    )?,
                 }),
             ),
             ("journal".to_owned(), journal),
@@ -935,26 +826,15 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 );
             };
             let (exists, type_name, active, children, attributes) =
-                composed_attribute_inspection(world, doc, document, &path);
-            let mut references = vec![
-                (
-                    "authored".to_owned(),
-                    api_value!({
-                        "root": reference_list_api_value(document.data(), &path),
-                        "runtime": reference_list_api_value(document.runtime_data(), &path),
-                        "view": reference_list_api_value(document.view_data(), &path),
-                    }),
-                ),
-                (
-                    "composed".to_owned(),
-                    reference_list_api_value(document.composed_arc().as_ref(), &path),
-                ),
-            ];
-            if let Some(canonical) = canonical_reference_api_value(world, doc, &path) {
-                references.push(("canonical_stage".to_owned(), canonical));
-            }
-            let canonical_kind = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
-                .and_then(|stage| stage.view().kind(&path));
+                composed_attribute_inspection(&stage, &path)?;
+            let references = api_value!({
+                "authored": {
+                    "root": reference_list_api_value(document.data(), &path)?,
+                    "runtime": reference_list_api_value(document.runtime_data(), &path)?,
+                    "view": reference_list_api_value(document.view_data(), &path)?,
+                },
+                "composed": composed_reference_api_value(&stage, &path)?,
+            });
             response.push((
                 "prim".to_owned(),
                 api_value!({
@@ -967,13 +847,13 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                     "metadata": {
                         "kind": metadata_stack_api_value(
                             document,
+                            &stage,
                             &path,
                             openusd::sdf::FieldKey::Kind.as_str(),
-                            canonical_kind,
-                        ),
-                        "variantSelections": variant_selection_stack_api_value(document, &path),
+                        )?,
+                        "variantSelections": metadata_stack_api_value(document, &stage, &path, openusd::sdf::FieldKey::VariantSelection.as_str())?,
                     },
-                    "references": ApiValue::Map(references),
+                    "references": references,
                 }),
             ));
         }
@@ -1156,22 +1036,9 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
     }
 }
 
-/// Resolve one explicit edit target against the document's authored layers and,
-/// when necessary, the one live OpenUSD composed stage.
-///
-/// Parameters:
-///
-/// ```json
-/// { "doc_id": 3, "path": "/Rover/Wheel", "edit_target": "@runtime@" }
-/// ```
-///
-/// Composed-only referenced and payloaded paths require the already-mounted
-/// canonical stage, whose OpenUSD PCP stack supplies the authoritative
-/// authored layer/path pairs. When that stage is mounted, a path absent from
-/// its composition is returned with `status: "missing"`; callers can safely
-/// allocate a new child path without treating an ordinary absence as a query
-/// failure. A path authored in this document remains resolvable from the
-/// document layer while the canonical stage catches up with that local edit.
+/// Resolve one explicit edit target against the current native document stage
+/// and its admitted dependency recipe. Native PCP spec sites supply authored
+/// layer/path pairs; a missing prim returns `status: "missing"`.
 /// Set `authored_children: true` to include direct prim child paths from the
 /// explicitly selected document layer without waiting for scene projection.
 pub struct ResolveUsdTargetProvider;
@@ -1312,19 +1179,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         // Resolve the current document layers through one native stage, with
         // the admitted dependency recipe. A derived projection may lag this
         // generation and cannot decide whether the command target exists.
-        let stage_result = match document_stage_recipe(world, doc) {
-            Some(recipe) => document.open_composed_stage_with_recipe(recipe),
-            None => document.open_composed_stage(),
-        };
-        let stage = match stage_result {
-            Ok(stage) => stage,
-            Err(error) => {
-                return query_error(
-                    ApiErrorCode::InternalError,
-                    format!("cannot compose USD document to resolve `{raw_path}`: {error}"),
-                );
-            }
-        };
+        let stage = open_document_stage(world, doc, document)?;
         let resolved = (|| -> Result<_, String> {
             let prim = stage.prim(&path).map_err(|error| error.to_string())?;
             let exists = prim.is_valid().map_err(|error| error.to_string())?;
