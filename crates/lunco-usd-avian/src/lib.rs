@@ -79,7 +79,7 @@ use lunco_usd_avian_reader::{
     joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
 };
-use openusd::schemas::physics::tokens as ptok;
+use openusd_schemas::physics::tokens as ptok;
 
 mod material;
 use material::read_physics_material;
@@ -656,7 +656,7 @@ fn add_collider_from_usd(
             commands.entity(entity).try_insert(collider);
         }
         ColliderBuildOutcome::UnsupportedGeometry { type_name }
-            if reader.has_api_schema(sdf_path, ptok::API_COLLISION) =>
+            if reader.has_api_schema(sdf_path, ptok::PHYSICS_COLLISION_API) =>
         {
             return Err(ColliderProjectionError::Backend {
                 prim: sdf_path.to_string(),
@@ -956,7 +956,7 @@ fn read_physics_scene_gravity(
 ) -> Result<(f64, DVec3), &'static str> {
     let convention = lunco_usd_bevy_stage::stage_convention(reader)
         .map_err(|_| "stage convention metadata is invalid")?;
-    let magnitude = match reader.real(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
+    let magnitude = match reader.real(sdf_path, ptok::PHYSICS_GRAVITY_MAGNITUDE) {
         Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
         Some(value) if value.is_finite() => {
             let converted = convention.length(value);
@@ -966,14 +966,16 @@ fn read_physics_scene_gravity(
             converted
         }
         Some(_) => return Err("gravity magnitude must be finite or negative for Earth gravity"),
-        None if !reader.has_authored_attribute(sdf_path, ptok::A_GRAVITY_MAGNITUDE) => {
+        None if !reader.has_authored_attribute(sdf_path, ptok::PHYSICS_GRAVITY_MAGNITUDE) => {
             lunco_environment::EARTH_SURFACE_GRAVITY
         }
         None => return Err("gravity magnitude has an unsupported authored value type"),
     };
-    let raw_direction = match reader.vec3_f64(sdf_path, ptok::A_GRAVITY_DIRECTION) {
+    let raw_direction = match reader.vec3_f64(sdf_path, ptok::PHYSICS_GRAVITY_DIRECTION) {
         Some(value) => DVec3::from_array(value),
-        None if !reader.has_authored_attribute(sdf_path, ptok::A_GRAVITY_DIRECTION) => DVec3::ZERO,
+        None if !reader.has_authored_attribute(sdf_path, ptok::PHYSICS_GRAVITY_DIRECTION) => {
+            DVec3::ZERO
+        }
         None => return Err("gravity direction has an unsupported authored value type"),
     };
     if !raw_direction.is_finite() {
@@ -1050,12 +1052,12 @@ fn is_physics_joint_type(
     matches!(
         reader.type_name(sdf_path).as_deref(),
         Some(
-            ptok::T_PHYSICS_JOINT
-                | ptok::T_PHYSICS_FIXED_JOINT
-                | ptok::T_PHYSICS_REVOLUTE_JOINT
-                | ptok::T_PHYSICS_PRISMATIC_JOINT
-                | ptok::T_PHYSICS_SPHERICAL_JOINT
-                | ptok::T_PHYSICS_DISTANCE_JOINT
+            ptok::PHYSICS_JOINT
+                | ptok::PHYSICS_FIXED_JOINT
+                | ptok::PHYSICS_REVOLUTE_JOINT
+                | ptok::PHYSICS_PRISMATIC_JOINT
+                | ptok::PHYSICS_SPHERICAL_JOINT
+                | ptok::PHYSICS_DISTANCE_JOINT
         )
     )
 }
@@ -1091,7 +1093,7 @@ fn project_pending_joint(
             lunco_physics::PhysicsJointPending,
             lunco_physics::PhysicsJointTopologyPending,
         ));
-    } else if reader.boolean(sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
+    } else if reader.boolean(sdf_path, ptok::PHYSICS_JOINT_ENABLED) != Some(false) {
         let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
         error!("USD physics joint {} rejected: {detail}", sdf_path);
         report_physics_runtime_fault(
@@ -1137,7 +1139,7 @@ fn extract_avian_prim(
     // gravity. It is a SETTINGS prim, not a body: it has no transform and no
     // collider, so it is handled here and the body/collider reads below are
     // skipped entirely.
-    if reader.type_name(sdf_path).as_deref() == Some(ptok::T_PHYSICS_SCENE) {
+    if reader.type_name(sdf_path).as_deref() == Some(ptok::PHYSICS_SCENE) {
         apply_physics_scene_gravity(reader, sdf_path, commands);
         commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
@@ -1170,8 +1172,8 @@ fn extract_avian_prim(
         return;
     }
 
-    let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);
-    let has_collision_api = reader.has_api_schema(sdf_path, ptok::API_COLLISION);
+    let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::PHYSICS_RIGID_BODY_API);
+    let has_collision_api = reader.has_api_schema(sdf_path, ptok::PHYSICS_COLLISION_API);
     let has_terrain_api = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
     // ── TERRAIN ── static collider; the terrain projection owns its marker.
     if has_terrain_api {
@@ -1318,19 +1320,22 @@ fn extract_avian_prim(
         // `ComputedAngularInertia` from collider geometry at `ColliderDensity` 1.0
         // and the authored values never take effect. Authoring the overrides first
         // means the observer's very first pass sees `NoAuto*` and honours them.
-        let simulated =
-            match read_authored_bool_or_default(reader, sdf_path, ptok::A_RIGID_BODY_ENABLED, true)
-            {
-                Ok(value) => value,
-                Err(()) => {
-                    error!(
-                        "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
-                        ptok::A_RIGID_BODY_ENABLED
-                    );
-                    commands.entity(entity).try_insert(UsdPhysicsProjected);
-                    return;
-                }
-            };
+        let simulated = match read_authored_bool_or_default(
+            reader,
+            sdf_path,
+            ptok::PHYSICS_RIGID_BODY_ENABLED,
+            true,
+        ) {
+            Ok(value) => value,
+            Err(()) => {
+                error!(
+                    "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
+                    ptok::PHYSICS_RIGID_BODY_ENABLED
+                );
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+        };
         // Thin, falling collision geometry needs a swept trajectory, not only
         // overlap at the end of a step. Honor the authored PhysX schema flag
         // through Avian's backend; no vehicle-type inference is involved.
@@ -1349,19 +1354,22 @@ fn extract_avian_prim(
                 return;
             }
         };
-        let kinematic =
-            match read_authored_bool_or_default(reader, sdf_path, ptok::A_KINEMATIC_ENABLED, false)
-            {
-                Ok(value) => value,
-                Err(()) => {
-                    error!(
-                        "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
-                        ptok::A_KINEMATIC_ENABLED
-                    );
-                    commands.entity(entity).try_insert(UsdPhysicsProjected);
-                    return;
-                }
-            };
+        let kinematic = match read_authored_bool_or_default(
+            reader,
+            sdf_path,
+            ptok::PHYSICS_KINEMATIC_ENABLED,
+            false,
+        ) {
+            Ok(value) => value,
+            Err(()) => {
+                error!(
+                    "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
+                    ptok::PHYSICS_KINEMATIC_ENABLED
+                );
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+        };
         if apply_rigid_body_mass_props(commands, entity, reader, sdf_path).is_err() {
             error!(
                 "[usd-avian] {sdf_path} has malformed rigid-body mass properties — refusing projection"
@@ -2047,26 +2055,27 @@ fn apply_rigid_body_mass_props(
     if !mpu.is_finite() || mpu <= 0.0 {
         return Err(());
     }
-    let mass = match read_authored_real(reader, sdf_path, ptok::A_MASS)? {
+    let mass = match read_authored_real(reader, sdf_path, ptok::PHYSICS_MASS)? {
         None | Some(0.0) => None,
         Some(value) if value.is_finite() && value > 0.0 && value <= f32::MAX as f64 => {
             Some(value as f32)
         }
         Some(_) => return Err(()),
     };
-    let body_density = match read_authored_real(reader, sdf_path, ptok::A_DENSITY)? {
+    let body_density = match read_authored_real(reader, sdf_path, ptok::PHYSICS_DENSITY)? {
         None | Some(0.0) => None,
         Some(value) if value.is_finite() && value > 0.0 => Some(value),
         Some(_) => return Err(()),
     };
-    let diagonal_inertia = match read_authored_vec3(reader, sdf_path, ptok::A_DIAGONAL_INERTIA)? {
-        None => None,
-        Some(value) if value == DVec3::ZERO => None,
-        Some(value) if value.x > 0.0 && value.y > 0.0 && value.z > 0.0 => Some(value),
-        Some(_) => return Err(()),
-    };
-    let principal_axes = read_authored_quat(reader, sdf_path, ptok::A_PRINCIPAL_AXES)?;
-    let center_of_mass = read_authored_vec3(reader, sdf_path, ptok::A_CENTER_OF_MASS)?;
+    let diagonal_inertia =
+        match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_DIAGONAL_INERTIA)? {
+            None => None,
+            Some(value) if value == DVec3::ZERO => None,
+            Some(value) if value.x > 0.0 && value.y > 0.0 && value.z > 0.0 => Some(value),
+            Some(_) => return Err(()),
+        };
+    let principal_axes = read_authored_quat(reader, sdf_path, ptok::PHYSICS_PRINCIPAL_AXES)?;
+    let center_of_mass = read_authored_vec3(reader, sdf_path, ptok::PHYSICS_CENTER_OF_MASS)?;
     let linear_damping = match read_authored_real(reader, sdf_path, PHYSX_LINEAR_DAMPING)? {
         None => None,
         Some(value) if value.is_finite() && value >= 0.0 => Some(value),
@@ -2077,7 +2086,7 @@ fn apply_rigid_body_mass_props(
         Some(value) if value.is_finite() && value >= 0.0 => Some(value),
         Some(_) => return Err(()),
     };
-    let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::A_VELOCITY)? {
+    let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_VELOCITY)? {
         Some(vel) => {
             let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel)).map_err(|_| ())?;
             if !vel.is_finite() {
@@ -2087,21 +2096,22 @@ fn apply_rigid_body_mass_props(
         }
         None => None,
     };
-    let authored_angular = match read_authored_vec3(reader, sdf_path, ptok::A_ANGULAR_VELOCITY)? {
-        Some(ang) => {
-            let ang = local_vector_to_world(
-                reader,
-                sdf_path,
-                conv.dir_d(ang) * std::f64::consts::PI / 180.0,
-            )
-            .map_err(|_| ())?;
-            if !ang.is_finite() {
-                return Err(());
+    let authored_angular =
+        match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_ANGULAR_VELOCITY)? {
+            Some(ang) => {
+                let ang = local_vector_to_world(
+                    reader,
+                    sdf_path,
+                    conv.dir_d(ang) * std::f64::consts::PI / 180.0,
+                )
+                .map_err(|_| ())?;
+                if !ang.is_finite() {
+                    return Err(());
+                }
+                Some(ang)
             }
-            Some(ang)
-        }
-        None => None,
-    };
+            None => None,
+        };
     let material_density = read_physics_material(reader, sdf_path)
         .map_err(|_| ())?
         .and_then(|pm| pm.density)
@@ -2275,8 +2285,8 @@ mod collider_parity_tests {
     use bevy::math::DVec3;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
-    use openusd::schemas::physics::CollisionApprox;
     use openusd::sdf::Path as SdfPath;
+    use openusd_schemas::physics::CollisionApprox;
 
     fn stage_from_source(source: &str) -> CanonicalStage {
         CanonicalStage::from_recipe(&StageRecipe::from_source("test.usda", source))

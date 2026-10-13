@@ -10,7 +10,7 @@
 use avian3d::prelude::{Collider, JointDamping, MotorModel};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use openusd::schemas::physics::CollisionApprox;
+use openusd_schemas::physics::CollisionApprox;
 
 /// Source prims actually cooked into this body's current collider. This is
 /// emitted with the collider admission, not reconstructed from authored USD.
@@ -258,7 +258,7 @@ pub struct JointDrive {
     /// Damping in normalized runtime units.
     pub damping: Option<f64>,
     /// Authored USD drive type.
-    pub drive_type: Option<openusd::schemas::physics::DriveType>,
+    pub drive_type: Option<openusd_schemas::physics::DriveType>,
 }
 
 impl JointDrive {
@@ -281,12 +281,12 @@ impl JointDrive {
         }
         match self
             .drive_type
-            .unwrap_or(openusd::schemas::physics::DriveType::Force)
+            .unwrap_or(openusd_schemas::physics::DriveType::Force)
         {
-            openusd::schemas::physics::DriveType::Acceleration => {
+            openusd_schemas::physics::DriveType::Acceleration => {
                 Ok(MotorModel::AccelerationBased { stiffness, damping })
             }
-            openusd::schemas::physics::DriveType::Force => {
+            openusd_schemas::physics::DriveType::Force => {
                 lunco_physics::force_drive_motor_model(stiffness, damping)
             }
         }

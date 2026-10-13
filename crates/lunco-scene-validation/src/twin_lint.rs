@@ -374,6 +374,7 @@ fn inspect_usd_file(
         &path,
         Some(engine_root.as_path()),
         Some(twin.root.as_path()),
+        lunco_usd_authoring::schema::native_registry(),
     ) {
         Ok(stage) => stage,
         Err(error) => {

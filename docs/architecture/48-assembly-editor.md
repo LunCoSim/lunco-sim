@@ -672,10 +672,9 @@ exists only through a reference or payload is rejected. Clearing an opinion
 reveals weaker-layer documentation. These operations update narrative metadata
 without replacing authored values.
 
-When a documentation operation updates an existing metadata string, or
-`RemovePrim` targets one unambiguous authored spec, the document patches the
-original USDA source and retains unrelated comments and layout. Other
-base-layer edits serialize from canonical SDF data.
+Documentation operations and `RemovePrim` edit canonical SDF data. Source text
+uses the native writer after structural edits; original USDA formatting and
+comments remain available only before an edit.
 
 `UsdOp::SetStageMetrics` authors the shared `StageMetrics` and `UpAxis` core
 types (`meters_per_unit` and Y/Z axis) as stage-root metadata in the selected

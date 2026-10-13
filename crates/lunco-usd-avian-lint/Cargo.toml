@@ -16,6 +16,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [dev-dependencies]
 lunco-storage = { path = "../lunco-storage" }

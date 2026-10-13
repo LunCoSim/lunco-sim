@@ -1,10 +1,10 @@
 use bevy::prelude::{Quat, Vec3, error};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::stage_convention;
-use openusd::schemas::geom::tokens;
-use openusd::schemas::physics::{CollisionApprox, tokens as physics_tokens};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
+use openusd_schemas::geom::tokens;
+use openusd_schemas::physics::{CollisionApprox, tokens as physics_tokens};
 
 /// Invalid authored `physics:approximation` data on a mesh collision API.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,7 +19,7 @@ impl std::fmt::Display for MeshCollisionApproximationError {
             f,
             "{} has invalid authored {} token `{}`",
             self.prim,
-            physics_tokens::A_APPROXIMATION,
+            physics_tokens::PHYSICS_APPROXIMATION,
             self.value
         )
     }
@@ -34,19 +34,19 @@ pub fn read_mesh_collision_approximation(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
 ) -> Result<CollisionApprox, MeshCollisionApproximationError> {
-    if !reader.has_api_schema(path, physics_tokens::API_MESH_COLLISION) {
+    if !reader.has_api_schema(path, physics_tokens::PHYSICS_MESH_COLLISION_API) {
         return Ok(CollisionApprox::None);
     }
-    match reader.text(path, physics_tokens::A_APPROXIMATION) {
+    match reader.text(path, physics_tokens::PHYSICS_APPROXIMATION) {
         Some(value) => CollisionApprox::from_token(value.clone()).ok_or_else(|| {
             MeshCollisionApproximationError {
                 prim: path.as_str().to_owned(),
                 value,
             }
         }),
-        None if reader.has_authored_attribute(path, physics_tokens::A_APPROXIMATION)
+        None if reader.has_authored_attribute(path, physics_tokens::PHYSICS_APPROXIMATION)
             || !reader
-                .connections(path, physics_tokens::A_APPROXIMATION)
+                .connections(path, physics_tokens::PHYSICS_APPROXIMATION)
                 .is_empty() =>
         {
             Err(MeshCollisionApproximationError {
@@ -378,7 +378,7 @@ pub fn read_usd_mesh_indexed(
 }
 
 pub fn read_usd_mesh_points(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
-    let points = reader.points3(path, tokens::A_POINTS);
+    let points = reader.points3(path, tokens::POINTS);
     if points.is_empty()
         || points
             .iter()

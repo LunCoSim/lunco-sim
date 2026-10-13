@@ -363,10 +363,13 @@ pub fn validate_proposal(
                 break;
             }
         }
-        if diagnostics.is_empty()
-            && lunco_usd_compose::layer_dependency_arcs(&candidate.source()).is_none()
-        {
-            diagnostics.push("candidate authored layer is not valid USDA composition".to_owned());
+        if diagnostics.is_empty() {
+            match candidate.source() {
+                Ok(source) if lunco_usd_compose::layer_dependency_arcs(&source).is_some() => {}
+                Ok(_) => diagnostics
+                    .push("candidate authored layer is not valid USD composition".to_owned()),
+                Err(error) => diagnostics.push(document_error(error)),
+            }
         }
     }
 

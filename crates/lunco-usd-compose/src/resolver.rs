@@ -1,6 +1,6 @@
 //! In-memory `ar::Resolver` for openusd composition over our asset pipeline.
 //!
-//! openusd 0.5.0 composes a stage by calling a **synchronous** [`ar::Resolver`]
+//! openusd composes a stage by calling a **synchronous** [`ar::Resolver`]
 //! to resolve + open every `@asset@` arc. `ar::DefaultResolver` uses `std::fs`
 //! unconditionally — wrong on wasm and wrong for our `lunco://` scheme. We
 //! supply [`LuncoUsdResolver`], a pure in-memory byte-map: the loader pre-fetches
@@ -39,19 +39,11 @@ pub type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
 /// File extensions openusd cannot parse as USD layers — non-USD binary assets
 /// referenced through `payload`/`references`. Pixar handles these via
-/// `SdfFileFormat` plugins (`UsdGltf`, …); openusd-rs has no plugin system, so
-/// the resolver routes them to an empty composition stub. The render projection
-/// reads the authored arc directly from the live prim stack. Matched
+/// `SdfFileFormat` plugins (`UsdGltf`, …). The Rust reader reports unsupported
+/// composition arcs; the render projection imports their authored URI through
+/// Bevy's asset pipeline. Matched
 /// case-insensitively.
 pub(crate) const BINARY_ASSET_EXTENSIONS: &[&str] = &["glb", "gltf", "obj", "stl"];
-
-/// Identifier every binary asset is mapped to. Ends in `.usda` so openusd's
-/// `open_layer` parses it as text; [`LuncoUsdResolver::open_asset`] returns an
-/// empty USD layer for it, so the binary arc composes to nothing (its URI is
-/// recovered separately from the prim's authored `payload`/`references`).
-pub(crate) const BINARY_STUB_ID: &str = "__lunco_binary_stub__.usda";
-
-const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 
 /// True if `asset_path` names a non-USD binary asset (see
 /// [`BINARY_ASSET_EXTENSIONS`]). HTTP URLs use their URL pathname; internal
@@ -162,21 +154,8 @@ impl ResolverDiagnostics {
     }
 }
 
-// TODO(glb-composability): binary assets (`.glb`/`.gltf`) remain an explicit
-// render projection because the pure-Rust openusd fork has no
-// `SdfFileFormat` plugin system. The standard payload/reference is composed as
-// an empty stub and the render reader loads the authored URI through Bevy.
-//   * External tools (Blender/usdview): adopt Adobe's open-source
-//     `USD-Fileformat-plugins` (glTF/FBX/OBJ/STL/PLY SdfFileFormat plugins)
-//     via `PXR_PLUGINPATH` — config only, no engine code. See
-//     `docs/architecture/21-domain-usd.md` (interop note).
-//   * Our engine (pure-Rust `openusd`, no C++ plugin system): mirror it with a
-//     small glTF→USD-layer adapter in `compose.rs` (points/indices/normals/uvs →
-//     `Mesh` specs) fed to the composer instead of stubbing. This is an
-//     interop enhancement, not a reason to duplicate asset identity in USD.
-
 /// In-memory resolver over pre-fetched layer bytes, keyed by [`canonicalize`]d
-/// identifier. Binary assets resolve to an empty stub (see [`BINARY_STUB_ID`]).
+/// identifier. Unsupported formats remain unresolved with native composition diagnostics.
 /// The byte map is [`SharedLayerBytes`] so the owning [`CanonicalStage`] can
 /// inject a spawned asset's layer closure at runtime and have a
 /// subsequently-authored reference compose (demand-driven resolution).
@@ -234,9 +213,7 @@ impl ar::Resolver for LuncoUsdResolver {
         {
             return None;
         }
-        if is_binary_asset(asset_path) {
-            Some(ResolvedPath::new(BINARY_STUB_ID))
-        } else if asset_path == BINARY_STUB_ID || self.bytes.borrow().contains_key(asset_path) {
+        if self.bytes.borrow().contains_key(asset_path) {
             Some(ResolvedPath::new(asset_path))
         } else {
             None
@@ -263,9 +240,6 @@ impl ar::Resolver for LuncoUsdResolver {
                 "USD asset identifier is not UTF-8",
             )
         })?;
-        if key == BINARY_STUB_ID {
-            return Ok(Box::new(Cursor::new(EMPTY_USDA.to_vec())));
-        }
         let bytes = self
             .bytes
             .borrow()
@@ -391,8 +365,11 @@ mod tests {
         use openusd::ar::Resolver;
         let invalid = "file:///invalid%00.usda";
         assert!(
-            LuncoUsdResolver::new(HashMap::from([(invalid.to_owned(), EMPTY_USDA.to_vec())]))
-                .is_err()
+            LuncoUsdResolver::new(HashMap::from([(
+                invalid.to_owned(),
+                b"#usda 1.0\n".to_vec()
+            )]))
+            .is_err()
         );
         let resolver = LuncoUsdResolver::new(HashMap::new()).unwrap();
         let id = resolver.create_identifier(invalid, None);

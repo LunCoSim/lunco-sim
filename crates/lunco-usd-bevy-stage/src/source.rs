@@ -1,4 +1,4 @@
-//! Raw USDA source assets loaded through Bevy's asset resolver.
+//! Raw USD layer assets loaded through Bevy's asset resolver.
 //!
 //! This is deliberately separate from composed [`UsdStageAsset`] loading:
 //! document authoring needs the bytes of one layer, while runtime projection
@@ -9,16 +9,16 @@
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::{Asset, TypePath};
 
-/// A USD layer's raw source text, without composition.
+/// A USD layer's exact source bytes, without composition.
 #[derive(Asset, TypePath, Clone)]
-pub struct UsdSourceText(pub String);
+pub struct UsdSourceBytes(pub Vec<u8>);
 
-/// Asset loader for raw USDA source text.
+/// Asset loader for raw USD source bytes.
 #[derive(Default, TypePath)]
-pub struct UsdSourceTextLoader;
+pub struct UsdSourceBytesLoader;
 
-impl AssetLoader for UsdSourceTextLoader {
-    type Asset = UsdSourceText;
+impl AssetLoader for UsdSourceBytesLoader {
+    type Asset = UsdSourceBytes;
     type Settings = ();
     type Error = anyhow::Error;
 
@@ -30,10 +30,10 @@ impl AssetLoader for UsdSourceTextLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        Ok(UsdSourceText(String::from_utf8(bytes)?))
+        Ok(UsdSourceBytes(bytes))
     }
 
     fn extensions(&self) -> &[&str] {
-        &["usda"]
+        &["usd", "usda", "usdc"]
     }
 }

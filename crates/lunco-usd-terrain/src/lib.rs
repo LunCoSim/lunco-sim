@@ -91,23 +91,7 @@ struct TerrainSchemaStatus {
 
 impl TerrainSchemaStatus {
     fn validate_registered_schema(&mut self) {
-        let registry = match lunco_usd_authoring::schema::SchemaRegistry::global().read() {
-            Ok(registry) => registry,
-            Err(_) => {
-                self.ready = true;
-                self.error = Some("the schema registry lock is unavailable".to_owned());
-                return;
-            }
-        };
-        // Schema sources arrive through Bevy's asset server. Do not freeze an
-        // empty registry into an invalid state during plugin construction.
-        if !registry
-            .api_schemas()
-            .iter()
-            .any(|schema| schema == "LunCoTerrainAPI")
-        {
-            return;
-        }
+        let registry = lunco_usd_authoring::schema::SchemaMetadata::global();
         self.ready = true;
         let missing = TERRAIN_SCHEMA_PROPERTIES
             .iter()
@@ -369,12 +353,11 @@ fn ns_attr(ns: &str, name: &str) -> String {
     // the single runtime contract; schema validation is enforced by the USD schema
     // tests and this diagnostic is the production signal if a packaged artifact is
     // stale or malformed.
-    match lunco_usd_authoring::schema::SchemaRegistry::global().read() {
-        Ok(registry) if registry.property(&full).is_some() => {}
-        Ok(_) => warn_once!("[usd-terrain] canonical property `{full}` is absent from luncoSchema"),
-        Err(_) => {
-            warn_once!("[usd-terrain] schema registry lock unavailable while resolving `{full}`")
-        }
+    if lunco_usd_authoring::schema::SchemaMetadata::global()
+        .property(&full)
+        .is_none()
+    {
+        warn_once!("[usd-terrain] canonical property `{full}` is absent from luncoSchema");
     }
     full
 }

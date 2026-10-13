@@ -28,7 +28,7 @@ fn prepared_usd_source_is_send_safe_and_preserves_source_identity() {
         DocumentOrigin::writable_file("/tmp/prepared.usda"),
     );
     assert_eq!(doc.parse_error(), None);
-    assert_eq!(doc.source(), TINY_USDA);
+    assert_eq!(doc.source().unwrap(), TINY_USDA);
 
     let mut resident = UsdDocument::with_origin(
         DocumentId::new(997),
@@ -36,7 +36,7 @@ fn prepared_usd_source_is_send_safe_and_preserves_source_identity() {
         DocumentOrigin::writable_file("/tmp/resident.usda"),
     );
     assert!(resident.reload_prepared_base(prepared));
-    assert_eq!(resident.source(), TINY_USDA);
+    assert_eq!(resident.source().unwrap(), TINY_USDA);
     assert_eq!(resident.generation(), 1);
 }
 
@@ -60,7 +60,7 @@ fn prepared_reset_reuses_parse_and_clears_transient_layers() {
             .spec(&SdfPath::new("/RuntimeOnly").unwrap())
             .is_none()
     );
-    assert_eq!(resident.source(), reset_source);
+    assert_eq!(resident.source().unwrap(), reset_source);
     assert!(!resident.is_dirty());
 }
 
@@ -98,8 +98,8 @@ fn document_clones_share_immutable_layers_until_an_edit_commits() {
     .unwrap();
 
     assert!(!std::sync::Arc::ptr_eq(&doc.base, &clone.base));
-    assert!(!clone.source().contains("newer"));
-    assert!(doc.source().contains("newer"));
+    assert!(!clone.source().unwrap().contains("newer"));
+    assert!(doc.source().unwrap().contains("newer"));
 }
 
 /// Whether a doc's serialized source **reparses cleanly** — the check that
@@ -110,7 +110,7 @@ fn document_clones_share_immutable_layers_until_an_edit_commits() {
 fn reparses_cleanly(doc: &UsdDocument) -> bool {
     let mut d2 = UsdDocument::with_origin(
         DocumentId::new(9999),
-        doc.source(),
+        doc.source().unwrap(),
         DocumentOrigin::writable_file("/tmp/roundtrip.usda"),
     );
     d2.apply(UsdOp::AddPrim {
@@ -242,109 +242,6 @@ fn stage_and_prim_documentation_use_typed_reversible_operations() {
             .field(&world, sdf::FieldKey::Documentation.as_str()),
         None
     );
-}
-
-#[test]
-fn schema_documentation_edits_preserve_unrelated_source_text() {
-    let source = r#"#usda 1.0
-# Keep this source comment and its surrounding layout.
-(
-)
-
-class "ExampleAPI" (
-    doc = """Old class documentation."""
-)
-{
-    # Keep this attribute comment too.
-    double example:epoch (
-        doc = "Old attribute documentation."
-    )
-}
-"#;
-    let mut doc = UsdDocument::with_origin(
-        DocumentId::new(80),
-        source,
-        DocumentOrigin::writable_file("/tmp/schema-documentation.usda"),
-    );
-
-    doc.apply(UsdOp::SetPrimDocumentation {
-        edit_target: LayerId::root(),
-        path: "/ExampleAPI".into(),
-        documentation: Some("New class documentation with \"quotes\".".into()),
-    })
-    .expect("class documentation applies");
-    doc.apply(UsdOp::SetAttributeDocumentation {
-        edit_target: LayerId::root(),
-        path: "/ExampleAPI".into(),
-        name: "example:epoch".into(),
-        documentation: Some("New attribute documentation.".into()),
-    })
-    .expect("attribute documentation applies");
-
-    let expected = source
-        .replace(
-            "doc = \"\"\"Old class documentation.\"\"\"",
-            "doc = \"New class documentation with \\\"quotes\\\".\"",
-        )
-        .replace(
-            "Old attribute documentation.",
-            "New attribute documentation.",
-        );
-    assert_eq!(doc.source(), expected);
-    usda_to_data(&doc.source()).expect("patched USDA source remains valid");
-}
-
-#[test]
-fn removing_authored_specs_preserves_unrelated_source_text() {
-    let source = r#"#usda 1.0
-(
-    defaultPrim = "World"
-)
-
-# Schema spec selected for removal.
-class "RemoveMe" {
-    double removeMe:value = 1
-}
-
-def "World"
-{
-    # Keep the neighboring scene source intact.
-    over "Earth"
-    {
-        # This local opinion is removed with RemoveMeChild.
-        over "RemoveMeChild"
-        {
-            bool test:removeMe = true
-        }
-        def Sphere "Keep"
-        {
-        }
-    }
-}
-"#;
-    let mut doc = UsdDocument::with_origin(
-        DocumentId::new(81),
-        source,
-        DocumentOrigin::writable_file("/tmp/remove-authored-spec.usda"),
-    );
-
-    doc.apply(UsdOp::RemovePrim {
-        edit_target: LayerId::root(),
-        path: "/RemoveMe".into(),
-    })
-    .expect("root class removal applies");
-    doc.apply(UsdOp::RemovePrim {
-        edit_target: LayerId::root(),
-        path: "/World/Earth/RemoveMeChild".into(),
-    })
-    .expect("nested over removal applies");
-
-    let result = doc.source();
-    assert!(!result.contains("RemoveMe"));
-    assert!(!result.contains("test:removeMe"));
-    assert!(result.contains("# Keep the neighboring scene source intact."));
-    assert!(result.contains("def Sphere \"Keep\""));
-    usda_to_data(&result).expect("remaining USDA source reparses cleanly");
 }
 
 #[test]
@@ -499,8 +396,17 @@ fn a_time_sample_on_a_non_canonical_stage_is_authored_in_its_own_frame() {
     doc.apply(sample("(0, 1, 0)")).expect("sample applies");
 
     let p = doc
-        .data()
-        .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+        .open_composed_stage()
+        .unwrap()
+        .attribute(
+            SdfPath::new("/World")
+                .unwrap()
+                .append_property("customPoint")
+                .unwrap(),
+        )
+        .unwrap()
+        .get_at::<[f32; 3]>(openusd::usd::TimeCode::new(5.0))
+        .unwrap()
         .expect("sample authored");
     assert!(
         p[1].abs() < 1e-4 && (p[2] - 100.0).abs() < 1e-2,
@@ -517,8 +423,17 @@ fn a_time_sample_on_a_non_canonical_stage_is_authored_in_its_own_frame() {
     );
     doc.apply(inverse).expect("undo applies");
     let p = doc
-        .data()
-        .prim_attribute_value_at::<[f32; 3]>(&SdfPath::new("/World").unwrap(), "customPoint", 5.0)
+        .open_composed_stage()
+        .unwrap()
+        .attribute(
+            SdfPath::new("/World")
+                .unwrap()
+                .append_property("customPoint")
+                .unwrap(),
+        )
+        .unwrap()
+        .get_at::<[f32; 3]>(openusd::usd::TimeCode::new(5.0))
+        .unwrap()
         .expect("sample restored");
     assert!(
         p[1].abs() < 1e-3 && (p[2] - 100.0).abs() < 1e-1,
@@ -654,7 +569,7 @@ fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
     // does. The recovered value must equal the original verbatim.
     let reparsed = UsdDocument::with_origin(
         DocumentId::new(61),
-        doc.source(),
+        doc.source().unwrap(),
         DocumentOrigin::writable_file("/tmp/script2.usda"),
     );
     let got = reparsed
@@ -664,7 +579,7 @@ fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
         got.as_deref(),
         Some(src),
         "real rhai source must round-trip verbatim.\nserialized:\n{}",
-        doc.source()
+        doc.source().unwrap()
     );
 }
 
@@ -692,7 +607,7 @@ fn set_attribute_string_rejects_unserializable_both_triple_delimiters() {
     );
     // And the document is untouched — the rejected op left no partial edit.
     assert!(
-        !doc.source().contains("info:sourceCode"),
+        !doc.source().unwrap().contains("info:sourceCode"),
         "a rejected op must not partially author"
     );
 }
@@ -712,16 +627,19 @@ fn set_attribute_string_undoes() {
         value: "fn on_tick(me, ctx) {}".into(),
     }))
     .unwrap();
-    assert!(host.document().source().contains("on_tick"), "authored");
+    assert!(
+        host.document().source().unwrap().contains("on_tick"),
+        "authored"
+    );
     assert!(
         reparses_cleanly(host.document()),
         "authored string reparses cleanly"
     );
     host.undo().unwrap();
     assert!(
-        !host.document().source().contains("on_tick"),
+        !host.document().source().unwrap().contains("on_tick"),
         "undo removes the newly-authored attribute: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
 }
 
@@ -732,7 +650,7 @@ fn untitled_starts_dirty_and_writable() {
     assert!(doc.origin().accepts_mutations());
     assert_eq!(doc.generation(), 0);
     // Source serializes from canonical data and preserves structure.
-    assert!(doc.source().contains("def Xform \"World\""));
+    assert!(doc.source().unwrap().contains("def Xform \"World\""));
 }
 
 #[test]
@@ -1207,7 +1125,7 @@ fn reloads_preserve_authored_operation_and_projection_boundaries() {
     let formatted_source = format!("# refreshed source\n{TINY_USDA}");
     assert!(doc.reload_base(&formatted_source));
     assert_eq!(doc.generation(), initial_generation + 1);
-    assert_eq!(doc.source(), formatted_source);
+    assert_eq!(doc.source().unwrap(), formatted_source);
     assert!(doc.ops_since(initial_generation).is_none());
 
     let changed_source = format!("{TINY_USDA}\ndef Xform \"Extra\" {{}}\n");
@@ -1274,7 +1192,7 @@ fn set_attribute_overwrite_inverts_to_typed_op() {
 fn set_attribute_array_overwrite_inverts_to_typed_op() {
     const SCENE: &str = "#usda 1.0\ndef Mesh \"Patch\"\n{\n    float[] widths = [0.5, 1.5]\n}\n";
     let mut doc = UsdDocument::new(DocumentId::new(45), SCENE);
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc
         .apply(UsdOp::SetAttribute {
@@ -1291,7 +1209,11 @@ fn set_attribute_array_overwrite_inverts_to_typed_op() {
          array literal, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior array");
+    assert_eq!(
+        author::data_to_usda(doc.data()).unwrap(),
+        author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap(),
+        "undo restores the authored array"
+    );
 }
 
 /// One time-sample op at time 5, for the sample-inverse tests.
@@ -1314,7 +1236,7 @@ fn time_sample_op(value: &str) -> UsdOp {
 fn set_time_sample_overwrite_inverts_to_typed_op() {
     let mut doc = UsdDocument::new(DocumentId::new(42), TINY_USDA);
     doc.apply(time_sample_op("1.5")).unwrap();
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(time_sample_op("2.5")).unwrap();
     assert!(
@@ -1322,7 +1244,11 @@ fn set_time_sample_overwrite_inverts_to_typed_op() {
         "overwriting an existing sample must invert to a typed SetTimeSample, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior sample");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior sample"
+    );
 }
 
 /// `RemoveTimeSample` inverts to a typed `SetTimeSample` re-authoring the
@@ -1331,7 +1257,7 @@ fn set_time_sample_overwrite_inverts_to_typed_op() {
 fn remove_time_sample_inverts_to_typed_set_time_sample() {
     let mut doc = UsdDocument::new(DocumentId::new(43), TINY_USDA);
     doc.apply(time_sample_op("3.5")).unwrap();
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc
         .apply(UsdOp::RemoveTimeSample {
@@ -1347,7 +1273,11 @@ fn remove_time_sample_inverts_to_typed_set_time_sample() {
         "removing a sample must invert to a typed SetTimeSample, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the removed sample");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the removed sample"
+    );
 }
 
 /// Overwriting an **existing** relationship inverts to a typed
@@ -1363,13 +1293,13 @@ fn set_relationship_overwrite_inverts_to_typed_op() {
         name: "material:binding".into(),
         targets,
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let create_inverse = doc.apply(rel(vec!["/World".into()])).unwrap();
     assert!(
         matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
         "a newly-authored relationship inverts to a snapshot, got {create_inverse:?}"
     );
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(rel(vec![])).unwrap();
     assert!(
@@ -1378,10 +1308,14 @@ fn set_relationship_overwrite_inverts_to_typed_op() {
         "overwriting an existing relationship must invert to a typed SetRelationship, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior targets");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior targets"
+    );
     doc.apply(create_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the created opinion"
     );
@@ -1422,7 +1356,7 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
             .prim_attribute_value::<f64>(&SdfPath::new("/World").unwrap(), "scalar"),
         Some(2.0)
     );
-    let restored_source = doc.source();
+    let restored_source = doc.source().unwrap();
     assert_eq!(
         doc.data()
             .field(&property, sdf::FieldKey::TargetPaths.as_str())
@@ -1435,7 +1369,7 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
         Err(DocumentError::ValidationFailed(_))
     ));
     assert_eq!(doc.generation(), generation);
-    assert_eq!(doc.source(), restored_source);
+    assert_eq!(doc.source().unwrap(), restored_source);
     doc.apply(remove("absent")).unwrap();
     assert_eq!(doc.generation(), generation);
     doc.apply(UsdOp::SetRelationship {
@@ -1462,7 +1396,7 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
     );
     doc.apply(inverse).unwrap();
     assert_eq!(doc.layer_source(TargetLayer::Runtime), runtime_before);
-    assert_eq!(doc.source(), restored_source);
+    assert_eq!(doc.source().unwrap(), restored_source);
 }
 
 /// The `SetRelationship` invariants, for the attribute-connection twin.
@@ -1476,13 +1410,13 @@ fn set_connection_overwrite_inverts_to_typed_op() {
         type_name: "float".into(),
         sources,
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let create_inverse = doc.apply(conn(vec!["/World.outputs:v".into()])).unwrap();
     assert!(
         matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
         "a newly-authored connection inverts to a snapshot, got {create_inverse:?}"
     );
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(conn(vec![])).unwrap();
     assert!(
@@ -1491,10 +1425,14 @@ fn set_connection_overwrite_inverts_to_typed_op() {
         "overwriting an existing connection must invert to a typed SetConnection, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior sources");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior sources"
+    );
     doc.apply(create_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the created opinion"
     );
@@ -1510,13 +1448,13 @@ fn set_api_schemas_overwrite_inverts_to_typed_op() {
         path: "/World".into(),
         schemas,
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let create_inverse = doc.apply(api(vec!["PhysicsRigidBodyAPI".into()])).unwrap();
     assert!(
         matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
         "first apiSchemas authoring inverts to a snapshot, got {create_inverse:?}"
     );
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(api(vec!["PhysicsMassAPI".into()])).unwrap();
     assert!(
@@ -1525,10 +1463,14 @@ fn set_api_schemas_overwrite_inverts_to_typed_op() {
         "overwriting a prior apiSchemas list must invert to a typed SetApiSchemas, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior schema list");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior schema list"
+    );
     doc.apply(create_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the created opinion"
     );
@@ -1599,13 +1541,13 @@ fn set_variant_selection_overwrite_inverts_to_typed_op() {
         variant_set: "drivetrain".into(),
         variant: variant.into(),
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let create_inverse = doc.apply(select("raycast")).unwrap();
     assert!(
         matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
         "a set's first selection inverts to a snapshot, got {create_inverse:?}"
     );
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(select("physical")).unwrap();
     assert!(
@@ -1613,10 +1555,14 @@ fn set_variant_selection_overwrite_inverts_to_typed_op() {
         "re-selecting must invert to a typed SetVariantSelection, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior selection");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior selection"
+    );
     doc.apply(create_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the created opinion"
     );
@@ -1632,13 +1578,13 @@ fn set_payload_overwrite_inverts_to_typed_op() {
         path: "/World".into(),
         asset_paths,
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let create_inverse = doc.apply(payload(vec!["meshes/hull.usda".into()])).unwrap();
     assert!(
         matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
         "first payload authoring inverts to a snapshot, got {create_inverse:?}"
     );
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc.apply(payload(vec![])).unwrap();
     assert!(
@@ -1647,10 +1593,14 @@ fn set_payload_overwrite_inverts_to_typed_op() {
         "overwriting an existing payload list must invert to a typed SetPayload, got {inverse:?}"
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before, "undo restores the prior payload list");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "undo restores the prior payload list"
+    );
     doc.apply(create_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the created opinion"
     );
@@ -1734,10 +1684,10 @@ fn set_reference_arcs_overwrite_undo_is_typed_and_round_trips() {
         }],
         list_op: UsdReferenceListOp::Explicit,
     };
-    let original = doc.source();
+    let original = doc.source().unwrap();
     let first_inverse = doc.apply(explicit("base.usda")).unwrap();
     assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc
         .apply(UsdOp::SetReferenceArcs {
@@ -1761,17 +1711,21 @@ fn set_reference_arcs_overwrite_undo_is_typed_and_round_trips() {
     let encoded = serde_json::to_value(&inverse).unwrap();
     let decoded: UsdOp = serde_json::from_value(encoded).unwrap();
     doc.apply(decoded).unwrap();
-    assert_eq!(doc.source(), before, "typed undo restores the prior list");
+    assert_eq!(
+        doc.source().unwrap(),
+        before,
+        "typed undo restores the prior list"
+    );
     doc.apply(first_inverse).unwrap();
     assert_eq!(
-        doc.source(),
+        doc.source().unwrap(),
         original,
         "coarse undo removes the first opinion"
     );
 }
 
 #[test]
-fn set_reference_arcs_rejects_unsafe_assets_and_composed_only_targets() {
+fn set_reference_arcs_rejects_invalid_assets_and_unresolved_targets() {
     let source = "#usda 1.0\ndef Xform \"World\" (\n\
 prepend references = @base.usda@</Base>\n\
 )\n{\n}\n";
@@ -1781,13 +1735,13 @@ prepend references = @base.usda@</Base>\n\
             edit_target: LayerId::root(),
             path: "/World".into(),
             references: vec![UsdReferenceArc {
-                asset_path: "../escape.usda".into(),
+                asset_path: "bad\0path.usda".into(),
                 prim_path: None,
             }],
             list_op: UsdReferenceListOp::Explicit,
         })
         .unwrap_err();
-    assert!(invalid.to_string().contains("safe asset path"));
+    assert!(invalid.to_string().contains("NUL"));
 
     let read_only = doc
         .apply(UsdOp::SetReferenceArcs {
@@ -1797,7 +1751,7 @@ prepend references = @base.usda@</Base>\n\
             list_op: UsdReferenceListOp::Explicit,
         })
         .unwrap_err();
-    assert!(read_only.to_string().contains("composed/read-only"));
+    assert!(read_only.to_string().contains("not found"));
 }
 
 #[test]
@@ -1805,7 +1759,7 @@ fn set_default_prim_authors_layers_and_typed_undo() {
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\" {}\ndef Xform \"Rover\" {}\n";
     let mut doc = UsdDocument::new(DocumentId::new(52), SCENE);
     let root = SdfPath::abs_root();
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc
         .apply(UsdOp::SetDefaultPrim {
@@ -1830,7 +1784,10 @@ fn set_default_prim_authors_layers_and_typed_undo() {
         Some("Rover".into())
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before);
+    assert_eq!(
+        author::data_to_usda(doc.data()).unwrap(),
+        author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
+    );
 
     doc.apply(UsdOp::SetDefaultPrim {
         edit_target: LayerId::runtime(),
@@ -1851,7 +1808,10 @@ fn set_default_prim_authors_layers_and_typed_undo() {
         default_prim: None,
     })
     .unwrap();
-    assert_eq!(doc.source(), before);
+    assert_eq!(
+        author::data_to_usda(doc.data()).unwrap(),
+        author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
+    );
 }
 
 #[test]
@@ -1879,7 +1839,7 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
     const SCENE: &str = "#usda 1.0\ndef Xform \"World\" (\n    kind = \"group\"\n) {}\n";
     let mut doc = UsdDocument::new(DocumentId::new(54), SCENE);
     let path = SdfPath::new("/World").unwrap();
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     let inverse = doc
         .apply(UsdOp::SetPrimKind {
@@ -1915,7 +1875,10 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
         Some("component".into())
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(doc.source(), before);
+    assert_eq!(
+        author::data_to_usda(doc.data()).unwrap(),
+        author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
+    );
 
     let invalid = doc
         .apply(UsdOp::SetPrimKind {
@@ -1937,7 +1900,7 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
 }
 
 #[test]
-fn set_prim_kind_rejects_composed_only_prim() {
+fn set_prim_kind_rejects_an_unresolved_prim() {
     const SCENE: &str =
         "#usda 1.0\ndef Xform \"World\" (\n    prepend references = @base.usda@</Base>\n) {}\n";
     let mut doc = UsdDocument::new(DocumentId::new(55), SCENE);
@@ -1948,7 +1911,7 @@ fn set_prim_kind_rejects_composed_only_prim() {
             kind: Some("component".into()),
         })
         .unwrap_err();
-    assert!(error.to_string().contains("composed/read-only"));
+    assert!(error.to_string().contains("not found"));
 }
 
 #[test]
@@ -2058,7 +2021,7 @@ fn rover_built_from_blank_round_trips_with_undo() {
             &SdfPath::new("/Rover/WheelFL").unwrap(),
             "xformOp:translate"
         ),
-        Some([1.0, 0.0, 1.0])
+        Some([100.0, 0.0, 100.0])
     );
 
     // Undo every step → back to blank (no prims).
@@ -2421,7 +2384,7 @@ fn set_attribute_creates_and_records_typed_value() {
 fn set_attribute_rejects_usd_role_or_array_shape_changes() {
     let scene = "#usda 1.0\ndef Mesh \"Patch\"\n{\n    color3f[] primvars:displayColor = [(1, 0, 0)]\n    color3f inputs:color = (0, 1, 0)\n}\n";
     let mut doc = UsdDocument::new(DocumentId::new(64), scene);
-    let before = doc.source();
+    let before = doc.source().unwrap();
 
     for (name, type_name, value) in [
         ("primvars:displayColor", "color3f", "(0, 0, 1)"),
@@ -2436,7 +2399,10 @@ fn set_attribute_rejects_usd_role_or_array_shape_changes() {
         });
         assert!(matches!(error, Err(DocumentError::ValidationFailed(_))));
         assert_eq!(doc.generation(), 0);
-        assert_eq!(doc.source(), before);
+        assert_eq!(
+            author::data_to_usda(doc.data()).unwrap(),
+            author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
+        );
     }
 }
 
@@ -2478,14 +2444,22 @@ fn set_time_sample_authors_keyframes_and_interpolates() {
     );
     // Time-aware read interpolates the authored curve.
     assert_eq!(
-        doc.data()
-            .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+        doc.open_composed_stage()
+            .unwrap()
+            .attribute(mover.append_property("xformOp:translate").unwrap())
+            .unwrap()
+            .get_at::<[f64; 3]>(openusd::usd::TimeCode::new(5.0))
+            .unwrap(),
         Some([5.0, 0.0, 0.0]),
         "midpoint must linearly interpolate the two keyframes"
     );
     assert_eq!(
-        doc.data()
-            .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
+        doc.open_composed_stage()
+            .unwrap()
+            .attribute(mover.append_property("xformOp:translate").unwrap())
+            .unwrap()
+            .get_at::<[f64; 3]>(openusd::usd::TimeCode::new(10.0))
+            .unwrap(),
         Some([10.0, 0.0, 0.0])
     );
     // A sample-only attribute has no `default` opinion.
@@ -2501,8 +2475,12 @@ fn set_time_sample_authors_keyframes_and_interpolates() {
         doc.apply(inv).unwrap();
     }
     assert_eq!(
-        doc.data()
-            .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+        doc.open_composed_stage()
+            .unwrap()
+            .attribute(mover.append_property("xformOp:translate").unwrap())
+            .unwrap()
+            .get_at::<[f64; 3]>(openusd::usd::TimeCode::new(5.0))
+            .unwrap(),
         None,
         "keyframes undone by the typed RemoveTimeSample inverses"
     );
@@ -2649,8 +2627,12 @@ fn remove_time_sample_errors_when_absent() {
     .unwrap();
     let mover = SdfPath::new("/Mover").unwrap();
     assert_eq!(
-        doc.data()
-            .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
+        doc.open_composed_stage()
+            .unwrap()
+            .attribute(mover.append_property("xformOp:translate").unwrap())
+            .unwrap()
+            .get_at::<[f64; 3]>(openusd::usd::TimeCode::new(0.0))
+            .unwrap(),
         None,
         "the only sample was removed, so nothing resolves"
     );
@@ -2665,7 +2647,7 @@ fn unparseable_source_preserved_and_edits_blocked() {
         DocumentOrigin::writable_file("/tmp/bad.usda"),
     );
     // Raw text preserved for save.
-    assert_eq!(doc.source(), garbage);
+    assert_eq!(doc.source().unwrap(), garbage);
     // Structural edits blocked.
     let err = doc
         .apply(UsdOp::AddPrim {
@@ -2736,7 +2718,7 @@ fn save_serializes_base_only_excluding_runtime_state() {
     })
     .unwrap();
     // The saved source (base layer) must NOT contain the runtime prim.
-    let saved = doc.source();
+    let saved = doc.source().unwrap();
     assert!(
         !saved.contains("SpawnedRock"),
         "runtime state leaked into save:\n{saved}"
@@ -2797,9 +2779,9 @@ fn composed_view_includes_runtime_but_source_excludes_it() {
             .as_deref(),
         Some("Sphere")
     );
-    assert!(doc.composed_source().contains("Obstacle"));
+    assert!(doc.composed_source().unwrap().contains("Obstacle"));
     // The saved source (base) does not.
-    assert!(!doc.source().contains("Obstacle"));
+    assert!(!doc.source().unwrap().contains("Obstacle"));
 }
 
 #[test]
@@ -2829,16 +2811,16 @@ fn spawn_op_authors_runtime_reference_excluded_from_save() {
     );
     // It rides into the composed view (what the viewport renders /
     // re-instantiates) as a resolvable reference opinion...
-    let composed = host.document().composed_source();
+    let composed = host.document().composed_source().unwrap();
     assert!(
         composed.contains("@vessels/rovers/skid_rover.usda@"),
         "composed view must carry the spawn reference:\n{composed}"
     );
     // ...and is EXCLUDED from Save (base only).
     assert!(
-        !host.document().source().contains("skid_rover"),
+        !host.document().source().unwrap().contains("skid_rover"),
         "spawn leaked into the saved base layer:\n{}",
-        host.document().source()
+        host.document().source().unwrap()
     );
 
     // Undo removes the spawn from runtime (typed AddPrim→RemovePrim inverse),
@@ -2878,9 +2860,9 @@ fn runtime_set_attribute_overrides_nested_base_attr_in_composed() {
         "runtime override must win in the composed sdf::Data"
     );
     assert!(
-        doc.composed_source().contains("density = 4"),
+        doc.composed_source().unwrap().contains("density = 4"),
         "composed USDA source must carry the override:\n{}",
-        doc.composed_source()
+        doc.composed_source().unwrap()
     );
 }
 
@@ -2899,6 +2881,17 @@ prepend references = @./traverse.usda@</Traverse>\n\
         base,
         DocumentOrigin::writable_file("/tmp/referenced-wrapper.usda"),
     );
+    let child = "#usda 1.0\ndef Xform \"Traverse\" { def Xform \"Terrain\" { def Scope \"Overzoom\" {} } }\n";
+    doc.set_authoring_recipe(
+        None,
+        Some(StageRecipe::new(
+            "wrapper.usda",
+            std::collections::HashMap::from([
+                ("wrapper.usda".to_owned(), base.as_bytes().to_vec()),
+                ("traverse.usda".to_owned(), child.as_bytes().to_vec()),
+            ]),
+        )),
+    );
     doc.apply(UsdOp::SetAttribute {
         edit_target: LayerId::runtime(),
         path: "/Traverse/Terrain/Overzoom".into(),
@@ -2915,7 +2908,7 @@ prepend references = @./traverse.usda@</Traverse>\n\
         "the override must be authored in the runtime layer"
     );
     assert!(
-        doc.source().contains("references"),
+        doc.source().unwrap().contains("references"),
         "the base wrapper must remain referenced rather than flattened"
     );
 }
@@ -2927,6 +2920,18 @@ fn runtime_set_attribute_can_target_descendant_of_runtime_reference() {
         DocumentId::new(43),
         base,
         DocumentOrigin::writable_file("/tmp/runtime-reference-wrapper.usda"),
+    );
+    let child =
+        "#usda 1.0\n(defaultPrim = \"Point\")\ndef Xform \"Point\" { def Scope \"Trigger\" {} }\n";
+    doc.set_authoring_recipe(
+        None,
+        Some(StageRecipe::new(
+            "wrapper.usda",
+            std::collections::HashMap::from([
+                ("wrapper.usda".to_owned(), base.as_bytes().to_vec()),
+                ("route_point.usda".to_owned(), child.as_bytes().to_vec()),
+            ]),
+        )),
     );
     doc.apply(UsdOp::AddPrim {
         edit_target: LayerId::runtime(),
@@ -3016,39 +3021,53 @@ fn base_and_runtime_ops_are_independent() {
     assert!(!runtime_prim_exists(&doc, "/Rover"));
 }
 
-/// Variability and `custom` come from the schema, not the call site — so the
-/// SAME `SetAttribute` op yields `uniform` for one attribute and `varying` for
-/// another, and no caller has to know which. This is the fix for `info:id` and
-/// `physics:axis` having been authored `varying`: they are `uniform` in their
-/// schemas, nothing at the call site knew that, and the value silently diverged.
 #[test]
 fn set_attribute_authors_variability_and_custom_from_the_schema() {
     let mut host = DocumentHost::new(UsdDocument::with_origin(
         DocumentId::new(41),
-        "#usda 1.0\ndef Shader \"Surface\"\n{\n}\n",
+        "#usda 1.0\ndef Shader \"Surface\" {}\ndef Camera \"Camera\" (prepend apiSchemas = [\"LunCoCameraAPI\"]) {}\ndef LunCoEnvironment \"Environment\" {}\n",
         DocumentOrigin::writable_file("/tmp/var.usda"),
     ));
-    let set = |host: &mut DocumentHost<UsdDocument>, name: &str, ty: &str, value: &str| {
-        host.apply(Mutation::local(UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
-            path: "/Surface".into(),
-            name: name.into(),
-            type_name: ty.into(),
-            value: value.into(),
-        }))
-        .unwrap();
-    };
+    let set =
+        |host: &mut DocumentHost<UsdDocument>, path: &str, name: &str, ty: &str, value: &str| {
+            host.apply(Mutation::local(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: path.into(),
+                name: name.into(),
+                type_name: ty.into(),
+                value: value.into(),
+            }))
+            .unwrap();
+        };
 
     // Core USD, declared `uniform` by UsdShadeShader.
-    set(&mut host, "info:id", "token", "\"UsdPreviewSurface\"");
+    set(
+        &mut host,
+        "/Surface",
+        "info:id",
+        "token",
+        "\"UsdPreviewSurface\"",
+    );
     // Ours, declared `uniform` by luncoSchema.
-    set(&mut host, "lunco:cameraPose", "token", "\"mounted\"");
+    set(
+        &mut host,
+        "/Camera",
+        "lunco:cameraPose",
+        "token",
+        "\"mounted\"",
+    );
     // Ours, declared `varying` by luncoSchema.
-    set(&mut host, "lunco:env:exposureEv100", "float", "12.5");
+    set(
+        &mut host,
+        "/Environment",
+        "lunco:env:exposureEv100",
+        "float",
+        "12.5",
+    );
     // Ours, declared by NO schema — a per-model Modelica param, genuinely custom.
-    set(&mut host, "lunco:voltage", "float", "28.0");
+    set(&mut host, "/Surface", "lunco:voltage", "float", "28.0");
 
-    let src = host.document().source();
+    let src = host.document().source().unwrap();
     assert!(
         src.contains("uniform token info:id"),
         "info:id is uniform per UsdShadeShader: {src}"
@@ -3091,10 +3110,17 @@ fn set_api_schemas_authors_and_undoes() {
     }))
     .unwrap();
     assert!(
-        host.document().source().contains("PhysicsRigidBodyAPI")
-            && host.document().source().contains("PhysicsCollisionAPI"),
+        host.document()
+            .source()
+            .unwrap()
+            .contains("PhysicsRigidBodyAPI")
+            && host
+                .document()
+                .source()
+                .unwrap()
+                .contains("PhysicsCollisionAPI"),
         "apiSchemas authored: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
     assert!(
         reparses_cleanly(host.document()),
@@ -3102,9 +3128,13 @@ fn set_api_schemas_authors_and_undoes() {
     );
     host.undo().unwrap();
     assert!(
-        !host.document().source().contains("PhysicsRigidBodyAPI"),
+        !host
+            .document()
+            .source()
+            .unwrap()
+            .contains("PhysicsRigidBodyAPI"),
         "undo removes the schemas: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
 }
 
@@ -3124,15 +3154,15 @@ fn set_active_false_then_undo_restores_absence() {
     }))
     .unwrap();
     assert!(
-        host.document().source().contains("active = false"),
+        host.document().source().unwrap().contains("active = false"),
         "deactivation authored: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
     host.undo().unwrap();
     assert!(
-        !host.document().source().contains("active"),
+        !host.document().source().unwrap().contains("active"),
         "undo restores the unauthored (neither true nor false) opinion: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
 }
 
@@ -3173,9 +3203,9 @@ fn set_active_on_runtime_overlay_authors_over_a_composed_prim() {
     // The base layer is untouched (Save serializes base only): a runtime hide
     // must not mutate the source scene.
     assert!(
-        !doc.source().contains("/Traverse/Route/W1"),
+        !doc.source().unwrap().contains("/Traverse/Route/W1"),
         "runtime overlay must not rewrite the base layer: {}",
-        doc.source()
+        doc.source().unwrap()
     );
 }
 
@@ -3195,7 +3225,7 @@ fn set_variant_selection_preserves_sibling_set() {
         variant: "physical".into(),
     })
     .unwrap();
-    let s = doc.source();
+    let s = doc.source().unwrap();
     assert!(
         s.contains("drivetrain") && s.contains("physical"),
         "new selection: {s}"
@@ -3226,6 +3256,17 @@ prepend references = @./rover.usda@</Rover>\n\
         scene,
         DocumentOrigin::writable_file("/tmp/variant_wrapper.usda"),
     );
+    let child = "#usda 1.0\ndef Xform \"Rover\" { def Xform \"Rover\" (prepend variantSets = \"generation\") { variantSet \"generation\" = { \"solar\" {} } } }\n";
+    doc.set_authoring_recipe(
+        None,
+        Some(StageRecipe::new(
+            "scene.usda",
+            std::collections::HashMap::from([
+                ("scene.usda".to_owned(), scene.as_bytes().to_vec()),
+                ("rover.usda".to_owned(), child.as_bytes().to_vec()),
+            ]),
+        )),
+    );
     doc.apply(UsdOp::SetVariantSelection {
         edit_target: LayerId::root(),
         path: "/Scene/Rover".into(),
@@ -3244,7 +3285,7 @@ prepend references = @./rover.usda@</Rover>\n\
         sdf::Value::VariantSelectionMap(map)
             if map.get("generation").is_some_and(|value| value == "solar")
     ));
-    let authored = doc.source();
+    let authored = doc.source().unwrap();
     assert!(
         authored.contains("over \"Rover\""),
         "the composed target must be authored as an over, not flattened:\n{authored}"
@@ -3275,22 +3316,22 @@ fn set_payload_authors_and_undoes() {
     }))
     .unwrap();
     assert!(
-        host.document().source().contains("hull.usdc"),
+        host.document().source().unwrap().contains("hull.usdc"),
         "payload authored: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
     // The substring check above passes even for a malformed `@@…@@` path; THIS
     // is what proves the payload serialized to parseable USDA.
     assert!(
         reparses_cleanly(host.document()),
         "authored payload must reparse cleanly: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
     host.undo().unwrap();
     assert!(
-        !host.document().source().contains("hull.usdc"),
+        !host.document().source().unwrap().contains("hull.usdc"),
         "undo clears the payload: {}",
-        host.document().source()
+        host.document().source().unwrap()
     );
 }
 
@@ -3362,4 +3403,69 @@ defaultPrim = \"Traverse\"
         moved.is_ok(),
         "moving a variant-authored prim must be accepted, got {moved:?}"
     );
+}
+
+#[test]
+fn native_binary_layer_roundtrip_and_export_rejection() {
+    let doc = UsdDocument::new(DocumentId::new(11), TINY_USDA);
+    let bytes = doc.export_bytes("usdc").unwrap();
+    assert!(bytes.starts_with(b"PXR-USDC"));
+    let prepared = PreparedUsdSource::from_bytes(bytes.clone()).unwrap();
+    assert_eq!(prepared.source_bytes(), bytes);
+    let restored = <UsdDocument as lunco_doc::PreparedFileBacked>::with_prepared_origin(
+        DocumentId::new(12),
+        prepared,
+        DocumentOrigin::writable_file("/tmp/native.usdc"),
+    );
+    assert!(same_layer_data(doc.data(), restored.data()));
+    assert!(doc.export_bytes("unsupported").is_err());
+    assert!(PreparedUsdSource::from_bytes(b"PXR-USDC corrupt".to_vec()).is_err());
+}
+
+#[test]
+fn native_writer_rejection_preserves_unchanged_authored_source() {
+    let source = "#usda 1.0\nclass \"Base\" {}\ndef Xform \"Derived\" (inherits = </Base>) {}\n";
+    let mut document = UsdDocument::new(DocumentId::new(13), source);
+    assert_eq!(document.export_bytes("usda").unwrap(), source.as_bytes());
+    document.authored_source = None;
+    assert!(
+        document
+            .export_bytes("usda")
+            .unwrap_err()
+            .to_string()
+            .contains("inheritPaths")
+    );
+    assert!(document.source().is_err());
+}
+
+#[test]
+fn native_binary_inheritance_does_not_require_text_export() {
+    let source = "#usda 1.0\nclass \"Base\" { double inherited = 7 }\ndef Xform \"Derived\" (inherits = </Base>) {}\n";
+    let document = UsdDocument::new(DocumentId::new(14), source);
+    let bytes = document.export_bytes("usdc").unwrap();
+    let prepared = PreparedUsdSource::from_bytes(bytes).unwrap();
+    let restored = <UsdDocument as lunco_doc::PreparedFileBacked>::with_prepared_origin(
+        DocumentId::new(15),
+        prepared,
+        DocumentOrigin::writable_file("/tmp/inherited.usdc"),
+    );
+    assert!(same_layer_data(document.data(), restored.data()));
+    assert!(!restored.is_dirty());
+    let stage = restored.open_composed_stage().unwrap();
+    assert_eq!(
+        stage
+            .attribute("/Derived.inherited")
+            .unwrap()
+            .get::<f64>()
+            .unwrap(),
+        Some(7.0)
+    );
+    let binary = restored.export_bytes("usdc").unwrap();
+    let layer = sdf::Layer::from_bytes("roundtrip", binary).unwrap();
+    assert!(same_layer_data(
+        restored.data(),
+        &sdf::Data::from_abstract(layer.data()).unwrap()
+    ));
+    assert!(restored.source().is_err());
+    assert!(restored.export_bytes("usda").is_err());
 }

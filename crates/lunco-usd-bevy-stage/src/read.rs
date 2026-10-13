@@ -18,7 +18,7 @@ use bevy::log::{error, warn};
 use bevy::math::DQuat;
 use bevy::prelude::Transform;
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{FieldKey, Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 use std::collections::HashSet;
 
@@ -27,9 +27,8 @@ use lunco_usd_data::metadata::AttrUiHint;
 
 /// Read binary asset arcs from one authored prim spec in the live stage.
 ///
-/// Binary files cannot be opened as USD layers by the pure-Rust resolver, so
-/// composition maps them to an empty stub. The authored payload/reference is
-/// still the authoritative asset identity; reading it here keeps the render
+/// Unsupported binary formats remain unresolved in native USD composition.
+/// Their authored payload/reference is the asset identity; reading it here keeps the render
 /// projection live and avoids a second precomputed cache or a custom USD
 /// attribute.
 fn binary_assets_in_spec(
@@ -127,6 +126,7 @@ impl std::error::Error for AssetIdentifierReadError {}
 fn consumed_asset_identifier(
     value: Option<Value>,
     prepared: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
+    source_layer: Option<&str>,
     prim: &SdfPath,
     name: &str,
 ) -> Result<Option<String>, AssetIdentifierReadError> {
@@ -144,20 +144,31 @@ fn consumed_asset_identifier(
             "has no composed canonical identifier".to_owned(),
         ));
     };
-    if asset.is_empty() {
+    if asset.asset_path().is_empty() {
         return Ok(Some(String::new()));
     }
-    let Some(identifier) = asset.canonical_identifier() else {
+    if openusd::sdf::expr::is_expression(asset.as_str()) && asset.evaluated_path().is_none() {
         return Err(error(
             asset.into_string(),
-            "has no composed canonical identifier".to_owned(),
+            "has an unevaluated USD asset expression".to_owned(),
+        ));
+    }
+    let Some(source_layer) = source_layer else {
+        return Err(error(
+            asset.into_string(),
+            "has no contributing USD layer".to_owned(),
         ));
     };
+    let identifier = lunco_usd_compose::canonicalize_at(
+        asset.asset_path(),
+        Some(&openusd::ar::ResolvedPath::new(source_layer)),
+    )
+    .map_err(|failure| error(asset.asset_path().to_owned(), failure.to_string()))?;
     let Some(lunco_assets_core::asset_path::AssetReference::Search {
         identifier,
         authored,
     }) = lunco_assets_core::asset_path::AssetReference::for_asset_value(
-        identifier,
+        &identifier,
         asset.asset_path(),
     )
     else {
@@ -196,6 +207,15 @@ pub trait UsdRead {
 
     /// The default-time composed value of attribute `name` on `prim`, owned.
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
+    /// Layer supplying this asset value, reported by native USD value resolution.
+    fn asset_source_layer(
+        &self,
+        _prim: &SdfPath,
+        _name: &str,
+        _time: Option<f64>,
+    ) -> Option<String> {
+        None
+    }
 
     /// Whether a composed attribute has an authored default or time-sample
     /// opinion in any contributing layer. This deliberately inspects the
@@ -203,45 +223,6 @@ pub trait UsdRead {
     /// fallback must not be mistaken for a scene override.
     fn has_authored_attribute(&self, _prim: &SdfPath, _name: &str) -> bool {
         false
-    }
-
-    /// The declared USD schema fallback for an unauthored property on `prim`.
-    /// This is resolved from the prim's concrete type and applied API schemas,
-    /// so renderer consumers can honor USD defaults even when the runtime
-    /// stage reader does not embed OpenUSD's native schema registry.
-    fn schema_fallback_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
-        let prim_type = self.type_name(prim)?;
-        let api_schemas = self.api_schemas(prim);
-        let registry = lunco_usd_authoring::schema::SchemaRegistry::global()
-            .read()
-            .ok()?;
-        registry
-            .fallback_value(&prim_type, &api_schemas, name)
-            .cloned()
-    }
-
-    /// Read a real scalar from the composed value or, when absent, its USD
-    /// schema fallback. Authorship can still be checked separately when the
-    /// caller needs provenance.
-    fn real_f32_with_schema_fallback(&self, prim: &SdfPath, name: &str) -> Option<f32> {
-        self.real_f32(prim, name).or_else(|| {
-            self.schema_fallback_value(prim, name)
-                .as_ref()
-                .and_then(numeric_value_as_f64)
-                .map(|value| value as f32)
-        })
-    }
-
-    /// Read a boolean from the composed value or, when absent, its USD schema
-    /// fallback.
-    fn boolean_with_schema_fallback(&self, prim: &SdfPath, name: &str) -> Option<bool> {
-        self.boolean(prim, name).or_else(|| {
-            self.schema_fallback_value(prim, name)
-                .and_then(|value| match value {
-                    Value::Bool(value) => Some(value),
-                    _ => None,
-                })
-        })
     }
 
     /// The composed USD `doc` metadata for `prim`, or `None` when no authored
@@ -372,6 +353,7 @@ pub trait UsdRead {
         consumed_asset_identifier(
             self.attr_value(prim, name),
             self.native_asset_paths(),
+            self.asset_source_layer(prim, name, None).as_deref(),
             prim,
             name,
         )
@@ -778,6 +760,15 @@ pub trait UsdReadObject {
     fn type_name(&self, prim: &SdfPath) -> Option<String>;
     fn kind(&self, prim: &SdfPath) -> Option<String>;
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
+    /// Layer supplying this asset value, reported by native USD value resolution.
+    fn asset_source_layer(
+        &self,
+        _prim: &SdfPath,
+        _name: &str,
+        _time: Option<f64>,
+    ) -> Option<String> {
+        None
+    }
     fn points3(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 3]>;
     fn vec3_f64(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]>;
     fn quat_d(&self, prim: &SdfPath, name: &str) -> Option<DQuat>;
@@ -792,6 +783,7 @@ pub trait UsdReadObject {
         consumed_asset_identifier(
             self.attr_value(prim, name),
             self.native_asset_paths(),
+            self.asset_source_layer(prim, name, None).as_deref(),
             prim,
             name,
         )
@@ -1310,6 +1302,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::kind(self, prim)
     }
 
+    fn asset_source_layer(&self, prim: &SdfPath, name: &str, time: Option<f64>) -> Option<String> {
+        UsdRead::asset_source_layer(self, prim, name, time)
+    }
+
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
         UsdRead::attr_value(self, prim, name)
     }
@@ -1501,6 +1497,7 @@ impl UsdRead for StageView<'_> {
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .type_name()
             .ok()
             .flatten()
@@ -1510,15 +1507,32 @@ impl UsdRead for StageView<'_> {
     fn kind(&self, prim: &SdfPath) -> Option<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .kind()
             .ok()
             .flatten()
             .map(|kind| kind.to_string())
     }
 
+    fn asset_source_layer(&self, prim: &SdfPath, name: &str, time: Option<f64>) -> Option<String> {
+        let attribute = self.stage().prim(prim).ok()?.attribute(name);
+        let info = attribute
+            .resolve_info_at(time.map(openusd::usd::TimeCode::new))
+            .ok()?;
+        let site = info.spec_site()?;
+        let layer = self.stage().layer(&site.layer)?;
+        Some(
+            layer
+                .resolved_path()
+                .unwrap_or(layer.identifier())
+                .to_owned(),
+        )
+    }
+
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .get::<Value>()
             .ok()
@@ -1528,6 +1542,7 @@ impl UsdRead for StageView<'_> {
     fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .type_name()
             .ok()
@@ -1536,48 +1551,28 @@ impl UsdRead for StageView<'_> {
     }
 
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
-        let Ok(property_stack) = self
-            .stage()
-            .prim(prim.clone())
+        self.stage()
+            .prim(prim)
+            .expect("validated USD path")
             .attribute(name)
-            .property_stack()
-        else {
-            return false;
-        };
-        property_stack.into_iter().any(|(layer_id, authored_path)| {
-            let Some(layer) = self.stage().layer(&layer_id) else {
-                return false;
-            };
-            let data = layer.data();
-            data.has_field(&authored_path, FieldKey::Default.as_str())
-                || data.has_field(&authored_path, FieldKey::TimeSamples.as_str())
-        })
+            .resolve_info()
+            .map(|info| info.has_authored_value_opinion())
+            .unwrap_or(false)
     }
 
     fn documentation(&self, prim: &SdfPath) -> Option<String> {
-        // `prim_stack` is already the composed, strongest-first opinion stack,
-        // including referenced and instanced layers. Reading each layer's
-        // standard `documentation` field here keeps the USD composition
-        // algorithm in OpenUSD while avoiding a second parser or a bespoke
-        // `lunco:*description` field.
         self.stage()
-            .prim(prim.clone())
-            .prim_stack()
+            .prim(prim)
             .ok()?
-            .into_iter()
-            .find_map(|(layer_id, authored_path)| {
-                let layer = self.stage().layer(&layer_id)?;
-                let value = layer
-                    .data()
-                    .try_field(&authored_path, "documentation")
-                    .ok()??;
-                value.as_ref().as_str().map(str::to_owned)
-            })
+            .get_metadata::<String>("documentation")
+            .ok()
+            .flatten()
     }
 
     fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .api_schemas()
             .map(|v| v.iter().any(|s| s.as_str() == schema))
             .unwrap_or(false)
@@ -1586,6 +1581,7 @@ impl UsdRead for StageView<'_> {
     fn api_schemas(&self, prim: &SdfPath) -> Vec<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .api_schemas()
             .map(|schemas| schemas.iter().map(ToString::to_string).collect())
             .unwrap_or_default()
@@ -1630,6 +1626,7 @@ impl UsdRead for StageView<'_> {
         // see the trait doc.
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .relationship(name)
             .targets()
             .unwrap_or_default()
@@ -1641,6 +1638,7 @@ impl UsdRead for StageView<'_> {
     fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .relationship(name)
             .targets()
             .unwrap_or_default()
@@ -1649,6 +1647,7 @@ impl UsdRead for StageView<'_> {
     fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .property_names()
             .map(|names| {
                 names
@@ -1656,6 +1655,7 @@ impl UsdRead for StageView<'_> {
                     .filter_map(|name| {
                         self.stage()
                             .prim(prim.clone())
+                            .expect("validated USD path")
                             .relationship(name.as_str())
                             .targets()
                             .ok()
@@ -1671,6 +1671,7 @@ impl UsdRead for StageView<'_> {
         // flat `Vec<Path>` — exactly the fan-in set the derivation needs.
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .connections()
             .map(|cs| cs.into_iter().map(|p| p.to_string()).collect())
@@ -1686,7 +1687,12 @@ impl UsdRead for StageView<'_> {
         // it at this shared reader boundary so every consumer gets one child.
         let mut children = Vec::new();
         let mut seen = HashSet::new();
-        if let Ok(composed) = self.stage().prim(prim.clone()).children() {
+        if let Ok(composed) = self
+            .stage()
+            .prim(prim.clone())
+            .expect("validated USD path")
+            .children()
+        {
             for child in composed.iter() {
                 let path = child.path().clone();
                 if seen.insert(path.clone()) {
@@ -1727,7 +1733,7 @@ impl UsdRead for StageView<'_> {
             if !seen.insert(path.clone()) {
                 return;
             }
-            let prim = stage.prim(path.clone());
+            let prim = stage.prim(path.clone()).expect("validated USD path");
             let matches_type = !type_names.is_empty()
                 && prim
                     .type_name()
@@ -1765,7 +1771,7 @@ impl UsdRead for StageView<'_> {
             if !seen.insert(path.clone()) {
                 return;
             }
-            let prim = stage.prim(path.clone());
+            let prim = stage.prim(path.clone()).expect("validated USD path");
             let type_name = prim.type_name().ok().flatten();
             let applied_api_schemas = prim.api_schemas().ok().unwrap_or_default();
             let has_attr_prefix = !attr_prefix.is_empty()
@@ -1798,6 +1804,7 @@ impl UsdRead for StageView<'_> {
     fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .property_names()
             .map(|ns| ns.iter().map(|t| t.to_string()).collect())
             .unwrap_or_default()
@@ -1809,6 +1816,7 @@ impl UsdRead for StageView<'_> {
         // property-name walk and no allocation at all.
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .property_names()
             .map(|ns| ns.iter().any(|t| t.as_str().starts_with(prefix)))
             .unwrap_or(false)
@@ -1822,6 +1830,7 @@ impl UsdRead for StageView<'_> {
         // timeSamples-then-default reimplementation.
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .get_at::<Value>(openusd::usd::TimeCode::new(time))
             .ok()
@@ -1829,9 +1838,19 @@ impl UsdRead for StageView<'_> {
     }
 
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
-        let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
+        let stack = self
+            .stage()
+            .prim(prim.clone())
+            .expect("validated USD path")
+            .prim_stack()
+            .ok()?;
         let mut matches = Vec::new();
-        for (layer_id, authored_path) in stack {
+        for openusd::usd::SpecSite {
+            layer: layer_id,
+            path: authored_path,
+            ..
+        } in stack
+        {
             let assets = match binary_assets_in_spec(self.stage(), &layer_id, &authored_path) {
                 Ok(assets) => assets,
                 Err(error) => {
@@ -1862,11 +1881,19 @@ impl UsdRead for StageView<'_> {
     }
 
     fn is_active(&self, prim: &SdfPath) -> bool {
-        self.stage().prim(prim.clone()).is_active().unwrap_or(true)
+        self.stage()
+            .prim(prim.clone())
+            .expect("validated USD path")
+            .is_active()
+            .unwrap_or(true)
     }
 
     fn has_prim(&self, prim: &SdfPath) -> bool {
-        self.stage().prim(prim.clone()).is_valid().unwrap_or(false)
+        self.stage()
+            .prim(prim.clone())
+            .expect("validated USD path")
+            .is_valid()
+            .unwrap_or(false)
     }
 
     fn default_prim(&self) -> Option<String> {
@@ -1880,21 +1907,25 @@ impl UsdRead for StageView<'_> {
     }
 
     fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint> {
-        // `get_metadata` decodes to a type that is `TryFrom<Value>`; a raw
-        // `Dictionary` (a `HashMap`) is not, so read the `Value` and unwrap its
-        // `Dictionary` variant, then parse the hint fields here.
-        let dict = match self
-            .stage()
-            .prim(prim.clone())
-            .attribute(name)
-            .get_metadata::<openusd::sdf::Value>("customData")
-            .ok()
-            .flatten()
+        let prim = self.stage().prim(prim).ok()?;
+        let attribute = prim.attribute(name);
+        if let Some(Value::Dictionary(dict)) =
+            attribute.get_metadata::<Value>("customData").ok().flatten()
+            && let Some(hint) = AttrUiHint::from_dict(&dict)
         {
-            Some(openusd::sdf::Value::Dictionary(d)) => d,
-            _ => return None,
-        };
-        AttrUiHint::from_dict(&dict)
+            return Some(hint);
+        }
+        if !prim
+            .prim_definition()
+            .ok()?
+            .has_property(&openusd::tf::Token::from(name))
+        {
+            return None;
+        }
+        lunco_usd_authoring::schema::SchemaMetadata::global()
+            .property(name)?
+            .ui_hint
+            .clone()
     }
 
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
@@ -1903,6 +1934,7 @@ impl UsdRead for StageView<'_> {
         // clip-animated channel registers as animated too.
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .time_sample_times()
             .map(|ts| !ts.is_empty())
@@ -1918,6 +1950,7 @@ impl UsdRead for StageView<'_> {
         // stage time (clip and layer offsets applied).
         self.stage()
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .time_sample_times()
             .unwrap_or_default()
@@ -1960,6 +1993,13 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::kind(*reader, prim),
             Self::Live(reader) => UsdRead::kind(reader, prim),
+        }
+    }
+
+    fn asset_source_layer(&self, prim: &SdfPath, name: &str, time: Option<f64>) -> Option<String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::asset_source_layer(*reader, prim, name, time),
+            Self::Live(reader) => UsdRead::asset_source_layer(reader, prim, name, time),
         }
     }
 
@@ -2277,27 +2317,35 @@ mod asset_identifier_tests {
         let error = consumed_asset_identifier(
             Some(Value::AssetPath("raw.png".into())),
             None,
+            None,
             &prim,
             "inputs:file",
         )
         .unwrap_err();
         assert_eq!(error.property, "/Source.inputs:file");
         assert_eq!(error.authored, "raw.png");
-        let mut anchored = openusd::sdf::AssetPath::new("./raw.png");
-        anchored.set_canonical_identifier("twin://mount/child/raw.png");
         assert_eq!(
-            consumed_asset_identifier(Some(Value::AssetPath(anchored)), None, &prim, "inputs:file")
-                .unwrap(),
+            consumed_asset_identifier(
+                Some(Value::AssetPath("./raw.png".into())),
+                None,
+                Some("twin://mount/child/source.usda"),
+                &prim,
+                "inputs:file"
+            )
+            .unwrap(),
             Some("twin://mount/child/raw.png".into())
         );
-        let mut search = openusd::sdf::AssetPath::new("raw.png");
-        search.set_canonical_identifier("twin://mount/child/raw.png");
-        let error =
-            consumed_asset_identifier(Some(Value::AssetPath(search)), None, &prim, "inputs:file")
-                .unwrap_err();
+        let error = consumed_asset_identifier(
+            Some(Value::AssetPath("raw.png".into())),
+            None,
+            Some("twin://mount/child/source.usda"),
+            &prim,
+            "inputs:file",
+        )
+        .unwrap_err();
         assert!(error.reason.contains("no preparation"), "{error}");
         assert_eq!(
-            consumed_asset_identifier(None, None, &prim, "inputs:file").unwrap(),
+            consumed_asset_identifier(None, None, None, &prim, "inputs:file").unwrap(),
             None
         );
     }

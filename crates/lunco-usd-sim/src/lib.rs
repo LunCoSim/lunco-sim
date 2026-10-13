@@ -89,8 +89,8 @@ use lunco_usd_sim_core::{
     GroundColliderPending, PendingDifferential, PendingEntityWork, PhysicalWheel, UsdSimProcessed,
     UsdSimSet,
 };
-use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
+use openusd_schemas::physics::tokens as ptok;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
@@ -2891,7 +2891,7 @@ fn process_usd_sim_prim_read(
         // invalid authored body leaves no partial runtime projection behind.
         let is_physical = topology.joint_targets.contains_key(&prim_path.path);
         let authored_collider = if is_physical {
-            if !reader.has_api_schema(&sdf_path, ptok::API_RIGID_BODY) {
+            if !reader.has_api_schema(&sdf_path, ptok::PHYSICS_RIGID_BODY_API) {
                 error!(
                     "USD physical wheel {} has no authored PhysicsRigidBodyAPI — refusing to spawn",
                     sdf_path.as_str()

@@ -101,10 +101,10 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 ## 4. USD Integration Layer
 Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation metadata, and materials.
 
-OpenUSD is the pinned maintained owner in `third_party/openusd`, selected by the
-workspace registry/Git patches. Its provenance file records revision/license and
-the derived strongest-default asset identifier. Composed I/O consumers use that
-identifier; authored bytes and serialization retain their original values.
+The workspace pins `openusd`, `openusd-schemas`, and `openusd-build` 0.8.0.
+Core composition and standard schemas come directly from the maintained Rust
+crates. Project declarations are generated from the schema source by
+`openusd-build`; asset provenance comes from native `ResolveInfo`.
 
 | Crate | Responsibility |
 | :--- | :--- |
@@ -698,8 +698,8 @@ registry.
 
 **`lunco-usd-authoring`**
 OpenUSD authored-layer operations and schema registry. It owns path-addressed
-authoring, USDA conversion, reference/list-op helpers, and registered schema
-metadata without owning document identity, journaling, runtime composition, or
+authoring, USDA conversion, reference/list-op helpers, native schema registration,
+and derived inspector/unit metadata without owning document identity, journaling, runtime composition, or
 UI.
 
 **`lunco-usd-core`**

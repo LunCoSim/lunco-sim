@@ -107,7 +107,7 @@ pub(super) fn read_physics_material(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
-    use openusd::schemas::physics::tokens as ptok;
+    use openusd_schemas::physics::tokens as ptok;
 
     let Some(mat_path) =
         reader.bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Physics)
@@ -115,7 +115,7 @@ pub(super) fn read_physics_material(
         return Ok(None);
     };
     let mat = SdfPath::new(&mat_path)
-        .map_err(|_| PhysicsMaterialReadError::new(ptok::REL_MATERIAL_BINDING_PHYSICS))?;
+        .map_err(|_| PhysicsMaterialReadError::new("material:binding:physics"))?;
     if !reader.has_api_schema(&mat, "PhysicsMaterialAPI") {
         return Ok(None);
     }
@@ -136,10 +136,10 @@ pub(super) fn read_physics_material(
                 Some(_) => Err(PhysicsMaterialReadError::new(attr)),
             }
         };
-    let dynamic_friction = read_coefficient(ptok::A_DYNAMIC_FRICTION, None)?;
-    let static_friction = read_coefficient(ptok::A_STATIC_FRICTION, None)?;
-    let restitution = read_coefficient(ptok::A_RESTITUTION, Some(1.0))?;
-    let density = read_coefficient(ptok::A_DENSITY, None)?;
+    let dynamic_friction = read_coefficient(ptok::PHYSICS_DYNAMIC_FRICTION, None)?;
+    let static_friction = read_coefficient(ptok::PHYSICS_STATIC_FRICTION, None)?;
+    let restitution = read_coefficient(ptok::PHYSICS_RESTITUTION, Some(1.0))?;
+    let density = read_coefficient(ptok::PHYSICS_DENSITY, None)?;
     let read_combine =
         |attr: &str| -> Result<Option<CoefficientCombine>, PhysicsMaterialReadError> {
             if !reader.has_authored_attribute(&mat, attr) {

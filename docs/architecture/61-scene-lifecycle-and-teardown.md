@@ -298,7 +298,7 @@ installed, and the canonical reader supplies later edits. Referenced instances
 read through their path-remapped plan until their canonical generation changes.
 
 Doc-backed Twin admission is event-driven at the asset boundary. The Twin source
-is loaded as `UsdSourceText`; `AssetEvent` marks successful availability and
+is loaded as `UsdSourceBytes`; `AssetEvent` marks successful availability and
 `AssetLoadFailedEvent` closes the pending document transaction with its error.
 Only after that terminal event does the owner publish the composed document
 overlay and submit `LoadScene`. Referenced stage assets use the same event

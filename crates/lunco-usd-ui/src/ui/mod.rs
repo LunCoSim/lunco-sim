@@ -286,7 +286,17 @@ fn on_save_as_document_ui(
     if target_path.is_empty() {
         target_path = suggested_usd_name(&host.document().origin().display_name());
     }
-    let source = host.document().source().to_string();
+    let source = match host.document().source() {
+        Ok(source) => source,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "usd-source-serialization-failed",
+                error.to_string(),
+            );
+            return;
+        }
+    };
     let admission = picker
         .as_deref()
         .ok_or_else(|| "browser download capability is not installed".to_owned())

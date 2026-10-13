@@ -413,30 +413,30 @@ Use `inputs:*` only for what a colour cannot express — accents, panel scale, w
 
 ## Adding a `lunco:*` schema property — THREE files, or it is inert
 
-`schema.usda` is the authoritative source **and is never read at runtime**.
+`schema.usda` is the authoritative project schema source. `openusd-build`
+compiles its declarations at build time; the runtime combines them with
+`openusd-schemas` through the native immutable schema registry. Inspector hints
+are decoded with the shared application metadata reader at build time because
+USD excludes schema `customData` from prim definitions.
 
-| File | Role |
-|---|---|
-| `crates/lunco-usd-authoring/schema/schema.usda` | the authoritative source. **Not read at runtime.** |
-| `assets/schemas/lunco/generatedSchema.usda` and `assets/schemas/core/*.usda` | runtime schema sources loaded through the ordinary USD asset pipeline and ingested by `lunco_usd_authoring::schema`; the crate schema files remain generation inputs, not compiled bytes |
-| `crates/lunco-usd-authoring/schema/plugInfo.json` | the `Types` map, so external USD runtimes register the class |
+The native generator also publishes `generatedSchema.usda` and the standard
+`plugInfo.json` type declarations for external USD tools:
 
-Plus a reader to consume it, plus authoring on the asset.
+```bash
+cargo run -p lunco-usd-authoring --example gen_schema -j 4 --
+cargo run -p lunco-usd-authoring --example gen_schema -j 4 -- --check
+```
 
-**Pixar's `usdGenSchema` is NOT used here** — it is not installed, and the one-way
-transform it performs is small enough to own. `python3 scripts/gen_schema.py`
-regenerates `generatedSchema.usda` from `schema.usda`; run it after every edit to
-the source. Do not hand-edit the generated file. Also add the class to
-`generated_schema_parses_and_registers_every_type` and assert its property type in
-`schema_declares_property_types`, or drift is silent.
+Do not hand-edit generated artifacts. A new schema needs a real consumer and
+validation through its production command or scene path.
 
 ### Slider bounds live in the schema's `customData`
 
 A property's UI hints (`double min`, `double max`, `string unit`, plus
 `string userDocBrief`) ride in the attribute's `customData` dictionary;
-`SchemaRegistry::ui_hint` decodes them through `AttrUiHint::from_dict`, and a
+the build script decodes them through `AttrUiHint::from_dict`, and a
 per-asset authored `customData` still overrides. Core USD annotates nothing this
-way, so the vendored `schema/core/*.usda` files carry ours.
+way. The maintained PhysX subset and project schema carry application hints.
 
 > **ONE `customData` block per attribute.** The USDA parser folds metadata with
 > `SpecData::add`, which **overwrites in place** — a second `customData = { … }`

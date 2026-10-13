@@ -86,7 +86,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Bldg\" (\n        prepend references = @wrapper.usda@\n    )\n    {\n    }\n}\n";
         // Build the two-layer closure keyed exactly as the async loader's resolver
         // does (`canonicalize`), so the scene's `@wrapper.usda@` reference resolves
-        // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
+        // to the wrapper bytes and the `@model.glb@` payload remains unresolved by USD — the
         // storage-based compose path, not the removed native-fs path.
         let root_id = canonicalize_root("scene.usda");
         let wrapper_id = lunco_assets_path::canonicalize("wrapper.usda", &root_id);
@@ -237,24 +237,8 @@ mod stage_view_tests {
 
     // ── `collection:*:includes` is a LIST OP, across layers ──────────────────
     //
-    // The three tests below take the same collection apart one composition arc at
-    // a time. They exist because every solar rover in the repo is silently dead:
-    // `project_domain_islands` rejects the electrical network with
-    //
-    //     output source component `…/SolarPanel` is outside the rover-root collection
-    //
-    // on `scenes/tests/solar_domain_nested_ref.usda` AND on the shipped
-    // `scenes/luncosim/solar_rover_demo.usda`, which has one reference arc and
-    // authors the membership in the scene itself. The panel prim composes, the
-    // connection to it composes, and the collection that must contain it does not.
-    //
-    // `collection_members` short-circuits `explicitOnly` to `rel_targets`, i.e. to
-    // the relationship's composed targets. Whether a `prepend` in a stronger layer
-    // MERGES with a weaker layer's list, or replaces it, or is dropped, is the
-    // whole question — and it is a property of relationship list-op composition,
-    // not of any asset. The rover assets are only the messenger.
-    //
-    // Ordered narrowest-first so a run says which arc is the broken one.
+    // Native collection membership must retain relationship list-op
+    // composition across each supported arc.
 
     /// One layer, one opinion. The control.
     ///

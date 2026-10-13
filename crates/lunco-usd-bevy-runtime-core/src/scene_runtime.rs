@@ -15,7 +15,7 @@ use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document as _, OpenOutcome};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_bevy_stage::{UsdStageAsset, source::UsdSourceText};
+use lunco_usd_bevy_stage::{UsdStageAsset, source::UsdSourceBytes};
 use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
 use lunco_usd_document::document::UsdDocument;
 use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
@@ -102,7 +102,7 @@ fn on_open_twin_scene(
     workspace: Res<WorkspaceResource>,
     roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
-    usd_sources: Option<Res<Assets<UsdSourceText>>>,
+    usd_sources: Option<Res<Assets<UsdSourceBytes>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
@@ -158,7 +158,7 @@ fn on_open_twin_scene(
     );
     let source_path = lunco_assets_core::asset_path::load_asset_path(&scene_uri, None, None, None)
         .map_err(|error| format!("invalid Twin scene source `{scene_uri}`: {error}"))?;
-    let handle = asset_server.load::<UsdSourceText>(source_path);
+    let handle = asset_server.load::<UsdSourceBytes>(source_path);
     let source_ready = usd_sources.get(handle.id()).is_some();
     let source_failed = asset_server
         .get_load_state(handle.id())
@@ -441,17 +441,20 @@ pub(crate) fn on_restart_scene_refresh_active_document(
         );
         return;
     };
-    let Ok(source) = String::from_utf8(bytes) else {
-        warn!(
-            "[restart-scene] `{}` is not UTF-8 USDA; keeping the mounted source",
-            path.display()
-        );
-        return;
+    let prepared = match lunco_usd_document::document::PreparedUsdSource::from_bytes(bytes) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            warn!(
+                "[restart-scene] refusing invalid USD source `{}`: {error}",
+                path.display()
+            );
+            return;
+        }
     };
     let (_, outcome) = if *reset_document {
-        registry.reset_file(path, source)
+        registry.reset_prepared_file(path, prepared)
     } else {
-        registry.open_file(path, source)
+        registry.open_prepared_file(path, prepared, true)
     };
     match outcome {
         OpenOutcome::Refreshed => {
@@ -784,6 +787,7 @@ mod restart_overlay_tests {
                 .unwrap()
                 .document()
                 .composed_source()
+                .unwrap()
                 .contains("99")
         );
         assert_eq!(backed.overlay_synced_generation(ids[1]), Some(2));

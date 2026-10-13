@@ -7,8 +7,8 @@
 //! `lunco-usd-bevy`. No UI or renderer backend belongs here.
 
 use bevy::prelude::*;
-use openusd::schemas::geom::tokens as gtok;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::geom::tokens as gtok;
 
 mod primitive_assets;
 pub use primitive_assets::{PrimitiveMeshAssets, PrimitiveMeshRequest, PrimitiveMeshResult};
@@ -474,7 +474,7 @@ pub fn build_usd_curve_mesh(
         return None;
     }
     // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
-    let widths = match read::read_curve_real_array(reader, path, gtok::A_WIDTHS) {
+    let widths = match read::read_curve_real_array(reader, path, gtok::WIDTHS) {
         Ok(Some(widths)) if !widths.is_empty() => widths,
         Ok(Some(_)) | Ok(None) => return None,
         Err(_) => {
@@ -526,11 +526,11 @@ pub fn build_usd_curve_mesh(
     // `type`/`basis` token pair instead. Both are swept identically once each
     // curve is reduced to a centerline — the only difference is how that
     // centerline is produced.
-    let is_nurbs = reader.type_name(path).as_deref() == Some(gtok::T_NURBS_CURVES);
+    let is_nurbs = reader.type_name(path).as_deref() == Some(gtok::NURBS_CURVES);
     let counts = match read::read_curve_int_array(
         reader,
         path,
-        openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
+        openusd_schemas::geom::tokens::CURVE_VERTEX_COUNTS,
     ) {
         Ok(Some(counts)) if !counts.is_empty() => counts,
         Ok(Some(_)) | Ok(None) => {
@@ -574,7 +574,7 @@ pub fn build_usd_curve_mesh(
         let orders = match read::read_curve_int_array(
             reader,
             path,
-            openusd::schemas::geom::tokens::A_ORDER,
+            openusd_schemas::geom::tokens::ORDER,
         ) {
             Ok(Some(orders)) if !orders.is_empty() => orders,
             Ok(Some(_)) | Ok(None) => {
@@ -601,24 +601,21 @@ pub fn build_usd_curve_mesh(
             );
             return None;
         }
-        let all_knots = match read::read_curve_real_array(
-            reader,
-            path,
-            openusd::schemas::geom::tokens::A_KNOTS,
-        ) {
-            Ok(Some(knots)) if !knots.is_empty() => knots,
-            Ok(Some(_)) | Ok(None) | Err(_) => {
-                error!(
-                    "[usd-bevy-mesh] {} has no usable authored NurbsCurves knots",
-                    path.as_str()
-                );
-                return None;
-            }
-        };
+        let all_knots =
+            match read::read_curve_real_array(reader, path, openusd_schemas::geom::tokens::KNOTS) {
+                Ok(Some(knots)) if !knots.is_empty() => knots,
+                Ok(Some(_)) | Ok(None) | Err(_) => {
+                    error!(
+                        "[usd-bevy-mesh] {} has no usable authored NurbsCurves knots",
+                        path.as_str()
+                    );
+                    return None;
+                }
+            };
         let point_weights = match read::read_curve_real_array(
             reader,
             path,
-            openusd::schemas::geom::tokens::A_POINT_WEIGHTS,
+            openusd_schemas::geom::tokens::POINT_WEIGHTS,
         ) {
             Ok(Some(weights)) if weights.len() == points.len() => weights,
             Ok(Some(_)) => {
@@ -642,7 +639,7 @@ pub fn build_usd_curve_mesh(
         let ty = match read::read_curve_token(
             reader,
             path,
-            openusd::schemas::geom::tokens::A_TYPE,
+            openusd_schemas::geom::tokens::TYPE,
             "cubic",
             &["linear", "cubic"],
         ) {
@@ -655,7 +652,7 @@ pub fn build_usd_curve_mesh(
             match read::read_curve_token(
                 reader,
                 path,
-                openusd::schemas::geom::tokens::A_BASIS,
+                openusd_schemas::geom::tokens::BASIS,
                 "bezier",
                 &["bezier", "catmullRom"],
             ) {
@@ -667,7 +664,7 @@ pub fn build_usd_curve_mesh(
         let wrap = match read::read_curve_token(
             reader,
             path,
-            openusd::schemas::geom::tokens::A_WRAP,
+            openusd_schemas::geom::tokens::WRAP,
             "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {
@@ -946,10 +943,10 @@ pub fn read_nurbs_patch_surface(
     }
 
     let points = read_usd_mesh_points(reader, path)?;
-    let u_count = lathe::read_required_nurbs_int(reader, path, gtok::A_U_VERTEX_COUNT)?;
-    let v_count = lathe::read_required_nurbs_int(reader, path, gtok::A_V_VERTEX_COUNT)?;
-    let u_order = lathe::read_required_nurbs_int(reader, path, gtok::A_U_ORDER)?;
-    let v_order = lathe::read_required_nurbs_int(reader, path, gtok::A_V_ORDER)?;
+    let u_count = lathe::read_required_nurbs_int(reader, path, gtok::U_VERTEX_COUNT)?;
+    let v_count = lathe::read_required_nurbs_int(reader, path, gtok::V_VERTEX_COUNT)?;
+    let u_order = lathe::read_required_nurbs_int(reader, path, gtok::U_ORDER)?;
+    let v_order = lathe::read_required_nurbs_int(reader, path, gtok::V_ORDER)?;
     if u_count < u_order || v_count < v_order {
         error!(
             "[usd-bevy-mesh] {} has NurbsPatch order/count mismatch: u {u_count}/{u_order}, v {v_count}/{v_order}",
@@ -957,7 +954,7 @@ pub fn read_nurbs_patch_surface(
         );
         return None;
     }
-    let u_knots = match read::read_curve_real_array(reader, path, gtok::A_U_KNOTS) {
+    let u_knots = match read::read_curve_real_array(reader, path, gtok::U_KNOTS) {
         Ok(Some(knots)) if knots.len() == u_count + u_order => knots,
         Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
@@ -967,7 +964,7 @@ pub fn read_nurbs_patch_surface(
             return None;
         }
     };
-    let v_knots = match read::read_curve_real_array(reader, path, gtok::A_V_KNOTS) {
+    let v_knots = match read::read_curve_real_array(reader, path, gtok::V_KNOTS) {
         Ok(Some(knots)) if knots.len() == v_count + v_order => knots,
         Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
@@ -977,7 +974,7 @@ pub fn read_nurbs_patch_surface(
             return None;
         }
     };
-    let weights = match read::read_curve_real_array(reader, path, gtok::A_POINT_WEIGHTS) {
+    let weights = match read::read_curve_real_array(reader, path, gtok::POINT_WEIGHTS) {
         Ok(Some(weights)) if weights.len() == points.len() => weights,
         Ok(Some(_)) => {
             error!(

@@ -111,7 +111,7 @@ fn read_f32_at(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str, time: f64
 /// Derive one animated prim's channel plan after its stage is available.
 pub fn plan_usd_animation(
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<CanonicalStages>,
+    mut canonical: NonSendMut<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (With<UsdAnimated>, Without<AnimationPlan>)>,
 ) {
@@ -119,8 +119,15 @@ pub fn plan_usd_animation(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
-        let reader = &reader;
+        let Some(recipe) = stage_asset.recipe.as_deref() else {
+            error!("[usd-animation] animated stage has no native composition recipe");
+            continue;
+        };
+        let Some(stage) = canonical.get_or_build(prim.stage_handle.id(), recipe) else {
+            continue;
+        };
+        let view = stage.view();
+        let reader = &view;
         let Ok(path) = SdfPath::new(prim.path.as_str()) else {
             continue;
         };
@@ -199,11 +206,15 @@ pub fn sample_usd_animation(
     grids: Query<&Grid>,
 ) {
     for (prim, plan, mut transform, mut visibility, cell, parent, binding) in &mut q {
-        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
+        let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
-        let reader = &reader;
+        let Some(stage) = canonical.get(prim.stage_handle.id()) else {
+            warn_once!("[usd-animation] native temporal stage is unavailable; refusing sample");
+            continue;
+        };
+        let view = stage.view();
+        let reader = &view;
         let Some(time_secs) = animation_time(binding, &resolved, &presentation_time) else {
             warn_once!("[usd-animation] a bound animation domain has no resolved sample");
             continue;
@@ -294,11 +305,15 @@ pub fn sample_usd_material_animation(
         let Some(material) = &plan.material else {
             continue;
         };
-        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
+        let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
-        let reader = &reader;
+        let Some(stage) = canonical.get(prim.stage_handle.id()) else {
+            warn_once!("[usd-animation] native temporal stage is unavailable; refusing sample");
+            continue;
+        };
+        let view = stage.view();
+        let reader = &view;
         let Some(time_secs) = animation_time(binding, &resolved, &presentation_time) else {
             warn_once!("[usd-animation] a bound animation domain has no resolved sample");
             continue;

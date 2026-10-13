@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{Collection, PrimPredicate, Stage, compute_included_paths};
+use openusd::usd::{CollectionAPI, PrimPredicate, Stage, compute_included_paths};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from the runtime adapter's `NonSend`
@@ -54,6 +54,7 @@ impl<'a> StageView<'a> {
     pub fn prim_type_name(&self, prim: &SdfPath) -> Option<String> {
         self.stage
             .prim(prim.clone())
+            .expect("validated USD path")
             .type_name()
             .ok()
             .flatten()
@@ -69,11 +70,13 @@ impl<'a> StageView<'a> {
         T::Error: std::error::Error + Send + Sync + 'static,
     {
         self.stage
-            .prim(prim.clone())
+            .prim(prim)
+            .expect("validated USD path")
             .attribute(name)
-            .get::<T>()
+            .get::<Value>()
             .ok()
-            .flatten()
+            .flatten()?
+            .get::<T>()
     }
 
     /// Attribute `name` on `prim` coerced to a string — handles `String`,
@@ -84,6 +87,7 @@ impl<'a> StageView<'a> {
         match self
             .stage
             .prim(prim.clone())
+            .expect("validated USD path")
             .attribute(name)
             .get::<Value>()
             .ok()
@@ -100,6 +104,7 @@ impl<'a> StageView<'a> {
     pub fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
         self.stage
             .prim(prim.clone())
+            .expect("validated USD path")
             .relationship(name)
             .targets()
             .unwrap_or_default()
@@ -107,23 +112,19 @@ impl<'a> StageView<'a> {
 
     /// Composed members of a standard USD collection.
     ///
-    /// `explicitOnly` can use the relationship targets directly. Every other
-    /// expansion rule goes through OpenUSD so excludes, subtree expansion,
-    /// references, and variants retain standard semantics.
+    /// Membership, excludes, expansion, references, and variants are evaluated
+    /// by the native CollectionAPI.
     pub fn collection_members(
         &self,
         prim: &SdfPath,
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String> {
-        let expansion = format!("collection:{instance_name}:expansionRule");
-        let includes = format!("collection:{instance_name}:includes");
-        if self.value_str(prim, &expansion).as_deref() == Some("explicitOnly") {
-            return Ok(self.rel_targets(prim, &includes));
-        }
-
-        let collection = Collection::new(prim.clone(), instance_name);
+        let collection = CollectionAPI::from_prim_unchecked(
+            self.stage.prim(prim).map_err(|e| e.to_string())?,
+            instance_name,
+        );
         let query = collection
-            .compute_membership_query(self.stage)
+            .compute_membership_query()
             .map_err(|error| format!("could not compute collection membership: {error}"))?;
         compute_included_paths(self.stage, &query, PrimPredicate::DEFAULT)
             .map_err(|error| format!("could not expand collection membership: {error}"))

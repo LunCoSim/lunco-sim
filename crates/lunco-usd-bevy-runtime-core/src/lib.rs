@@ -21,7 +21,6 @@ mod native_assets;
 mod native_references;
 pub mod scene;
 mod scene_runtime;
-mod schema_assets;
 mod twin_projection;
 
 /// Install the USD scene admission and live projection systems.
@@ -37,15 +36,6 @@ impl Plugin for UsdSceneRuntimePlugin {
         if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
-        app.add_systems(
-            bevy::prelude::Update,
-            (
-                schema_assets::request_schema_assets,
-                schema_assets::register_ready_schema_assets
-                    .run_if(schema_assets::schema_registration_pending),
-            )
-                .chain(),
-        );
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.init_resource::<lunco_usd_core::commands::EmptyViewportReason>();
         app.add_message::<lunco_usd_bevy_scene::UsdSceneProjectionReset>();
@@ -99,7 +89,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 )
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
-                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceText>,
+                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceBytes>,
                     >,
                 ),
         );
@@ -119,7 +109,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 )
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
-                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceText>,
+                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceBytes>,
                     >,
                 ),
         );

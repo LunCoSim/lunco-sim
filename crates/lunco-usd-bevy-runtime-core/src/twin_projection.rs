@@ -12,7 +12,7 @@
 //! Flow (doc-first: the document exists and its persistent source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
 //! 1. The authored Twin loading policy selects a scene and dispatches
-//!    `OpenTwinScene`; this owner kicks an async [`UsdSourceText`] load of
+//!    `OpenTwinScene`; this owner kicks an async [`UsdSourceBytes`] load of
 //!    `twin://<name>/<scene>` (raw base layer, read
 //!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
 //!    The scene mount is admitted after the source asset reaches a terminal
@@ -76,7 +76,7 @@ use lunco_usd_bevy_scene::{
 };
 use lunco_usd_bevy_stage::{
     UsdInstanceProjection, UsdRead, UsdStageAsset, UsdStageProjectionPlan, euler_xyz_deg_to_quat,
-    source::UsdSourceText,
+    source::UsdSourceBytes,
 };
 use lunco_usd_bevy_twin::{
     DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake, scene_document_for,
@@ -94,7 +94,7 @@ use lunco_usd_document::document::UsdOp;
 /// loading through the twin source.
 struct PendingTwinDoc {
     /// In-flight raw-source load of `twin://<name>/<rel>`.
-    handle: Handle<UsdSourceText>,
+    handle: Handle<UsdSourceBytes>,
     twin: lunco_workspace::TwinId,
     /// Twin name (the `twin://` first segment).
     name: String,
@@ -329,8 +329,8 @@ impl PendingDependentStageRefreshes {
 #[derive(Resource, Default)]
 pub(crate) struct PendingTwinDocs {
     items: Vec<PendingTwinDoc>,
-    ready: HashSet<AssetId<UsdSourceText>>,
-    failed: HashMap<AssetId<UsdSourceText>, String>,
+    ready: HashSet<AssetId<UsdSourceBytes>>,
+    failed: HashMap<AssetId<UsdSourceBytes>, String>,
     completions: Arc<Mutex<Vec<TwinDocCompletion>>>,
     next_operation: u64,
 }
@@ -339,7 +339,7 @@ impl PendingTwinDocs {
     /// Queue a default twin scene for doc-backed projection.
     pub(crate) fn push(
         &mut self,
-        handle: Handle<UsdSourceText>,
+        handle: Handle<UsdSourceBytes>,
         twin: lunco_workspace::TwinId,
         ready: bool,
         name: String,
@@ -365,13 +365,13 @@ impl PendingTwinDocs {
         });
     }
 
-    fn mark_ready(&mut self, id: AssetId<UsdSourceText>) {
+    fn mark_ready(&mut self, id: AssetId<UsdSourceBytes>) {
         if self.items.iter().any(|item| item.handle.id() == id) {
             self.ready.insert(id);
         }
     }
 
-    pub(crate) fn mark_failed(&mut self, id: AssetId<UsdSourceText>, error: String) {
+    pub(crate) fn mark_failed(&mut self, id: AssetId<UsdSourceBytes>, error: String) {
         if self.items.iter().any(|item| item.handle.id() == id) {
             self.failed.insert(id, error);
         }
@@ -1225,8 +1225,8 @@ fn report_twin_doc_load_failed(
 /// failed; no frame-count or readiness poll is needed.
 pub(crate) fn mark_pending_twin_docs(
     mut pending: ResMut<PendingTwinDocs>,
-    mut events: MessageReader<bevy::asset::AssetEvent<UsdSourceText>>,
-    mut failures: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdSourceText>>,
+    mut events: MessageReader<bevy::asset::AssetEvent<UsdSourceBytes>>,
+    mut failures: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdSourceBytes>>,
 ) {
     for event in events.read() {
         match event {
@@ -1361,7 +1361,7 @@ pub(crate) fn drain_pending_twin_docs(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<DocBackedTwinScenes>,
     wake: Res<TwinProjectionWake>,
-    sources: Res<Assets<UsdSourceText>>,
+    sources: Res<Assets<UsdSourceBytes>>,
     twin_roots: Res<TwinRoots>,
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     runtime_saves: Res<lunco_usd_bevy_runtime_persistence::RuntimeSaveJobs>,
@@ -1408,8 +1408,8 @@ pub(crate) fn drain_pending_twin_docs(
                 Ok(prepared) => {
                     let current_source = sources
                         .get(&item.handle)
-                        .map(|UsdSourceText(source)| source.as_str());
-                    if current_source != Some(prepared.source_text()) {
+                        .map(|UsdSourceBytes(source)| source.as_slice());
+                    if current_source != Some(prepared.source_bytes()) {
                         item.stage = TwinDocPreparationStage::AwaitingSource;
                         continue;
                     }
@@ -1441,7 +1441,7 @@ pub(crate) fn drain_pending_twin_docs(
                                 &mut empty_reason,
                                 &mut commands,
                                 &lunco_assets_core::twin_uri(&item.name, &item.rel),
-                                "the source asset is not valid USDA; refusing to mount a stale document",
+                                "the source asset is not valid USD; refusing to mount a stale document",
                             );
                             item.stage = TwinDocPreparationStage::Finished;
                             continue;
@@ -1615,7 +1615,7 @@ pub(crate) fn drain_pending_twin_docs(
                     still.push(item);
                     continue;
                 }
-                let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
+                let Some(UsdSourceBytes(source)) = sources.get(&item.handle) else {
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
@@ -1637,15 +1637,15 @@ pub(crate) fn drain_pending_twin_docs(
                     );
                     continue;
                 };
-                let key =
-                    twin_usd_work_key(&item, lunco_hash::fnv1a64(source.as_bytes()), operation);
+                let key = twin_usd_work_key(&item, lunco_hash::fnv1a64(source), operation);
                 let completions = Arc::clone(&pending.completions);
                 let source = source.clone();
                 let job = move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        PreparedUsdSource::parse(source)
+                        PreparedUsdSource::from_bytes(source)
                     }))
-                    .map_err(|_| "USDA parser panicked".to_owned());
+                    .map_err(|_| "USD decoder panicked".to_owned())
+                    .and_then(|result| result);
                     completions
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -2068,11 +2068,21 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             None => {
                 let _span =
                     bevy::log::info_span!("usd_twin_projection_rebuild_history_gap").entered();
-                let cs = world
+                let cs = match world
                     .resource::<DocumentRegistry<UsdDocument>>()
                     .host(doc)
-                    .map(|h| h.document().composed_source())
-                    .unwrap_or_default();
+                    .ok_or_else(|| format!("USD document {doc} is no longer open"))
+                    .and_then(|host| {
+                        host.document()
+                            .composed_source()
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        error!("[usd] refusing document projection: {error}");
+                        continue;
+                    }
+                };
                 if !rebuild_scene_from_composed(world, scene_id, &cs) {
                     continue;
                 }
@@ -2089,11 +2099,21 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     // incomplete composition.
                     continue;
                 }
-                let cs = world
+                let cs = match world
                     .resource::<DocumentRegistry<UsdDocument>>()
                     .host(doc)
-                    .map(|h| h.document().composed_source())
-                    .unwrap_or_default();
+                    .ok_or_else(|| format!("USD document {doc} is no longer open"))
+                    .and_then(|host| {
+                        host.document()
+                            .composed_source()
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        error!("[usd] refusing document projection: {error}");
+                        continue;
+                    }
+                };
                 if !rebuild_scene_from_composed(world, scene_id, &cs) {
                     continue;
                 }
@@ -3977,6 +3997,43 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     return;
                 }
                 match op {
+                    UsdOp::SetStageDocumentation {
+                        documentation: value,
+                        ..
+                    } => {
+                        let field = openusd::sdf::FieldKey::Documentation;
+                        let result = world
+                            .get_non_send::<CanonicalStages>()
+                            .and_then(|stages| stages.get(scene_id))
+                            .ok_or_else(|| "canonical USD stage is unavailable".to_owned())
+                            .and_then(|canonical| {
+                                let stage = canonical.stage();
+                                let layer = stage.root_layer().identifier.clone();
+                                stage
+                                    .batch_edit(&[layer.as_str()], |edits| {
+                                        let root = openusd::sdf::Path::abs_root();
+                                        match value {
+                                            Some(text) => edits[0].data_mut().set_field(
+                                                &root,
+                                                field.as_str(),
+                                                openusd::sdf::Value::String(text.clone()),
+                                            ),
+                                            None => edits[0]
+                                                .data_mut()
+                                                .erase_field(&root, field.as_str()),
+                                        }
+                                        Ok(())
+                                    })
+                                    .map_err(|error| error.to_string())
+                            });
+                        if let Err(error) = result {
+                            report_stage_projection_reset_failure(
+                                world,
+                                scene_id,
+                                format!("author layer {}: {error}", field.as_str()),
+                            );
+                        }
+                    }
                     UsdOp::RemovePrim { .. } if exact_root => {
                         cancel_pending_reference(world, index);
                     }
@@ -4528,19 +4585,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
                 .is_some_and(|cs| cs.projector().clear_active(&sp).is_ok());
-            if cleared {
-                // OpenUSD 0.5 exposes metadata erasure through Sdf data editing;
-                // unlike Prim::set_active, that low-level edit is not classified
-                // as a structural resync by the pinned sink. Reuse the shared
-                // structural reconciler at the same stage boundary so undoing a
-                // local active=false opinion immediately reveals the weaker
-                // composed prim without a scene rebuild.
-                crate::live_consume::reconcile_structural_live(
-                    world,
-                    scene_id,
-                    std::slice::from_ref(path),
-                );
-            } else {
+            if !cleared {
                 warn!("[twin] clear active at {path} failed");
             }
         }
@@ -6468,10 +6513,10 @@ mod tests {
     fn source_asset_events_advance_pending_twin_docs() {
         let mut app = App::new();
         app.init_resource::<PendingTwinDocs>()
-            .add_message::<bevy::asset::AssetEvent<UsdSourceText>>()
-            .add_message::<bevy::asset::AssetLoadFailedEvent<UsdSourceText>>()
+            .add_message::<bevy::asset::AssetEvent<UsdSourceBytes>>()
+            .add_message::<bevy::asset::AssetLoadFailedEvent<UsdSourceBytes>>()
             .add_systems(Update, mark_pending_twin_docs);
-        let handle = Handle::<UsdSourceText>::default();
+        let handle = Handle::<UsdSourceBytes>::default();
         app.world_mut().resource_mut::<PendingTwinDocs>().push(
             handle.clone(),
             lunco_workspace::TwinId::new(1),
@@ -6488,7 +6533,7 @@ mod tests {
                 .has_terminal_source_event()
         );
         app.world_mut()
-            .resource_mut::<Messages<bevy::asset::AssetEvent<UsdSourceText>>>()
+            .resource_mut::<Messages<bevy::asset::AssetEvent<UsdSourceBytes>>>()
             .write(bevy::asset::AssetEvent::Added { id: handle.id() });
         app.update();
 
@@ -6508,7 +6553,7 @@ mod tests {
     #[test]
     fn twin_document_preparation_wakes_on_source_capacity_and_completion() {
         let mut pending = PendingTwinDocs::default();
-        let handle = Handle::<UsdSourceText>::default();
+        let handle = Handle::<UsdSourceBytes>::default();
         pending.push(
             handle.clone(),
             lunco_workspace::TwinId::new(1),
@@ -6543,7 +6588,7 @@ mod tests {
     #[test]
     fn resident_source_is_ready_when_queued() {
         let mut pending = PendingTwinDocs::default();
-        let handle = Handle::<UsdSourceText>::default();
+        let handle = Handle::<UsdSourceBytes>::default();
         pending.push(
             handle.clone(),
             lunco_workspace::TwinId::new(1),
@@ -6561,7 +6606,7 @@ mod tests {
     #[test]
     fn failed_source_asset_event_is_terminal() {
         let mut pending = PendingTwinDocs::default();
-        let handle = Handle::<UsdSourceText>::default();
+        let handle = Handle::<UsdSourceBytes>::default();
         pending.push(
             handle.clone(),
             lunco_workspace::TwinId::new(1),
@@ -7536,7 +7581,12 @@ mod tests {
             })
             .unwrap();
 
-        let composed = registry.host(doc).unwrap().document().composed_source();
+        let composed = registry
+            .host(doc)
+            .unwrap()
+            .document()
+            .composed_source()
+            .unwrap();
         assert!(
             composed.contains("rover_1"),
             "overlay bytes carry the runtime spawn:\n{composed}"

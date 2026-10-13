@@ -1,0 +1,47 @@
+#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def "PhysxVehicleContextAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleWheelAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleSuspensionAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleWheelAttachmentAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleSuspensionComplianceAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleTireAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}
+
+def "PhysxVehicleEngineAPI"
+{
+    token schemaKind = "singleApplyAPI"
+    token[] bases = ["APISchemaBase"]
+}

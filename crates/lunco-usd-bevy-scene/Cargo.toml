@@ -11,6 +11,7 @@ lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-core = { path = "../lunco-core" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

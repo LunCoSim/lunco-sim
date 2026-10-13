@@ -583,7 +583,7 @@ A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed a
 A new property is **inert** until it reaches the registered layer:
 
 1. Edit `crates/lunco-usd-document/schema/schema.usda` — the source, **never read at runtime**
-2. Run `python3 scripts/gen_schema.py` — regenerates
+2. Run `cargo run -p lunco-usd-authoring --example gen_schema -j 4 --` — regenerates
    `crates/lunco-usd-document/schema/generatedSchema.usda`, the file actually compiled in
    (never hand-edit it)
 3. A new CLASS additionally needs a `crates/lunco-usd-document/schema/plugInfo.json`
@@ -594,7 +594,7 @@ schema UI hints, so a forgotten regenerate fails loudly.
 
 **Schema-level sliders.** `customData = { double min; double max; string unit }`
 on a SCHEMA attribute gives every asset composing that schema a derived
-Inspector slider with zero per-asset authoring (`SchemaRegistry::ui_hint`,
+Inspector slider with zero per-asset authoring (`SchemaMetadata::property`,
 consumed by `produce_usd_param_view`). Per-asset authored `customData` still
 overrides. Hints are UI metadata only — value defaults stay in the component
 `.usda` (no-fallback doctrine), e.g. `components/mobility/wheel.usda` for
@@ -640,7 +640,7 @@ facts; keep them in separate layers and verify the composed result.
 - ❌ `physics:friction` — does not exist.
 - ❌ `string doc` inside `customData` — not a key; use prim `doc` metadata.
 - ❌ `info:sourceAsset` typed as `string` — must be `asset`.
-- ❌ Editing `schema.usda` without running `scripts/gen_schema.py` — the
+- ❌ Editing `schema.usda` without running `cargo run -p lunco-usd-authoring --example gen_schema -j 4 --` — the
   runtime reads only the generated layer.
 - ❌ Hand-editing `generatedSchema.usda` — the next regenerate erases it.
 - ❌ Assuming `kind` does something.
@@ -662,3 +662,16 @@ When editing variant-owned connection plans, select the variant in the temporary
 `@view@` layer first. Source paths use the composed namespace; operation owners
 use variant-qualified Sdf paths. Keep the compound plan atomic and verify its
 composed source types.
+
+Use `ApplyUsdOp SetStageDocumentation` for layer `doc` metadata. Open the exact
+source and save it through the document owner.
+
+The pinned OpenUSD 0.8.0 text writer cannot publish standard inheritance syntax.
+The document owner rejects that serialization; preserve the authored file and
+surface the SDK diagnostic. Use native USDC export when a binary destination
+is appropriate. Transient
+document composition uses native Sdf copying and binary session buffers;
+binary document decoding does not require a text representation.
+Do not rewrite the output or select another text
+writer. See the [native migration review](../../docs/reviews/openusd-0.8-native-cutover.md)
+for current evidence and remaining layer-stack work.

@@ -162,6 +162,6 @@ impl AssetLoader for UsdLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["usda"]
+        &["usd", "usda", "usdc"]
     }
 }

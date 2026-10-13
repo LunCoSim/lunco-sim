@@ -62,7 +62,7 @@ fn verify_usd_path(id, filename) {
     report_verdict([
         t_true(normalized_path(record.origin.path).ends_with("/" + filename), "USD document retained its literal filename"),
         t_true(document.prim.exists && document.prim.type == "Cube", "saved USD prim was read back"),
-        t_true(target.status == "resolved" && target.source == "canonical_stage", "literal USD filename resolves to the loaded canonical stage"),
+        t_true(target.status == "resolved" && target.source == "document_composition", "literal USD filename resolves through the native document composition"),
         t_true(literal_model_ready(), "literal Modelica source compiled and published its authored equation result"),
     ], "Portable USD and Modelica runtime", "PATH_USD_MODELICA")
 }

@@ -6665,14 +6665,10 @@ The trace's `process_queued_usd_visuals` system ran 15 times, taking
 104.78 ms total, 6.99 ms mean, and 21.35 ms maximum. The pass rebuilt a
 whole-world child-identity set for each queued batch, making small incremental
 batches pay for every live prim. Its duplicate check now walks only the direct
-children of queued parents. `register_ready_schema_assets` ran 401 times, taking
-206.45 ms total with a 195.79 ms maximum; it cloned its full entry list on each
-pass and kept checking after all sources settled. It now iterates the owned
-entries without cloning, caches the core-source IDs at request time, and closes
-the system after completion. `celestial_visuals_system` also ran 351 times
+children of queued parents. `celestial_visuals_system` also ran 351 times
 (0.170 ms mean, 6.64 ms maximum); it rebuilt its per-body transition map each
 frame and cloned it on dirty updates. It now reuses current/previous map
-capacity and swaps the maps after a write pass. All three owners passed the
+capacity and swaps the maps after a write pass. Both owners passed the
 focused `cargo check`; none of these edits has yet been reprofiled.
 
 The capture also hit GPU out-of-memory and shadow-map shader errors. Presentation

@@ -3966,16 +3966,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11277822c27bde750de02c5dc5159b91e88bf2661a2c1d98106f2fb1c5c6f590"
 
 [[package]]
-name = "diff_json"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ba1c5ed21063bcaab3e3db72513874cbdd590fd71d5847d55b6248815318de"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9580,6 +9570,7 @@ dependencies = [
  "lunco-usd-document",
  "lunco-workspace",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -9606,6 +9597,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-document",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10313,6 +10305,9 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "openusd",
+ "openusd-build",
+ "openusd-schemas",
+ "serde_json",
 ]
 
 [[package]]
@@ -10336,6 +10331,7 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10346,6 +10342,7 @@ dependencies = [
  "bevy",
  "lunco-physics",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10371,6 +10368,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10401,6 +10399,7 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-stage",
  "openusd",
+ "openusd-schemas",
  "tempfile",
 ]
 
@@ -10416,6 +10415,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10492,6 +10492,7 @@ dependencies = [
  "lunco-usd-geometry",
  "lunco-viewport-core",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10550,6 +10551,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "openusd",
+ "openusd-schemas",
  "wgpu-types",
 ]
 
@@ -10566,6 +10568,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-geometry",
  "openusd",
+ "openusd-schemas",
  "parry3d-f64",
 ]
 
@@ -10629,6 +10632,7 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-workspace",
  "openusd",
+ "openusd-schemas",
  "tempfile",
 ]
 
@@ -10660,6 +10664,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10684,6 +10689,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10730,6 +10736,7 @@ dependencies = [
  "lunco-workbench-file-dialog",
  "lunco-workspace",
  "openusd",
+ "openusd-schemas",
  "serde_json",
  "tempfile",
 ]
@@ -10744,6 +10751,7 @@ dependencies = [
  "lunco-hash",
  "lunco-storage",
  "openusd",
+ "openusd-schemas",
  "tempfile",
  "url",
 ]
@@ -10838,6 +10846,7 @@ dependencies = [
  "lunco-usd-data",
  "lunco-usd-document",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10876,6 +10885,7 @@ dependencies = [
  "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
  "openusd",
+ "openusd-schemas",
  "web-time",
 ]
 
@@ -11572,9 +11582,9 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash 2.1.2",
 ]
@@ -12778,23 +12788,50 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openusd"
-version = "0.5.0"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54f38d869c64c96492e1a482fb621eda620d120d91dbe93072112ee315a8923c"
 dependencies = [
- "anyhow",
  "bitflags 2.13.0",
  "bytemuck",
  "derive_more",
- "diff_json",
  "half",
  "logos 0.16.1",
  "lz4_flex",
  "num-traits",
- "serde",
- "serde_json",
+ "regex-lite",
  "strum",
- "tempfile",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
  "zip",
+]
+
+[[package]]
+name = "openusd-build"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ffbbcc78f97548fe2e4c6eaa164f6ec25414c6f685c73ee547504a7bc2361c6"
+dependencies = [
+ "openusd",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 3.0.8",
+ "textwrap",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "openusd-schemas"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841935b1f1445c20c139f42478566459fac7b8830da0358d735526a7415057f4"
+dependencies = [
+ "derive_more",
+ "openusd",
+ "openusd-build",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13508,6 +13545,16 @@ name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
+
+[[package]]
+name = "prettyplease"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.8",
+]
 
 [[package]]
 name = "private-gemm-x86"
@@ -14248,6 +14295,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"
@@ -15475,6 +15528,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "smawk"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8e2fb0f499abb4d162f2bedad68f5ef91a1682b5a03596ddb67efd37768d100"
+
+[[package]]
 name = "smithay-client-toolkit"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16050,6 +16109,7 @@ version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 dependencies = [
+ "smawk",
  "unicode-linebreak",
  "unicode-width 0.2.2",
 ]

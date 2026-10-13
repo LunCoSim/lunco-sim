@@ -107,8 +107,8 @@ use lunco_usd_bevy_stage::{
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
-use openusd::schemas::physics::tokens as physics_tokens;
 use openusd::sdf::{Path as SdfPath, Value};
+use openusd_schemas::physics::tokens as physics_tokens;
 use std::collections::{HashMap, HashSet};
 
 /// One attribute, converted to a typed API value by probing the USD readers.
@@ -228,7 +228,7 @@ fn nearest_rigid_body(view: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
     while let Some(candidate) = current {
         if view.has_api_schema(
             &candidate,
-            openusd::schemas::physics::tokens::API_RIGID_BODY,
+            openusd_schemas::physics::tokens::PHYSICS_RIGID_BODY_API,
         ) {
             return Some(candidate);
         }
@@ -279,7 +279,7 @@ fn collider_geometry_api_value(
         .collect::<Vec<_>>();
     let type_name = view.type_name(prim).unwrap_or_default();
     let approximation = geometry.approximation.map_or(ApiValue::Unit, |mode| {
-        ApiValue::str(openusd::schemas::physics::CollisionApprox::as_token(mode))
+        ApiValue::str(openusd_schemas::physics::CollisionApprox::as_token(mode))
     });
     if cooked_parts.is_empty() {
         return Err(format!(
@@ -455,10 +455,20 @@ fn transform_api_value(transform: Option<Transform>) -> ApiValue {
 }
 
 fn source_layer_api_value(view: &StageView<'_>, path: &SdfPath) -> ApiValue {
-    let Ok(stack) = view.stage().prim(path.clone()).prim_stack() else {
+    let Ok(stack) = view
+        .stage()
+        .prim(path.clone())
+        .expect("validated USD path")
+        .prim_stack()
+    else {
         return ApiValue::Unit;
     };
-    let Some((layer, authored_path)) = stack.first() else {
+    let Some(openusd::usd::SpecSite {
+        layer,
+        path: authored_path,
+        ..
+    }) = stack.first()
+    else {
         return ApiValue::Unit;
     };
     api_value!({
@@ -482,8 +492,10 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
         let Some(type_name) = view.type_name(candidate) else {
             continue;
         };
-        let collider =
-            view.has_api_schema(candidate, openusd::schemas::physics::tokens::API_COLLISION);
+        let collider = view.has_api_schema(
+            candidate,
+            openusd_schemas::physics::tokens::PHYSICS_COLLISION_API,
+        );
         let visual = is_visual_geometry(&type_name) && !view.is_invisible_or_guide(candidate);
         if !collider && !visual {
             continue;
@@ -1648,7 +1660,7 @@ fn read_prim_from_reader(
     };
 
     let collision_geometry = if include_collision_geometry {
-        if !view.has_api_schema(prim, physics_tokens::API_COLLISION) {
+        if !view.has_api_schema(prim, physics_tokens::PHYSICS_COLLISION_API) {
             Some(ApiValue::Unit)
         } else {
             let native_view = native_view.expect("native view required");

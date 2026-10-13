@@ -9,9 +9,9 @@ use lunco_usd_bevy_scene::{
     read_usd_mesh_indexed, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
 };
 use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
-use openusd::schemas::physics::CollisionApprox;
-use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
+use openusd_schemas::physics::CollisionApprox;
+use openusd_schemas::physics::tokens as ptok;
 
 use crate::read_authored_bool_or_default;
 
@@ -40,7 +40,7 @@ impl std::fmt::Display for ColliderProjectionError {
             Self::InvalidApproximation { prim, value } => write!(
                 f,
                 "{prim}: invalid authored {} token `{value}`",
-                ptok::A_APPROXIMATION
+                ptok::PHYSICS_APPROXIMATION
             ),
             Self::UnsupportedApproximation {
                 prim,
@@ -48,7 +48,7 @@ impl std::fmt::Display for ColliderProjectionError {
             } => write!(
                 f,
                 "{prim}: Avian cannot realize the authored {} mode `{}`",
-                ptok::A_APPROXIMATION,
+                ptok::PHYSICS_APPROXIMATION,
                 approximation.as_token()
             ),
         }
@@ -127,27 +127,31 @@ pub fn authored_collider_from_usd_at_scale(
     sdf_path: &SdfPath,
     scale: Vec3,
 ) -> Result<Collider, ColliderProjectionError> {
-    if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
+    if !reader.has_api_schema(sdf_path, ptok::PHYSICS_COLLISION_API) {
         return Err(ColliderProjectionError::Backend {
             prim: sdf_path.to_string(),
             detail: "missing PhysicsCollisionAPI on authored collision geometry".to_owned(),
         });
     }
 
-    let collision_enabled =
-        match read_authored_bool_or_default(reader, sdf_path, ptok::A_COLLISION_ENABLED, true) {
-            Ok(value) => value,
-            Err(()) => {
-                return Err(ColliderProjectionError::Backend {
-                    prim: sdf_path.to_string(),
-                    detail: format!("malformed {}", ptok::A_COLLISION_ENABLED),
-                });
-            }
-        };
+    let collision_enabled = match read_authored_bool_or_default(
+        reader,
+        sdf_path,
+        ptok::PHYSICS_COLLISION_ENABLED,
+        true,
+    ) {
+        Ok(value) => value,
+        Err(()) => {
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: format!("malformed {}", ptok::PHYSICS_COLLISION_ENABLED),
+            });
+        }
+    };
     if !collision_enabled {
         return Err(ColliderProjectionError::Backend {
             prim: sdf_path.to_string(),
-            detail: format!("{} is authored false", ptok::A_COLLISION_ENABLED),
+            detail: format!("{} is authored false", ptok::PHYSICS_COLLISION_ENABLED),
         });
     }
 
@@ -189,16 +193,16 @@ pub fn authored_collider_geometry_from_usd(
     sdf_path: &SdfPath,
     scale: Vec3,
 ) -> Result<Option<AuthoredColliderGeometry>, ColliderProjectionError> {
-    if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
+    if !reader.has_api_schema(sdf_path, ptok::PHYSICS_COLLISION_API) {
         return Ok(None);
     }
-    match read_authored_bool_or_default(reader, sdf_path, ptok::A_COLLISION_ENABLED, true) {
+    match read_authored_bool_or_default(reader, sdf_path, ptok::PHYSICS_COLLISION_ENABLED, true) {
         Ok(false) => return Ok(None),
         Ok(true) => {}
         Err(()) => {
             return Err(ColliderProjectionError::Backend {
                 prim: sdf_path.to_string(),
-                detail: format!("malformed {}", ptok::A_COLLISION_ENABLED),
+                detail: format!("malformed {}", ptok::PHYSICS_COLLISION_ENABLED),
             });
         }
     }
@@ -359,7 +363,7 @@ pub fn collect_child_colliders_from_usd(
     // of the compound; otherwise the presence of any child silently discards
     // part of the authored collision contract. Its local transform is already
     // the ECS body's transform, so the shape is untransformed in body space.
-    if !candidates.is_empty() && reader.has_api_schema(parent_path, ptok::API_COLLISION) {
+    if !candidates.is_empty() && reader.has_api_schema(parent_path, ptok::PHYSICS_COLLISION_API) {
         candidates.insert(0, (parent_path.clone(), Transform::IDENTITY));
     }
     // Equivalent composed readers must produce the same native part indices
@@ -403,7 +407,7 @@ pub fn collect_child_colliders_from_usd(
         // Only descendants that APPLY `PhysicsCollisionAPI` are colliders — same
         // rule the standalone arm uses. Bare geometry (a light housing, a decal
         // plane) contributes nothing to the compound shape.
-        if !reader.has_api_schema(&child_path, ptok::API_COLLISION) {
+        if !reader.has_api_schema(&child_path, ptok::PHYSICS_COLLISION_API) {
             continue;
         }
 
@@ -414,7 +418,7 @@ pub fn collect_child_colliders_from_usd(
         let child_collision = match read_authored_bool_or_default(
             reader,
             &child_path,
-            ptok::A_COLLISION_ENABLED,
+            ptok::PHYSICS_COLLISION_ENABLED,
             true,
         ) {
             Ok(value) => value,
@@ -423,7 +427,7 @@ pub fn collect_child_colliders_from_usd(
                     prim: child_path.to_string(),
                     detail: format!(
                         "malformed {}; compound collider would otherwise be incomplete",
-                        ptok::A_COLLISION_ENABLED
+                        ptok::PHYSICS_COLLISION_ENABLED
                     ),
                 });
             }
@@ -562,7 +566,7 @@ fn gather_compound_candidates(
         if !reader.is_active(&child) {
             continue;
         }
-        if reader.has_api_schema(&child, ptok::API_RIGID_BODY) {
+        if reader.has_api_schema(&child, ptok::PHYSICS_RIGID_BODY_API) {
             continue;
         }
         if reader
@@ -784,23 +788,23 @@ fn dynamic_rigid_body_ancestor(
 ) -> Result<Option<SdfPath>, ColliderProjectionError> {
     let mut ancestor = Some(prim.clone());
     while let Some(path) = ancestor {
-        if reader.has_api_schema(&path, ptok::API_RIGID_BODY) {
-            let enabled = match reader.boolean(&path, ptok::A_RIGID_BODY_ENABLED) {
+        if reader.has_api_schema(&path, ptok::PHYSICS_RIGID_BODY_API) {
+            let enabled = match reader.boolean(&path, ptok::PHYSICS_RIGID_BODY_ENABLED) {
                 Some(value) => value,
-                None if reader.has_authored_attribute(&path, ptok::A_RIGID_BODY_ENABLED) => {
+                None if reader.has_authored_attribute(&path, ptok::PHYSICS_RIGID_BODY_ENABLED) => {
                     return Err(ColliderProjectionError::Backend {
                         prim: path.to_string(),
-                        detail: format!("malformed {}", ptok::A_RIGID_BODY_ENABLED),
+                        detail: format!("malformed {}", ptok::PHYSICS_RIGID_BODY_ENABLED),
                     });
                 }
                 None => true,
             };
-            let kinematic = match reader.boolean(&path, ptok::A_KINEMATIC_ENABLED) {
+            let kinematic = match reader.boolean(&path, ptok::PHYSICS_KINEMATIC_ENABLED) {
                 Some(value) => value,
-                None if reader.has_authored_attribute(&path, ptok::A_KINEMATIC_ENABLED) => {
+                None if reader.has_authored_attribute(&path, ptok::PHYSICS_KINEMATIC_ENABLED) => {
                     return Err(ColliderProjectionError::Backend {
                         prim: path.to_string(),
-                        detail: format!("malformed {}", ptok::A_KINEMATIC_ENABLED),
+                        detail: format!("malformed {}", ptok::PHYSICS_KINEMATIC_ENABLED),
                     });
                 }
                 None => false,
@@ -834,7 +838,7 @@ fn validate_derived_primitive_proxy(
     if source == proxy
         || source.parent() != proxy.parent()
         || reader.type_name(source).as_deref() != Some(ty)
-        || reader.has_api_schema(proxy, ptok::API_RIGID_BODY)
+        || reader.has_api_schema(proxy, ptok::PHYSICS_RIGID_BODY_API)
     {
         return Err(fail(
             "derived primitive must be a matching non-body sibling of its source".into(),

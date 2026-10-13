@@ -41,6 +41,8 @@ pub struct UsdPrimProjectionPlan {
     property_names: Vec<String>,
     attributes: HashMap<String, Value>,
     attribute_types: HashMap<String, String>,
+    asset_sources: HashMap<String, String>,
+    sampled_asset_sources: HashMap<(String, u64), String>,
     authored_attributes: HashSet<String>,
     attr_ui_hints: HashMap<String, AttrUiHint>,
     api_schemas: Vec<String>,
@@ -233,13 +235,22 @@ impl UsdStageProjectionPlan {
             let time_sample_values = attribute_names
                 .iter()
                 .filter_map(|name| {
-                    let samples = reader
-                        .stage()
-                        .prim(path.clone())
-                        .attribute(name)
-                        .time_samples()
-                        .ok()??;
-                    (!samples.is_empty()).then(|| (name.clone(), samples))
+                    let mut times = reader.time_sample_times(&path, name);
+                    if times.is_empty() {
+                        return None;
+                    }
+                    if !times.contains(&0.0) {
+                        times.push(0.0);
+                    }
+                    let values = times
+                        .into_iter()
+                        .filter_map(|time| {
+                            reader
+                                .attr_value_at(&path, name, time)
+                                .map(|value| (time, value))
+                        })
+                        .collect();
+                    Some((name.clone(), values))
                 })
                 .collect();
             let relationships = reader
@@ -273,6 +284,40 @@ impl UsdStageProjectionPlan {
                         .map(|(instance, _)| instance.to_owned())
                 }))
                 .collect();
+            let asset_sources = attribute_names
+                .iter()
+                .filter(|name| {
+                    matches!(
+                        attribute_types.get(*name).map(String::as_str),
+                        Some("asset" | "asset[]")
+                    )
+                })
+                .filter_map(|name| {
+                    reader
+                        .asset_source_layer(&path, name, None)
+                        .map(|source| (name.clone(), source))
+                })
+                .collect();
+            let sampled_asset_sources = attribute_names
+                .iter()
+                .filter(|name| {
+                    matches!(
+                        attribute_types.get(*name).map(String::as_str),
+                        Some("asset" | "asset[]")
+                    )
+                })
+                .flat_map(|name| {
+                    reader
+                        .time_sample_times(&path, name)
+                        .into_iter()
+                        .filter_map(|time| {
+                            reader
+                                .asset_source_layer(&path, name, Some(time))
+                                .map(|source| ((name.clone(), time.to_bits()), source))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
             let prim = UsdPrimProjectionPlan {
                 path: path_string.clone(),
                 transform,
@@ -286,6 +331,8 @@ impl UsdStageProjectionPlan {
                 property_names: attribute_names.clone(),
                 attributes,
                 attribute_types,
+                asset_sources,
+                sampled_asset_sources,
                 authored_attributes,
                 attr_ui_hints,
                 api_schemas,
@@ -319,6 +366,9 @@ impl UsdStageProjectionPlan {
                 data.collections
                     .insert((path_string.clone(), instance), members);
             }
+        }
+        for diagnostic in stage.composition_errors() {
+            bevy::log::warn!(target: "usd-bevy", %diagnostic, "USD composition diagnostic");
         }
         for (index, prim) in data.prims.iter().enumerate() {
             if let Some(type_name) = &prim.type_name {
@@ -416,6 +466,28 @@ impl UsdStageProjectionPlan {
             .prim_indices
             .get(source_path.as_ref())
             .and_then(|index| self.data.prims.get(*index))
+    }
+
+    fn transform_snapshot(
+        &self,
+        path: &SdfPath,
+        time: f64,
+    ) -> Result<&UsdPrimProjectionPlan, crate::TransformReadError> {
+        let plan = self.prim(path).ok_or_else(|| crate::TransformReadError {
+            prim: path.to_string(),
+        })?;
+        if time != 0.0
+            && plan
+                .time_samples
+                .keys()
+                .any(|name| name.starts_with("xformOp:"))
+        {
+            bevy::log::error!(%path, %time, "continuous USD transforms require the native temporal stage");
+            return Err(crate::TransformReadError {
+                prim: path.to_string(),
+            });
+        }
+        Ok(plan)
     }
 
     fn source_path<'a>(&self, path: &'a str) -> Cow<'a, str> {
@@ -641,6 +713,17 @@ impl UsdRead for UsdStageProjectionPlan {
         self.prim(prim).and_then(|prim| prim.kind.clone())
     }
 
+    fn asset_source_layer(&self, prim: &SdfPath, name: &str, time: Option<f64>) -> Option<String> {
+        let prim = self.prim(prim)?;
+        match time {
+            None => prim.asset_sources.get(name).cloned(),
+            Some(time) => prim
+                .sampled_asset_sources
+                .get(&(name.to_owned(), time.to_bits()))
+                .cloned(),
+        }
+    }
+
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
         if self.is_instance_root(prim)
             && let Some((_, value)) = self.instance_root_attributes.get(name)
@@ -864,7 +947,12 @@ impl UsdRead for UsdStageProjectionPlan {
             return Some(value.clone());
         }
         if let Some(samples) = prim_plan.time_sample_values.get(name) {
-            return openusd::usd::evaluate(samples, time, openusd::usd::InterpolationType::Linear);
+            if let Some((_, value)) = samples.iter().find(|(sample_time, _)| *sample_time == time) {
+                return Some(value.clone());
+            }
+            bevy::log::error!(%prim, %name, %time,
+                "continuous USD sampling requires the native temporal stage");
+            return None;
         }
         prim_plan.attributes.get(name).cloned()
     }
@@ -872,11 +960,9 @@ impl UsdRead for UsdStageProjectionPlan {
     fn local_transform_matrix_d_at(
         &self,
         prim: &SdfPath,
-        _time: f64,
+        time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
-        let plan = self.prim(prim).ok_or_else(|| crate::TransformReadError {
-            prim: prim.to_string(),
-        })?;
+        let plan = self.transform_snapshot(prim, time)?;
         let mut matrix = plan.transform_matrix_d;
         if self.is_instance_root(prim) {
             if let Some(pose) = self.instance_root_pose {
@@ -906,11 +992,9 @@ impl UsdRead for UsdStageProjectionPlan {
     fn local_transform_at(
         &self,
         prim: &SdfPath,
-        _time: f64,
+        time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError> {
-        let prim_plan = self.prim(prim).ok_or_else(|| crate::TransformReadError {
-            prim: prim.to_string(),
-        })?;
+        let prim_plan = self.transform_snapshot(prim, time)?;
         if self.is_instance_root(prim) {
             let mut transform = self.instance_root_pose.or(prim_plan.transform);
             if let Some(scale) = self.instance_root_scale {
@@ -1007,8 +1091,8 @@ def Xform \"World\"\n\
             vec![0.0, 10.0]
         );
         assert_eq!(
-            plan.scalar_at::<[f64; 3]>(&child, "xformOp:translate", 5.0),
-            Some([6.0, 2.0, 3.0])
+            plan.scalar_at::<[f64; 3]>(&child, "xformOp:translate", 0.0),
+            Some([1.0, 2.0, 3.0])
         );
         assert_eq!(plan.children(&world), vec![child]);
     }

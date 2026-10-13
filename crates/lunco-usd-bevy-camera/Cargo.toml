@@ -25,6 +25,7 @@ lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

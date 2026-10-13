@@ -87,7 +87,7 @@ use lunco_doc::{
 };
 use lunco_geometry_core::profile_extrusion::ProfilePlane;
 use lunco_usd_authoring::author::{
-    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
+    self, extract_edit_layer_data, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_data::units::{ConventionTransform, StageMetadataReader, StageMetrics, UpAxis};
@@ -114,7 +114,8 @@ const EMPTY_USDA: &str = "#usda 1.0\n";
 /// whether the result is still eligible to open or refresh.
 #[derive(Debug, Clone)]
 pub struct PreparedUsdSource {
-    source: String,
+    source: Option<String>,
+    bytes: Vec<u8>,
     parsed: Result<sdf::Data, String>,
 }
 
@@ -123,12 +124,37 @@ impl PreparedUsdSource {
     /// `UsdDocument`.
     pub fn parse(source: String) -> Self {
         let parsed = usda_to_data(&source).map_err(|error| error.to_string());
-        Self { source, parsed }
+        let bytes = source.as_bytes().to_vec();
+        Self {
+            source: Some(source),
+            bytes,
+            parsed,
+        }
+    }
+
+    /// Decode a layer using the native file-format registry. Its exact bytes
+    /// fence asynchronous source admission. Binary layers stay parsed data;
+    /// text serialization is required only when a consumer requests source.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        let layer = sdf::Layer::from_bytes("document", bytes.clone())
+            .map_err(|error| format!("decode USD layer: {error}"))?;
+        let data = sdf::Data::from_abstract(layer.data())
+            .map_err(|error| format!("prepare USD layer: {error}"))?;
+        let source = if bytes.starts_with(b"#usda") {
+            Some(String::from_utf8(bytes.clone()).map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        Ok(Self {
+            source,
+            bytes,
+            parsed: Ok(data),
+        })
     }
 
     /// Exact source bytes represented by this preparation result.
-    pub fn source_text(&self) -> &str {
-        &self.source
+    pub fn source_bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -168,433 +194,6 @@ fn same_layer_data(left: &sdf::Data, right: &sdf::Data) -> bool {
         }
     }
     true
-}
-
-#[derive(Clone, Copy)]
-enum UsdaTokenKind {
-    Identifier,
-    String,
-    Punctuation(u8),
-}
-
-#[derive(Clone, Copy)]
-struct UsdaToken {
-    start: usize,
-    end: usize,
-    kind: UsdaTokenKind,
-}
-
-fn usda_tokens(source: &str) -> Option<Vec<UsdaToken>> {
-    let bytes = source.as_bytes();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b' ' | b'\t' | b'\r' | b'\n' => i += 1,
-            b'#' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'"' => {
-                let start = i;
-                let triple = bytes.get(i..i + 3) == Some(b"\"\"\"");
-                let width = if triple { 3 } else { 1 };
-                i += width;
-                let mut closed = false;
-                while i < bytes.len() {
-                    if !triple && bytes[i] == b'\\' {
-                        i = (i + 2).min(bytes.len());
-                    } else if triple && bytes.get(i..i + 3) == Some(b"\"\"\"") {
-                        i += 3;
-                        closed = true;
-                        break;
-                    } else if !triple && bytes[i] == b'"' {
-                        i += 1;
-                        closed = true;
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-                if !closed {
-                    return None;
-                }
-                tokens.push(UsdaToken {
-                    start,
-                    end: i,
-                    kind: UsdaTokenKind::String,
-                });
-            }
-            b'@' => {
-                i += 1;
-                let mut closed = false;
-                while i < bytes.len() {
-                    if bytes[i] == b'\\' {
-                        i = (i + 2).min(bytes.len());
-                    } else if bytes[i] == b'@' {
-                        i += 1;
-                        closed = true;
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-                if !closed {
-                    return None;
-                }
-            }
-            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
-                let start = i;
-                i += 1;
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b':'))
-                {
-                    i += 1;
-                }
-                tokens.push(UsdaToken {
-                    start,
-                    end: i,
-                    kind: UsdaTokenKind::Identifier,
-                });
-            }
-            punctuation => {
-                tokens.push(UsdaToken {
-                    start: i,
-                    end: i + 1,
-                    kind: UsdaTokenKind::Punctuation(punctuation),
-                });
-                i += 1;
-            }
-        }
-    }
-    Some(tokens)
-}
-
-fn token_is_punctuation(token: UsdaToken, punctuation: u8) -> bool {
-    matches!(token.kind, UsdaTokenKind::Punctuation(value) if value == punctuation)
-}
-
-fn token_is_identifier(source: &str, token: UsdaToken, identifier: &str) -> bool {
-    matches!(token.kind, UsdaTokenKind::Identifier) && &source[token.start..token.end] == identifier
-}
-
-fn matching_usda_delimiter(tokens: &[UsdaToken], open: usize) -> Option<usize> {
-    let UsdaTokenKind::Punctuation(first) = tokens.get(open)?.kind else {
-        return None;
-    };
-    let mut stack = vec![first];
-    for (index, token) in tokens.iter().enumerate().skip(open + 1) {
-        let UsdaTokenKind::Punctuation(punctuation) = token.kind else {
-            continue;
-        };
-        match punctuation {
-            b'{' | b'[' | b'(' => stack.push(punctuation),
-            b'}' | b']' | b')' => {
-                let expected = match punctuation {
-                    b'}' => b'{',
-                    b']' => b'[',
-                    b')' => b'(',
-                    _ => return None,
-                };
-                if stack.pop() != Some(expected) {
-                    return None;
-                }
-                if stack.is_empty() {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn documentation_string_token(
-    source: &str,
-    tokens: &[UsdaToken],
-    start: usize,
-    end: usize,
-) -> Option<usize> {
-    (start..end.saturating_sub(2))
-        .find(|index| {
-            token_is_identifier(source, tokens[*index], "doc")
-                && token_is_punctuation(tokens[*index + 1], b'=')
-                && matches!(tokens[*index + 2].kind, UsdaTokenKind::String)
-        })
-        .map(|index| index + 2)
-}
-
-fn usda_class_metadata(
-    source: &str,
-    tokens: &[UsdaToken],
-    class_name: &str,
-) -> Option<(usize, usize)> {
-    let mut depth = Vec::new();
-    for (index, token) in tokens.iter().copied().enumerate() {
-        if depth.is_empty()
-            && token_is_identifier(source, token, "class")
-            && tokens.get(index + 1).is_some_and(|name| {
-                matches!(name.kind, UsdaTokenKind::String)
-                    && &source[name.start + 1..name.end - 1] == class_name
-            })
-            && tokens
-                .get(index + 2)
-                .is_some_and(|open| token_is_punctuation(*open, b'('))
-        {
-            let close = matching_usda_delimiter(tokens, index + 2)?;
-            return Some((index + 2, close));
-        }
-        if let UsdaTokenKind::Punctuation(punctuation) = token.kind {
-            match punctuation {
-                b'{' | b'[' | b'(' => depth.push(punctuation),
-                b'}' | b']' | b')' => {
-                    let expected = match punctuation {
-                        b'}' => b'{',
-                        b']' => b'[',
-                        b')' => b'(',
-                        _ => return None,
-                    };
-                    if depth.pop() != Some(expected) {
-                        return None;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-fn schema_attribute_documentation_token(
-    source: &str,
-    tokens: &[UsdaToken],
-    body_open: usize,
-    body_close: usize,
-    name: &str,
-) -> Option<usize> {
-    let mut nesting = Vec::new();
-    for index in body_open + 1..body_close {
-        let token = tokens[index];
-        if nesting.is_empty()
-            && token_is_identifier(source, token, name)
-            && index > body_open + 1
-            && matches!(tokens[index - 1].kind, UsdaTokenKind::Identifier)
-            && tokens.get(index + 1).is_some_and(|next| {
-                token_is_punctuation(*next, b'(') || token_is_punctuation(*next, b'=')
-            })
-        {
-            let mut cursor = index + 1;
-            while cursor < body_close {
-                if token_is_punctuation(tokens[cursor], b'(') {
-                    let close = matching_usda_delimiter(tokens, cursor)?;
-                    if close >= body_close {
-                        return None;
-                    }
-                    if let Some(doc) = documentation_string_token(source, tokens, cursor + 1, close)
-                    {
-                        return Some(doc);
-                    }
-                    cursor = close + 1;
-                } else {
-                    cursor += 1;
-                }
-            }
-            return None;
-        }
-        if let UsdaTokenKind::Punctuation(punctuation) = token.kind {
-            match punctuation {
-                b'{' | b'[' | b'(' => nesting.push(punctuation),
-                b'}' | b']' | b')' => {
-                    let expected = match punctuation {
-                        b'}' => b'{',
-                        b']' => b'[',
-                        b')' => b'(',
-                        _ => return None,
-                    };
-                    if nesting.pop() != Some(expected) {
-                        return None;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-fn quote_usda_string(value: &str) -> Option<String> {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for character in value.chars() {
-        match character {
-            '\\' => quoted.push_str("\\\\"),
-            '"' => quoted.push_str("\\\""),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            character if character.is_control() => return None,
-            character => quoted.push(character),
-        }
-    }
-    quoted.push('"');
-    Some(quoted)
-}
-
-fn patch_class_documentation(
-    source: &str,
-    path: &str,
-    attribute: Option<&str>,
-    documentation: Option<&str>,
-) -> Option<String> {
-    let documentation = documentation?;
-    let class_name = path.strip_prefix('/')?;
-    if class_name.is_empty() || class_name.contains('/') {
-        return None;
-    }
-    let tokens = usda_tokens(source)?;
-    let (metadata_open, metadata_close) = usda_class_metadata(source, &tokens, class_name)?;
-    let doc_token = if let Some(attribute) = attribute {
-        let body_open = metadata_close + 1;
-        if !tokens
-            .get(body_open)
-            .is_some_and(|token| token_is_punctuation(*token, b'{'))
-        {
-            return None;
-        }
-        let body_close = matching_usda_delimiter(&tokens, body_open)?;
-        schema_attribute_documentation_token(source, &tokens, body_open, body_close, attribute)?
-    } else {
-        documentation_string_token(source, &tokens, metadata_open + 1, metadata_close)?
-    };
-    let replacement = quote_usda_string(documentation)?;
-    let token = tokens[doc_token];
-    let mut patched = String::with_capacity(source.len() + replacement.len());
-    patched.push_str(&source[..token.start]);
-    patched.push_str(&replacement);
-    patched.push_str(&source[token.end..]);
-    Some(patched)
-}
-
-fn patch_stage_documentation(source: &str, documentation: Option<&str>) -> Option<String> {
-    let documentation = documentation?;
-    let tokens = usda_tokens(source)?;
-    let metadata_open = tokens
-        .iter()
-        .position(|token| token_is_punctuation(*token, b'('))?;
-    let metadata_close = matching_usda_delimiter(&tokens, metadata_open)?;
-    let doc_token = documentation_string_token(source, &tokens, metadata_open + 1, metadata_close)?;
-    let replacement = quote_usda_string(documentation)?;
-    let token = tokens[doc_token];
-    let mut patched = String::with_capacity(source.len() + replacement.len());
-    patched.push_str(&source[..token.start]);
-    patched.push_str(&replacement);
-    patched.push_str(&source[token.end..]);
-    Some(patched)
-}
-
-fn remove_usda_prim_spec(source: &str, path: &str) -> Option<String> {
-    let tokens = usda_tokens(source)?;
-    let mut specs = Vec::new();
-    for (index, token) in tokens.iter().copied().enumerate() {
-        let (name_index, has_type) = if token_is_identifier(source, token, "def") {
-            match tokens.get(index + 1) {
-                Some(next) if matches!(next.kind, UsdaTokenKind::String) => (index + 1, false),
-                Some(next) if matches!(next.kind, UsdaTokenKind::Identifier) => (index + 2, true),
-                _ => continue,
-            }
-        } else if token_is_identifier(source, token, "over")
-            || token_is_identifier(source, token, "class")
-        {
-            (index + 1, false)
-        } else {
-            continue;
-        };
-        if has_type
-            && !tokens
-                .get(index + 1)
-                .is_some_and(|token| matches!(token.kind, UsdaTokenKind::Identifier))
-        {
-            continue;
-        }
-        let Some(name) = tokens.get(name_index).copied() else {
-            continue;
-        };
-        if !matches!(name.kind, UsdaTokenKind::String) {
-            continue;
-        }
-        let name = source.get(name.start + 1..name.end - 1)?.to_owned();
-        let mut body_open = name_index + 1;
-        if tokens
-            .get(body_open)
-            .is_some_and(|token| token_is_punctuation(*token, b'('))
-        {
-            body_open = matching_usda_delimiter(&tokens, body_open)? + 1;
-        }
-        if !tokens
-            .get(body_open)
-            .is_some_and(|token| token_is_punctuation(*token, b'{'))
-        {
-            continue;
-        }
-        let body_close = matching_usda_delimiter(&tokens, body_open)?;
-        specs.push((index, body_close, name));
-    }
-
-    let mut stack: Vec<(usize, String)> = Vec::new();
-    let mut matches = Vec::new();
-    for (start, close, name) in specs {
-        while stack
-            .last()
-            .is_some_and(|(parent_close, _)| *parent_close < start)
-        {
-            stack.pop();
-        }
-        let current_path = stack
-            .last()
-            .map(|(_, parent)| format!("{parent}/{name}"))
-            .unwrap_or_else(|| format!("/{name}"));
-        if current_path == path {
-            matches.push((tokens[start].start, tokens[close].end));
-        }
-        stack.push((close, current_path));
-    }
-    if matches.len() != 1 {
-        return None;
-    }
-
-    let (mut start, mut end) = matches[0];
-    let mut indentation = String::new();
-    if let Some(line_start) = source[..start].rfind('\n').map(|index| index + 1)
-        && source[line_start..start].trim().is_empty()
-    {
-        indentation = source[line_start..start].to_owned();
-        start = line_start;
-    }
-    while start > 0 {
-        let previous_line_end = start - 1;
-        let previous_line_start = source[..previous_line_end]
-            .rfind('\n')
-            .map_or(0, |index| index + 1);
-        let previous_line = &source[previous_line_start..previous_line_end];
-        let Some(comment) = previous_line.strip_prefix(&indentation) else {
-            break;
-        };
-        if !comment.trim_start().starts_with('#') {
-            break;
-        }
-        start = previous_line_start;
-    }
-    if let Some(relative_end) = source[end..].find('\n') {
-        let line_end = end + relative_end;
-        if source[end..line_end].trim().is_empty() {
-            end = line_end + 1;
-        }
-    }
-    let mut patched = String::with_capacity(source.len() - (end - start));
-    patched.push_str(&source[..start]);
-    patched.push_str(&source[end..]);
-    Some(patched)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1475,9 +1074,8 @@ pub struct UsdDocument {
     /// the file rather than silently emptying it. While `Some`, structural ops
     /// are rejected; a base [`UsdOp::ReplaceSource`] clears it.
     parse_error: Option<std::sync::Arc<str>>,
-    /// Original source text while supported edits can preserve it: documentation
-    /// edits patch existing USDA strings, and `RemovePrim` deletes one uniquely
-    /// located spec. Other base-layer edits use canonical SDF serialization.
+    /// Original USDA text until a structural base-layer edit requires native
+    /// SDF serialization. Binary preparation has no original text representation.
     authored_source: Option<std::sync::Arc<str>>,
     generation: u64,
     /// Revision of the authored base layer. It is independent from the
@@ -1587,9 +1185,10 @@ impl UsdDocument {
         let PreparedUsdSource {
             source: source_text,
             parsed,
+            ..
         } = source;
         let (base, parse_error, authored_source) = match parsed {
-            Ok(data) => (data, None, Some(source_text)),
+            Ok(data) => (data, None, source_text),
             Err(error) => {
                 warn!(
                     "[usd] document {} source did not parse as USDA ({error}); \
@@ -1598,7 +1197,7 @@ impl UsdDocument {
                 );
                 (
                     usda_to_data(EMPTY_USDA).unwrap_or_default(),
-                    Some(source_text),
+                    Some(source_text.expect("invalid text preparation retains its source")),
                     None,
                 )
             }
@@ -1634,17 +1233,19 @@ impl UsdDocument {
         let PreparedUsdSource {
             source: source_text,
             parsed,
+            ..
         } = source;
         match parsed {
             Ok(data) => {
                 if self.parse_error.is_none()
-                    && self.authored_source.as_deref() == Some(source_text.as_str())
+                    && self.authored_source.as_deref() == source_text.as_deref()
+                    && same_layer_data(&self.base, &data)
                 {
                     return true;
                 }
                 self.commit(TargetLayer::Base, data, UsdChange::FullReload);
                 self.parse_error = None;
-                self.authored_source = Some(std::sync::Arc::from(source_text));
+                self.authored_source = source_text.map(std::sync::Arc::from);
                 self.last_saved_base_revision = Some(self.base_revision);
                 true
             }
@@ -1662,23 +1263,43 @@ impl UsdDocument {
     /// The current source text for the **base** layer. Save, viewport previews,
     /// and session snapshots use this text; runtime and view overlays are
     /// excluded. Original source text remains available until a structural edit
-    /// requires canonical SDF serialization. Documentation edits patch their
-    /// existing metadata strings, and `RemovePrim` deletes one uniquely located
-    /// authored spec in place.
+    /// requires the native SDF serializer. Every structural edit uses parsed
+    /// layer data; source formatting and comments are not retained after editing.
     ///
     /// If the document was opened from un-parseable source, the verbatim
     /// original text is returned instead so the file is never corrupted.
-    pub fn source(&self) -> String {
+    pub fn source(&self) -> Result<String, DocumentError> {
         if let Some(raw) = &self.parse_error {
-            return raw.to_string();
+            return Ok(raw.to_string());
         }
         if let Some(source) = &self.authored_source {
-            return source.to_string();
+            return Ok(source.to_string());
         }
-        author::data_to_usda(&self.base).unwrap_or_else(|e| {
-            warn!("[usd] failed to serialize document {}: {e}", self.id.raw());
-            EMPTY_USDA.to_string()
-        })
+        author::data_to_usda(&self.base).map_err(author_err)
+    }
+
+    /// Serialize the authored base using the native format selected by the
+    /// destination extension. Invalid source and unsupported formats fail
+    /// before persistence can write anything.
+    pub fn export_bytes(&self, extension: &str) -> Result<Vec<u8>, DocumentError> {
+        if let Some(error) = &self.parse_error {
+            return Err(DocumentError::ValidationFailed(format!(
+                "invalid USD source: {error}"
+            )));
+        }
+        let format = sdf::LayerRegistry::find_by_extension(extension).ok_or_else(|| {
+            DocumentError::ValidationFailed(format!("unknown USD file format `{extension}`"))
+        })?;
+        if format.format_id() == "usda"
+            && let Some(source) = &self.authored_source
+        {
+            return Ok(source.as_bytes().to_vec());
+        }
+        if format.format_id() == "usda" {
+            author::ensure_usda_serializable(self.base.as_ref()).map_err(author_err)?;
+        }
+        let written = format.write_bytes(self.base.as_ref()).map_err(author_err)?;
+        Ok(written.bytes.as_ref().to_vec())
     }
 
     /// The authored **base** layer data (references intact). Query it with the
@@ -1750,13 +1371,13 @@ impl UsdDocument {
     /// The flattened `composed_arc` remains a local authored-data view and is
     /// not a substitute for this stage when a loaded dependency closure exists.
     pub fn open_composed_stage(&self) -> Result<Stage, DocumentError> {
-        match &self.authoring_recipe {
-            Some(recipe) => self.open_composed_stage_with_recipe(recipe),
-            None => {
-                let composed = self.composed_arc();
-                open_doc_stage(&composed).map_err(author_err)
-            }
-        }
+        author::open_doc_stage_with_layers(
+            &self.base,
+            &self.runtime,
+            &self.view,
+            self.authoring_recipe.as_deref(),
+        )
+        .map_err(author_err)
     }
 
     /// Open this document's current layers over the scene's resolved dependency
@@ -1766,7 +1387,7 @@ impl UsdDocument {
         &self,
         recipe: &StageRecipe,
     ) -> Result<Stage, DocumentError> {
-        author::open_doc_stage_with_layers(&self.base, &self.runtime, &self.view, recipe)
+        author::open_doc_stage_with_layers(&self.base, &self.runtime, &self.view, Some(recipe))
             .map_err(author_err)
     }
 
@@ -1779,7 +1400,7 @@ impl UsdDocument {
     ) -> Result<(SdfPath, Vec<String>, bool), DocumentError> {
         let prim_path = parse_prim_path(path)?;
         let stage = self.open_composed_stage()?;
-        let prim = stage.prim(prim_path.clone());
+        let prim = stage.prim(prim_path.clone()).map_err(author_err)?;
         if !prim.is_valid().map_err(author_err)? {
             // A referenced descendant is editable only when the loaded
             // composition resolves that exact prim.  An arc ancestor grants
@@ -1795,11 +1416,6 @@ impl UsdDocument {
             .map_err(author_err)?
         {
             Some(sdf::Value::TokenVec(values)) => values.into_iter().map(Into::into).collect(),
-            Some(sdf::Value::StringVec(values)) => values,
-            Some(sdf::Value::TokenListOp(values)) => {
-                values.flatten().into_iter().map(Into::into).collect()
-            }
-            Some(sdf::Value::StringListOp(values)) => values.flatten(),
             None => Vec::new(),
             Some(_) => {
                 return Err(DocumentError::ValidationFailed(format!(
@@ -1838,7 +1454,7 @@ impl UsdDocument {
     /// target itself is resolved by OpenUSD through the live canonical stage.
     pub fn path_is_under_composed_arc(&self, path: &str) -> Result<bool, DocumentError> {
         let path = parse_prim_path(path)?;
-        Ok(self.path_is_under_composed_arc_path(&path))
+        self.path_is_under_composed_arc_path(&path)
     }
 
     /// Revision of the persisted authored layer.
@@ -1936,17 +1552,11 @@ impl UsdDocument {
     /// The composed view serialized to USDA text — the source the viewport
     /// re-parses so runtime-layer state becomes visible. Falls back to the raw
     /// (base) source when the base is un-parseable.
-    pub fn composed_source(&self) -> String {
+    pub fn composed_source(&self) -> Result<String, DocumentError> {
         if let Some(raw) = &self.parse_error {
-            return raw.to_string();
+            return Ok(raw.to_string());
         }
-        author::data_to_usda(&self.composed_arc()).unwrap_or_else(|e| {
-            warn!(
-                "[usd] failed to serialize composed document {}: {e}",
-                self.id.raw()
-            );
-            EMPTY_USDA.to_string()
-        })
+        author::data_to_usda(&self.composed_arc()).map_err(author_err)
     }
 
     /// Serialize the base and user-authored runtime layers for a Twin source
@@ -2065,6 +1675,7 @@ impl UsdDocument {
         let PreparedUsdSource {
             source: source_text,
             parsed,
+            ..
         } = prepared;
         let Ok(base) = parsed else {
             warn!(
@@ -2088,7 +1699,7 @@ impl UsdDocument {
         self.changes
             .push_back((self.generation, UsdChange::FullReload));
         self.parse_error = None;
-        self.authored_source = Some(std::sync::Arc::from(source_text));
+        self.authored_source = source_text.map(std::sync::Arc::from);
         self.last_saved_base_revision = Some(self.base_revision);
         true
     }
@@ -2179,32 +1790,49 @@ impl UsdDocument {
     /// separate declarations, which is the reason the registry keys on the
     /// declaring schema rather than the bare name.
     ///
-    /// The namespaced fallback covers our own `lunco:*` properties, which come from
-    /// applied API schemas rather than the prim's type. Their names are globally
-    /// unique by construction (that is what the namespace is for), so resolving one
-    /// by name is unambiguous and saves walking the `apiSchemas` list op for a
-    /// lookup that could only ever have one answer.
     fn linear_unit_of(
         &self,
         prim: &SdfPath,
         attr: &str,
     ) -> lunco_usd_authoring::schema::LinearUnit {
-        use lunco_usd_authoring::schema::{LinearUnit, SchemaRegistry};
-        let Ok(reg) = SchemaRegistry::global().read() else {
-            return LinearUnit::None;
-        };
+        use lunco_usd_authoring::schema::{LinearUnit, SchemaMetadata};
+        let reg = SchemaMetadata::global();
         if let Some(ty) = self.composed_arc().prim_type_name(prim) {
             let u = reg.linear_unit(&ty, attr);
             if u != LinearUnit::None {
                 return u;
             }
         }
-        if attr.contains(':') {
-            if let Some(spec) = reg.property(attr) {
-                return spec.linear;
-            }
-        }
         LinearUnit::None
+    }
+
+    fn open_target_stage(&self, target: TargetLayer) -> Result<Stage, DocumentError> {
+        let stage = self.open_composed_stage()?;
+        let identifier = match target {
+            TargetLayer::Base => stage.root_layer().identifier().to_owned(),
+            TargetLayer::Runtime | TargetLayer::View => {
+                let session_id = stage
+                    .session_layer()
+                    .ok_or_else(|| {
+                        DocumentError::Internal("document session layer is missing".into())
+                    })?
+                    .identifier()
+                    .to_owned();
+                let layers = stage.sub_layers(&session_id);
+                let index = match target {
+                    TargetLayer::View => 0,
+                    TargetLayer::Runtime => 1,
+                    TargetLayer::Base => unreachable!(),
+                };
+                layers.get(index).cloned().ok_or_else(|| {
+                    DocumentError::Internal("document overlay layer is missing".into())
+                })?
+            }
+        };
+        stage
+            .set_edit_target(openusd::usd::EditTarget::for_layer(identifier))
+            .map_err(author_err)?;
+        Ok(stage)
     }
 
     fn layer(&self, t: TargetLayer) -> &sdf::Data {
@@ -2263,24 +1891,12 @@ impl UsdDocument {
     }
 
     /// The current serialized source of layer `t` (base honors the
-    /// un-parseable raw-text fallback; runtime is always real data).
-    fn layer_source(&self, t: TargetLayer) -> String {
-        match t {
-            TargetLayer::Base => self.source(),
-            TargetLayer::Runtime => author::data_to_usda(&self.runtime).unwrap_or_else(|e| {
-                warn!(
-                    "[usd] failed to serialize runtime layer {}: {e}",
-                    self.id.raw()
-                );
-                EMPTY_USDA.to_string()
-            }),
-            TargetLayer::View => author::data_to_usda(&self.view).unwrap_or_else(|e| {
-                warn!(
-                    "[usd] failed to serialize view layer {}: {e}",
-                    self.id.raw()
-                );
-                EMPTY_USDA.to_string()
-            }),
+    /// original invalid text; runtime and view contain parsed data).
+    fn layer_source(&self, target: TargetLayer) -> Result<String, DocumentError> {
+        if target == TargetLayer::Base {
+            self.source()
+        } else {
+            author::data_to_usda(self.layer(target)).map_err(author_err)
         }
     }
 
@@ -2314,11 +1930,11 @@ impl UsdDocument {
     /// (pre-mutation) source verbatim via a `ReplaceSource` **targeting the
     /// same layer**, so undo routes back to the layer the forward op touched.
     /// Capture it *before* authoring the forward op.
-    fn coarse_inverse(&self, t: TargetLayer, id: &LayerId) -> UsdOp {
-        UsdOp::ReplaceSource {
+    fn coarse_inverse(&self, t: TargetLayer, id: &LayerId) -> Result<UsdOp, DocumentError> {
+        Ok(UsdOp::ReplaceSource {
             edit_target: id.clone(),
-            text: self.layer_source(t),
-        }
+            text: self.layer_source(t)?,
+        })
     }
 
     /// Validate that `path` names a prim present in one of the document layers —
@@ -2326,7 +1942,16 @@ impl UsdDocument {
     /// prim. Returns the parsed [`SdfPath`].
     fn require_prim_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
-        if prim_in(&self.base, &sdf) || prim_in(&self.runtime, &sdf) || prim_in(&self.view, &sdf) {
+        if prim_in(&self.base, &sdf)
+            || prim_in(&self.runtime, &sdf)
+            || prim_in(&self.view, &sdf)
+            || self
+                .open_composed_stage()?
+                .prim(&sdf)
+                .map_err(author_err)?
+                .is_valid()
+                .map_err(author_err)?
+        {
             Ok(sdf)
         } else {
             Err(DocumentError::ValidationFailed(format!(
@@ -2363,22 +1988,13 @@ impl UsdDocument {
     /// deliberately absent from this document's authored `sdf::Data`. A runtime
     /// attribute override on such a path is valid USD: the edit layer first
     /// defines a local over opinion, then authors the attribute on it.
-    fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> bool {
-        let mut ancestor = Some(path.clone());
-        while let Some(path) = ancestor {
-            if [&self.base, &self.runtime, &self.view]
-                .into_iter()
-                .any(|layer| {
-                    layer.spec(&path).is_some_and(|spec| {
-                        spec.get("references").is_some() || spec.get("payload").is_some()
-                    })
-                })
-            {
-                return true;
-            }
-            ancestor = path.parent();
+    fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> Result<bool, DocumentError> {
+        let stage = self.open_composed_stage()?;
+        let prim = stage.prim(path).map_err(author_err)?;
+        if !prim.is_valid().map_err(author_err)? {
+            return Ok(false);
         }
-        false
+        prim.has_composition_arc().map_err(author_err)
     }
 
     /// Validate that `path` names a prim authored in **this specific layer** —
@@ -2448,32 +2064,13 @@ fn validate_reference_asset_path(
     asset_path: &str,
     operation: &str,
 ) -> Result<String, DocumentError> {
-    let normalized = lunco_assets_path::slashed(asset_path);
-    if normalized.is_empty() || normalized.contains('@') || normalized.contains('\0') {
+    if asset_path.is_empty() || asset_path.contains('\0') {
         return Err(DocumentError::ValidationFailed(format!(
-            "{operation} requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
+            "{operation} requires a non-empty USD asset path without NUL"
         )));
     }
-    if let Some((scheme, rest)) = lunco_assets_path::split_scheme(&normalized) {
-        if scheme.is_empty()
-            || rest.is_empty()
-            || rest
-                .split('/')
-                .any(|segment| segment == "." || segment == ".." || segment.contains('\0'))
-        {
-            return Err(DocumentError::ValidationFailed(format!(
-                "{operation} asset identity is not safe: `{asset_path}`"
-            )));
-        }
-    } else {
-        let relative = normalized.strip_prefix('/').unwrap_or(&normalized);
-        if !lunco_assets_path::is_safe_relative_path(relative) {
-            return Err(DocumentError::ValidationFailed(format!(
-                "SetReferenceArcs asset identity is not a safe asset path: `{asset_path}`"
-            )));
-        }
-    }
-    Ok(normalized)
+    lunco_usd_compose::canonicalize_at(asset_path, None).map_err(author_err)?;
+    Ok(asset_path.to_owned())
 }
 
 fn normalize_reference_prim_path(path: Option<&str>) -> Result<Option<String>, DocumentError> {
@@ -2803,7 +2400,7 @@ impl Document for UsdDocument {
             UsdOp::ReplaceSource { text, .. } => {
                 let new_data = usda_to_data(&text)
                     .map_err(|e| DocumentError::ValidationFailed(format!("ReplaceSource: {e}")))?;
-                let inverse = self.coarse_inverse(target, &id);
+                let inverse = self.coarse_inverse(target, &id)?;
                 // Replacing the base layer repairs an un-parseable document.
                 if target == TargetLayer::Base {
                     self.parse_error = None;
@@ -2837,7 +2434,7 @@ impl Document for UsdDocument {
                         Ok(_) => false,
                         Err(error) => {
                             let parent = parse_prim_path(&parent_path)?;
-                            if !self.path_is_under_composed_arc_path(&parent) {
+                            if !self.path_is_under_composed_arc_path(&parent)? {
                                 return Err(error);
                             }
                             true
@@ -2865,7 +2462,7 @@ impl Document for UsdDocument {
                 // is what the inverse will or won't be able to cleanly remove.
                 let existed = self.layer(target).spec(&prim_sdf).is_some();
 
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 if composed_parent {
                     stage
                         .override_prim(parent_path.as_str())
@@ -2875,7 +2472,7 @@ impl Document for UsdDocument {
                 if let Some(tn) = &type_name {
                     prim.set_type_name(tn.as_str()).map_err(author_err)?;
                 }
-                let mut new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let mut new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 // Author the asset reference (Stage has no `add_reference`, so this
                 // is set at the sdf level) — turns the prim into a runtime spawn.
                 if reference_prim_path.is_some() && reference.is_none() {
@@ -2896,7 +2493,7 @@ impl Document for UsdDocument {
                 // A brand-new prim in this layer is exactly undone by removing
                 // it (from the same layer); otherwise fall back to the snapshot.
                 let inverse = if existed {
-                    self.coarse_inverse(target, &id)
+                    self.coarse_inverse(target, &id)?
                 } else {
                     UsdOp::RemovePrim {
                         edit_target: id,
@@ -2922,26 +2519,17 @@ impl Document for UsdDocument {
                         .map_err(author_err)?;
                 let snapshot_usda = author::snapshot_prim_subtree(self.layer(target), &prim_sdf)
                     .map_err(author_err)?;
-                let authored_source = if target == TargetLayer::Base {
-                    self.authored_source
-                        .as_deref()
-                        .and_then(|source| remove_usda_prim_spec(source, &path))
-                } else {
-                    None
-                };
+
                 let inverse = UsdOp::RestorePrim {
                     edit_target: id,
                     path: path.clone(),
                     snapshot_usda,
                     sibling_order,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.remove_prim(path.as_str()).map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
-                if target == TargetLayer::Base {
-                    self.authored_source = authored_source.map(std::sync::Arc::from);
-                }
                 Ok(inverse)
             }
 
@@ -2986,7 +2574,7 @@ impl Document for UsdDocument {
                 // layer may already list ops this edit must not discard. When
                 // the op is missing, materialise that order plus the new op into
                 // the target layer — append, never clobber.
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
                 // canonical (Y-up, metres) — that is what makes an op portable: the
@@ -3010,7 +2598,7 @@ impl Document for UsdDocument {
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:translate")?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
 
                 let restore_order = append_op.then(|| {
                     let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
@@ -3041,9 +2629,10 @@ impl Document for UsdDocument {
                             path: path.clone(),
                             value: conv.point_d(DVec3::from_array(old)).to_array(),
                         })
-                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                        .map(Ok)
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))?
                 } else {
-                    self.coarse_inverse(target, &id)
+                    self.coarse_inverse(target, &id)?
                 };
                 self.commit(
                     target,
@@ -3075,7 +2664,7 @@ impl Document for UsdDocument {
                     Ok(path) => path,
                     Err(error) => {
                         let path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&path) {
+                        if self.path_is_under_composed_arc_path(&path)? {
                             path
                         } else {
                             return Err(error);
@@ -3099,7 +2688,7 @@ impl Document for UsdDocument {
                     value: restore_value,
                     order: restore_order,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 if authored_value {
                     stage.remove_property(value_path).map_err(author_err)?;
@@ -3119,7 +2708,7 @@ impl Document for UsdDocument {
                             .map_err(author_err)?;
                     }
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
@@ -3141,7 +2730,7 @@ impl Document for UsdDocument {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim) {
+                        if !self.path_is_under_composed_arc_path(&prim)? {
                             return Err(error);
                         }
                         prim
@@ -3190,12 +2779,12 @@ impl Document for UsdDocument {
                     author::snapshot_property_subtree(self.layer(target), &prim_sdf, &name)
                         .map_err(author_err)?;
 
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 if !prim_sdf.is_prim_variant_selection_path() {
                     stage.override_prim(&prim_sdf).map_err(author_err)?;
                 }
                 stage.remove_property(property).map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 let inverse = UsdOp::RestoreProperty {
                     edit_target: id,
                     path: path.clone(),
@@ -3265,14 +2854,14 @@ impl Document for UsdDocument {
                     Ok(path) => path,
                     Err(error) => {
                         let path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&path) {
+                        if self.path_is_under_composed_arc_path(&path)? {
                             path
                         } else {
                             return Err(error);
                         }
                     }
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 let conv = self.composed_stage_convention()?;
                 let authored = match name.as_str() {
@@ -3293,7 +2882,7 @@ impl Document for UsdDocument {
                         .set(sdf::Value::token_vec(order.clone()))
                         .map_err(author_err)?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 let inverse = UsdOp::RemoveXformOp {
                     edit_target: id.clone(),
                     path: path.clone(),
@@ -3319,7 +2908,7 @@ impl Document for UsdDocument {
                     .is_some();
                 let old_rotate =
                     layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
                 //
@@ -3339,7 +2928,7 @@ impl Document for UsdDocument {
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:rotateXYZ")?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
 
                 let restore_order = append_op.then(|| {
                     let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
@@ -3362,9 +2951,10 @@ impl Document for UsdDocument {
                             path: path.clone(),
                             value: conv.canonical_euler_xyz_deg(old),
                         })
-                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                        .map(Ok)
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))?
                 } else {
-                    self.coarse_inverse(target, &id)
+                    self.coarse_inverse(target, &id)?
                 };
                 self.commit(
                     target,
@@ -3392,7 +2982,7 @@ impl Document for UsdDocument {
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
                 let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 let conv = self.composed_stage_convention()?;
                 let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
@@ -3404,7 +2994,7 @@ impl Document for UsdDocument {
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:scale")?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
 
                 let restore_order = append_op.then(|| {
                     let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
@@ -3426,9 +3016,10 @@ impl Document for UsdDocument {
                             path: path.clone(),
                             value: conv.scale_vec_d(DVec3::from_array(old)).to_array(),
                         })
-                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                        .map(Ok)
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))?
                 } else {
-                    self.coarse_inverse(target, &id)
+                    self.coarse_inverse(target, &id)?
                 };
                 self.commit(
                     target,
@@ -3453,7 +3044,7 @@ impl Document for UsdDocument {
                         Ok(prim) => (prim, false),
                         Err(error) => {
                             let prim = parse_prim_path(&path)?;
-                            if !self.path_is_under_composed_arc_path(&prim) {
+                            if !self.path_is_under_composed_arc_path(&prim)? {
                                 return Err(error);
                             }
                             (prim, true)
@@ -3566,28 +3157,18 @@ impl Document for UsdDocument {
                         path: path.clone(),
                         name: name.clone(),
                     },
-                    None => self.coarse_inverse(target, &id),
+                    None => self.coarse_inverse(target, &id)?,
                 };
-                // Variability and `custom` are declared by the SCHEMA, not by the
-                // call site — see `lunco_usd_authoring::schema`. Deciding them here, in the one
-                // place attributes are authored, is what makes it impossible for a
-                // caller to author `info:id` as `varying` (which is how it *was*
-                // authored, because nothing knew better) or to omit `custom` on a
-                // per-model `lunco:` param that no schema declares.
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 if define_local_over {
-                    stage.define_prim(prim_sdf.as_str()).map_err(author_err)?;
+                    stage.override_prim(prim_sdf.as_str()).map_err(author_err)?;
                 }
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
                     .map_err(author_err)?
-                    .set_variability(lunco_usd_authoring::schema::variability_of(&name))
-                    .map_err(author_err)?
-                    .set_custom(lunco_usd_authoring::schema::is_custom(&name))
-                    .map_err(author_err)?
                     .set(val)
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
@@ -3632,7 +3213,7 @@ impl Document for UsdDocument {
                         name: name.clone(),
                         documentation: None,
                     },
-                    Some(_) => self.coarse_inverse(target, &id),
+                    Some(_) => self.coarse_inverse(target, &id)?,
                 };
                 if documentation.is_none() && prior.is_none() {
                     return Ok(inverse);
@@ -3646,18 +3227,7 @@ impl Document for UsdDocument {
                     ),
                     None => new_data.erase_field(&attr_sdf, documentation_field),
                 };
-                let authored_source = if target == TargetLayer::Base {
-                    self.authored_source.as_deref().and_then(|source| {
-                        patch_class_documentation(
-                            source,
-                            &path,
-                            Some(&name),
-                            documentation.as_deref(),
-                        )
-                    })
-                } else {
-                    None
-                };
+
                 self.commit(
                     target,
                     new_data,
@@ -3666,9 +3236,6 @@ impl Document for UsdDocument {
                         attr: format!("{name}.doc"),
                     },
                 );
-                if target == TargetLayer::Base {
-                    self.authored_source = authored_source.map(std::sync::Arc::from);
-                }
                 Ok(inverse)
             }
 
@@ -3765,7 +3332,7 @@ impl Document for UsdDocument {
                     // There is no typed operation for removing one xformOpOrder
                     // token. The existing exact document snapshot inverse removes
                     // the channel and its order entry together.
-                    self.coarse_inverse(target, &id)
+                    self.coarse_inverse(target, &id)?
                 } else {
                     match prior_sample {
                         Some(old) => match author::value_to_literal(&type_name, old) {
@@ -3777,7 +3344,7 @@ impl Document for UsdDocument {
                                 time,
                                 value: v,
                             },
-                            None => self.coarse_inverse(target, &id),
+                            None => self.coarse_inverse(target, &id)?,
                         },
                         None => UsdOp::RemoveTimeSample {
                             edit_target: id,
@@ -3787,7 +3354,7 @@ impl Document for UsdDocument {
                         },
                     }
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
                     .map_err(author_err)?
@@ -3796,7 +3363,7 @@ impl Document for UsdDocument {
                 if append_xform_op {
                     author_xform_op_order(&stage, &path, composed_order, &name)?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
@@ -3855,7 +3422,7 @@ impl Document for UsdDocument {
                         time,
                         value,
                     },
-                    None => self.coarse_inverse(target, &id),
+                    None => self.coarse_inverse(target, &id)?,
                 };
                 let mut new_data = self.layer(target).clone();
                 let removed = author::remove_time_sample(&mut new_data, &attr_sdf, time)
@@ -3902,15 +3469,15 @@ impl Document for UsdDocument {
                         name: name.clone(),
                         targets: op.explicit_items.iter().map(|p| p.to_string()).collect(),
                     },
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage
                     .create_relationship(format!("{path}.{name}"))
                     .map_err(author_err)?
                     .set_targets(target_paths)
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
@@ -3929,6 +3496,7 @@ impl Document for UsdDocument {
                     let composed = self.open_composed_stage()?;
                     if !composed
                         .prim(prim_sdf.clone())
+                        .map_err(author_err)?
                         .is_valid()
                         .map_err(author_err)?
                     {
@@ -3962,9 +3530,9 @@ impl Document for UsdDocument {
                         type_name: type_name.clone(),
                         sources: op.explicit_items.iter().map(|p| p.to_string()).collect(),
                     },
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 // Create-if-absent (like SetAttribute) so a connection can be
                 // authored on a not-yet-materialised port, then author the
                 // `connectionPaths` list op (explicit; empty clears).
@@ -3973,7 +3541,7 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set_connections(source_paths)
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
@@ -3999,28 +3567,26 @@ impl Document for UsdDocument {
                                 default_prim: Some(token.to_string()),
                             }
                         } else {
-                            self.coarse_inverse(target, &id)
+                            self.coarse_inverse(target, &id)?
                         }
                     }
                     None => UsdOp::SetDefaultPrim {
                         edit_target: id,
                         default_prim: None,
                     },
-                    Some(_) => self.coarse_inverse(target, &id),
+                    Some(_) => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                if let Some((_, relative)) = normalized {
-                    stage.set_default_prim(relative).map_err(author_err)?;
-                } else {
-                    let root_id = stage.root_layer().identifier().to_owned();
-                    let mut layer = stage
-                        .layer_mut(&root_id)
-                        .ok_or_else(|| author_err("document stage has no root layer"))?;
-                    layer
-                        .edit(|edit| edit.clear_default_prim())
-                        .map_err(author_err)?;
-                }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
+                let layer_id = stage.edit_target().layer_identifier().to_owned();
+                stage
+                    .layer_mut(&layer_id)
+                    .ok_or_else(|| author_err("document edit layer is missing"))?
+                    .edit(|edit| match normalized {
+                        Some((_, relative)) => edit.set_default_prim(relative),
+                        None => edit.clear_default_prim(),
+                    })
+                    .map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
                 Ok(inverse)
             }
@@ -4049,10 +3615,10 @@ impl Document for UsdDocument {
                                     up_axis,
                                 },
                             },
-                            None => self.coarse_inverse(target, &id),
+                            None => self.coarse_inverse(target, &id)?,
                         }
                     }
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
 
                 // These are Sdf pseudo-root fields, not prim properties. Edit
@@ -4081,55 +3647,44 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
-            UsdOp::SetStageDocumentation { documentation, .. } => {
+            UsdOp::SetStageDocumentation {
+                documentation: text,
+                ..
+            } => {
+                let field = sdf::FieldKey::Documentation;
                 let root = SdfPath::abs_root();
-                let prior = self
-                    .layer(target)
-                    .field(&root, sdf::FieldKey::Documentation.as_str())
-                    .cloned();
-                let inverse = match prior {
-                    Some(sdf::Value::String(text)) => UsdOp::SetStageDocumentation {
-                        edit_target: id,
-                        documentation: Some(text),
-                    },
-                    None => UsdOp::SetStageDocumentation {
-                        edit_target: id,
-                        documentation: None,
-                    },
-                    Some(_) => self.coarse_inverse(target, &id),
+                let prior = match self.layer(target).field(&root, field.as_str()) {
+                    Some(sdf::Value::String(text)) => Some(text.clone()),
+                    None => None,
+                    Some(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "layer {} metadata must be a string",
+                            field.as_str()
+                        )));
+                    }
                 };
-                let mut new_data = self.layer(target).clone();
-                if !new_data.has_spec(&root) {
+                let inverse = UsdOp::SetStageDocumentation {
+                    edit_target: id,
+                    documentation: prior,
+                };
+                let mut data = self.layer(target).clone();
+                if !data.has_spec(&root) {
                     return Err(DocumentError::ValidationFailed(
-                        "SetStageDocumentation requires an authored USD pseudo-root".into(),
+                        "layer text metadata requires an authored pseudo-root".into(),
                     ));
                 }
-                match &documentation {
-                    Some(text) => new_data.set_field(
-                        &root,
-                        sdf::FieldKey::Documentation.as_str(),
-                        sdf::Value::String(text.clone()),
-                    ),
-                    None => new_data.erase_field(&root, sdf::FieldKey::Documentation.as_str()),
-                };
-                let authored_source = if target == TargetLayer::Base {
-                    self.authored_source.as_deref().and_then(|source| {
-                        patch_stage_documentation(source, documentation.as_deref())
-                    })
-                } else {
-                    None
-                };
+                match text {
+                    Some(text) => data.set_field(&root, field.as_str(), sdf::Value::String(text)),
+                    None => data.erase_field(&root, field.as_str()),
+                }
                 self.commit(
                     target,
-                    new_data,
+                    data,
                     UsdChange::InfoOnly {
                         path: "/".into(),
-                        attr: sdf::FieldKey::Documentation.as_str().to_owned(),
+                        attr: field.as_str().into(),
                     },
                 );
-                if target == TargetLayer::Base {
-                    self.authored_source = authored_source.map(std::sync::Arc::from);
-                }
                 Ok(inverse)
             }
 
@@ -4143,15 +3698,6 @@ impl Document for UsdDocument {
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimDocumentation target {path} must name a prim, not a property"
-                        )));
-                    }
-                    Err(_)
-                        if self.path_is_under_composed_arc_path(
-                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
-                        ) =>
-                    {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetPrimDocumentation target {path} is composed/read-only; author the owning prim or a local override"
                         )));
                     }
                     Err(error) => return Err(error),
@@ -4172,16 +3718,16 @@ impl Document for UsdDocument {
                         path: path.clone(),
                         documentation: None,
                     },
-                    Some(_) => self.coarse_inverse(target, &id),
+                    Some(_) => self.coarse_inverse(target, &id)?,
                 };
                 if documentation.is_none() && prior_is_absent {
                     return Ok(inverse);
                 }
                 let mut new_data = self.layer(target).clone();
                 if documentation.is_some() && !new_data.has_spec(&prim_sdf) {
-                    let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                    let stage = self.open_target_stage(target)?;
                     stage.override_prim(path.as_str()).map_err(author_err)?;
-                    new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                    new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 }
                 match &documentation {
                     Some(text) => new_data.set_field(
@@ -4191,13 +3737,7 @@ impl Document for UsdDocument {
                     ),
                     None => new_data.erase_field(&prim_sdf, sdf::FieldKey::Documentation.as_str()),
                 };
-                let authored_source = if target == TargetLayer::Base {
-                    self.authored_source.as_deref().and_then(|source| {
-                        patch_class_documentation(source, &path, None, documentation.as_deref())
-                    })
-                } else {
-                    None
-                };
+
                 self.commit(
                     target,
                     new_data,
@@ -4206,9 +3746,6 @@ impl Document for UsdDocument {
                         attr: sdf::FieldKey::Documentation.as_str().to_owned(),
                     },
                 );
-                if target == TargetLayer::Base {
-                    self.authored_source = authored_source.map(std::sync::Arc::from);
-                }
                 Ok(inverse)
             }
 
@@ -4218,15 +3755,6 @@ impl Document for UsdDocument {
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimKind target {path} must name a prim, not a property"
-                        )));
-                    }
-                    Err(_)
-                        if self.path_is_under_composed_arc_path(
-                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
-                        ) =>
-                    {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetPrimKind target {path} is composed/read-only; author the owning prim or a local override"
                         )));
                     }
                     Err(error) => return Err(error),
@@ -4251,17 +3779,18 @@ impl Document for UsdDocument {
                         path: path.clone(),
                         kind: None,
                     },
-                    Some(_) => self.coarse_inverse(target, &id),
+                    Some(_) => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 if let Some(kind) = kind {
                     stage.override_prim(path.as_str()).map_err(author_err)?;
                     stage
                         .prim(path.as_str())
+                        .map_err(author_err)?
                         .set_kind(kind)
                         .map_err(author_err)?;
                 } else if self.layer(target).spec(&prim_sdf).is_some() {
-                    let root_id = stage.root_layer().identifier().to_owned();
+                    let root_id = stage.edit_target().layer_identifier().to_owned();
                     let mut layer = stage
                         .layer_mut(&root_id)
                         .ok_or_else(|| author_err("document stage has no root layer"))?;
@@ -4273,7 +3802,7 @@ impl Document for UsdDocument {
                         })
                         .map_err(author_err)?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4292,11 +3821,11 @@ impl Document for UsdDocument {
                     from_path: to_path,
                     to_path: from_path,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 let mut editor = openusd::usd::NamespaceEditor::new(&stage);
-                editor.move_prim(from_sdf, to_sdf);
+                editor.move_prim(from_sdf, to_sdf).map_err(author_err)?;
                 editor.apply().map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 // A move changes prim paths on both ends; the translator re-keys
                 // entities by path, so a full reload is the honest change kind.
                 self.commit(target, new_data, UsdChange::FullReload);
@@ -4311,7 +3840,7 @@ impl Document for UsdDocument {
                     )));
                 }
                 let composed_stage = self.open_composed_stage()?;
-                let composed_parent = composed_stage.prim(prim_sdf.clone());
+                let composed_parent = composed_stage.prim(prim_sdf.clone()).map_err(author_err)?;
                 if !composed_parent.is_valid().map_err(author_err)? {
                     return Err(DocumentError::ValidationFailed(format!(
                         "SetPrimOrder parent {path} is not a composed prim"
@@ -4367,9 +3896,9 @@ impl Document for UsdDocument {
                         path: path.clone(),
                         order: None,
                     },
-                    Some(_) => self.coarse_inverse(target, &id),
+                    Some(_) => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage.override_prim(path.as_str()).map_err(author_err)?;
                 match order {
                     Some(names) => {
@@ -4379,6 +3908,7 @@ impl Document for UsdDocument {
                             .collect::<Vec<_>>();
                         stage
                             .prim(path.as_str())
+                            .map_err(author_err)?
                             .set_metadata(
                                 sdf::FieldKey::PrimOrder.as_str(),
                                 sdf::Value::TokenVec(tokens),
@@ -4386,7 +3916,7 @@ impl Document for UsdDocument {
                             .map_err(author_err)?;
                     }
                     None => {
-                        let root_id = stage.root_layer().identifier().to_owned();
+                        let root_id = stage.edit_target().layer_identifier().to_owned();
                         let mut layer = stage
                             .layer_mut(&root_id)
                             .ok_or_else(|| author_err("document stage has no root layer"))?;
@@ -4399,7 +3929,7 @@ impl Document for UsdDocument {
                             .map_err(author_err)?;
                     }
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4409,7 +3939,7 @@ impl Document for UsdDocument {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim) {
+                        if !self.path_is_under_composed_arc_path(&prim)? {
                             return Err(error);
                         }
                         prim
@@ -4442,20 +3972,21 @@ impl Document for UsdDocument {
                                 .collect(),
                         }
                     }
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 // A referenced or payloaded prim is present in the composed
                 // stage but not in this edit layer. Define the local over
                 // before writing its API schema list, just as SetActive does
                 // for a local active opinion.
                 if !prim_in(self.layer(target), &prim_sdf) {
-                    stage.define_prim(prim_sdf.as_str()).map_err(author_err)?;
+                    stage.override_prim(prim_sdf.as_str()).map_err(author_err)?;
                 }
                 let tokens: Vec<openusd::tf::Token> =
                     schemas.iter().map(openusd::tf::Token::from).collect();
                 stage
                     .prim(prim_sdf.as_str())
+                    .map_err(author_err)?
                     .set_metadata(
                         sdf::FieldKey::ApiSchemas.as_str(),
                         openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(
@@ -4463,7 +3994,7 @@ impl Document for UsdDocument {
                         )),
                     )
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 // Applied schemas decide which ECS components the translator
                 // attaches (rigid body, collider) — the prim must be re-projected.
                 self.commit(target, new_data, UsdChange::Resync { path });
@@ -4480,7 +4011,7 @@ impl Document for UsdDocument {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim) {
+                        if !self.path_is_under_composed_arc_path(&prim)? {
                             return Err(error);
                         }
                         prim
@@ -4505,23 +4036,24 @@ impl Document for UsdDocument {
                             variant: m[&variant_set].clone(),
                         }
                     }
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 // Read-modify-write the selection map so selecting `drivetrain`
                 // doesn't silently drop a sibling variant set's selection.
                 stage
                     .prim(prim_sdf)
+                    .map_err(author_err)?
                     .update_metadata(sdf::FieldKey::VariantSelection.as_str(), |current| {
                         let mut map = match current {
                             Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
                             _ => Default::default(),
                         };
                         map.insert(variant_set.clone(), variant.clone());
-                        openusd::sdf::Value::VariantSelectionMap(map)
+                        Some(openusd::sdf::Value::VariantSelectionMap(map))
                     })
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4541,10 +4073,10 @@ impl Document for UsdDocument {
                 let inverse = match prior {
                     Some(sdf::Value::PayloadListOp(op))
                         if op.explicit
-                            && op
-                                .explicit_items
-                                .iter()
-                                .all(|p| p.prim_path.is_empty() && p.layer_offset.is_none()) =>
+                            && op.explicit_items.iter().all(|p| {
+                                p.prim_path.is_empty()
+                                    && p.layer_offset == sdf::LayerOffset::IDENTITY
+                            }) =>
                     {
                         UsdOp::SetPayload {
                             edit_target: id,
@@ -4556,9 +4088,9 @@ impl Document for UsdDocument {
                                 .collect(),
                         }
                     }
-                    _ => self.coarse_inverse(target, &id),
+                    _ => self.coarse_inverse(target, &id)?,
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 let payloads: Vec<openusd::sdf::Payload> = asset_paths
                     .iter()
                     .map(|a| openusd::sdf::Payload {
@@ -4568,6 +4100,7 @@ impl Document for UsdDocument {
                     .collect();
                 stage
                     .prim(path.as_str())
+                    .map_err(author_err)?
                     .set_metadata(
                         sdf::FieldKey::Payload.as_str(),
                         openusd::sdf::Value::PayloadListOp(openusd::sdf::PayloadListOp::explicit(
@@ -4575,7 +4108,7 @@ impl Document for UsdDocument {
                         )),
                     )
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4591,15 +4124,6 @@ impl Document for UsdDocument {
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetReferenceArcs target `{path}` must name a prim, not a property"
-                        )));
-                    }
-                    Err(_)
-                        if self.path_is_under_composed_arc_path(
-                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
-                        ) =>
-                    {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetReferenceArcs target `{path}` is composed/read-only; author the owning prim or a local override"
                         )));
                     }
                     Err(error) => return Err(error),
@@ -4630,16 +4154,18 @@ impl Document for UsdDocument {
                         sdf::Value::ReferenceListOp(op) => reference_list_inverse(&op, &id, &path),
                         _ => None,
                     })
-                    .unwrap_or_else(|| self.coarse_inverse(target, &id));
+                    .map(Ok)
+                    .unwrap_or_else(|| self.coarse_inverse(target, &id))?;
 
                 let value = author::reference_list_value(&arcs, reference_list_edit(list_op))
                     .map_err(author_err)?;
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 stage
                     .prim(path.as_str())
+                    .map_err(author_err)?
                     .set_metadata(sdf::FieldKey::References.as_str(), value)
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4649,7 +4175,7 @@ impl Document for UsdDocument {
                     Ok(path) => path,
                     Err(error) => {
                         let prim_path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&prim_path) {
+                        if self.path_is_under_composed_arc_path(&prim_path)? {
                             prim_path
                         } else {
                             return Err(error);
@@ -4675,7 +4201,7 @@ impl Document for UsdDocument {
                         path: path.clone(),
                     },
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let stage = self.open_target_stage(target)?;
                 // A `SetActive` must be authorable onto a layer that does not yet
                 // carry a spec for the prim — most importantly a local override
                 // over a referenced route point. `Prim::set_active` requires a
@@ -4685,9 +4211,10 @@ impl Document for UsdDocument {
                 stage.define_prim(prim_path.as_str()).map_err(author_err)?;
                 stage
                     .prim(prim_path.as_str())
+                    .map_err(author_err)?
                     .set_active(active)
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
@@ -4697,7 +4224,7 @@ impl Document for UsdDocument {
                     Ok(path) => path,
                     Err(error) => {
                         let prim_path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&prim_path) {
+                        if self.path_is_under_composed_arc_path(&prim_path)? {
                             prim_path
                         } else {
                             return Err(error);
@@ -4719,8 +4246,8 @@ impl Document for UsdDocument {
                         path: path.clone(),
                     },
                 };
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let root_id = stage.root_layer().identifier().to_owned();
+                let stage = self.open_target_stage(target)?;
+                let root_id = stage.edit_target().layer_identifier().to_owned();
                 stage
                     .batch_edit(&[root_id.as_str()], |edits| {
                         edits[0]
@@ -4729,7 +4256,7 @@ impl Document for UsdDocument {
                         Ok(())
                     })
                     .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }

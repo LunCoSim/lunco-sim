@@ -12,14 +12,13 @@
 //! losslessly with external USD tools). To apply an edit we:
 //!
 //!   1. Copy the current [`sdf::Data`] directly into a writable in-memory root
-//!      layer of a transient [`Stage`] through a stub resolver (every external
-//!      arc resolves to an empty layer — we never traverse the composition, so
-//!      missing referenced files don't matter).
+//!      layer of a transient [`Stage`] using `sdf::copy_spec`. External
+//!      dependencies remain unresolved; this path edits authored opinions.
 //!   2. Author the edit by **SDF path** (`define_prim`, `create_attribute`,
 //!      `remove_prim`) into that root layer. Path-addressed authoring cannot
 //!      touch a sibling or nested prim that happens to share a name.
 //!   3. Extract the root layer's authored specs back out as a fresh
-//!      [`sdf::Data`] ([`extract_root_layer_data`]) — references untouched,
+//!      [`sdf::Data`] ([`extract_edit_layer_data`]) — references untouched,
 //!      because the edit only added/removed opinions on the root layer.
 //!
 //! `Stage` is `!Send` (`Rc`-backed), so it never escapes a synchronous call; the
@@ -27,7 +26,7 @@
 
 use anyhow::{Result, anyhow};
 use lunco_usd_compose::parse_usda;
-use openusd::ar::{self, ResolvedPath};
+use openusd::ar::ResolvedPath;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecData, Value};
 use openusd::usd::Stage;
 use openusd::usda;
@@ -36,7 +35,6 @@ use openusd::usda;
 /// keeps diagnostics and any authored relative arcs in the textual USD domain.
 const DOC_ROOT_ID: &str = "lunco://__lunco_document_root__.usda";
 
-const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 const HISTORY_SNAPSHOT_PRIM: &str = "__lunco_history_snapshot__";
 
 /// A fully validated local history restore ready to author to one Sdf layer.
@@ -50,48 +48,28 @@ pub struct SnapshotRestorePlan {
     specs: Vec<(SdfPath, sdf::SpecType, sdf::SpecData)>,
 }
 
-/// Resolver that routes every external arc (sublayers, references, payloads)
-/// to an empty stub. The document authoring path never traverses the composed
-/// stage — it only reads back the root layer's own specs — so stubbing external
-/// arcs is lossless: the root's authored `references`/`payload`/`subLayers`
-/// opinions survive in [`extract_root_layer_data`]; only their resolution is
-/// skipped.
-struct DocResolver;
-
-impl ar::Resolver for DocResolver {
-    fn create_identifier(&self, asset_path: &str, _anchor: Option<&ResolvedPath>) -> String {
-        // Keep each authored arc's identifier stable for composition diagnostics;
-        // every identifier opens the same empty stub below.
-        asset_path.to_string()
-    }
-
-    fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {
-        Some(ResolvedPath::new(asset_path))
-    }
-
-    fn resolve_for_new_asset(&self, asset_path: &str) -> Option<ResolvedPath> {
-        Some(ResolvedPath::new(asset_path))
-    }
-
-    fn open_asset(&self, resolved_path: &ResolvedPath) -> std::io::Result<Box<dyn ar::Asset>> {
-        let _ = resolved_path;
-        Ok(Box::new(std::io::Cursor::new(EMPTY_USDA.to_vec())))
-    }
-
-    fn get_modification_timestamp(
-        &self,
-        _asset_path: &str,
-        _resolved_path: &ResolvedPath,
-    ) -> Option<std::time::SystemTime> {
-        None
-    }
-}
-
 /// Serialize `data` to USDA text for persistence, export, and explicit source
 /// replacement. Normal path-addressed edits use [`open_doc_stage`] directly
 /// and do not pass through this formatter.
 pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
+    ensure_usda_serializable(data)?;
     usda::TextWriter::write_to_string(data).map_err(|e| anyhow!("serialize layer to USDA: {e}"))
+}
+
+/// Refuse a demonstrated native-writer contract violation before publishing
+/// USDA. OpenUSD 0.8.0 writes the internal inheritance field as `inheritPaths`,
+/// which Pixar's USDA parser rejects. The owning SDK must fix serialization;
+/// the application does not rewrite its output or substitute another writer.
+pub fn ensure_usda_serializable(data: &sdf::Data) -> Result<()> {
+    if let Some((path, _)) = data
+        .iter()
+        .find(|(_, spec)| spec.get(sdf::FieldKey::InheritPaths.as_str()).is_some())
+    {
+        return Err(anyhow!(
+            "OpenUSD 0.8.0 cannot serialize inheritance at {path} as standard USDA; native writer emits inheritPaths instead of inherits"
+        ));
+    }
+    Ok(())
 }
 
 /// Parse USDA `text` into a single root layer's [`sdf::Data`] (no composition).
@@ -490,14 +468,15 @@ fn merged_child_order(
 /// Open `data` as the root layer of a transient, writable [`Stage`]. Authoring
 /// calls (`stage.define_prim`, `stage.create_attribute`, `stage.remove_prim`)
 /// target the root layer by default, so callers author directly on the returned
-/// stage and then pass it to [`extract_root_layer_data`].
+/// stage and then pass it to [`extract_edit_layer_data`].
 ///
 /// `Stage` is `!Send`; keep it on the stack of one synchronous edit. The root
 /// layer is populated through the public SDF authoring interface, so an edit
 /// never serializes or reparses the whole document.
 pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
     let stage = Stage::builder()
-        .resolver(DocResolver)
+        .resolver(lunco_usd_compose::LuncoUsdResolver::new(Default::default())?)
+        .schema_registry(crate::schema::native_registry())
         .in_memory(DOC_ROOT_ID)
         .map_err(|e| anyhow!("create document stage: {e}"))?;
     populate_doc_root(stage, data)
@@ -509,41 +488,71 @@ pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
 /// layer. Keep them as USD session-layer opinions when composing references and
 /// variants; flattening them into the root changes composition strength and can
 /// hide children contributed by a selected variant.
+/// The root opens at its admitted identifier and receives authored specs through
+/// native Sdf copying. Session layers use native USDC buffers. Composition does
+/// not require text export of the document's authored data.
 pub fn open_doc_stage_with_layers(
     base: &sdf::Data,
     runtime: &sdf::Data,
     view: &sdf::Data,
-    recipe: &lunco_usd_compose::recipe::StageRecipe,
+    recipe: Option<&lunco_usd_compose::recipe::StageRecipe>,
 ) -> Result<Stage> {
-    let root_id = recipe.root_id.clone();
+    let root_id = recipe
+        .map(|recipe| recipe.root_id.as_str())
+        .unwrap_or(DOC_ROOT_ID)
+        .to_owned();
     let root_anchor = ResolvedPath::new(&root_id);
-    let runtime_asset = ".__luncosim_document_runtime__.usda";
-    let view_asset = ".__luncosim_document_view__.usda";
+    let runtime_asset = ".__luncosim_document_runtime__.usdc";
+    let view_asset = ".__luncosim_document_view__.usdc";
     let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor))?;
     let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor))?;
 
-    let mut view_layer = view.clone();
-    let pseudo_root = view_layer
-        .spec_mut(&SdfPath::abs_root())
-        .ok_or_else(|| anyhow!("document view layer has no pseudo-root"))?;
-    pseudo_root.add(
-        sdf::FieldKey::SubLayers.as_str(),
-        sdf::Value::StringVec(vec![runtime_asset.to_owned()]),
-    );
+    let session_asset = ".__luncosim_document_session__.usdc";
+    let session_id = lunco_usd_compose::canonicalize_at(session_asset, Some(&root_anchor))?;
+    let mut session_layer = sdf::Data::new();
+    session_layer
+        .create_spec(SdfPath::abs_root(), sdf::SpecType::PseudoRoot)
+        .add(
+            sdf::FieldKey::SubLayers.as_str(),
+            Value::StringVec(vec![view_asset.to_owned(), runtime_asset.to_owned()]),
+        );
 
-    let mut bytes = recipe.bytes.clone();
-    bytes.insert(root_id.clone(), data_to_usda(base)?.into_bytes());
-    bytes.insert(runtime_id, data_to_usda(runtime)?.into_bytes());
-    bytes.insert(view_id.clone(), data_to_usda(&view_layer)?.into_bytes());
+    let mut bytes = recipe
+        .map(|recipe| recipe.bytes.clone())
+        .unwrap_or_default();
+    let extension = root_anchor
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| anyhow!("document root has no UTF-8 format extension: {root_id}"))?;
+    let root_format = sdf::LayerRegistry::find_by_extension(extension)
+        .ok_or_else(|| anyhow!("unknown document root format: {root_id}"))?;
+    bytes.insert(
+        root_id.clone(),
+        root_format
+            .write_bytes(&sdf::Data::new())?
+            .bytes
+            .as_ref()
+            .to_vec(),
+    );
+    let format = sdf::LayerRegistry::find_by_extension("usdc").expect("native USDC format");
+    for (id, data) in [
+        (runtime_id, runtime),
+        (view_id, view),
+        (session_id.clone(), &session_layer),
+    ] {
+        bytes.insert(id, format.write_bytes(data)?.bytes.as_ref().to_vec());
+    }
 
     let resolver = lunco_usd_compose::LuncoUsdResolver::new(bytes)?;
     let diagnostics = resolver.diagnostics();
     let stage = Stage::builder()
         .resolver(resolver)
-        .session_layer(view_id.clone())
+        .schema_registry(crate::schema::native_registry())
+        .session_layer(session_id)
         .open(&root_id);
     diagnostics.check()?;
-    stage.map_err(|error| anyhow!("create layered document stage: {error}"))
+    let stage = stage.map_err(|error| anyhow!("create layered document stage: {error}"))?;
+    populate_doc_root(stage, base)
 }
 
 fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
@@ -553,24 +562,12 @@ fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
         .layer_mut(&root_id)
         .ok_or_else(|| anyhow!("document stage has no root layer"))?;
     root.edit(|edit| {
-        let existing = edit.data().spec_paths();
-        for path in existing {
-            edit.data_mut().erase_spec(&path);
-        }
-        let target = edit.data_mut();
-        for path in source.spec_paths() {
-            let ty = source.spec_type(&path).expect("Data spec path has a type");
-            target.create_spec(path.clone(), ty);
-            if let Some(fields) = source.list_fields(&path) {
-                for field in fields {
-                    let value = source
-                        .get_field(&path, &field)
-                        .expect("eager Data field read")
-                        .into_owned();
-                    target.set_field(&path, &field, value);
-                }
-            }
-        }
+        sdf::copy_spec(
+            &source,
+            &SdfPath::abs_root(),
+            edit.data_mut(),
+            &SdfPath::abs_root(),
+        )?;
         Ok(())
     })
     .map_err(|e| anyhow!("copy document root layer: {e}"))?;
@@ -578,21 +575,25 @@ fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
     Ok(stage)
 }
 
-/// Extract the **root layer's** authored specs from `stage` as a fresh
+/// Extract the **edit-target layer's** authored specs from `stage` as a fresh
 /// [`sdf::Data`]. This is the document's new canonical representation after an
 /// edit — references/payloads/sublayers are preserved verbatim because the edit
 /// only altered opinions on the root layer; the composition is never flattened
 /// in.
-pub fn extract_root_layer_data(stage: &Stage) -> Result<sdf::Data> {
-    sdf::Data::from_abstract(stage.root_layer().data())
-        .map_err(|e| anyhow!("extract root layer data: {e}"))
+pub fn extract_edit_layer_data(stage: &Stage) -> Result<sdf::Data> {
+    let target = stage.edit_target();
+    let layer = stage
+        .layer(target.layer_identifier())
+        .ok_or_else(|| anyhow!("document stage has no edit-target layer"))?;
+    sdf::Data::from_abstract(layer.data())
+        .map_err(|error| anyhow!("extract edit-target layer: {error}"))
 }
 
 /// Author a `references = @asset_path@` arc onto the prim at `prim_path` in
 /// `data` (an explicit single-item reference list — `asset_path` is the bare
 /// path, no `@` delimiters; the serializer adds them). The prim spec must
 /// already exist — a reference is prim metadata, so the caller defines the prim
-/// first (e.g. [`open_doc_stage`] + `define_prim` + [`extract_root_layer_data`]).
+/// first (e.g. [`open_doc_stage`] + `define_prim` + [`extract_edit_layer_data`]).
 ///
 /// openusd's Stage authoring API exposes no `add_reference`, so this is authored
 /// at the `sdf` level — the symmetric counterpart of how `compose` *reads*
@@ -739,8 +740,8 @@ pub fn normalize_value_literal(type_name: &str, literal: &str) -> Result<String>
 
 /// Inverse of [`parse_attribute_value`]: format `value` (of USD type
 /// `type_name`) back into the USDA literal that `parse_attribute_value(type_name,
-/// <literal>)` would re-read to the same value. Delegates to the fork's own
-/// writer-side formatter ([`openusd::usda::format_value_literal`]) so every
+/// <literal>)` would re-read to the same value. Delegates to the native
+/// writer-side formatter ([`openusd::usda::TextWriter::value_to_string`]) so every
 /// value type — including arrays and matrices, which it emits single-line —
 /// formats exactly as the parser expects; no hand-maintained per-type formatter
 /// to drift.
@@ -752,7 +753,7 @@ pub fn normalize_value_literal(type_name: &str, literal: &str) -> Result<String>
 /// correctness.
 pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
     let _ = type_name; // typing is carried by the value itself
-    openusd::usda::format_value_literal(&value).ok()
+    openusd::usda::TextWriter::value_to_string(&value).ok()
 }
 
 /// Overlay the `runtime` layer's opinions onto `base` as an **sdf layer-stack
@@ -861,7 +862,7 @@ fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
 /// `assetInfo`) merge KEY-WISE — the stronger layer wins per key, weaker-only
 /// keys survive — and list-ops (`references`, `apiSchemas`, relationship /
 /// connection targets) compose per the spec's list-op application, the stronger
-/// op applied over the weaker (the fork's `ListOp::combined_with`, its
+/// op applied over the weaker (native `ListOp::combined_with`, its
 /// `SdfListOp::ComposeAndReduce`). An explicit stronger op still replaces the
 /// weaker entirely, exactly as the spec requires. Returns `None` for every
 /// other pairing — the caller then replaces plainly.
@@ -914,6 +915,72 @@ mod tests {
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n    def Sphere \"Box\"\n    {\n        double radius = 1\n        def Sphere \"Inner\"\n        {\n            double radius = 9\n        }\n    }\n}\n";
 
+    #[test]
+    fn layered_stage_preserves_inheritance_identity_and_opinion_strength() {
+        let base = usda_to_data(
+            r#"#usda 1.0
+class "Template" { double inherited = 17 }
+def "World" (
+    inherits = </Template>
+    references = @parts/part.usda@</Part>
+) {
+    double value = 1
+}
+"#,
+        )
+        .unwrap();
+        let runtime = usda_to_data(
+            r#"#usda 1.0
+over "World" { double value = 2 }
+"#,
+        )
+        .unwrap();
+        let view = usda_to_data(
+            r#"#usda 1.0
+over "World" { double value = 3 }
+"#,
+        )
+        .unwrap();
+        for extension in ["usda", "usdc", "usd"] {
+            let root_id = format!("lunco://models/root.{extension}");
+            let recipe = lunco_usd_compose::recipe::StageRecipe {
+                root_id: root_id.to_owned(),
+                bytes: std::collections::HashMap::from([(
+                    "lunco://models/parts/part.usda".to_owned(),
+                    br#"#usda 1.0
+def "Part" { double referenced = 23 }
+"#
+                    .to_vec(),
+                )]),
+                dependency_diagnostics: Vec::new(),
+            };
+            let stage = open_doc_stage_with_layers(&base, &runtime, &view, Some(&recipe)).unwrap();
+            assert_eq!(stage.root_layer().identifier(), root_id.as_str());
+            for (name, expected) in [("inherited", 17.0), ("referenced", 23.0), ("value", 3.0)] {
+                let attribute = stage.attribute(format!("/World.{name}")).unwrap();
+                assert_eq!(attribute.get::<f64>().unwrap(), Some(expected));
+            }
+            let extracted = extract_edit_layer_data(&stage).unwrap();
+            assert_eq!(
+                extracted
+                    .spec(&SdfPath::new("/World").unwrap())
+                    .unwrap()
+                    .get("inheritPaths"),
+                base.spec(&SdfPath::new("/World").unwrap())
+                    .unwrap()
+                    .get("inheritPaths")
+            );
+            assert_eq!(
+                extracted
+                    .spec(&SdfPath::new("/World.value").unwrap())
+                    .unwrap()
+                    .get("default"),
+                Some(&Value::Double(1.0))
+            );
+            assert!(data_to_usda(&extracted).is_err());
+        }
+    }
+
     /// A reference arc authored onto a defined prim survives serialization back
     /// to USDA and re-parsing — the load-bearing property for the C4b spawn
     /// producer (a spawn = a runtime prim that `references` its asset).
@@ -925,7 +992,7 @@ mod tests {
             open_doc_stage(&usda_to_data("#usda 1.0\ndef Xform \"World\"\n{\n}\n").unwrap())
                 .unwrap();
         stage.define_prim("/World/spawn_1").unwrap();
-        let mut data = extract_root_layer_data(&stage).unwrap();
+        let mut data = extract_edit_layer_data(&stage).unwrap();
         let prim = SdfPath::new("/World/spawn_1").unwrap();
         author_reference(&mut data, &prim, "vessels/rover.usda", None).unwrap();
 
@@ -978,7 +1045,7 @@ mod tests {
     }
 
     /// THE load-bearing property: a resolver-opened root layer is writable,
-    /// path-addressed authoring lands in it, and `extract_root_layer_data`
+    /// path-addressed authoring lands in it, and `extract_edit_layer_data`
     /// reflects the change — proving the whole C2/C3 mechanic.
     #[test]
     fn author_round_trips_through_stage() {
@@ -991,7 +1058,7 @@ mod tests {
             .unwrap()
             .set_type_name("Xform")
             .unwrap();
-        let out = extract_root_layer_data(&stage).unwrap();
+        let out = extract_edit_layer_data(&stage).unwrap();
 
         assert_eq!(
             out.prim_type_name(&SdfPath::new("/World/Rover").unwrap())
@@ -1021,7 +1088,7 @@ mod tests {
             .unwrap()
             .set(val)
             .unwrap();
-        let out = extract_root_layer_data(&stage).unwrap();
+        let out = extract_edit_layer_data(&stage).unwrap();
 
         assert_eq!(
             out.prim_attribute_value::<f64>(&SdfPath::new("/World/Box").unwrap(), "radius"),
@@ -1037,8 +1104,8 @@ mod tests {
 
     /// References authored on the root layer must survive an edit — the doc
     /// canonical is the root layer, NOT the flattened composition, so a
-    /// `references = @other.usda@` opinion is preserved even though the stub
-    /// resolver never resolves it.
+    /// `references = @other.usda@` opinion is preserved without resolving its
+    /// external dependency.
     #[test]
     fn references_survive_authoring() {
         let with_ref = "#usda 1.0\ndef Xform \"World\"\n{\n    def \"Vehicle\" (\n        references = @vessels/rover.usda@\n    )\n    {\n    }\n}\n";
@@ -1050,7 +1117,7 @@ mod tests {
             .unwrap()
             .set_type_name("DistantLight")
             .unwrap();
-        let out = extract_root_layer_data(&stage).unwrap();
+        let out = extract_edit_layer_data(&stage).unwrap();
 
         let vehicle = SdfPath::new("/World/Vehicle").unwrap();
         assert!(
@@ -1300,7 +1367,7 @@ mod tests {
         let stage = open_doc_stage(&data).unwrap();
 
         stage.remove_prim("/World/Box").unwrap();
-        let out = extract_root_layer_data(&stage).unwrap();
+        let out = extract_edit_layer_data(&stage).unwrap();
 
         assert!(out.spec(&SdfPath::new("/World/Box").unwrap()).is_none());
         assert!(

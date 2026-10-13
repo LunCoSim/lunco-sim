@@ -58,8 +58,8 @@ use lunco_render::{
     LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
 };
 use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
-use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::{Path as SdfPath, Value};
+use openusd_schemas::lux::tokens as ltok;
 
 use crate::dome;
 
@@ -86,7 +86,7 @@ pub enum LightProjectionScope {
 
 fn light_is_in_scope(scope: LightProjectionScope, prim_type: Option<&str>) -> bool {
     !(scope == LightProjectionScope::Preview
-        && matches!(prim_type, Some(ltok::T_DISTANT_LIGHT | ltok::T_DOME_LIGHT)))
+        && matches!(prim_type, Some(ltok::DISTANT_LIGHT | ltok::DOME_LIGHT)))
 }
 
 /// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
@@ -142,7 +142,7 @@ pub fn untextured_dome_intensity_sum(
     let dome_paths: Vec<SdfPath> = data
         .iter()
         .map(|(p, _)| p.clone())
-        .filter(|p| data.prim_type_name(p).as_deref() == Some(ltok::T_DOME_LIGHT))
+        .filter(|p| data.prim_type_name(p).as_deref() == Some(ltok::DOME_LIGHT))
         .collect();
 
     let mut total = 0.0;
@@ -174,7 +174,7 @@ pub fn untextured_dome_intensity_sum(
 /// cannot resolve it safely.
 fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> Result<bool, LightReadError> {
     let attr = prim
-        .append_property(ltok::A_TEXTURE_FILE)
+        .append_property(ltok::INPUTS_TEXTURE_FILE)
         .map_err(|_| LightReadError)?;
     let Some(spec) = data.spec(&attr) else {
         return Ok(false);
@@ -196,7 +196,7 @@ fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> Result<bool, L
             error!(
                 "[usd-bevy] {} has authored DomeLight {} with an unsupported type",
                 prim.as_str(),
-                ltok::A_TEXTURE_FILE
+                ltok::INPUTS_TEXTURE_FILE
             );
             Err(LightReadError)
         }
@@ -211,10 +211,10 @@ fn dome_intensity(
     data: &openusd::sdf::Data,
     prim: &SdfPath,
 ) -> Result<Option<f32>, LightReadError> {
-    let Some(intensity) = field_f32(data, prim, ltok::A_INTENSITY)? else {
+    let Some(intensity) = field_f32(data, prim, ltok::INPUTS_INTENSITY)? else {
         return Ok(None);
     };
-    let exposure = field_f32(data, prim, ltok::A_EXPOSURE)?.unwrap_or(0.0);
+    let exposure = field_f32(data, prim, ltok::INPUTS_EXPOSURE)?.unwrap_or(0.0);
     let scaled = intensity * exposure.exp2();
     if scaled.is_finite() && scaled >= 0.0 {
         Ok(Some(scaled))
@@ -322,16 +322,16 @@ fn resolve_intensity_with_exposure(
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<(f32, bool, f32), LightReadError> {
-    let authored_intensity = read_authored_real(reader, path, ltok::A_INTENSITY)?;
+    let authored_intensity = read_authored_real(reader, path, ltok::INPUTS_INTENSITY)?;
     let schema_intensity = if authored_intensity.is_none() {
-        reader.real_f32_with_schema_fallback(path, ltok::A_INTENSITY)
+        reader.real_f32(path, ltok::INPUTS_INTENSITY)
     } else {
         None
     };
     let intensity = authored_intensity
         .or(schema_intensity)
         .unwrap_or(default_intensity);
-    let exposure = read_authored_real(reader, path, ltok::A_EXPOSURE)?.unwrap_or(0.0);
+    let exposure = read_authored_real(reader, path, ltok::INPUTS_EXPOSURE)?.unwrap_or(0.0);
     let exposure_scale = exposure.exp2();
     let scaled = intensity * exposure_scale;
     if scaled.is_finite() && scaled >= 0.0 {
@@ -421,10 +421,10 @@ pub(crate) fn read_light_color(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<Vec3, LightReadError> {
-    let color = if reader.has_authored_attribute(path, ltok::A_COLOR)
-        || !reader.connections(path, ltok::A_COLOR).is_empty()
+    let color = if reader.has_authored_attribute(path, ltok::INPUTS_COLOR)
+        || !reader.connections(path, ltok::INPUTS_COLOR).is_empty()
     {
-        let Some(color) = get_attribute_as_vec3(reader, path, ltok::A_COLOR) else {
+        let Some(color) = get_attribute_as_vec3(reader, path, ltok::INPUTS_COLOR) else {
             error!(
                 "[usd-bevy] {} has authored inputs:color with an unsupported type",
                 path.as_str()
@@ -443,11 +443,12 @@ pub(crate) fn read_light_color(
         Vec3::ONE
     };
     let enabled =
-        read_authored_bool(reader, path, ltok::A_ENABLE_COLOR_TEMPERATURE)?.unwrap_or(false);
+        read_authored_bool(reader, path, ltok::INPUTS_ENABLE_COLOR_TEMPERATURE)?.unwrap_or(false);
     if !enabled {
         return Ok(color);
     }
-    let kelvin = read_authored_real(reader, path, ltok::A_COLOR_TEMPERATURE)?.unwrap_or(6500.0);
+    let kelvin =
+        read_authored_real(reader, path, ltok::INPUTS_COLOR_TEMPERATURE)?.unwrap_or(6500.0);
     let Some(temperature) = blackbody_rgb(kelvin) else {
         error!(
             "[usd-bevy] {} has unsupported authored color temperature {kelvin}; expected a finite value in [1667, 25000] K",
@@ -617,7 +618,7 @@ fn read_shadow_distance(
     default: f32,
     convention: lunco_usd_data::units::ConventionTransform,
 ) -> Result<(f32, bool), LightReadError> {
-    match read_authored_real(reader, path, ltok::A_SHADOW_DISTANCE)? {
+    match read_authored_real(reader, path, ltok::INPUTS_SHADOW_DISTANCE)? {
         Some(d) if d > 0.0 => {
             let metres = convention.length(d as f64) as f32;
             if metres.is_finite() {
@@ -661,7 +662,10 @@ fn read_shadow_enable(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<bool, LightReadError> {
-    Ok(read_authored_bool(reader, path, ltok::A_SHADOW_ENABLE)?.unwrap_or(USDLUX_SHADOW_ENABLE))
+    Ok(
+        read_authored_bool(reader, path, ltok::INPUTS_SHADOW_ENABLE)?
+            .unwrap_or(USDLUX_SHADOW_ENABLE),
+    )
 }
 
 /// Convert the USD distant-light emission convention into Bevy's directional
@@ -721,7 +725,7 @@ pub fn instantiate_light_prim(
         }
     };
     match prim_type {
-        Some(ltok::T_DISTANT_LIGHT) => {
+        Some(ltok::DISTANT_LIGHT) => {
             // Resolve the current USD DistantLight schema fallback (50,000) if
             // intensity is omitted. This is scene data resolved by USD, not a
             // value selected by the render-quality profile.
@@ -755,12 +759,12 @@ pub fn instantiate_light_prim(
             // `normalize`, `intensity`, `exposure`, and `angle` semantics. USD
             // schema fallbacks resolve through the composed reader; the solar
             // angle constant is only a guard for hosts without core schemas.
-            let authored_angle = match read_authored_real(reader, sdf_path, ltok::A_ANGLE) {
+            let authored_angle = match read_authored_real(reader, sdf_path, ltok::INPUTS_ANGLE) {
                 Ok(angle) => angle,
                 Err(_) => return false,
             };
             let angle = authored_angle
-                .or_else(|| reader.real_f32_with_schema_fallback(sdf_path, ltok::A_ANGLE))
+                .or_else(|| reader.real_f32(sdf_path, ltok::INPUTS_ANGLE))
                 .unwrap_or(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG);
             if !angle.is_finite() {
                 error!(
@@ -770,9 +774,9 @@ pub fn instantiate_light_prim(
                 return false;
             }
             let angular_diameter_deg = angle.clamp(0.0, 360.0);
-            let normalize = match read_authored_bool(reader, sdf_path, ltok::A_NORMALIZE) {
+            let normalize = match read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) {
                 Ok(value) => value
-                    .or_else(|| reader.boolean_with_schema_fallback(sdf_path, ltok::A_NORMALIZE))
+                    .or_else(|| reader.boolean(sdf_path, ltok::INPUTS_NORMALIZE))
                     .unwrap_or(false),
                 Err(_) => return false,
             };
@@ -866,7 +870,7 @@ pub fn instantiate_light_prim(
             );
             true
         }
-        Some(ltok::T_DOME_LIGHT) => {
+        Some(ltok::DOME_LIGHT) => {
             // Two domes in one prim type, and USD says which by whether the
             // author supplied an image:
             //
@@ -920,7 +924,7 @@ pub fn instantiate_light_prim(
             commands.entity(entity).try_insert((env, UsdAuthoredLight));
             true
         }
-        Some(ltok::T_SPHERE_LIGHT) => {
+        Some(ltok::SPHERE_LIGHT) => {
             // UNITS — this was documented backwards, and the error is a factor of
             // 4π (≈12.6x) that presents as "the light is authored but does nothing".
             //
@@ -950,7 +954,7 @@ pub fn instantiate_light_prim(
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
             //
-            // The spec (`crates/lunco-usd-authoring/schema/core/usdLux.usda`):
+            // The spec (`openusd-schemas::lux`):
             //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
             //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
             //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
@@ -990,13 +994,13 @@ pub fn instantiate_light_prim(
             let Ok(light_radius) = read_positive_length(
                 reader,
                 sdf_path,
-                ltok::A_RADIUS,
+                ltok::INPUTS_RADIUS,
                 DEFAULT_SPHERE_RADIUS,
                 convention,
             ) else {
                 return false;
             };
-            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::A_NORMALIZE) else {
+            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
                 return false;
             };
             let normalize = normalize.unwrap_or(false);
@@ -1047,7 +1051,7 @@ pub fn instantiate_light_prim(
             };
 
             let cone_angle_deg =
-                match read_authored_real(reader, sdf_path, ltok::A_SHAPING_CONE_ANGLE) {
+                match read_authored_real(reader, sdf_path, ltok::INPUTS_SHAPING_CONE_ANGLE) {
                     Ok(angle) => angle,
                     Err(_) => return false,
                 };
@@ -1063,7 +1067,7 @@ pub fn instantiate_light_prim(
                 let softness = match read_authored_real(
                     reader,
                     sdf_path,
-                    ltok::A_SHAPING_CONE_SOFTNESS,
+                    ltok::INPUTS_SHAPING_CONE_SOFTNESS,
                 ) {
                     Ok(Some(softness)) if (0.0..=1.0).contains(&softness) => softness,
                     Ok(Some(softness)) => {
@@ -1171,7 +1175,7 @@ pub fn instantiate_light_prim(
             }
             true
         }
-        Some(ltok::T_RECT_LIGHT) => {
+        Some(ltok::RECT_LIGHT) => {
             // `UsdLuxRectLight` and Bevy's `RectLight` share a geometry
             // convention exactly: the rectangle lies in the local XY plane and
             // emits along local **-Z**. So orientation needs no fixup — the
@@ -1199,12 +1203,13 @@ pub fn instantiate_light_prim(
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let Ok(width) = read_positive_length(reader, sdf_path, ltok::A_WIDTH, 1.0, convention)
+            let Ok(width) =
+                read_positive_length(reader, sdf_path, ltok::INPUTS_WIDTH, 1.0, convention)
             else {
                 return false;
             };
             let Ok(height) =
-                read_positive_length(reader, sdf_path, ltok::A_HEIGHT, 1.0, convention)
+                read_positive_length(reader, sdf_path, ltok::INPUTS_HEIGHT, 1.0, convention)
             else {
                 return false;
             };
@@ -1213,7 +1218,7 @@ pub fn instantiate_light_prim(
             // schema default) `intensity` fixes radiance, so emitted power scales
             // with the emitting area. For a rect A = w·h, and the ratio against
             // the 1×1 m schema fallback makes an unauthored size exactly neutral.
-            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::A_NORMALIZE) else {
+            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
                 return false;
             };
             let normalize = normalize.unwrap_or(false);
@@ -1243,11 +1248,12 @@ pub fn instantiate_light_prim(
 
             // `UsdLuxRectLight.inputs:texture:file` (an image mapped across the
             // rect) has no Bevy equivalent — say so rather than silently drop it.
-            let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
+            let texture_authored = reader
+                .has_authored_attribute(sdf_path, ltok::INPUTS_TEXTURE_FILE)
                 || !reader
-                    .connections(sdf_path, ltok::A_TEXTURE_FILE)
+                    .connections(sdf_path, ltok::INPUTS_TEXTURE_FILE)
                     .is_empty();
-            let texture_value = reader.asset(sdf_path, ltok::A_TEXTURE_FILE);
+            let texture_value = reader.asset(sdf_path, ltok::INPUTS_TEXTURE_FILE);
             if texture_authored && texture_value.is_none() {
                 error!(
                     "[usd-bevy] {} has authored RectLight inputs:texture:file with an unsupported type",
@@ -1506,23 +1512,23 @@ mod photometry_tests {
     fn preview_scope_excludes_only_dominant_authored_lights() {
         assert!(!light_is_in_scope(
             LightProjectionScope::Preview,
-            Some(ltok::T_DISTANT_LIGHT)
+            Some(ltok::DISTANT_LIGHT)
         ));
         assert!(!light_is_in_scope(
             LightProjectionScope::Preview,
-            Some(ltok::T_DOME_LIGHT)
+            Some(ltok::DOME_LIGHT)
         ));
         assert!(light_is_in_scope(
             LightProjectionScope::Preview,
-            Some(ltok::T_SPHERE_LIGHT)
+            Some(ltok::SPHERE_LIGHT)
         ));
         assert!(light_is_in_scope(
             LightProjectionScope::Preview,
-            Some(ltok::T_RECT_LIGHT)
+            Some(ltok::RECT_LIGHT)
         ));
         assert!(light_is_in_scope(
             LightProjectionScope::Scene,
-            Some(ltok::T_DISTANT_LIGHT)
+            Some(ltok::DISTANT_LIGHT)
         ));
     }
 
@@ -1582,7 +1588,7 @@ def Xform "World"
             Ok((0.9, false))
         );
         assert_eq!(
-            convention.length(view.real_f32(&lamp, ltok::A_RADIUS).unwrap() as f64) as f32,
+            convention.length(view.real_f32(&lamp, ltok::INPUTS_RADIUS).unwrap() as f64) as f32,
             0.02
         );
         assert_eq!(

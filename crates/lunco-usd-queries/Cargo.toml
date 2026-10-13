@@ -23,6 +23,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [lints]
 workspace = true

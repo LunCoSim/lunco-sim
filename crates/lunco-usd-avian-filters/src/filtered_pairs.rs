@@ -46,8 +46,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_usd_bevy_scene::{UsdPrimPath, instance_key};
 use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
-use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::physics::tokens as ptok;
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.
 ///
 /// The rel names prims; the pair is only expressible once both ends exist as
@@ -208,11 +208,11 @@ pub fn read_filtered_pairs(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Option<PendingFilteredPairs> {
-    if !reader.has_api_schema(sdf_path, ptok::API_FILTERED_PAIRS) {
+    if !reader.has_api_schema(sdf_path, ptok::PHYSICS_FILTERED_PAIRS_API) {
         return None;
     }
     let targets: Vec<String> = reader
-        .rel_targets(sdf_path, ptok::A_FILTERED_PAIRS)
+        .rel_targets(sdf_path, ptok::PHYSICS_FILTERED_PAIRS)
         .into_iter()
         .map(|p| p.to_string())
         .collect();
@@ -220,8 +220,8 @@ pub fn read_filtered_pairs(
         warn!(
             "[usd-avian] {sdf_path}: applies {} but names no targets in {} — \
              the pair it was meant to filter still collides.",
-            ptok::API_FILTERED_PAIRS,
-            ptok::A_FILTERED_PAIRS,
+            ptok::PHYSICS_FILTERED_PAIRS_API,
+            ptok::PHYSICS_FILTERED_PAIRS,
         );
         return None;
     }
@@ -326,7 +326,7 @@ pub fn resolve_filtered_pairs(
                     "[usd-avian] {}: applies {} but neither it nor any ancestor has a \
                      collider, so there is no pair to filter.",
                     prim.path,
-                    ptok::API_FILTERED_PAIRS,
+                    ptok::PHYSICS_FILTERED_PAIRS_API,
                 );
             }
             resolve_ticks.insert(entity, ticks);

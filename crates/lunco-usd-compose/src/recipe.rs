@@ -330,8 +330,16 @@ over "Asset" {
             assert_eq!(prepared.root_id, anchor);
             assert_eq!(prepared.bytes.len(), 4);
             assert!(prepared.bytes.contains_key(absolute));
-            let child_id = crate::child_layer_ids(anchor, root).unwrap()[0].clone();
-            let grand_id = crate::child_layer_ids(&child_id, child).unwrap()[0].clone();
+            let child_id = crate::canonicalize_at(
+                "parts/child.usda",
+                Some(&openusd::ar::ResolvedPath::new(anchor)),
+            )
+            .unwrap();
+            let grand_id = crate::canonicalize_at(
+                "grand.usda",
+                Some(&openusd::ar::ResolvedPath::new(&child_id)),
+            )
+            .unwrap();
             assert_eq!(prepared.bytes[&child_id], child);
             assert_eq!(prepared.bytes[&grand_id], grand);
             if anchor != transport_root {
@@ -342,7 +350,9 @@ over "Asset" {
                 .resolver(resolver)
                 .open(anchor)
                 .expect("compose closure");
-            let prim = stage.prim(openusd::sdf::Path::new("/Asset").unwrap());
+            let prim = stage
+                .prim(openusd::sdf::Path::new("/Asset").unwrap())
+                .unwrap();
             assert_eq!(
                 prim.attribute("nested").get::<String>().unwrap().as_deref(),
                 Some("composed")
@@ -360,10 +370,10 @@ over "Asset" {
                 .expect("asset value");
             assert_eq!(value.as_str(), "images/paint #%.png");
             let stack = attribute.property_stack().unwrap();
-            assert_eq!(stack[0].0, child_id);
+            assert_eq!(stack[0].layer, child_id);
             let image_id = crate::canonicalize_at(
                 value.as_str(),
-                Some(&openusd::ar::ResolvedPath::new(&stack[0].0)),
+                Some(&openusd::ar::ResolvedPath::new(&stack[0].layer)),
             )
             .unwrap();
             if anchor == transport_root {

@@ -16,8 +16,8 @@
 use bevy::prelude::*;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
-use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::lux::tokens as ltok;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -559,7 +559,10 @@ pub(crate) fn reproject_physics_if_needed(
         .map(|stage| {
             let view = stage.view();
             (
-                view.has_api_schema(&sdf_path, openusd::schemas::physics::tokens::API_RIGID_BODY),
+                view.has_api_schema(
+                    &sdf_path,
+                    openusd_schemas::physics::tokens::PHYSICS_RIGID_BODY_API,
+                ),
                 view.has_api_schema(&sdf_path, "PhysxVehicleContextAPI"),
             )
         })
@@ -1114,7 +1117,7 @@ pub(crate) fn refresh_edited_prims_live(
             };
             match view.type_name(&sp).as_deref() {
                 // Already handled in place by the light projection.
-                Some(ltok::T_DOME_LIGHT) => {}
+                Some(ltok::DOME_LIGHT) => {}
                 // Material network edits fan out to every prim bound to them.
                 Some("Shader") | Some("Material") => scene_wide = true,
                 _ => subtrees.push(prim),

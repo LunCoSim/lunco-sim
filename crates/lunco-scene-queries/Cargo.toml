@@ -28,6 +28,7 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

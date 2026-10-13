@@ -175,29 +175,30 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// This is USD interpretation only. Traversal and storage access remain in
 /// `lunco-assets-core`.
 pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
-    let data = parse_usda(text).ok()?;
-    Some(
-        data.composition_asset_dependencies()
-            .into_iter()
-            .chain(data.asset_dependencies())
-            .collect(),
-    )
+    authored_dependencies("lunco://__dependency_source__.usda", text.as_bytes()).ok()
 }
 
 /// Compose a native USDA file using the canonical LunCo asset traversal.
 ///
 /// The root is promoted to `lunco://` when it lives below an `assets/` root, so
 /// all arcs in the closure use the same canonical identity space.
-pub fn compose_file_to_stage(path: &Path) -> Result<Stage> {
+pub fn compose_file_to_stage(
+    path: &Path,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
+) -> Result<Stage> {
     let assets_root = lunco_assets_core::shipped_asset_root(path);
-    compose_file_to_stage_with_assets(path, assets_root)
+    compose_file_to_stage_with_assets(path, assets_root, registry)
 }
 
 /// Compose an authored file with an explicit shipped-asset root. Twin/campaign
 /// callers use this when the scene itself is outside the library but its
 /// `lunco://` arcs still target the engine asset source.
-pub fn compose_file_to_stage_with_assets(path: &Path, assets_root: Option<&Path>) -> Result<Stage> {
-    compose_file_to_stage_with_roots(path, assets_root, None)
+pub fn compose_file_to_stage_with_assets(
+    path: &Path,
+    assets_root: Option<&Path>,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
+) -> Result<Stage> {
+    compose_file_to_stage_with_roots(path, assets_root, None, registry)
 }
 
 /// Compose a document with the asset roots that belong to its provenance.
@@ -215,6 +216,7 @@ pub fn compose_file_to_stage_with_roots(
     path: &Path,
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<Stage> {
     let absolute = lunco_storage::canonicalize_file_path(path)
         .map_err(|error| anyhow!("cannot resolve USD root {}: {error}", path.display()))?;
@@ -234,7 +236,7 @@ pub fn compose_file_to_stage_with_roots(
     .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
     let recipe =
         recipe_from_bytes_with_roots(&root_id, root_bytes, assets_root, twin_root, limits)?;
-    compose_recipe_to_stage(recipe).map(|(stage, _)| stage)
+    compose_recipe_to_stage(recipe, registry).map(|(stage, _)| stage)
 }
 
 /// Compose current in-memory layer source against the same asset resolver used
@@ -247,19 +249,24 @@ pub fn compose_source_to_stage_with_roots(
     source: &str,
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
     let recipe = recipe_from_source_with_roots(root_id, source, assets_root, twin_root)?;
-    compose_recipe_to_stage(recipe)
+    compose_recipe_to_stage(recipe, registry)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn compose_recipe_to_stage(
     recipe: recipe::StageRecipe,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
     let diagnostics = recipe.dependency_diagnostics;
     let resolver = LuncoUsdResolver::new(recipe.bytes)?;
     let resolver_diagnostics = resolver.diagnostics();
-    let stage = Stage::builder().resolver(resolver).open(&recipe.root_id);
+    let stage = Stage::builder()
+        .schema_registry(registry)
+        .resolver(resolver)
+        .open(&recipe.root_id);
     resolver_diagnostics.check()?;
     let stage = stage.map_err(|error| anyhow!("USD composition error: {error}"))?;
     Ok((stage, diagnostics))
@@ -352,28 +359,81 @@ pub fn compose_file_to_stage_with_roots(
     path: &Path,
     assets_root: Option<&Path>,
     twin_root: Option<&Path>,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<Stage> {
-    let _ = (path, assets_root, twin_root);
+    let _ = (path, assets_root, twin_root, registry);
     Err(anyhow!(
         "synchronous USD composition is unavailable on wasm; load the stage through lunco-usd-bevy"
     ))
 }
 
-/// Discover a USDA layer's non-binary composition dependencies in canonical
-/// asset identity space. Fetch adapters use this; they do not parse arcs.
+/// Discover USD-layer dependencies through the native format reader and asset
+/// visitor. Results follow sorted authored spellings before anchoring, so a
+/// recipe can reanchor relative and absolute arcs without changing their pairing.
+/// Fetch adapters consume the identifiers; they do not parse USD.
 pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
-    let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-    let data = parse_usda(text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
     let anchor = ResolvedPath::new(id);
+    authored_dependencies(id, raw)?
+        .into_iter()
+        .map(|arc| canonicalize_at(&arc, Some(&anchor)))
+        .filter_map(|result| match result {
+            Ok(path) if is_usd_layer(Path::new(&path)) => Some(Ok(path)),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+/// The native rewrite visitor includes inactive list-op items. Normalize only
+/// the analysis copy with native ListOp evaluation before walking its paths;
+/// source opinions and expression spellings stay intact. This does not use
+/// UsdUtilsComputeAllDependencies, whose expansion contract currently refuses
+/// variable expressions and UDIM patterns accepted by the stage reader.
+fn authored_dependencies(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     canonicalize_at(id, None)?;
-    let mut children = Vec::new();
-    for arc in data.composition_asset_dependencies() {
-        let canonical = canonicalize_at(&arc, Some(&anchor))?;
-        if !is_binary_asset(&canonical) {
-            children.push(canonical);
-        }
+    if raw.starts_with(openusd::usda::MAGIC) {
+        validate_usda_nesting(std::str::from_utf8(raw)?)?;
     }
-    Ok(children)
+    let mut layer = openusd::sdf::Layer::from_bytes(id, raw.to_vec())?;
+    layer.edit(|edit| {
+        let data = edit.data_mut();
+        for path in data.spec_paths() {
+            for field in [
+                openusd::sdf::FieldKey::References,
+                openusd::sdf::FieldKey::Payload,
+            ] {
+                let applied = match data.try_field(&path, field.as_str())?.as_deref() {
+                    Some(openusd::sdf::Value::ReferenceListOp(op)) => {
+                        Some(openusd::sdf::Value::ReferenceListOp(
+                            openusd::sdf::ReferenceListOp::explicit(op.flatten()),
+                        ))
+                    }
+                    Some(openusd::sdf::Value::PayloadListOp(op)) => {
+                        Some(openusd::sdf::Value::PayloadListOp(
+                            openusd::sdf::PayloadListOp::explicit(op.flatten()),
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(applied) = applied {
+                    data.set_field(&path, field.as_str(), applied);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    let mut paths = Vec::new();
+    openusd::usd_utils::modify_asset_paths(
+        &mut layer,
+        |path| {
+            paths.push(path.to_owned());
+            path.to_owned()
+        },
+        true,
+    )?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -381,7 +441,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scalar_asset_identifiers_follow_the_strongest_contributing_layer() {
+    fn asset_provenance_follows_the_strongest_contributing_layer() {
         let root = "twin://fixture/scenes/root.usda";
         let child = "twin://fixture/scenes/parts/child.usda";
         let bytes = std::collections::HashMap::from([
@@ -412,20 +472,28 @@ mod tests {
             ),
         ]);
         let stage = Stage::builder()
+            .schema_registry(openusd_schemas::schema_registry())
             .resolver(LuncoUsdResolver::new(bytes).unwrap())
             .open(root)
             .unwrap();
         let asset = |name: &str| {
             stage
                 .attribute(openusd::sdf::Path::new(&format!("/Instance.{name}")).unwrap())
+                .unwrap()
                 .get::<openusd::sdf::AssetPath>()
                 .unwrap()
+        };
+        let identifier = |name: &str, asset: &openusd::sdf::AssetPath| {
+            let attr = stage.attribute(format!("/Instance.{name}")).unwrap();
+            let info = attr.resolve_info().unwrap();
+            let anchor = ResolvedPath::new(&info.spec_site().unwrap().layer);
+            canonicalize_at(asset.asset_path(), Some(&anchor)).unwrap()
         };
         let image = asset("image").unwrap();
         assert_eq!(image.as_str(), "textures/image # %.png");
         assert_eq!(
-            image.canonical_identifier(),
-            Some("twin://fixture/scenes/parts/textures/image # %.png")
+            identifier("image", &image),
+            "twin://fixture/scenes/parts/textures/image # %.png"
         );
         assert_eq!(
             image.resolved_path(),
@@ -433,28 +501,29 @@ mod tests {
             "identity does not require payload existence"
         );
         assert_eq!(
-            asset("override").unwrap().canonical_identifier(),
-            Some("twin://fixture/scenes/parent.png")
+            identifier("override", &asset("override").unwrap()),
+            "twin://fixture/scenes/parent.png"
         );
         assert_eq!(asset("blocked"), None);
         let images = stage
             .attribute(openusd::sdf::Path::new("/Instance.images").unwrap())
+            .unwrap()
             .get::<Vec<openusd::sdf::AssetPath>>()
             .unwrap()
             .unwrap();
         assert_eq!(
-            images[1].canonical_identifier(),
-            Some("twin://fixture/scenes/parts/textures/missing.png")
+            identifier("images", &images[1]),
+            "twin://fixture/scenes/parts/textures/missing.png"
         );
         let expression = asset("expression").unwrap();
         assert_eq!(expression.as_str(), "`\"textures/${NAME}.png\"`");
         assert_eq!(
-            expression.canonical_identifier(),
-            Some("twin://fixture/scenes/parts/textures/image.png")
+            identifier("expression", &expression),
+            "twin://fixture/scenes/parts/textures/image.png"
         );
         assert_eq!(
-            asset("binary").unwrap().canonical_identifier(),
-            Some("twin://fixture/scenes/parts/meshes/model.glb")
+            identifier("binary", &asset("binary").unwrap()),
+            "twin://fixture/scenes/parts/meshes/model.glb"
         );
     }
 
@@ -499,8 +568,13 @@ mod tests {
         lunco_storage::write_file_sync(&world, b"#usda 1.0\ndef Scope \"Traverse\" {}\n")
             .expect("write world");
 
-        compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
-            .expect("a Windows-authored Twin URI composes on this OS");
+        compose_file_to_stage_with_roots(
+            &scene,
+            None,
+            Some(temp.path()),
+            openusd_schemas::schema_registry(),
+        )
+        .expect("a Windows-authored Twin URI composes on this OS");
     }
 
     #[test]
@@ -522,8 +596,13 @@ mod tests {
         )
         .expect("write external Twin scene");
 
-        compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
-            .expect("external Twin can resolve authored engine layers");
+        compose_file_to_stage_with_roots(
+            &scene,
+            None,
+            Some(temp.path()),
+            openusd_schemas::schema_registry(),
+        )
+        .expect("external Twin can resolve authored engine layers");
     }
 
     #[test]

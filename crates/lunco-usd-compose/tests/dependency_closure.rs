@@ -84,11 +84,12 @@ def Xform "Available" {}
     )
     .unwrap();
 
-    let stage = compose_file_to_stage_with_roots(&scene, None, None)
-        .expect("a missing sibling layer must not discard available USD content");
-    assert!(stage.prim("/Root").is_defined().unwrap());
-    assert!(stage.prim("/Available").is_defined().unwrap());
-    assert!(!stage.prim("/Missing").is_defined().unwrap());
+    let stage =
+        compose_file_to_stage_with_roots(&scene, None, None, openusd_schemas::schema_registry())
+            .expect("a missing sibling layer must not discard available USD content");
+    assert!(stage.prim("/Root").unwrap().is_defined().unwrap());
+    assert!(stage.prim("/Available").unwrap().is_defined().unwrap());
+    assert!(!stage.prim("/Missing").unwrap().is_defined().unwrap());
 
     let root_id = lunco_storage::file_path_to_uri(&scene).unwrap();
     for invalid in [
@@ -97,10 +98,30 @@ def Xform "Available" {}
         "file:///invalid.usda?query",
     ] {
         let source = format!("#usda 1.0\n(subLayers = [@{invalid}@])\ndef Xform \"Root\" {{}}\n");
-        let error =
-            lunco_usd_compose::compose_source_to_stage_with_roots(&root_id, &source, None, None)
-                .err()
-                .expect("invalid file URI must reject composition");
+        let error = lunco_usd_compose::compose_source_to_stage_with_roots(
+            &root_id,
+            &source,
+            None,
+            None,
+            openusd_schemas::schema_registry(),
+        )
+        .err()
+        .expect("invalid file URI must reject composition");
         assert!(error.to_string().contains("file URI"), "{error}");
     }
+}
+
+#[test]
+fn native_dependency_discovery_excludes_inactive_reference_items() {
+    let source = r#"#usda 1.0
+def Xform "Root" (
+    prepend references = @active.usda@
+    delete references = @deleted.usda@
+    reorder references = @reordered.usda@
+) {
+    asset info:sourceAsset = @Program.mo@
+}
+"#;
+    let dependencies = layer_dependency_arcs(source).unwrap();
+    assert_eq!(dependencies, ["Program.mo", "active.usda"]);
 }

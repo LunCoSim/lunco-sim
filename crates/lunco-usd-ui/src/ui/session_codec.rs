@@ -165,8 +165,15 @@ impl DocumentSessionCodec for UsdSessionCodec {
             .collect::<Vec<_>>()
             .into_iter()
             .filter_map(|id| {
-                reg.host(id).map(|host| {
+                reg.host(id).and_then(|host| {
                     let doc = host.document();
+                    let source = match doc.source() {
+                        Ok(source) => source,
+                        Err(error) => {
+                            bevy::log::error!("USD session snapshot failed: {error}");
+                            return None;
+                        }
+                    };
                     let origin = doc.origin().clone();
                     let session = viewport.and_then(|viewport| {
                         viewport
@@ -196,12 +203,12 @@ impl DocumentSessionCodec for UsdSessionCodec {
                             (view.id != session.primary_view().0, view.id)
                         });
                     }
-                    (
+                    Some((
                         id.raw(),
                         DocumentSnapshot {
                             kind: KIND.to_string(),
                             title: origin.display_name(),
-                            source: doc.source(),
+                            source,
                             dirty: doc.is_dirty(),
                             origin,
                             id: id.raw(),
@@ -230,7 +237,7 @@ impl DocumentSessionCodec for UsdSessionCodec {
                                 },
                             ),
                         },
-                    )
+                    ))
                 })
             })
             .collect()
@@ -256,7 +263,20 @@ impl DocumentSessionCodec for UsdSessionCodec {
             let Some(path) = file_path else {
                 return PreparedDocumentSnapshot::new(snapshot);
             };
-            match lunco_storage::read_text_file_sync(&path) {
+            match lunco_storage::read_file_sync(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    lunco_usd_document::document::PreparedUsdSource::from_bytes(bytes)
+                })
+                .and_then(|prepared| {
+                    <UsdDocument as lunco_doc::PreparedFileBacked>::with_prepared_origin(
+                        lunco_doc::DocumentId::new(snapshot.id),
+                        prepared,
+                        snapshot.origin.clone(),
+                    )
+                    .source()
+                    .map_err(|error| error.to_string())
+                }) {
                 Ok(source) => {
                     let mut snapshot = snapshot;
                     snapshot.source = source;
@@ -493,7 +513,7 @@ mod tests {
             .host(DocumentId::new(id))
             .expect("restored USD document is registered");
 
-        assert_eq!(host.document().source(), snapshot.source);
+        assert_eq!(host.document().source().unwrap(), snapshot.source);
         assert!(host.document().is_dirty());
     }
 
@@ -530,7 +550,7 @@ mod tests {
 
         assert_eq!(same_id, id);
         assert_eq!(registry.ids().count(), 1);
-        assert_eq!(host.document().source(), "#usda 1.0\n");
+        assert_eq!(host.document().source().unwrap(), "#usda 1.0\n");
         assert!(host.document().is_dirty());
     }
 
@@ -561,7 +581,7 @@ mod tests {
 
         assert_eq!(registry.ids().count(), 1);
         assert!(document.is_dirty());
-        assert!(document.source().contains("Saved edit"));
+        assert!(document.source().unwrap().contains("Saved edit"));
     }
 
     #[test]

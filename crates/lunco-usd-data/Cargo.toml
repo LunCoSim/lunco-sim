@@ -5,9 +5,14 @@ edition = "2024"
 license.workspace = true
 description = "Reusable authored USD data, metadata, and stage-convention contracts"
 
+[features]
+default = ["bevy"]
+# Stage-convention transforms are the only Bevy adapter in this data package.
+bevy = ["dep:bevy", "dep:lunco-engineering-values"]
+
 [dependencies]
-lunco-engineering-values = { path = "../lunco-engineering-values" }
-bevy = { workspace = true }
+lunco-engineering-values = { path = "../lunco-engineering-values", optional = true }
+bevy = { workspace = true, optional = true }
 openusd = { workspace = true }
 serde = { workspace = true }
 

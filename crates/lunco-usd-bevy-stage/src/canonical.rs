@@ -44,7 +44,7 @@ pub struct RawStageChange {
     /// Structurally-resynced prim paths — includes reference/sublayer dependents
     /// that PCP fanned out (cascade), so the projector re-reads exactly these.
     pub resynced: Vec<SdfPath>,
-    /// Attribute-only ("info only") prim paths — cheap incremental projection.
+    /// Native changed-info property or metadata paths for incremental projection.
     pub info_only: Vec<SdfPath>,
     /// True when the committed USD change authored the native
     /// `connectionPaths` field. This is the only live-edit signal that can
@@ -132,7 +132,6 @@ impl CanonicalStage {
                     .any(|path| {
                         change
                             .changed_fields(path)
-                            .iter()
                             .any(|field| field == "connectionPaths")
                     });
                 q.push(RawStageChange {
@@ -316,6 +315,7 @@ impl CanonicalStage {
         let existing: Vec<String> = match self
             .stage
             .prim(path.clone())
+            .expect("validated USD path")
             .attribute("xformOpOrder")
             .get::<openusd::sdf::Value>()
             .map_err(|e| anyhow!("read xformOpOrder at {path}: {e}"))?
@@ -343,6 +343,7 @@ impl CanonicalStage {
             } else {
                 self.stage
                     .prim(path.clone())
+                    .expect("validated USD path")
                     .create_attribute("xformOpOrder", "token[]")
                     .map_err(|e| anyhow!("update xformOpOrder at {path}: {e}"))?
                     .set(openusd::sdf::Value::token_vec(remaining))
@@ -431,6 +432,7 @@ impl CanonicalStage {
         if let Some(order) = order {
             self.stage
                 .prim(path.clone())
+                .expect("validated USD path")
                 .create_attribute("xformOpOrder", "token[]")
                 .map_err(|e| anyhow!("restore xformOpOrder at {path}: {e}"))?
                 .set(openusd::sdf::Value::token_vec(order.iter().cloned()))
@@ -459,7 +461,7 @@ impl CanonicalStage {
     /// already listed; existing ops keep their relative order.
     fn insert_xform_op(&self, path: &SdfPath, op: &str) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let prim = self.stage.prim(path.clone());
+        let prim = self.stage.prim(path.clone()).expect("validated USD path");
         let existing: Vec<String> = match prim
             .attribute("xformOpOrder")
             .get::<openusd::sdf::Value>()
@@ -742,13 +744,19 @@ impl CanonicalStage {
             .as_ref()
             .and_then(|shared| shared.borrow().get(&reference_id).cloned())
             .ok_or_else(|| anyhow!("reference source `{asset_path}` is not loaded"))?;
-        let source = std::str::from_utf8(&source)
-            .map_err(|e| anyhow!("reference source `{asset_path}` is not UTF-8: {e}"))?;
-        let default_prim = crate::authoring::DefaultPrim::parse(source)
-            .ok_or_else(|| anyhow!("reference source `{asset_path}` has no valid defaultPrim"))?;
+        let layer = openusd::sdf::Layer::from_bytes(&reference_id, source)?;
+        let root = SdfPath::abs_root();
+        let default_prim = layer
+            .data()
+            .try_field(&root, openusd::sdf::FieldKey::DefaultPrim.as_str())?
+            .ok_or_else(|| anyhow!("reference source `{asset_path}` has no defaultPrim"))?;
+        let path = openusd::sdf::default_prim_path(default_prim.as_str().ok_or_else(|| {
+            anyhow!("reference source `{asset_path}` has an invalid defaultPrim")
+        })?)
+        .ok_or_else(|| anyhow!("reference source `{asset_path}` has an invalid defaultPrim"))?;
         Ok(openusd::sdf::Reference {
             asset_path: asset_path.to_string(),
-            prim_path: default_prim.path().clone(),
+            prim_path: path,
             ..Default::default()
         })
     }
@@ -817,6 +825,7 @@ impl CanonicalStage {
         // semantics) — an unconditional set would erase prior arcs on the prim.
         self.stage
             .prim(path.clone())
+            .expect("validated USD path")
             .update_metadata(openusd::sdf::FieldKey::References.as_str(), |current| {
                 let mut op = match current {
                     Some(openusd::sdf::Value::ReferenceListOp(op)) => op,
@@ -829,7 +838,7 @@ impl CanonicalStage {
                         op.prepended_items.push(reference);
                     }
                 }
-                openusd::sdf::Value::ReferenceListOp(op)
+                Some(openusd::sdf::Value::ReferenceListOp(op))
             })
             .map_err(|e| anyhow!("author reference @{asset_path}@ at {path}: {e}"))?;
         Ok(())
@@ -913,6 +922,7 @@ impl CanonicalStage {
             .collect();
         self.stage
             .prim(prim.clone())
+            .expect("validated USD path")
             .set_metadata(
                 openusd::sdf::FieldKey::ApiSchemas.as_str(),
                 openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(tokens)),
@@ -970,7 +980,7 @@ impl CanonicalStage {
         self.stage
             .override_prim(prim.clone())
             .map_err(|e| anyhow!("override prim before authoring kind at {prim}: {e}"))?;
-        let prim_spec = self.stage.prim(prim.clone());
+        let prim_spec = self.stage.prim(prim.clone()).expect("validated USD path");
         match kind {
             Some(kind) => prim_spec
                 .set_kind(kind)
@@ -1008,6 +1018,7 @@ impl CanonicalStage {
             .map_err(|e| anyhow!("define_prim before author_active at {prim}: {e}"))?;
         self.stage
             .prim(prim.clone())
+            .expect("validated USD path")
             .set_active(active)
             .map(|_| ())
             .map_err(|e| anyhow!("author active={active} at {prim}: {e}"))
@@ -1017,14 +1028,10 @@ impl CanonicalStage {
     /// weaker composed state without rebuilding unrelated prims.
     pub(crate) fn clear_active(&self, prim: &SdfPath) -> anyhow::Result<()> {
         self.stage
-            .batch_edit(&[self.scene_layer.as_str()], |edits| {
-                edits[0]
-                    .data_mut()
-                    .erase_field(prim, openusd::sdf::FieldKey::Active.as_str());
-                Ok(())
-            })
+            .prim(prim)?
+            .clear_metadata(openusd::sdf::FieldKey::Active.as_str())
             .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("clear active at {prim}: {e}"))
+            .map_err(|error| anyhow::anyhow!("clear active at {prim}: {error}"))
     }
 
     /// Author attribute `name = value` (USD type `type_name`) onto the prim at
@@ -2000,7 +2007,7 @@ mod authoring_tests {
             c.info_only
                 .iter()
                 .chain(c.resynced.iter())
-                .any(|p| p.to_string() == path)
+                .any(|p| p.prim_path().as_str() == path)
         })
     }
 
@@ -2424,6 +2431,7 @@ mod authoring_tests {
         let order: Vec<String> = match cs
             .stage()
             .prim(rover)
+            .unwrap()
             .attribute("xformOpOrder")
             .get::<openusd::sdf::Value>()
             .expect("read xformOpOrder")

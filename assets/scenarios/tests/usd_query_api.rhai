@@ -82,10 +82,7 @@ fn on_tick(me, ctx) {
             fail(this, "ResolveUsdTarget rejected the authored prim under a USD reference arc");
             return;
         }
-        if arc.source != "canonical_stage" {
-            return;
-        }
-        if arc.status != "resolved" || !arc.authored_here || !arc.under_arc
+        if arc.status != "resolved" || arc.source != "document_composition" || !arc.authored_here || !arc.under_arc
             || arc.edit_scope != "authored_layer" {
             fail(this, "ResolveUsdTarget lost the authored target's reference-arc scope");
             return;

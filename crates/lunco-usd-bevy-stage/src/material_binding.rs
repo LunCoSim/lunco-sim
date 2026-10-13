@@ -16,7 +16,7 @@ impl MaterialPurpose {
     /// The USD binding purpose token.
     pub fn token(self) -> &'static str {
         match self {
-            Self::Render => openusd::schemas::shade::tokens::PURPOSE_ALL,
+            Self::Render => openusd_schemas::shade::tokens::ALL_PURPOSE,
             Self::Physics => "physics",
         }
     }
@@ -33,7 +33,7 @@ pub fn resolve_bound_material(
     prim: &SdfPath,
     purpose: MaterialPurpose,
 ) -> Option<SdfPath> {
-    openusd::schemas::shade::MaterialBindingAPI::on(reader.stage(), prim.clone())
+    openusd_schemas::shade::MaterialBindingAPI::from_prim_unchecked(reader.stage().prim(prim).ok()?)
         .compute_bound_material(purpose.token())
         .ok()
         .flatten()

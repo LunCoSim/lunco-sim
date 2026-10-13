@@ -1,0 +1,38 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "Malformed" (
+        prepend apiSchemas = ["CollectionAPI:bad-name"]
+    )
+    {
+    }
+    def Scope "Valid" (
+        prepend apiSchemas = ["CollectionAPI:selection"]
+    )
+    {
+        uniform token collection:selection:expansionRule = "explicitOnly"
+        rel collection:selection:includes = </World/Valid/Included>
+        def Scope "Included"
+        {
+        }
+    }
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/usd_collection_lint.rhai@
+        }
+    }
+    def DistantLight "Light"
+    {
+    }
+}

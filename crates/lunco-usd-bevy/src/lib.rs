@@ -73,7 +73,7 @@ use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_strict,
 };
-use lunco_usd_bevy_stage::source::{UsdSourceText, UsdSourceTextLoader};
+use lunco_usd_bevy_stage::source::{UsdSourceBytes, UsdSourceBytesLoader};
 use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader, UsdStageAsset, canonical,
     read,
@@ -158,8 +158,8 @@ impl Plugin for UsdVisualPlugin {
             .init_asset_loader::<UsdLoader>()
             // E1b: raw-source asset so a scene document's base layer can be read
             // through the same (web-ready) asset source the live world uses.
-            .init_asset::<UsdSourceText>()
-            .register_asset_loader(UsdSourceTextLoader)
+            .init_asset::<UsdSourceBytes>()
+            .register_asset_loader(UsdSourceBytesLoader)
             .register_type::<UsdPrimPath>()
             .register_type::<lunco_core::UsdPrimKind>()
             .register_type::<UsdAnimated>()
@@ -1213,8 +1213,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // glTF / external-mesh branch.
         //
         // Read the authored binary `payload`/`references` directly from the
-        // live composed prim stack. The pure-Rust USD resolver composes those
-        // arcs through an empty stub, while this render projection hands the
+        // live composed prim stack. This render projection hands their
         // canonical URI to Bevy's `AssetServer` — the registered asset sources
         // (`lunco://` for library assets, `twin://` for Twin-local ones,
         // default `assets://` for

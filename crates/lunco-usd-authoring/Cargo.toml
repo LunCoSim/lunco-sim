@@ -9,8 +9,18 @@ description = "OpenUSD authored-data helpers and schema registry for LunCoSim"
 anyhow = { workspace = true }
 bevy = { workspace = true }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-data = { path = "../lunco-usd-data" }
+
+[build-dependencies]
+openusd = { workspace = true }
+lunco-usd-data = { path = "../lunco-usd-data", default-features = false }
+openusd-build = "=0.8.0"
+
+[dev-dependencies]
+openusd-build = "=0.8.0"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

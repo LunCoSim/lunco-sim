@@ -12,6 +12,7 @@ bevy.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [lints]
 workspace = true

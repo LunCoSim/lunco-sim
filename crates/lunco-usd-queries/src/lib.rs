@@ -24,8 +24,8 @@ use lunco_usd_bevy_twin::{
     DocBackedTwinScenes, canonical_stage_for_document, stage_asset_for_document,
 };
 use lunco_usd_data::usd_data::UsdDataExt;
-use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
+use openusd_schemas::physics::CollisionApprox;
 
 use lunco_usd_core::edit_session::UsdEditSessions;
 use lunco_usd_document::document::UsdDocument;
@@ -443,7 +443,9 @@ fn document_snapshot(
     reason: &str,
     from_generation: Option<u64>,
 ) -> Result<ApiValue, ApiQueryError> {
-    let source = document.source();
+    let source = document
+        .source()
+        .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error.to_string()))?;
     let runtime = runtime_source(document)
         .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
     let view = view_source(document)
@@ -631,14 +633,22 @@ fn canonical_reference_api_value(
     path: &SdfPath,
 ) -> Option<ApiValue> {
     let stage = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)?;
-    let prim = stage.stage().prim(path.clone());
+    let prim = stage
+        .stage()
+        .prim(path.clone())
+        .expect("validated USD path");
     if !prim.is_valid().ok()? {
         return None;
     }
     let stack = prim.prim_stack().ok()?;
     let mut sites = Vec::new();
     let mut list_ops = Vec::new();
-    for (layer_id, authored_path) in stack {
+    for openusd::usd::SpecSite {
+        layer: layer_id,
+        path: authored_path,
+        ..
+    } in stack
+    {
         let Some(layer) = stage.stage().layer(&layer_id) else {
             continue;
         };
@@ -833,7 +843,9 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             );
         };
         let document = host.document();
-        let source = document.source();
+        let source = document
+            .source()
+            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error.to_string()))?;
         let runtime_bytes = runtime_source(document)
             .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
             .len();
@@ -1297,192 +1309,52 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 return query_error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
-        let under_arc = match document.path_is_under_composed_arc(raw_path) {
-            Ok(value) => value,
+        // Resolve the current document layers through one native stage, with
+        // the admitted dependency recipe. A derived projection may lag this
+        // generation and cannot decide whether the command target exists.
+        let stage_result = match document_stage_recipe(world, doc) {
+            Some(recipe) => document.open_composed_stage_with_recipe(recipe),
+            None => document.open_composed_stage(),
+        };
+        let stage = match stage_result {
+            Ok(stage) => stage,
             Err(error) => {
-                return query_error(ApiErrorCode::DeserializationError, error.to_string());
-            }
-        };
-
-        let document_composed_exists = document
-            .composed_arc()
-            .spec(&path)
-            .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
-            || authored_in_document
-            || authored_here;
-        let document_layer_response = || {
-            include_authored_children(
-                query_ok(api_value!({
-                    "doc_id": doc.raw(),
-                    "path": raw_path,
-                    "edit_target": edit_target.as_str(),
-                    "status": if document_composed_exists { "resolved" } else { "missing" },
-                    "source": "document_layers",
-                    "composed_exists": document_composed_exists,
-                    "authored_here": authored_here,
-                    "authored_in_document": authored_in_document,
-                    "under_arc": under_arc,
-                    "edit_scope": if authored_here {
-                        "authored_layer"
-                    } else if document_composed_exists && authored_in_document {
-                        "local_override"
-                    } else {
-                        "missing"
-                    },
-                    "prim_stack": [],
-                })),
-                authored_children.as_deref(),
-            )
-        };
-
-        if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
-            let prim = stage.stage().prim(path.clone());
-            let composed_exists = match prim.is_valid() {
-                Ok(exists) => exists,
-                Err(error) => {
-                    return query_error(
-                        ApiErrorCode::InternalError,
-                        format!("OpenUSD could not validate `{raw_path}`: {error}"),
-                    );
-                }
-            };
-            if composed_exists {
-                let Ok(stack) = prim.prim_stack() else {
-                    return query_error(
-                        ApiErrorCode::InternalError,
-                        format!("OpenUSD could not return the prim stack for `{raw_path}`"),
-                    );
-                };
-                return include_authored_children(
-                    query_ok(api_value!({
-                        "doc_id": doc.raw(),
-                        "path": raw_path,
-                        "edit_target": edit_target.as_str(),
-                        "status": "resolved",
-                        "source": "canonical_stage",
-                        "composed_exists": true,
-                        "authored_here": authored_here,
-                        "authored_in_document": authored_in_document,
-                        "under_arc": under_arc,
-                        "edit_scope": if authored_here {
-                            "authored_layer"
-                        } else if authored_in_document || under_arc {
-                            "local_override"
-                        } else {
-                            "composed_read_only"
-                        },
-                        "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
-                            api_value!({
-                                "layer": layer,
-                                "path": authored_path.to_string(),
-                            })
-                        }).collect::<Vec<_>>(),
-                    })),
-                    authored_children.as_deref(),
-                );
-            }
-            if authored_here || authored_in_document {
-                return document_layer_response();
-            }
-            if under_arc {
-                return include_authored_children(
-                    query_ok(api_value!({
-                        "doc_id": doc.raw(),
-                        "path": raw_path,
-                        "edit_target": edit_target.as_str(),
-                        "status": "missing",
-                        "source": "canonical_stage",
-                        "composed_exists": false,
-                        "authored_here": false,
-                        "authored_in_document": false,
-                        "under_arc": true,
-                        "edit_scope": "missing",
-                        "prim_stack": [],
-                    })),
-                    authored_children.as_deref(),
-                );
-            }
-        } else if under_arc {
-            if authored_here || authored_in_document {
-                return document_layer_response();
-            }
-            let stage_result = if document.authoring_recipe().is_some() {
-                document.open_composed_stage()
-            } else if let Some(recipe) = document_stage_recipe(world, doc) {
-                document.open_composed_stage_with_recipe(recipe)
-            } else {
-                return query_error(
-                    ApiErrorCode::CommandRejected,
-                    format!(
-                        "referenced path `{raw_path}` cannot be resolved without its loaded USD composition"
-                    ),
-                );
-            };
-            let stage = match stage_result {
-                Ok(stage) => stage,
-                Err(error) => {
-                    return query_error(
-                        ApiErrorCode::InternalError,
-                        format!("cannot compose USD document to resolve `{raw_path}`: {error}"),
-                    );
-                }
-            };
-            let prim = stage.prim(path.clone());
-            let composed_exists = match prim.is_valid() {
-                Ok(exists) => exists,
-                Err(error) => {
-                    return query_error(
-                        ApiErrorCode::InternalError,
-                        format!("OpenUSD could not validate `{raw_path}`: {error}"),
-                    );
-                }
-            };
-            if !composed_exists {
-                return include_authored_children(
-                    query_ok(api_value!({
-                        "doc_id": doc.raw(),
-                        "path": raw_path,
-                        "edit_target": edit_target.as_str(),
-                        "status": "missing",
-                        "source": "document_composition",
-                        "composed_exists": false,
-                        "authored_here": false,
-                        "authored_in_document": false,
-                        "under_arc": true,
-                        "edit_scope": "missing",
-                        "prim_stack": [],
-                    })),
-                    authored_children.as_deref(),
-                );
-            }
-            let Ok(stack) = prim.prim_stack() else {
                 return query_error(
                     ApiErrorCode::InternalError,
-                    format!("OpenUSD could not return the prim stack for `{raw_path}`"),
+                    format!("cannot compose USD document to resolve `{raw_path}`: {error}"),
                 );
-            };
-            return include_authored_children(
-                query_ok(api_value!({
-                    "doc_id": doc.raw(),
-                    "path": raw_path,
-                    "edit_target": edit_target.as_str(),
-                    "status": "resolved",
-                    "source": "document_composition",
-                    "composed_exists": true,
-                    "authored_here": false,
-                    "authored_in_document": false,
-                    "under_arc": true,
-                    "edit_scope": "local_override",
-                    "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
-                        api_value!({
-                            "layer": layer,
-                            "path": authored_path.to_string(),
-                        })
-                    }).collect::<Vec<_>>(),
-                })),
-                authored_children.as_deref(),
-            );
-        }
-        document_layer_response()
+            }
+        };
+        let resolved = (|| -> Result<_, String> {
+            let prim = stage.prim(&path).map_err(|error| error.to_string())?;
+            let exists = prim.is_valid().map_err(|error| error.to_string())?;
+            let under_arc = prim
+                .has_composition_arc()
+                .map_err(|error| error.to_string())?;
+            let stack = prim.prim_stack().map_err(|error| error.to_string())?;
+            Ok((exists, under_arc, stack))
+        })();
+        let (exists, under_arc, stack) = match resolved {
+            Ok(facts) => facts,
+            Err(error) => {
+                return query_error(
+                    ApiErrorCode::InternalError,
+                    format!("OpenUSD could not resolve `{raw_path}`: {error}"),
+                );
+            }
+        };
+        include_authored_children(
+            query_ok(api_value!({
+                "doc_id": doc.raw(), "path": raw_path, "edit_target": edit_target.as_str(),
+                "status": if exists { "resolved" } else { "missing" },
+                "source": "document_composition", "composed_exists": exists,
+                "authored_here": authored_here, "authored_in_document": authored_in_document,
+                "under_arc": under_arc,
+                "edit_scope": if !exists { "missing" } else if authored_here { "authored_layer" }
+                    else if authored_in_document || under_arc { "local_override" } else { "composed_read_only" },
+                "prim_stack": stack.into_iter().map(|site| api_value!({ "layer": site.layer, "path": site.path.to_string() })).collect::<Vec<_>>(),
+            })),
+            authored_children.as_deref(),
+        )
     }
 }

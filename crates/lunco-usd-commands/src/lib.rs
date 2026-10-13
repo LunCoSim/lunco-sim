@@ -62,7 +62,7 @@ use lunco_workspace::{
     DocumentRuntimeOwner, FileDocumentAdmission, ResolvedFileDocument, StorageHandle,
     WorkspaceResource,
 };
-use openusd::schemas::lux::tokens as ltok;
+use openusd_schemas::lux::tokens as ltok;
 
 /// Plugin that registers the USD document kind, the typed-command
 /// observers, and the pending-event drain system.
@@ -515,11 +515,9 @@ async fn prepare_usd_file(
     path: PathBuf,
 ) -> Result<PreparedUsdLoad, String> {
     let (resolved, bytes) = admission.read(&path).await?;
-    let source = String::from_utf8(bytes)
-        .map_err(|error| format!("invalid UTF-8 in {}: {error}", resolved.path.display()))?;
     Ok(PreparedUsdLoad::File(
         resolved,
-        PreparedUsdSource::parse(source),
+        PreparedUsdSource::from_bytes(bytes)?,
     ))
 }
 
@@ -558,10 +556,8 @@ fn prepare_browser_usd_document(
     display_name: String,
     bytes: &[u8],
 ) -> Result<UsdDocument, String> {
-    let source = std::str::from_utf8(bytes)
-        .map_err(|error| format!("invalid UTF-8 in browser file `{display_name}`: {error}"))?
-        .to_owned();
-    let prepared = PreparedUsdSource::parse(source);
+    let prepared = PreparedUsdSource::from_bytes(bytes.to_vec())
+        .map_err(|error| format!("browser file `{display_name}`: {error}"))?;
     Ok(
         <UsdDocument as lunco_doc::PreparedFileBacked>::with_prepared_origin(
             id,
@@ -926,12 +922,7 @@ fn on_discard_usd_document(
                             let storage = lunco_storage::FileStorage::new();
                             let handle = lunco_storage::StorageHandle::File(task_path.clone());
                             match storage.read(&handle).await {
-                                Ok(bytes) => {
-                                    let source = String::from_utf8(bytes).map_err(|error| {
-                                        format!("invalid UTF-8 in {}: {error}", task_path.display())
-                                    })?;
-                                    Ok(PreparedUsdSource::parse(source))
-                                }
+                                Ok(bytes) => PreparedUsdSource::from_bytes(bytes),
                                 Err(error) => Err(format!(
                                     "failed to read {}: {error:?}",
                                     task_path.display()
@@ -1104,63 +1095,44 @@ const DEFAULT_USDA_SCAFFOLD: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n
 // ─────────────────────────────────────────────────────────────────────
 
 #[on_command(SaveDocument)]
-fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
+fn on_save_document(
+    trigger: On<SaveDocument>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    active: Res<ActiveCommandId>,
+    mut results: ResMut<CommandResults>,
+    mut commands: Commands,
+) {
     let doc_id = trigger.event().doc_id;
+    if registry.host(doc_id).is_none() {
+        return;
+    }
+    let command_id = active.get();
+    if let Some(id) = command_id {
+        results.insert(id, lunco_core::CommandOutcome::Pending);
+    }
     commands.queue(move |world: &mut World| {
-        let registry = world.resource::<DocumentRegistry<UsdDocument>>();
-        let Some(host) = registry.host(doc_id) else {
-            return;
-        };
-        let doc = host.document();
-        let path = match doc.origin() {
-            DocumentOrigin::File {
-                path,
-                writable: true,
-            } => path.clone(),
-            DocumentOrigin::File {
-                writable: false, ..
-            } => {
-                bevy::log::warn!("[SaveUsd] {} is read-only", doc_id);
-                return;
-            }
-            DocumentOrigin::Untitled { .. } => {
-                bevy::log::warn!("[SaveUsd] {} is Untitled — Save-As required", doc_id);
-                return;
-            }
-            DocumentOrigin::Bundled { .. } => {
-                bevy::log::warn!("[SaveUsd] {} is a bundled example — read-only", doc_id);
-                return;
-            }
-        };
-        let source = doc.source();
-        // Route through the storage abstraction instead of a direct
-        // `std::fs::write` (clippy-banned in domain crates, wasm-broken).
-        // `write_sync` blocks on `FileStorage`'s write future, which wraps
-        // synchronous fs and is already `Ready` — no reactor, no hang.
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(e) = storage.write_sync(&handle, source.as_bytes()) {
-            bevy::log::error!(
-                "[SaveUsd] {} write to {} failed: {:?}",
-                doc_id,
-                path.display(),
-                e
-            );
-            return;
-        }
-        // Borrow mut to mark saved. `host_mut` doesn't bump the
-        // change ring because saving doesn't change the document — it
-        // only resets the dirty marker.
-        {
-            let mut reg = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-            if let Some(host) = reg.host_mut(doc_id) {
-                host.document_mut().mark_saved();
-            }
-            // Re-baseline the disk watermark: the bytes on disk are now ours, so
-            // the staleness check must not flag this write as an external edit.
-            reg.note_saved(doc_id);
-        }
-        bevy::log::info!("[SaveUsd] {} saved to {}", doc_id, path.display());
+        let result = (|| -> Result<Ack, String> {
+            let host = world.resource::<DocumentRegistry<UsdDocument>>().host(doc_id)
+                .ok_or_else(|| format!("USD document {doc_id} closed before save"))?;
+            let doc = host.document();
+            let path = match doc.origin() {
+                DocumentOrigin::File { path, writable: true } => path.clone(),
+                DocumentOrigin::File { writable: false, .. } | DocumentOrigin::Bundled { .. } =>
+                    return Err(format!("USD document {doc_id} is read-only")),
+                DocumentOrigin::Untitled { .. } => return Err(format!("USD document {doc_id} requires Save-As")),
+            };
+            let bytes = doc.export_bytes(path.extension().and_then(|ext| ext.to_str()).unwrap_or(""))
+                .map_err(|error| error.to_string())?;
+            let storage = lunco_storage::FileStorage::new();
+            storage.write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
+                .map_err(|error| format!("write USD {}: {error}", path.display()))?;
+            let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
+            registry.host_mut(doc_id).expect("save retains the document owner").document_mut().mark_saved();
+            registry.note_saved(doc_id);
+            Ok(Ack::with_data(OpId::new(), lunco_api_core::api_value!({ "doc_id": doc_id.raw(), "path": path.display().to_string() })))
+        })();
+        if let Err(error) = &result { warn!("[SaveUsd] {error}"); }
+        if let Some(id) = command_id { world.resource_mut::<CommandResults>().record(id, result); }
     });
 }
 
@@ -1175,48 +1147,57 @@ fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
+    active: Res<ActiveCommandId>,
+    mut results: ResMut<CommandResults>,
 ) {
     let doc_id = trigger.event().doc_id;
-    let target_path = trigger.event().path.clone();
-    let Some(host) = registry.host(doc_id) else {
-        bevy::log::warn!("[SaveAsUsd] unknown document {doc_id}");
-        return;
-    };
-    let document = host.document();
-    let source = document.source();
-    if target_path.is_empty() {
-        bevy::log::warn!("[SaveAsUsd] {doc_id} has no target path; the caller must provide one");
+    if registry.host(doc_id).is_none() {
         return;
     }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (source, commands);
-        bevy::log::warn!("[SaveAsUsd] {doc_id} cannot save a local file on wasm");
-        return;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = std::path::PathBuf::from(target_path);
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(error) = storage.write_sync(&handle, source.as_bytes()) {
-            bevy::log::error!(
-                "[SaveAsUsd] {doc_id} write to {} failed: {error}",
-                path.display()
-            );
-            return;
+    let result = (|| -> Result<Ack, String> {
+        let host = registry.host(doc_id).expect("admitted USD save owner");
+        let target = &trigger.event().path;
+        if target.is_empty() {
+            return Err("USD Save-As requires an explicit destination".into());
         }
-        if let Some(host) = registry.host_mut(doc_id) {
-            host.document_mut().set_origin(DocumentOrigin::File {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = host;
+            return Err("local USD file saving is unavailable on wasm".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = std::path::PathBuf::from(target);
+            let bytes = host
+                .document()
+                .export_bytes(path.extension().and_then(|ext| ext.to_str()).unwrap_or(""))
+                .map_err(|error| error.to_string())?;
+            let storage = lunco_storage::FileStorage::new();
+            storage
+                .write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
+                .map_err(|error| format!("write USD {}: {error}", path.display()))?;
+            let doc = registry
+                .host_mut(doc_id)
+                .expect("save retains the document owner")
+                .document_mut();
+            doc.set_origin(DocumentOrigin::File {
                 path: path.clone(),
                 writable: true,
             });
-            host.document_mut().mark_saved();
+            doc.mark_saved();
+            registry.note_saved(doc_id);
+            commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
+            Ok(Ack::with_data(
+                OpId::new(),
+                lunco_api_core::api_value!({ "doc_id": doc_id.raw(), "path": path.display().to_string() }),
+            ))
         }
-        bevy::log::info!("[SaveAsUsd] {doc_id} saved to {}", path.display());
-        commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
+    })();
+    if let Err(error) = &result {
+        warn!("[SaveAsUsd] {error}");
+    }
+    if let Some(id) = active.get() {
+        results.record(id, result);
     }
 }
 
@@ -2474,6 +2455,7 @@ fn composed_planned_attribute_types(
                     let selections = view
                         .stage()
                         .prim(prim.clone())
+                        .expect("validated USD path")
                         .variant_sets()
                         .get_all_variant_selections()
                         .map_err(|error| error.to_string())?;
@@ -3474,7 +3456,7 @@ fn on_set_dome_light(
             edit_target: root.clone(),
             parent_path: parent,
             name,
-            type_name: Some(ltok::T_DOME_LIGHT.into()),
+            type_name: Some(ltok::DOME_LIGHT.into()),
             reference: None,
             reference_prim_path: None,
         }];
@@ -3493,20 +3475,20 @@ fn on_set_dome_light(
             });
         };
         if let Some(t) = &cmd.texture {
-            attr(ltok::A_TEXTURE_FILE, "asset", format!("@{t}@"));
+            attr(ltok::INPUTS_TEXTURE_FILE, "asset", format!("@{t}@"));
             // Be explicit rather than leaning on USD's `automatic`: it makes the
             // authored intent legible in the .usda, and `automatic` is what a
             // reader has to *guess* at.
-            attr(ltok::A_TEXTURE_FORMAT, "token", "\"latlong\"".into());
+            attr(ltok::INPUTS_TEXTURE_FORMAT, "token", "\"latlong\"".into());
         }
         if let Some(i) = cmd.intensity {
-            attr(ltok::A_INTENSITY, "float", i.to_string());
+            attr(ltok::INPUTS_INTENSITY, "float", i.to_string());
         }
         if let Some(e) = cmd.exposure {
-            attr(ltok::A_EXPOSURE, "float", e.to_string());
+            attr(ltok::INPUTS_EXPOSURE, "float", e.to_string());
         }
         if let Some([r, g, b]) = cmd.color {
-            attr(ltok::A_COLOR, "color3f", format!("({r}, {g}, {b})"));
+            attr(ltok::INPUTS_COLOR, "color3f", format!("({r}, {g}, {b})"));
         }
         if let Some(s) = cmd.skybox {
             attr("lunco:dome:skybox", "bool", s.to_string());

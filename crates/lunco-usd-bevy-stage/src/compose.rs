@@ -20,12 +20,9 @@
 //!     needs an editable `!Send` stage, the same recipe is opened on the main
 //!     thread. `StageView` then serves authored edits and incremental reads.
 //!
-//! Binary assets (`.glb`/`.gltf`/…) are not USD layers: the resolver routes them
-//! to an empty composition stub, while the render projection reads the
-//! authored binary arc directly from the live prim stack. That keeps the USD
-//! payload/reference as the only asset identity and means live authoring and
-//! referenced wrappers use the same path (openusd has no `SdfFileFormat` plugin
-//! system).
+//! Foreign binary formats remain unresolved by the native USD reader. The render
+//! projection reads the authored binary arc from its prim stack and imports it
+//! through Bevy's asset pipeline. Native composition diagnostics remain visible.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -466,7 +463,10 @@ pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedL
     let diagnostics = resolver.diagnostics();
     let stage = {
         let _open_span = bevy::log::info_span!("usd_live_open_stage").entered();
-        Stage::builder().resolver(resolver).open(&recipe.root_id)
+        Stage::builder()
+            .schema_registry(lunco_usd_authoring::schema::native_registry())
+            .resolver(resolver)
+            .open(&recipe.root_id)
     };
     diagnostics.check()?;
     let stage = stage.map_err(|e| anyhow!("USD composition error: {e}"))?;
@@ -557,14 +557,11 @@ mod tests {
 
 /// Compose a USD layer from disk into a **live** [`Stage`] (read through
 /// [`StageView`](crate::view::StageView), the production read path). Native +
-/// synchronous, backed by [`openusd::ar::DefaultResolver`] — for tests and tools
-/// that load a real on-disk `.usda` with every reference resolved, distinct from
-/// the async `AssetServer`-driven loader (the storage-based recipe path).
-/// `DefaultResolver` anchors each relative reference to its own layer's
-/// directory, so the on-disk reference tree resolves exactly as authored.
+/// synchronous, using the shared storage-based closure and explicit compiled
+/// schema registry. Relative references retain their authored layer anchors.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
-    lunco_usd_compose::compose_file_to_stage(path)
+    lunco_usd_compose::compose_file_to_stage(path, lunco_usd_authoring::schema::native_registry())
 }
 
 /// Compose an on-disk USD layer while resolving `lunco://` references against
@@ -578,5 +575,9 @@ pub fn compose_file_to_stage_with_assets(
     path: &std::path::Path,
     assets_root: Option<&std::path::Path>,
 ) -> Result<Stage> {
-    lunco_usd_compose::compose_file_to_stage_with_assets(path, assets_root)
+    lunco_usd_compose::compose_file_to_stage_with_assets(
+        path,
+        assets_root,
+        lunco_usd_authoring::schema::native_registry(),
+    )
 }

@@ -57,8 +57,8 @@ use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
-use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::lux::tokens as ltok;
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
@@ -106,7 +106,7 @@ fn read_dome_format(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &openusd::sdf::Path,
 ) -> Result<(), crate::light::LightReadError> {
-    match reader.text(path, ltok::A_TEXTURE_FORMAT).as_deref() {
+    match reader.text(path, ltok::INPUTS_TEXTURE_FORMAT).as_deref() {
         Some("latlong") | Some("automatic") => Ok(()),
         Some(format) => {
             warn!(
@@ -116,7 +116,7 @@ fn read_dome_format(
             );
             Err(crate::light::LightReadError)
         }
-        None if !reader.has_authored_attribute(path, ltok::A_TEXTURE_FORMAT) => Ok(()),
+        None if !reader.has_authored_attribute(path, ltok::INPUTS_TEXTURE_FORMAT) => Ok(()),
         None => {
             error!(
                 "[usd-bevy] {} has authored DomeLight inputs:texture:format with an unsupported type",
@@ -226,7 +226,7 @@ fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[St
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                if view.type_name(&sp).as_deref() != Some(ltok::T_DOME_LIGHT) {
+                if view.type_name(&sp).as_deref() != Some(ltok::DOME_LIGHT) {
                     return None;
                 }
                 let env = match read_dome_environment(&view, &sp, &asset_server, id, quality, world.get_resource::<lunco_assets_core::TwinRoots>()) {
@@ -351,12 +351,12 @@ pub fn read_dome_environment(
     quality: RenderQualityProfile,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<Option<UsdDomeEnvironment>, crate::light::LightReadError> {
-    let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
+    let texture_authored = reader.has_authored_attribute(sdf_path, ltok::INPUTS_TEXTURE_FILE)
         || !reader
-            .connections(sdf_path, ltok::A_TEXTURE_FILE)
+            .connections(sdf_path, ltok::INPUTS_TEXTURE_FILE)
             .is_empty();
     let texture_value = reader
-        .asset_identifier(sdf_path, ltok::A_TEXTURE_FILE)
+        .asset_identifier(sdf_path, ltok::INPUTS_TEXTURE_FILE)
         .map_err(|error| {
             error!(
                 "[usd-bevy] {} dome texture rejected: {error}",
