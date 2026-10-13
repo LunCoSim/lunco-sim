@@ -424,24 +424,6 @@ pub fn apply_ops_as(
         }
     }
 
-    // Preload any newly-referenced external class on a background task so the
-    // engine session is warm by the time projection re-runs. Fire-and-forget;
-    // rumoca's content-hash artifact cache dedupes repeated requests.
-    for op in &ops {
-        if let ModelicaOp::AddComponent { decl, .. } = op {
-            if decl.type_name.contains('.')
-                && !lunco_modelica_ast::ast_extract::is_builtin_type_name(&decl.type_name)
-            {
-                let qualified = decl.type_name.clone();
-                bevy::tasks::AsyncComputeTaskPool::get()
-                    .spawn(async move {
-                        let _ = crate::class_cache::peek_or_load_class_blocking(&qualified);
-                    })
-                    .detach();
-            }
-        }
-    }
-
     let n = ops.len();
     let mut any_applied = false;
     let mut hit_read_only = false;

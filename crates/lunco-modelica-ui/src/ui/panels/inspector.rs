@@ -544,7 +544,7 @@ fn apply_plot_title(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::sim_default::default_simulation_class(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -634,7 +634,7 @@ fn apply_plot_binding(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::sim_default::default_simulation_class(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -775,7 +775,7 @@ fn apply_diagram_text_string(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::sim_default::default_simulation_class(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {

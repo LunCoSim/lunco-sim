@@ -95,8 +95,7 @@ pub enum SourceRootKind {
 }
 
 /// One source root the workbench knows about. Keyed by the
-/// qualified-path root segment (the value the dependency scanner extracts
-/// from an external qualified reference).
+/// external namespace returned by Rumoca’s source dependency query.
 #[derive(Debug, Clone)]
 pub struct SourceRoot {
     /// Root segment of qualified names that resolve into this source.
@@ -620,41 +619,13 @@ pub fn register_open_document_source_root(
         _ => None,
     };
     for class in document.index().classes.values() {
-        if !class.name.contains('.') {
+        if rumoca_core::qualified_name_segments(&class.name).count() == 1 {
             source_roots.register_open_doc_root(class.name.clone(), path.clone());
         }
     }
 }
 
-/// Walk an AST and extract the set of qualified-path root segments
-/// that the AST references. The result is the input to the load
-/// gate: each segment is looked up in [`SourceRootRegistry`] to
-/// decide whether the corresponding source root needs to be loaded
-/// before compile.
-///
-/// For example, an AST that contains qualified references rooted at
-/// `Control.Blocks.Interfaces.RealOutput` and
-/// `extends Thermal.Boundaries.Base` yields `{"Control", "Thermal"}`.
-///
-/// Filters out:
-/// - Built-in scalar types (`Real`, `Integer`, etc.) — handled by
-///   rumoca natively.
-/// - Bare (non-qualified) names — those resolve locally via the
-///   doc's own classes, no external load needed.
-/// - The empty string (defensive).
-/// Ensure that the source root `id` is loaded into the rumoca
-/// compile session before the next compile runs. Returns `true`
-/// when the root is `Ready` (either now or after this call's
-/// install). Returns `false` for unknown ids or load failures —
-/// the caller logs and lets compile fall through (rumoca will
-/// surface a `unresolved type reference` diagnostic).
-///
-/// The per-kind dispatch sends either a disk package or an in-memory package
-/// to the worker. The worker owns parsing and session installation; this
-/// function only changes registry state and queues the operation.
-///
-/// Source tag used for [`lunco_status_core::status_bus::StatusBus`]
-/// progress entries during source-root loads.
+/// Source tag for progress entries during source-root loads.
 pub const STATUS_BUS_SOURCE: &str = "source-roots";
 
 /// Load one Twin-selected Modelica directory through the shared worker root
@@ -1149,11 +1120,10 @@ pub fn admit_compile_roots(
     Ok(())
 }
 
-/// Diagnostic log: walk the given AST, find every source-root
-/// dependency, classify each against the registry, and emit a
-/// one-line summary.
+/// Classify Rumoca’s source dependency facts against the registry and log
+/// their admission state.
 pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
-    let deps = lunco_modelica_ast::ast_extract::source_root_dependencies_from_ast(ast);
+    let deps = rumoca_compile::compile::source_root_dependencies(ast);
     if deps.is_empty() {
         bevy::log::info!(
             "[source-roots] compile `{}`: no external library deps",

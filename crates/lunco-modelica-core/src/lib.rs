@@ -57,7 +57,6 @@ pub mod class_metadata;
 
 /// Source-aware class admission for document operations. Files are read and
 /// parsed outside the engine lock, then installed into the shared session.
-pub mod class_cache;
 pub mod library_documents;
 pub mod library_fs;
 

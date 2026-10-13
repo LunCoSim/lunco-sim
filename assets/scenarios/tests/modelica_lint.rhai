@@ -47,7 +47,7 @@ fn on_tick(me, ctx) {
         this.failures.push(t_true(
             diagnostics.doc_id == this.diagnostics_doc
                 && diagnostics.generation == source.generation,
-            "GetDiagnostics did not identify the current scratch document generation"));
+            "GetDiagnostics document/generation mismatch: " + diagnostics.doc_id.to_string() + "/" + diagnostics.generation.to_string() + " expected " + this.diagnostics_doc.to_string() + "/" + source.generation.to_string() + " types=" + type_of(diagnostics.doc_id) + "," + type_of(this.diagnostics_doc) + "," + type_of(diagnostics.generation) + "," + type_of(source.generation)));
         let lint_channel = ();
         for channel in diagnostics.channels {
             if channel.id == "modelica.rumoca-lint" { lint_channel = channel; }
@@ -58,7 +58,7 @@ fn on_tick(me, ctx) {
                 && lint_channel.state == "ready"
                 && lint_channel.generation == source.generation
                 && to_int(lint_channel.revision) > 0,
-            "GetDiagnostics did not publish a completed Rumoca lint snapshot"));
+            "GetDiagnostics omitted the current Rumoca lint snapshot: " + diagnostics.channels.to_string()));
         let naming_finding = ();
         if diagnostics.diagnostics != () {
             for finding in diagnostics.diagnostics {
@@ -74,6 +74,7 @@ fn on_tick(me, ctx) {
                 && to_int(naming_finding.column) > 0
                 && naming_finding.suggestion != (),
             "GetDiagnostics omitted Rumoca's source-located naming finding or fix suggestion"));
+        modelica_editor::close_scratch(this.diagnostics_doc);
         this.done = true;
         report_verdict(this.failures, "MODELICA LINT", "MODELICA_LINT");
         return;

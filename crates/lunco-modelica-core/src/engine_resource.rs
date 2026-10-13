@@ -51,7 +51,7 @@ use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 
 /// Process-wide accessor for the workbench's engine handle. Set
 /// once during plugin init and read from non-Bevy contexts (static
-/// helpers in `class_cache`, async tasks, etc.) that can't take a
+/// projection tasks) that can't take a
 /// `Res<ModelicaEngineHandle>` parameter.
 ///
 /// Returns `None` before `ModelicaEnginePlugin::build` has run —
@@ -144,13 +144,6 @@ impl ModelicaEngineHandle {
     ) -> Option<lunco_modelica_ast::annotations::Icon> {
         let mut engine = self.engine.try_lock().ok()?;
         engine.cached_icon_for(qualified).flatten()
-    }
-
-    /// Make a bundled source root available to the shared engine. This is a
-    /// generic source-loading seam used by generated documents before the
-    /// canvas asks the resolver for class icons, ports, or inherited members.
-    pub fn ensure_source_root(&self, root: &str) -> bool {
-        self.lock().ensure_source_root(root)
     }
 
     /// Schedule admission from bundled packages or the installed source library.
@@ -989,8 +982,7 @@ impl Plugin for ModelicaEnginePlugin {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
         // Install the resource and mirror it into the process-wide
-        // `GLOBAL_ENGINE` slot so static helpers (`class_cache`,
-        // off-thread projection tasks) read the same handle the
+        // `GLOBAL_ENGINE` slot so off-thread projection tasks read the same handle the
         // resource exposes. The clone is `Arc`-cheap.
         let handle = ModelicaEngineHandle::default();
         let _ = GLOBAL_ENGINE.set(handle.clone());

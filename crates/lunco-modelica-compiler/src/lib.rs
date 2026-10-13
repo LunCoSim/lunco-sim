@@ -747,7 +747,7 @@ impl ModelicaCompiler {
             .qualified_class_name(model_name)
             .unwrap_or_else(|| model_name.to_owned());
         self.requested_source_roots =
-            lunco_modelica_ast::ast_extract::required_source_roots_from_ast(primary.definition())
+            rumoca_compile::compile::source_root_dependencies(primary.definition())
                 .into_iter()
                 .collect();
         let mut documents = vec![(primary, lunco_hash::content::cid(source.as_bytes()))];
@@ -767,11 +767,10 @@ impl ModelicaCompiler {
             }
             let document = ParsedSourceDocument::parse(uri.clone(), text.clone())
                 .map_err(|error| format!("could not parse {uri}: {error}"))?;
-            self.requested_source_roots.extend(
-                lunco_modelica_ast::ast_extract::required_source_roots_from_ast(
+            self.requested_source_roots
+                .extend(rumoca_compile::compile::source_root_dependencies(
                     document.definition(),
-                ),
-            );
+                ));
             seen.insert(uri.clone(), content);
             documents.push((document, content));
         }

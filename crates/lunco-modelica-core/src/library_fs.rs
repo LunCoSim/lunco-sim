@@ -2,8 +2,8 @@
 //! `.mo` file resolution.
 //!
 //! Pure path / index logic, no parsing. The resolver tier consumed
-//! by `class_cache` (engine-backed loader) and the drill-in / open
-//! flows that need a file path before reading source.
+//! by drill-in and document-open flows that need a file path before
+//! reading source.
 //!
 //! One lazy index:
 //!

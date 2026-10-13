@@ -352,58 +352,6 @@ impl ModelicaEngine {
         self.icon_cache.peek(qualified)
     }
 
-    /// Load a library (source library or third-party) into the session as a
-    /// `DurableExternal` source root. Once loaded, every class in
-    /// `files` is resolvable through the session's normal queries —
-    /// no separate cache, no path lookup. Cross-file inheritance
-    /// walks user docs + this library uniformly.
-    ///
-    /// `set_id` is a stable identifier (e.g. `"library"`); `label` is a
-    /// log-friendly name (e.g. `"in-memory:library"`); `files` is the
-    /// already-loaded `(uri, source)` pairs (typically decoded from
-    /// the `modelica_library_indexer` bincode bundle).
-    ///
-    /// The complete set is parsed before installation. A single malformed
-    /// member therefore fails the root as a whole instead of leaving a
-    /// partially-resolved package in the shared engine.
-    pub fn load_library_files(
-        &mut self,
-        set_id: &str,
-        label: &str,
-        files: Vec<(String, String)>,
-    ) -> Result<usize, String> {
-        self.failed_source_roots.remove(set_id);
-        let mut parsed = Vec::with_capacity(files.len());
-        let mut diagnostics = Vec::new();
-        for (uri, text) in files {
-            match rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), text) {
-                Ok(document) => parsed.push(document),
-                Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
-            }
-        }
-        if !diagnostics.is_empty() {
-            let message = format!(
-                "source root `{set_id}` ({label}) has invalid Modelica members: {}",
-                diagnostics.join("; ")
-            );
-            self.failed_source_roots
-                .insert(set_id.to_string(), message.clone());
-            return Err(message);
-        }
-        let count = parsed.len();
-        if count == 0 {
-            let message = format!("source root `{set_id}` ({label}) has no Modelica files");
-            self.failed_source_roots
-                .insert(set_id.to_string(), message.clone());
-            return Err(message);
-        }
-        let count = self.load_parsed_library_files(parsed);
-        if count > 0 {
-            self.installed_source_sets.insert(set_id.to_string());
-        }
-        Ok(count)
-    }
-
     /// Replace one complete parsed source set in the shared session.
     ///
     /// This is the canonical boundary for immutable library batches such as
@@ -428,39 +376,6 @@ impl ModelicaEngine {
     /// Whether a complete source set has crossed the shared-session boundary.
     pub fn source_set_installed(&self, set_id: &str) -> bool {
         self.installed_source_sets.contains(set_id)
-    }
-
-    /// Ensure a bundled Modelica package is available to every source-aware
-    /// reader that shares this engine. The package is discovered by its
-    /// qualified root, so this mechanism is reusable for `LunCo` and future
-    /// shipped libraries without a library-specific resolver branch.
-    pub fn ensure_source_root(&mut self, root: &str) -> bool {
-        if self.source_set_installed(root)
-            || self.has_class(root)
-            || self.pending_source_roots.contains(root)
-        {
-            return true;
-        }
-        if self.failed_source_roots.contains_key(root) {
-            return false;
-        }
-        if !lunco_assets_runtime::models::package_roots_live()
-            .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
-        {
-            return false;
-        }
-        let files = match lunco_assets_runtime::models::package_files_live(root) {
-            Ok(files) if !files.is_empty() => files,
-            Ok(_) => return false,
-            Err(error) => {
-                bevy::log::warn!("[ModelicaEngine] cannot load package `{root}`: {error}");
-                return false;
-            }
-        };
-        match self.load_library_files(root, &format!("bundled:{root}"), files) {
-            Ok(_) => self.has_class(root),
-            Err(_) => false,
-        }
     }
 
     /// Reserve a bundled source root for asynchronous loading. The caller
@@ -765,38 +680,6 @@ mod tests {
     }
 
     #[test]
-    fn load_library_files_makes_classes_resolvable() {
-        let mut engine = ModelicaEngine::new();
-        // Pretend we have a tiny "library" with a Base class.
-        let library_files = vec![(
-            "lib/Base.mo".to_string(),
-            "model Base\n  parameter Real k = 5;\n  Real x;\nend Base;\n".to_string(),
-        )];
-        let inserted = engine
-            .load_library_files("test_lib", "in-memory:test", library_files)
-            .expect("library file should be inserted");
-        assert_eq!(inserted, 1, "library file should be inserted");
-
-        // A user doc that extends a class from the library — without
-        // any explicit upsert wiring it together. Cross-file inheritance
-        // walks user + library uniformly through the same session.
-        upsert_test(
-            &mut engine,
-            DocumentId::new(99),
-            "model UserMod\n  extends Base;\n  Real y;\nend UserMod;\n",
-        );
-
-        let members = engine.inherited_components("UserMod");
-        let names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(
-            names.contains(&"k"),
-            "library Base.k must be resolved across the user doc + library: {names:?}"
-        );
-        assert!(names.contains(&"x"), "library Base.x must be resolved");
-        assert!(names.contains(&"y"), "user-doc UserMod.y must be present");
-    }
-
-    #[test]
     fn async_source_root_reservation_deduplicates_and_publishes_completion() {
         let mut engine = ModelicaEngine::new();
         assert!(engine.begin_source_root_load("DemoRoot"));
@@ -831,7 +714,6 @@ mod tests {
                 .is_some_and(|message| message.contains("no Modelica source definitions"))
         );
         assert!(!engine.begin_source_root_load("BrokenRoot"));
-        assert!(!engine.ensure_source_root("BrokenRoot"));
     }
 
     #[test]

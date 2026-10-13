@@ -1002,7 +1002,8 @@ Startup and previews publish a native recipe under the document projection
 lease: original root bytes, distinct per-root runtime/view layers, and a session
 layer containing those opinions. Root bytes retain the source codec, including
 USDC. Do not merge or flatten these layers into a transport root. Previews
-include view opinions; restart clears them and publishes root/runtime input.
+share root/runtime input; canonical-stage synchronization applies view opinions
+after admission. Restart clears them and publishes root/runtime input.
 Incremental edits and deferred reference roots use the named native edit target.
 A coarse replacement waits for native address admission and its root projection
 notice before document synchronization completes. Closing or rehoming the

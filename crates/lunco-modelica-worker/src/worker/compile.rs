@@ -220,8 +220,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
     }
 
     let mut claimed: HashSet<String> = ast.classes.iter().map(|(name, _)| name.clone()).collect();
-    let mut dependency_roots =
-        lunco_modelica_ast::ast_extract::required_source_roots_from_ast(&ast);
+    let mut dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
     let mut extra_sources = Vec::new();
     let mut sibling_documents: Vec<_> = documents
         .docs()
@@ -255,9 +254,9 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
                 continue;
             }
             claimed.extend(names);
-            dependency_roots.extend(
-                lunco_modelica_ast::ast_extract::required_source_roots_from_ast(&other_ast),
-            );
+            dependency_roots.extend(rumoca_compile::compile::source_root_dependencies(
+                &other_ast,
+            ));
         }
         extra_sources.push((
             format!("doc_{}.mo", other_doc.raw()),

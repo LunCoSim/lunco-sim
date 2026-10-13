@@ -9,11 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use lunco_doc::{
-    Diagnostic, DiagnosticSeverity, DiagnosticSourceReport, DiagnosticSourceState, DocumentId,
+    Diagnostic, DiagnosticSeverity, DiagnosticSourceReport, DiagnosticSourceState, Document,
+    DocumentId,
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_document::ModelicaDocument;
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_ACTIVE_LINTS: usize = 2;
 
 /// Installs the shared, generation-scoped Rumoca lint service for authoring
@@ -118,7 +120,7 @@ pub fn refresh_modelica_lint_diagnostics(
     registry: Res<DocumentRegistry<ModelicaDocument>>,
     mut diagnostics: ResMut<ModelicaLintDiagnostics>,
     mut document_diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
-    mut published: Local<HashMap<DocumentId, (u64, u64)>>,
+    mut published: Local<HashMap<DocumentId, (u64, u64, u64)>>,
 ) {
     let completed = {
         let mut queue = diagnostics
@@ -131,7 +133,7 @@ pub fn refresh_modelica_lint_diagnostics(
         diagnostics.in_flight.remove(&result.doc);
         let current_generation = registry
             .host(result.doc)
-            .map(|host| host.document().ast().generation);
+            .map(|host| host.document().generation());
         if current_generation != Some(result.generation) {
             continue;
         }
@@ -154,7 +156,7 @@ pub fn refresh_modelica_lint_diagnostics(
 
     let mut open_documents = registry
         .iter()
-        .map(|(doc, host)| (doc, host.document().ast().generation))
+        .map(|(doc, host)| (doc, host.document().generation()))
         .collect::<Vec<_>>();
     open_documents.sort_by_key(|(doc, _)| doc.raw());
     let open_ids = open_documents
@@ -271,13 +273,15 @@ pub fn refresh_modelica_lint_diagnostics(
         let uri = document.origin().session_uri();
         let lint_snapshot = diagnostics.for_generation(doc, generation);
         let revision = lint_snapshot.map_or(0, |snapshot| snapshot.revision);
-        if published.get(&doc) == Some(&(generation, revision)) {
+        let ast_generation = document.ast().generation;
+        if published.get(&doc) == Some(&(generation, ast_generation, revision)) {
             continue;
         }
         let parse_diagnostics = document
             .ast()
             .errors
             .iter()
+            .filter(|_| !document.syntax_is_stale())
             .map(|diagnostic| {
                 let mut value =
                     Diagnostic::error(diagnostic.message.clone(), diagnostic.line, diagnostic.col);
@@ -294,8 +298,12 @@ pub fn refresh_modelica_lint_diagnostics(
                 id: "modelica.parser".to_owned(),
                 domain: "modelica".to_owned(),
                 generation,
-                revision: Some(generation),
-                state: DiagnosticSourceState::Ready,
+                revision: (!document.syntax_is_stale()).then_some(ast_generation),
+                state: if document.syntax_is_stale() {
+                    DiagnosticSourceState::Pending
+                } else {
+                    DiagnosticSourceState::Ready
+                },
                 message: None,
                 diagnostics: parse_diagnostics,
             },
@@ -356,6 +364,6 @@ pub fn refresh_modelica_lint_diagnostics(
                 diagnostics: findings,
             },
         );
-        published.insert(doc, (generation, revision));
+        published.insert(doc, (generation, ast_generation, revision));
     }
 }

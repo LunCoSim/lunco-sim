@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "third_party/rumoca-compile",
     "third_party/bevy_render",
     "third_party/glam",
     "crates/lunco-core",
@@ -265,9 +264,6 @@ glam = { path = "third_party/glam" }
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
 
-[patch."https://github.com/LunCoSim/rumoca"]
-rumoca-compile = { path = "third_party/rumoca-compile" }
-
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 # Matches the Apache-2.0 text in ./LICENSE. Declared here so every member inherits
@@ -427,18 +423,18 @@ lunco-theme = { path = "crates/lunco-theme" }
 lunco-web = { path = "crates/lunco-web" }
 
 # Rumoca 0.10.2: one immutable dependency revision across workspace consumers.
-rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
+rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
-rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "83641b8cf7247815d0ab80b3262113cb8622be5c" }
+rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
+rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
@@ -614,9 +610,6 @@ split-debuginfo = "unpacked"
 opt-level = 3
 
 [profile.dev.package.bevy_render]
-opt-level = 3
-
-[profile.dev.package.rumoca-compile]
 opt-level = 3
 
 # Workspace math owners instantiate the native collision and joint kernels.

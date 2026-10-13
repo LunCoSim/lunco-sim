@@ -184,8 +184,10 @@ empty. Its live
 projection tracks `@view@` operations separately and replays them onto the
 mounted canonical stage, including view operations authored before that stage
 was mounted. This keeps transient annotations visible in the live View without
-adding them to persistent source bytes. Editor previews include the view layer
-in their captured native input. Restart publishes fresh root/runtime input and
+adding them to persistent source bytes. Editor previews publish the same root/runtime input as scene admission.
+The canonical-stage synchronization owner applies disposable view operations
+after admission; preview creation cannot replace an in-flight scene recipe
+with presentation opinions. Restart publishes fresh root/runtime input and
 clears view opinions before reloading. Incremental operations and pending
 reference materialization select the exact native edit target through OpenUSD's
 scoped edit context; property reconciliation reads that authored layer.

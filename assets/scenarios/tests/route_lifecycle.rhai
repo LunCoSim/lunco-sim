@@ -482,8 +482,8 @@ fn route_step_route_fixture_action(me) {
     this.checks.push(t_true(program != () && program.ok != false
         && program.attrs["info:implementationSource"] == "sourceAsset"
         && program.attrs["info:sourceAsset"] != ()
-        && program.attrs["info:id"] == ()
-        && program.attrs["info:sourceCode"] == (),
+        && program.attrs["info:id"] == ""
+        && program.attrs["info:sourceCode"] == "",
         "route program uses the sourceAsset-only USD contract"));
     this.checks.push(t_true(true,
         "route program materializes an oriented ribbon from authored points"));

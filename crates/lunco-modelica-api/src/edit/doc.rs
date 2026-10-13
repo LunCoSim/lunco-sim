@@ -62,7 +62,8 @@ pub fn on_create_scratch_modelica_document(
 
 /// Cancel owned experiments and close an untitled API scratch document through
 /// the shared document lifecycle, including its linked execution entities.
-/// Saved documents continue through the ordinary document close flow.
+/// Completed results remain under the experiment history owner. Saved documents
+/// continue through the ordinary document close flow.
 #[Command(default)]
 pub struct CloseScratchModelicaDocument {
     pub doc_id: DocumentId,
@@ -72,7 +73,7 @@ pub struct CloseScratchModelicaDocument {
 pub fn on_close_scratch_modelica_document(
     trigger: On<CloseScratchModelicaDocument>,
     registry: Res<ModelicaDocuments>,
-    mut scratch_documents: ResMut<ToolScratchDocuments>,
+    scratch_documents: Res<ToolScratchDocuments>,
     mut experiments: Option<ResMut<ExperimentRegistry>>,
     sources: Option<Res<ExperimentOrigins>>,
     mut pending: Option<ResMut<PendingHandles>>,
@@ -137,13 +138,7 @@ pub fn on_close_scratch_modelica_document(
         }
     }
 
-    if let Some(experiments) = experiments.as_mut() {
-        for id in &run_ids {
-            experiments.delete(*id);
-        }
-    }
     commands.trigger(lunco_doc_bevy::CloseDocument { doc_id: doc });
-    scratch_documents.0.remove(&doc);
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({ "doc_id": doc.raw() }),

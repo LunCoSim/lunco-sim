@@ -3239,7 +3239,7 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         .host(doc)?
         .document();
     let generation = document.generation();
-    let input = document.capture_stage_input(&root_id, true);
+    let input = document.capture_stage_input(&root_id, false);
     let input = match input {
         Ok(input) => input,
         Err(error) => {

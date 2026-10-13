@@ -17,11 +17,6 @@ pub(crate) fn is_generated_document(document: &ModelicaDocument) -> bool {
     lunco_modelica_runtime::generated_source::is_generated_origin(document.origin())
 }
 
-/// Detected top-level model name for a document.
-pub(crate) fn detected_name_for(world: &World, doc: DocumentId) -> Option<String> {
-    lunco_modelica_core::sim_default::default_simulation_class(world, doc)
-}
-
 /// Read-only flag for a document.
 pub(crate) fn read_only_for(world: &World, doc: DocumentId) -> bool {
     world

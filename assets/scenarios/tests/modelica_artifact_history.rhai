@@ -1,16 +1,14 @@
-// Run in two fresh owned Application-scoped sessions. Seed root is a fresh
-// directory containing an API-authored entry scene and no Twin manifest;
-// restore opens that existing Twin. Parameters: mode, root, entry_scene.
-// After seed PASS, inspect ListRuns for the ArtifactHistoryProbe UUID/CID and
-// verify <root>/results/<UUID>.json is durable before Exit. Place a malformed
-// optional neighbor with another UUID, then restart and pass seed_id, seed_cid,
-// corrupt_id to restore. Persistence JSON fixtures are external inputs; this
-// gate never authors USD or treats a current source as an archived trajectory.
+// Run in two fresh owned sessions with a prepared, active Twin. Seed uses
+// an API-authored entry scene; restore reopens the saved Twin. Parameters:
+// mode, plus seed_id, seed_cid and corrupt_id for restore. Inspect ListRuns
+// and verify the UUID artifact is durable before stopping seed. Include a
+// malformed optional neighbor; archived source/value identity must survive a
+// changed same-name source. Persistence JSON fixtures are external inputs.
 import "lunco://scripting/tools/modelica_editor" as editor;
 
 fn simulation_dependencies(me, params) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ReadActiveTwinContract", "CompileStatus", "RunStatus", "ListRuns", "GetExperimentResult"], required_inputs: [] }
+       query_reads: ["ReadActiveTwinContract", "CompileStatus", "RunStatus", "ListRuns", "GetExperimentResult", "GetDocumentSource"], required_inputs: [] }
 }
 fn ack(value) {
     if value != () && value.status == "pending" && value.id != () { return command_result(value.id); }
@@ -36,32 +34,34 @@ fn finish(state, failures) {
     state
 }
 fn on_start(me, params) {
-    this.done = false; this.doc = (); this.ticks = 0; this.phase = "mount";
+    this.done = false; this.doc = (); this.ticks = 0; this.phase = if params.mode == "restore" { "history" } else { "source" };
     this.mode = params.mode; this.seed_id = params.seed_id; this.seed_cid = params.seed_cid; this.corrupt_id = params.corrupt_id;
-    if (this.mode != "seed" && this.mode != "restore") || params.root == () || params.entry_scene == () {
-        this = finish(this, ["mode, existing Twin root and entry_scene are required"]); return;
+    if this.mode != "seed" && this.mode != "restore" {
+        this = finish(this, ["mode must select seed or restore"]); return;
     }
     if this.mode == "restore" && (this.seed_id == () || this.seed_cid == () || this.corrupt_id == () || this.seed_id == this.corrupt_id) {
         this = finish(this, ["restore requires distinct seed/corrupt UUIDs and the observed seed source CID"]); return;
     }
     let twin = query("ReadActiveTwinContract", #{});
-    if twin == () || twin.open != false { this = finish(this, ["gate requires fresh Application document scope"]); return; }
-    this.mount_ack = if this.mode == "seed" {
-        cmd("CreateTwin", #{path: params.root, name: "Artifact history owner", default_scene: params.entry_scene})
-    } else {
-        cmd("OpenTwin", #{path: params.root})
-    };
+    if twin == () || twin.open != true {
+        this = finish(this, ["gate requires an active Twin"]); return;
+    }
 }
 fn on_tick(me, params) {
     if this.done { return; }
     this.ticks += 1;
     if this.ticks > 6000 { this = finish(this, ["artifact gate timed out at " + this.phase]); return; }
-    if this.phase == "mount" {
-        let admitted = ack(this.mount_ack); if admitted == () || admitted.status == "pending" { return; }
-        if admitted.ok != true { this = finish(this, ["Twin admission rejected: " + admitted.to_string()]); return; }
-        let twin = query("ReadActiveTwinContract", #{});
-        if twin.open != true { return; }
-        this.phase = if this.mode == "restore" { "history" } else { "source" };
+    if this.phase == "close" {
+        let closed = ack(this.close_ack);
+        if closed == () || closed.status == "pending" { return; }
+        if closed.ok != true { this = finish(this, ["scratch close rejected: " + closed.to_string()]); return; }
+        let source = query("GetDocumentSource", #{doc_id: this.closed_doc});
+        if source != () && source.ok != false { return; }
+        let retained = result(this.run);
+        this.checks.push(t_true(values_are(retained,this.expected)
+            && retained.source_cid == this.current_cid,
+            "closing the source retains its completed result and compiler identity"));
+        this = finish(this, this.checks); return;
     }
     if this.phase == "history" {
         let archived = result(this.seed_id);
@@ -109,5 +109,7 @@ fn on_tick(me, params) {
         failures.push(t_true(this.run != this.seed_id && current.source_cid != this.seed_cid, "same-name changed source has a distinct run and source CID"));
         failures.push(t_true(values_are(archived,1.0) && archived.source_cid == this.seed_cid && archived.restored_history == true, "successor cannot retag or overwrite archived source identity"));
     }
-    this = finish(this, failures);
+    this.checks = failures; this.expected = expected; this.current_cid = current.source_cid;
+    this.closed_doc = this.doc; this.close_ack = editor::close_scratch(this.doc);
+    this.doc = (); this.phase = "close";
 }

@@ -85,6 +85,7 @@ ui = [
     "dep:lunco-luncosim-ui",
     "lunco-scene-runner/ui",
     "lunco-luncosim-ui/avatar-ui",
+    "lunco-luncosim-runtime/experiments",
 ]
 # Installed desktop packages carry the native Velopack updater. Keeping this
 # separate from `ui` avoids compiling its HTTP/update closure for ordinary

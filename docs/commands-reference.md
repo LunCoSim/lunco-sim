@@ -2358,7 +2358,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Cancel owned experiments and close an untitled API scratch document through
  the shared document lifecycle, including its linked execution entities.
- Saved documents continue through the ordinary document close flow.
+ Completed results remain under the experiment history owner. Saved documents
+ continue through the ordinary document close flow.
 
 - *defined in:* `crates/lunco-modelica-api/src/edit/doc.rs`
 
@@ -4146,7 +4147,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 273 commands from the runtime schema; scanned 994 .rs files for docs (0 parse failure(s) skipped).
+<!-- 273 commands from the runtime schema; scanned 993 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestEcho
 -->

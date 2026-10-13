@@ -1105,8 +1105,7 @@ fn dispatch_experiment(
             let ast = document.strict_ast().ok_or_else(|| {
                 "experiment requires a current strict Modelica source snapshot".to_owned()
             })?;
-            let dependency_roots =
-                lunco_modelica_ast::ast_extract::required_source_roots_from_ast(&ast);
+            let dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
             (
                 source,
                 filename,

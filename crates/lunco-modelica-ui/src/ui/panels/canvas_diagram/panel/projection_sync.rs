@@ -465,9 +465,7 @@ fn spawn_projection_task(
                 {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
-                        for root in lunco_modelica_ast::ast_extract::required_source_roots_from_ast(
-                            &ast_arc,
-                        ) {
+                        for root in rumoca_compile::compile::source_root_dependencies(&ast_arc) {
                             let _ = handle.ensure_source_root_async(&root);
                         }
                         return Err(error);

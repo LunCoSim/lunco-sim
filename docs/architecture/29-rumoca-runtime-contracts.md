@@ -54,9 +54,8 @@ The session package-definition map records its validated session revision.
 Unchanged declaration queries reuse it without rebuilding the whole-library
 source signature. After a revision changes, the existing dependency signature
 validates reuse or triggers reconstruction. The maintained Rumoca revision
-supplies this cache contract. The local `rumoca-compile` correction owns the
-base-class lookup context described below; see
-`third_party/rumoca-compile/LUNCOSIM-PROVENANCE.md`.
+supplies this cache contract, the base-class lookup context described below,
+and immutable shared class interfaces.
 Native editor indexing retains the real loading state until metadata publication
 completes; clearing a progress indicator does not complete that work.
 
@@ -210,6 +209,11 @@ comments, and formatting are preserved. Only new nodes use the local emitter.
 Connect annotation routing has one parser-backed source reader in
 `lunco-modelica-index::annotation_source`.
 
+Rumoca lint jobs capture the document’s source generation with its text.
+Completed jobs publish only for that same current source generation; parser
+channels remain pending while the syntax cache is stale. Publication tracks
+source generation, AST generation and lint revision independently.
+
 Parse-time `lint.modelica` policy checks declaration conflicts. Conditional
 expressions and events are compiler/solver capabilities, not blanket syntax
 errors. Runtime acceptance uses authored Rhai through the production binary.
@@ -247,6 +251,16 @@ endpoint substitution.
 | Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps and reject unsupported event/discrete/clock/table models. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
+
+`within` places declarations in their native Rumoca namespace; it does not
+require a separately registered source library. Source-root admission consumes Rumoca’s
+`compile::source_root_dependencies` query. Rumoca resolves lexical scopes and
+imports, including aliases in nested classes; LunCoSim only maps the resulting
+external namespaces to its library registry. Structural component edits reparse
+through the document owner; projection and compilation consume that admitted
+source without a per-component file loader. The production
+`modelica_class_compile.rhai` gate covers qualified and default run targets
+inside an authored `within` namespace and an imported unit alias.
 
 Plain package/type/function documents have no automatic simulation target.
 An explicit class selection or a runnable model/block/class is required.

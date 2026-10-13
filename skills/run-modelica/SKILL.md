@@ -915,12 +915,17 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   `GetExperimentResult`; an archived result never claims the currently edited
   source or starts playback. Parsed-only contributing libraries without source
   bytes warn that persistence is unavailable while the run remains valid.
-  Exercise `modelica_artifact_history.rhai` in fresh seed/restore sessions and
-  verify the UUID artifact is durable before stopping the seed session. Seed
-  creates a fresh Twin around its API-authored scene; restore opens the saved
-  Twin through `OpenTwin`. Include
+  Prepare fresh seed/restore sessions with `CreateTwin` around an API-authored
+  scene and `OpenTwin` on the saved Twin respectively. Launch
+  `modelica_artifact_history.rhai` with the active Twin owner and verify the UUID
+  artifact is durable before stopping seed. Scratch-source closure cancels live
+  work and retains completed history. Include
   a corrupt optional artifact and changed same-name source; history must retain
   its original CID and values. See the [artifact owner contract](../../docs/architecture/25-experiments.md#durable-completed-history).
+- **Lint generations**: lint findings belong to the captured source generation,
+  while parser readiness follows that generation’s syntax cache. A stale parser
+  channel remains pending; an older lint completion cannot publish as current.
+  `modelica_lint.rhai` checks the shared diagnostic channels and source identity.
 - **File diagnostics**: `GetFile` acknowledges asynchronous read admission. It
   uses the same captured native/OPFS source path as document opens; inspect its
   log text or structured read-error diagnostic. Closing the admitted Twin or
@@ -1046,3 +1051,9 @@ activity cannot block parsing. `modelica_run_metadata.rhai` verifies that a
 replacement draft compiles while earlier runs retain their checked facts.
 
 For library execution acceptance, run `modelica_library_smoke.rhai` through the production scene runner. It checks an acausal electrical circuit, a dynamic block trajectory, units, and terminal rejection of a missing declaration. Experiments admit required source roots through the same registry as interactive compilation.
+
+An authored `within` clause sets the compiler namespace; it does not itself
+request an external source library. Use Rumoca’s
+`compile::source_root_dependencies` for lexical/import-aware dependency facts,
+then admit those namespaces through the shared source-root registry. Do not
+scan type strings or special-case import aliases such as `SI`.

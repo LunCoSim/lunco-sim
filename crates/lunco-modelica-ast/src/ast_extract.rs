@@ -55,7 +55,7 @@ pub struct ModelInterface {
     /// what a generated model instantiating it has to get right.
     pub within: Option<String>,
     /// Top-level Modelica source roots required by this source, including its
-    /// `within` package root when that root is not declared in the same file.
+    /// qualified type and import references.
     /// The sorted set is prepared with the interface so runtime admission does
     /// not need to parse the same source on the application schedule.
     pub required_source_roots: BTreeSet<String>,
@@ -164,7 +164,7 @@ fn project_model_interface(
     let mut interface = ModelInterface {
         model_name,
         within: within_package(ast),
-        required_source_roots: required_source_roots_from_ast(ast),
+        required_source_roots: rumoca_compile::compile::source_root_dependencies(ast),
         ..Default::default()
     };
     if let Some(class) = class {
@@ -347,87 +347,6 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 // per-class scoping a multi-class doc like AnnotatedRocketStage would
 // merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
 // nonsensical pile.
-
-/// Visit every type-name reference reachable from `class`, recursing
-/// into nested classes. Emits each `extends` base name and each
-/// component `type_name` raw — **no filtering**. Callers apply their
-/// own predicate (built-in vs not, qualified-only, etc.).
-///
-/// The icon warmer and source-root scanner share this traversal and apply
-/// their type-name selection at the call site.
-pub fn walk_class_type_names<F: FnMut(&str)>(class: &ClassDef, visit: &mut F) {
-    for ext in &class.extends {
-        let name = ext.base_name.to_string();
-        visit(&name);
-    }
-    for (_, comp) in class.components.iter() {
-        let t = format!("{}", comp.type_name);
-        visit(&t);
-    }
-    for nested in class.classes.values() {
-        walk_class_type_names(nested, visit);
-    }
-}
-
-/// Return deterministic top-level roots referenced by qualified type names and
-/// imports in a parsed definition. Bare names resolve in the current source
-/// context, while Modelica built-ins are handled by Rumoca.
-pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
-    let mut qualified_names = BTreeSet::new();
-    for class in ast.classes.values() {
-        walk_class_type_names(class, &mut |name| {
-            if name.contains('.') {
-                qualified_names.insert(name.to_owned());
-            }
-        });
-        for import in &class.imports {
-            use rumoca_ir_ast::Import;
-            let path = match import {
-                Import::Qualified { path, .. }
-                | Import::Renamed { path, .. }
-                | Import::Unqualified { path, .. }
-                | Import::Selective { path, .. } => path.to_string(),
-            };
-            if path.contains('.') {
-                qualified_names.insert(path);
-            }
-        }
-    }
-    qualified_names
-        .into_iter()
-        .filter_map(|name| {
-            rumoca_core::qualified_name_segments(&name)
-                .next()
-                .map(str::to_owned)
-        })
-        .filter(|root| !root.is_empty() && !is_builtin_type_name(root))
-        .collect()
-}
-
-/// Return every source root needed to compile one definition: qualified
-/// references plus its `within` package root when that root is not declared in
-/// the same source set.
-pub fn required_source_roots_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
-    let mut roots = source_root_dependencies_from_ast(ast);
-    if let Some(package) = within_package(ast)
-        && let Some(root) = rumoca_core::qualified_name_segments(&package).next()
-        && !ast.classes.contains_key(root)
-        && !root.is_empty()
-    {
-        roots.insert(root.to_owned());
-    }
-    roots
-}
-
-/// Whether a type reference is handled by Modelica/Rumoca without an external
-/// source root. Keep this filter beside the shared type-name traversal so the
-/// source-root admission path and the icon warmer cannot diverge on built-ins.
-pub fn is_builtin_type_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Real" | "Integer" | "Boolean" | "String" | "enumeration"
-    )
-}
 
 /// Lower-case Modelica class kind keyword: `model`, `block`, `connector`,
 /// `package`, `function`, `record`, `type`, `class`, `operator`. The same

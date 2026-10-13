@@ -65,10 +65,6 @@ pub fn run_is_in_active_scope(ctx: &PanelCtx, id: lunco_experiments::ExperimentI
     crate::ui::doc_pin::run_is_in_active_scope(&PanelResources(ctx), id)
 }
 
-pub fn detected_name_for(ctx: &PanelCtx, doc: DocumentId) -> Option<String> {
-    default_simulation_class(ctx, doc)
-}
-
 pub fn read_only_for(ctx: &PanelCtx, doc: DocumentId) -> bool {
     ctx.resource::<ModelicaDocuments>()
         .and_then(|registry| registry.host(doc))

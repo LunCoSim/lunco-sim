@@ -395,12 +395,15 @@ the directory and file; existing symlinks cannot route optional reads or writes
 outside the admitted root. This is a confinement check at preparation, not a
 race-free guarantee against concurrent hostile filesystem replacement.
 
+Desktop and server feature closures enable the same artifact service.
+
 Verify the pure codec, compiler contribution CID, bounded directory iterator
 and asynchronous route seams, then run `modelica_artifact_history.rhai` in two
-fresh owned sessions: seed a completed run and verify its UUID artifact is
-durable before restart. Seed uses `CreateTwin` on a fresh root with an existing
-API-authored entry scene; restore uses `OpenTwin` on the saved Twin. Restore
-with a corrupt optional neighbor, then run
+fresh owned sessions with active Twins: prepare seed with `CreateTwin` around
+an API-authored entry scene, then run the Twin-owned seed gate and verify its
+UUID artifact is durable before restart. Closing a scratch source cancels live
+work and retains completed results under the experiment history owner. Prepare
+restore with `OpenTwin`, including a corrupt optional neighbor, then run
 the same class name from changed source and compare CIDs and values.
 
 ## Future enhancements

@@ -58,18 +58,9 @@ pub(super) fn resolve_doc_context(
     else {
         return (None, None);
     };
-    // Class resolution priority — must match `compile_model`'s logic
-    // and `active_class_for_doc` so the canvas's *edit* target lines
-    // up with what compile / projection consider authoritative:
-    //   1. drilled-in pin (user explicitly navigated into a class)
-    //   2. first non-package class via `extract_model_name_from_ast`
-    //   3. the per-doc Index (display cache)
-    //
-    // The previous `s.classes.keys().next()` returned the IndexMap's
-    // first key, which for a multi-class file wrapped in a `package`
-    // (AnnotatedRocketStage, every source library example, …) is the *package*
-    // wrapper. Adding a component to a package corrupts the file —
-    // packages can only contain classes, not components.
+    // A drilled tab selects its exact class. Otherwise use the strict source
+    // declaration, or the shared simulation-class selector while parsing is
+    // pending. Source edits validate the current document before mutation.
     let drilled_in = crate::ui::context::drilled_class_for_doc(ctx, doc_id);
     let class = drilled_in
         .or_else(|| {
@@ -81,7 +72,7 @@ pub(super) fn resolve_doc_context(
                     })
                 })
         })
-        .or_else(|| crate::ui::context::detected_name_for(ctx, doc_id));
+        .or_else(|| crate::ui::context::default_simulation_class(ctx, doc_id));
     (Some(doc_id), class)
 }
 
@@ -888,8 +879,8 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
 }
 
 /// Resolve the active class name for an Auto-Arrange target. Prefers
-/// the drilled-in class name (for source library drill-in tabs); falls back to
-/// the open document's detected model name.
+/// the drilled-in class for source library tabs, then uses the shared
+/// simulation-class selector.
 pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) -> Option<String> {
     // A document may have both its root tab and drilled-in class tabs. The
     // focused tab, not HashMap iteration order, owns the class that an edit
@@ -903,7 +894,7 @@ pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) ->
             return Some(class);
         }
     }
-    crate::ui::document_context::detected_name_for(world, doc_id)
+    crate::sim_default::default_simulation_class(world, doc_id)
 }
 
 /// `PanelCtx` sibling of [`active_class_for_doc`] — same precedence,
@@ -915,5 +906,5 @@ pub fn active_class_for_doc_ctx(
     if let Some(c) = crate::ui::context::drilled_class_for_doc(ctx, doc_id) {
         return Some(c);
     }
-    crate::ui::context::detected_name_for(ctx, doc_id)
+    crate::ui::context::default_simulation_class(ctx, doc_id)
 }

@@ -8,6 +8,7 @@ description = "Pure Modelica parsing, AST extraction, source normalization, and 
 [dependencies]
 anyhow = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }
+rumoca-compile = { workspace = true }
 rumoca-core = { workspace = true }
 rumoca-ir-ast = { workspace = true }
 rumoca-phase-parse = { workspace = true }

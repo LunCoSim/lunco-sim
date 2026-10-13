@@ -324,8 +324,8 @@ Layers 1–2 are what make it scale: a static scene costs ~nil because nothing i
    real, physics-coupled artifact.
 3. **Fold in `derived_layers` + `stream_viz`** (already precompute / already budgeted) — 3–4
    near-identical hand-rolls in one crate collapse onto the generic.
-4. **Horizon bake** (quantized-sun key) and **`class_cache`** (highest
-   WASM-correctness payoff — correct-by-construction).
+4. **Horizon bake** (quantized-sun key). Modelica source admission and
+   semantic caches remain owned by the shared Rumoca session.
 5. **`GpuExec`** — build only when a concrete expensive procedural shader (regolith) is worth
    baking down; net-new render-graph plumbing, separate platform matrix (WebGL2 = no compute).
 6. Leave genuinely one-shot background jobs (file ops, scenario sync, ephemeris fetch) on a
