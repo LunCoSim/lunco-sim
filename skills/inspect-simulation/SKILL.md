@@ -120,6 +120,13 @@ Before interpreting a live read as a finished scene, check
 `pending_count:0`. A port may be absent while its Modelica island is still
 compiling; that is different from a valid zero.
 
+When a run stops, inspect `/api/ready` for the terminal fault as well as
+`CosimStatus`: a model's last `Running` status does not prove that the shared
+simulation still advances. Physics fault subjects identify the USD prim or
+native entity name. `SimulationTimingProfile` reports retained fixed demand;
+render easing must remain within completed endpoints even when that demand
+exceeds a timestep.
+
 For DEM terrain, read the typed `TerrainLodStatus` query as the authoritative
 geometry stream state. A settled visual terrain requires `wanted == resident`
 and `pending == 0`; the status-bar text is presentation history and is not a

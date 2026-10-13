@@ -728,9 +728,8 @@ fn parse_validated_root_interface(
 }
 
 /// Validate the policy's actual Modelica source against the Rust-owned graph
-/// facts. Parsing only is insufficient: a policy can return a syntactically
-/// valid empty model while the runtime later falls back to an invented class
-/// name or silently loses every member. This validator is intentionally an AST
+/// facts. The exact named root, boundary declarations, units and member
+/// identities must match the graph. This validator is an AST
 /// mechanism, not a knowledge of the shipped emitter, so future Rhai policies
 /// can change layout, equations, and partition without Rust changes.
 fn validate_generated_source(

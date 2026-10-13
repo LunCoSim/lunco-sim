@@ -1015,6 +1015,9 @@ composed generation and instance, with unchanged runtime edges retained across
 unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
 share a lifecycle-coalesced pending-prim set. Pending Modelica source admission
 reuses Bevy's system-local query state across updates and scene replacements.
+Standalone Modelica programs consume `UsdSceneProjectionReset` before
+rediscovery, delegating worker and observation retirement to Modelica component
+teardown. Source admission rejects an absent runnable target at this owner.
 Generic scene commands and mount/teardown mechanics live in
 `lunco-usd-bevy-runtime-core`; `sync` owns the
 fixed-step port exchange and authored event projection. Its optional API query
@@ -1521,6 +1524,14 @@ collider geometry. Collider insertion retains constructor scale; the
 native scale cooking and mass reduction in fixed preparation.
 `lunco-physics` owns stable ordering and continuous impact closure;
 `lunco-cosim` admits native prismatic force writeback for its measured force port.
+
+`third_party/bevy_transform_interpolation` is the published 0.5.0 easing owner
+with bounded fixed-clock fractions for linear, spherical, and Hermite render
+interpolation. `lunco-time` retains whole pending fixed cycles during holds;
+the easing owner presents its captured upper endpoint instead of extrapolating
+that queued demand. Simulation time and solved Avian poses retain their
+authoritative owners. The physics bridge reports faults with canonical USD
+paths or native entity names.
 
 The pinned Parry f64 source in `third_party/parry3d-f64` retains the native
 Bevy/glam type contract while supplying maintained GJK stall classification and

@@ -1424,9 +1424,7 @@ fn commit_domain_projection(
 
     // The synthesizer already parsed and validated this source once. Carry its
     // interface through installation so the runtime does not recover it again.
-    let compiled_name = interface
-        .model_name
-        .unwrap_or_else(|| model_name.to_string());
+    let compiled_name = model_name.to_owned();
     let declared_output_ports = interface.outputs.clone();
 
     let doc_uri = format!("generated://{model_name}.mo");

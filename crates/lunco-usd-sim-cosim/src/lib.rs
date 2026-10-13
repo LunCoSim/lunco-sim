@@ -45,7 +45,7 @@ use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{SceneOwnedScript, ScriptRegistry, doc::ScriptedModel};
 use lunco_telemetry_core::{ChannelSource, Parameter};
 use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
-use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath};
+use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjectionReset};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::read::read_authored_bool_strict;
 use lunco_usd_bevy_stage::{
@@ -396,6 +396,38 @@ fn queue_added_usd_cosim_prim(
 ) {
     if unprocessed.contains(trigger.entity) {
         pending.0.queue(trigger.entity);
+    }
+}
+
+/// Retire standalone Modelica state before its USD projection is rebuilt.
+/// Generated networks own their stage reset separately. Model removal delegates
+/// solver, signal and variable teardown to the Modelica execution owner.
+fn reset_standalone_modelica_projection(
+    mut resets: MessageReader<UsdSceneProjectionReset>,
+    standalone: Query<
+        (),
+        (
+            With<UsdSourcedCosim>,
+            With<DeclaredOutputPorts>,
+            Without<GeneratedModelicaSource>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for reset in resets.read() {
+        if standalone.contains(reset.entity) {
+            commands.entity(reset.entity).remove::<(
+                UsdSourcedCosim,
+                ModelicaModel,
+                PendingModelicaSource,
+                SimComponent,
+                UsdSimProcessed,
+                UsdInputDefaults,
+                DeclaredOutputPorts,
+                UsdModelicaSchedule,
+                ModelicaSignalLayout,
+            )>();
+        }
     }
 }
 
@@ -1744,6 +1776,37 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     }
 }
 
+/// Reject source configuration before worker admission. Removing an installed
+/// model invokes the worker's teardown owner; the shared port surface retains
+/// the terminal diagnostic.
+fn reject_modelica_source(
+    commands: &mut Commands,
+    notices: &mut MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
+    entity: Entity,
+    component: &mut SimComponent,
+    error: String,
+) {
+    component.status = SimStatus::Error(error.clone());
+    commands.entity(entity).try_remove::<ModelicaModel>();
+    commands
+        .entity(entity)
+        .try_remove::<PendingModelicaSource>();
+    error!("[usd-cosim] {error}");
+    notices.write(lunco_modelica_runtime::ModelicaNotice {
+        level: lunco_modelica_runtime::NoticeLevel::Error,
+        text: format!("[{}] {error}", component.model_name),
+    });
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
+        name: MODEL_CONFIGURATION_INVALID.into(),
+        source: 0,
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(error),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    });
+}
+
 fn dispatch_admitted_modelica_sources(
     In(admissions): In<HashMap<Entity, Result<Option<Vec<(String, f64)>>, String>>>,
     mut commands: Commands,
@@ -1754,7 +1817,6 @@ fn dispatch_admitted_modelica_sources(
         &mut SimComponent,
         Option<&UsdInputDefaults>,
         Option<&UsdModelicaSchedule>,
-        Option<&mut ModelicaModel>,
         Option<&mut ModelicaSignalLayout>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
@@ -1781,19 +1843,10 @@ fn dispatch_admitted_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending
-        .sort_unstable_by(|(_, _, a, _, _, _, _, _), (_, _, b, _, _, _, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _, _), (_, _, b, _, _, _, _)| a.path.cmp(&b.path));
 
-    for (
-        entity,
-        pending,
-        prim_path,
-        mut component,
-        usd_defaults,
-        schedule,
-        current_model,
-        current_layout,
-    ) in pending
+    for (entity, pending, prim_path, mut component, usd_defaults, schedule, current_layout) in
+        pending
     {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
@@ -1802,26 +1855,19 @@ fn dispatch_admitted_modelica_sources(
                 "failed to load Modelica source `{}` via AssetServer",
                 pending.asset_path
             );
-            warn!("[usd-cosim] {error}");
-            notices.write(lunco_modelica_runtime::ModelicaNotice {
-                level: lunco_modelica_runtime::NoticeLevel::Error,
-                text: format!("[{}] Asset load error: {error}", component.model_name),
-            });
-            component.status = SimStatus::Error(error.clone());
-            if let Some(mut model) = current_model {
-                model.is_compiling = false;
-                model.is_compiled = false;
-                model.is_stepping = false;
-                model.paused = true;
-                model.last_error = Some(error.clone());
-                model.resume_after_compile = false;
-            }
-            commands
-                .entity(entity)
-                .try_remove::<PendingModelicaSource>();
+            reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
             continue;
         }
         let Some(src) = sources.get(&pending.handle) else {
+            continue;
+        };
+
+        let Some(model_name) = src.interface.model_name.clone() else {
+            let error = format!(
+                "Modelica source `{}` contains no runnable model, block, or class",
+                pending.asset_path
+            );
+            reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
             continue;
         };
 
@@ -1853,11 +1899,6 @@ fn dispatch_admitted_modelica_sources(
         // the authored interface, which
         // `wrap_modelica_into_simcomponent` copies into `SimComponent::inputs` —
         // the port surface a wire writes to.
-        let model_name = src
-            .interface
-            .model_name
-            .clone()
-            .unwrap_or_else(|| "Model".into());
         let mut parameters = src.interface.parameters.clone();
         let input_names = &src.interface.inputs;
         let mut inputs = HashMap::new();
@@ -1895,32 +1936,7 @@ fn dispatch_admitted_modelica_sources(
                 "Modelica source `{}` has no projected co-simulation schedule",
                 pending.asset_path
             );
-            component.status = SimStatus::Error(error.clone());
-            if let Some(mut model) = current_model {
-                model.is_compiling = false;
-                model.is_compiled = false;
-                model.is_stepping = false;
-                model.paused = true;
-                model.last_error = Some(error.clone());
-                model.resume_after_compile = false;
-            }
-            commands
-                .entity(entity)
-                .try_remove::<PendingModelicaSource>();
-            error!("[usd-cosim] {error}");
-            notices.write(lunco_modelica_runtime::ModelicaNotice {
-                level: lunco_modelica_runtime::NoticeLevel::Error,
-                text: format!("[{}] {error}", component.model_name),
-            });
-            commands.trigger(lunco_telemetry_core::TelemetryEvent {
-                name: MODEL_CONFIGURATION_INVALID.into(),
-                source: 0,
-                severity: lunco_telemetry_core::Severity::Error,
-                data: lunco_telemetry_core::TelemetryValue::String(error),
-                timestamp: 0.0,
-                sim_secs: 0.0,
-                sim_tick: 0,
-            });
+            reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
             continue;
         };
 
@@ -2480,6 +2496,15 @@ impl Plugin for UsdSimCosimPlugin {
         // `MinimalPlugins` without those plugins) run the cosim systems without
         // panicking on a missing `Assets<…>` resource.
         app.init_asset::<ModelicaSource>();
+        app.add_message::<UsdSceneProjectionReset>();
+        app.add_systems(
+            PreUpdate,
+            reset_standalone_modelica_projection
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::on_message::<UsdSceneProjectionReset>,
+                ),
+        );
         #[cfg(feature = "python")]
         app.init_asset::<PythonSource>();
         // The USD simulation projection owns these derived registries and

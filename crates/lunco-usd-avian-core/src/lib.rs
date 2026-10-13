@@ -215,6 +215,7 @@ fn validate_physics_frame_contract(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_metadata: Query<(Option<&Name>, Option<&UsdPrimPath>)>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut status: ResMut<PhysicsFrameContractStatus>,
@@ -256,7 +257,8 @@ fn validate_physics_frame_contract(
                 if let Err(detail) =
                     validate_physics_render_rotations(entity, None, &q_parents, &q_spatial)
                 {
-                    let subject = format!("physical-entity:{entity:?}");
+                    let (name, prim_path) = q_metadata.get(entity).unwrap_or((None, None));
+                    let subject = physics_subject(entity, name, prim_path);
                     report_physics_runtime_fault(
                         faults.as_deref_mut(),
                         holds.as_deref_mut(),
@@ -281,11 +283,12 @@ fn validate_physics_frame_contract(
                     )
                     .is_none()
                     {
+                        let (name, prim_path) = q_metadata.get(entity).unwrap_or((None, None));
                         findings.push(lunco_core::RuntimeDiagnostic {
                         code: "physics-frame".to_string(),
                         severity: lunco_core::DiagnosticSeverity::Error,
                         producer: "usd-avian".to_string(),
-                        subject: format!("physical-entity:{entity:?}"),
+                        subject: physics_subject(entity, name, prim_path),
                         message: format!(
                             "physical entity {entity:?} is disconnected from explicitly bound physics frame {0:?}",
                             active.0

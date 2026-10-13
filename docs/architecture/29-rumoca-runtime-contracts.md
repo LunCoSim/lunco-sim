@@ -148,6 +148,16 @@ Parsed AST fields must be serialized completely for positional readers.
 
 Plain package/type/function documents have no automatic simulation target.
 An explicit class selection or a runnable model/block/class is required.
+USD source admission rejects a missing target before sending worker compilation
+and retains the terminal diagnostic on the shared port surface. Source edits
+to standalone USD programs reproject their owning subtree; the worker teardown
+observer retires the installed solver and observations before replacement
+admission. Rejected source configuration also removes an installed model through
+that same teardown boundary.
+Library-only web documents open for inspection without a solver participant.
+Generated networks compile the exact root name already validated by synthesis;
+they do not select another class from the source-wide interface. The production
+`modelica_source_target.rhai` gate covers source rejection and live replacement.
 Live telemetry units, descriptions, and input bounds come exclusively from the
 checked FMI scalar inventory. Construction carries that inventory through the typed worker
 result alongside the installed solver plan. Session and source-generation fences
