@@ -335,7 +335,7 @@ fn remove_plot_node_through_apply() {
     // apply — chaining apply(Add) + apply(Remove) doesn't work in
     // headless tests because the SyntaxCache stays stale between
     // applies (no debounced reparse driver). Production paths re-run
-    // the parser between ops via `ui/ast_refresh.rs`.
+    // the parser between ops via the core engine-sync driver.
     let mut h = host(
         "model M\nannotation(__LunCo(plotNodes={LunCoAnnotations.PlotNode(extent={{0,0},{1,1}}, signal=\"x\")}));\nend M;\n",
     );

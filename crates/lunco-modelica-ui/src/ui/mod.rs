@@ -92,8 +92,6 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 pub mod class_display;
 pub mod context;
 pub(crate) mod document_context;
-/// Debounced AST reparse driver — see module docs.
-pub mod input_activity;
 pub mod panels;
 pub mod solver_picker;
 pub mod text_node;
@@ -743,11 +741,6 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<DocTitleGenCache>()
             .add_systems(Update, derive_doc_title)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
-            // Input activity timestamp — read by `drive_engine_sync`
-            // to gate edit-debounced reparses (replaces the prior
-            // standalone `ast_refresh` system).
-            .init_resource::<input_activity::InputActivity>()
-            .add_systems(bevy::prelude::PreUpdate, input_activity::stamp_user_input)
             .add_systems(Startup, register_settings_submenu)
             .add_systems(Startup, register_edit_menu)
             .init_resource::<panels::code_editor::CodeEditorMenuRequest>()

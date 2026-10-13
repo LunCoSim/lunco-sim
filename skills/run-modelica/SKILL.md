@@ -782,7 +782,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/source libraries/open docs → URIs |
 | `Open` | `{uri}` | open bundled/source-library/path/mem into a tab |
 | `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, dirty, active` per tab |
-| `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs and `has_array_dimensions` declaration facts (pre-compile) |
+| `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs and scoped `scalar_type` / `has_array_dimensions` facts (pre-compile) |
 | `CompileStatus` | `{doc}` | `state, ast_parsed, candidates, picker_pending, drilled_in_class` |
 | `GetDiagnostics` | exactly one of `{doc_id}` or `{scope}` | shared parser/compiler/lint diagnostics; poll `complete`, then read channel states, stable codes, source locations, and suggestions. `scope` is `loaded_stages` or `twin` |
 | `ListCompileCandidates` | `{doc}` | `{candidates:[{qualified,short}]}` — the picker choices |
@@ -984,3 +984,18 @@ that run, using the same `variables` filter as its series. Draft edits and later
 runs cannot change those retained facts. `modelica_run_metadata.rhai` exercises
 this contract through production runs; version 2 completed-history artifacts
 retain the same facts across persistence.
+
+For authoring type facts, use the engine's inheritance-merged declaration query.
+Rumoca resolves alias causality and primitive/array types through the admitted
+source context. Input/output suffixes never classify a declaration. Missing
+class/type metadata must remain visible; do not substitute an empty input list.
+Experiment editors use `parse_scalar_run_value` with the resolved primitive enum,
+retain declaration defaults on omitted values, and reject invalid text before
+changing the draft or dispatching a run. `modelica_type_prefixes.rhai` is the
+production authoring gate for signal aliases, record-name negatives and alias
+array dimensions.
+
+Modelica draft reparsing is paced by that document's source-edit timestamp and
+bounded worker admission. API edits waive the typing debounce; unrelated UI
+activity cannot block parsing. `modelica_run_metadata.rhai` verifies that a
+replacement draft compiles while earlier runs retain their checked facts.

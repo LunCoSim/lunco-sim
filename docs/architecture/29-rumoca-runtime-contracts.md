@@ -32,17 +32,28 @@ without reusing the completed trajectory or crashing the host.
 
 ## Declaration dimensions and connector presentation
 
-`DescribeModel` carries `has_array_dimensions` from Rumoca's component `shape`
-and `shape_expr` fields. Parameter rows use this fact to exclude
-declarations with dimensions from scalar overrides. Brackets in a quoted type
-name do not imply declaration dimensions. Effective alias and tunability
-admission remains with the compiler and solver.
+Authoring `DescribeModel`, experiment setup, and parameter rows consume Rumoca's cached
+`ClassComponentDeclaration` query. The session owns lexical/import lookup,
+inherited nested types, package aliases, effective causality, primitive type,
+and type-alias dimensions. Authored expressions and source coordinates remain
+separate from those type facts. Missing or cyclic type information is a visible
+query rejection, never a name-based signal classification.
+
+`scalar_type` and `has_array_dimensions` describe the admitted declaration and
+its resolved type. Numeric run text uses the shared `parse_scalar_run_value` parser
+against the primitive enum. Empty text omits an override; malformed, non-finite,
+aggregate, array, and String values reject scalar admission. The compiler and
+solver retain final tunability ownership. Fast Run retains its setup dialog
+and entered text when validation rejects a value; the existing draft stays
+unchanged. Session revision invalidates the bounded declaration cache;
+repeated UI reads reuse its immutable result.
 
 Canvas wires consume the projected `PortKind`. Rumoca's short-form class
 causality supplies signal connector direction, and declared flow members supply
 acausal ports. A connector's spelling does not change its wire direction.
-`modelica_declaration_shapes.rhai` checks the public declaration facts; focused
-inline parser/projection tests cover parameter rows and connector kinds.
+`modelica_declaration_shapes.rhai` and `modelica_type_prefixes.rhai` check the
+public declaration facts. Focused inline parser/projection tests cover parameter
+rows, typed scalar parsing, and connector kinds.
 
 ## Prepared execution and persistence
 

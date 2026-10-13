@@ -1313,9 +1313,6 @@ impl ApiQueryProvider for DescribeModelProvider {
             );
         };
 
-        let inputs = lunco_modelica_ast::ast_extract::extract_typed_inputs_for_class(class);
-        let parameters = lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class(class);
-        let outputs = lunco_modelica_ast::ast_extract::extract_typed_outputs_for_class(class);
         let components = lunco_modelica_ast::ast_extract::extract_components_for_class(class);
         let connections = lunco_modelica_ast::ast_extract::extract_connections_for_class(class);
         let extends = lunco_modelica_ast::ast_extract::extract_extends_for_class(class);
@@ -1333,7 +1330,9 @@ impl ApiQueryProvider for DescribeModelProvider {
                 None => {
                     return query_error(
                         ApiErrorCode::CommandRejected,
-                        format!("{target_name} has unresolved or cyclic inherited declarations"),
+                        format!(
+                            "{target_name} has unresolved or cyclic declarations or type prefixes"
+                        ),
                     );
                 }
             },
@@ -1355,9 +1354,15 @@ impl ApiQueryProvider for DescribeModelProvider {
                 .iter()
                 .map(|(from, to)| api_value!({"from": from, "to": to}))
                 .collect::<Vec<_>>(),
-            "inputs": inputs.iter().map(typed_api_value).collect::<Vec<_>>(),
-            "parameters": parameters.iter().map(typed_api_value).collect::<Vec<_>>(),
-            "outputs": outputs.iter().map(typed_api_value).collect::<Vec<_>>(),
+            "inputs": inherited_members.iter()
+                .filter(|member| matches!(member.causality, lunco_modelica_core::engine::InheritedCausality::Input))
+                .map(|member| typed_api_value(&member.metadata)).collect::<Vec<_>>(),
+            "parameters": inherited_members.iter()
+                .filter(|member| matches!(member.variability, lunco_modelica_core::engine::InheritedVariability::Parameter))
+                .map(|member| typed_api_value(&member.metadata)).collect::<Vec<_>>(),
+            "outputs": inherited_members.iter()
+                .filter(|member| matches!(member.causality, lunco_modelica_core::engine::InheritedCausality::Output))
+                .map(|member| typed_api_value(&member.metadata)).collect::<Vec<_>>(),
             "inherited_members": inherited_members
                 .iter()
                 .map(|m| api_value!({
@@ -1396,6 +1401,7 @@ fn typed_api_value(c: &lunco_modelica_ast::ast_extract::TypedComponent) -> ApiVa
     api_value!({
         "name": c.name.clone(),
         "type": c.type_name.clone(),
+        "scalar_type": c.scalar_type.map(|kind| kind.name()),
         "has_array_dimensions": c.has_array_dimensions,
         "unit": c.unit.clone(),
         "default": c.default,

@@ -759,19 +759,15 @@ impl ExperimentsPanel {
         };
         let mut bounds_changed = false;
 
-        // Inputs come from the parsed AST of the resolved model class —
-        // no per-frame source scan (WP-8 / CQ-205).
-        let detected_inputs = ctx
-            .resource::<crate::ui::document_context::ModelicaDocuments>()
-            .and_then(|r| r.host(doc))
-            .and_then(|h| {
-                h.document()
-                    .syntax()
-                    .ast()
-                    .get_class_by_qualified_name(&model_name)
-                    .map(lunco_modelica_runner::detect_top_level_inputs)
-            })
-            .unwrap_or_default();
+        let Some(members) = ctx
+            .resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
+            .and_then(|handle| handle.try_lock())
+            .and_then(|mut engine| engine.inherited_members_typed(&model_name))
+        else {
+            ui.colored_label(col_error, "Class type metadata is not resolved");
+            return;
+        };
+        let detected_inputs = lunco_modelica_runner::input_rows(&members);
         let prefilled_inputs: BTreeMap<
             lunco_experiments::ParamPath,
             lunco_experiments::ParamValue,
@@ -782,7 +778,11 @@ impl ExperimentsPanel {
         // Maintain editable text per input row across frames via a
         // local scratch in the panel — simpler than yet another
         // resource. Reset when model changes.
-        let mut input_edits: Vec<(String, String, String)> = detected_inputs
+        let mut input_edits: Vec<(
+            String,
+            Option<lunco_modelica_ast::PredefinedComponentType>,
+            String,
+        )> = detected_inputs
             .iter()
             .map(|d| {
                 let txt = prefilled_inputs
@@ -802,7 +802,7 @@ impl ExperimentsPanel {
                         lunco_experiments::ParamValue::RealArray(_) => "(array)".into(),
                     })
                     .unwrap_or_default();
-                (d.name.clone(), d.type_name.clone(), txt)
+                (d.name.clone(), d.scalar_type, txt)
             })
             .collect();
         let mut inputs_changed = false;
@@ -1140,19 +1140,11 @@ impl ExperimentsPanel {
                                 );
                                 for (name, ty, value_text) in input_edits.iter_mut() {
                                     ui.label(name.as_str());
-                                    let s_trim = value_text.trim();
-                                    let parses = if s_trim.is_empty() {
-                                        true
-                                    } else {
-                                        match ty.as_str() {
-                                            "Real" => s_trim.parse::<f64>().is_ok(),
-                                            "Integer" | "Int" => s_trim.parse::<i64>().is_ok(),
-                                            "Boolean" | "Bool" => {
-                                                matches!(s_trim, "true" | "false")
-                                            }
-                                            _ => s_trim.parse::<f64>().is_ok(),
-                                        }
-                                    };
+                                    let parsed = lunco_modelica_runner::parse_scalar_run_value(
+                                        *ty,
+                                        value_text.trim(),
+                                    );
+                                    let parses = parsed.is_ok();
                                     let mut edit =
                                         lunco_workbench_widgets::text_editor::singleline(
                                             value_text,
@@ -1161,17 +1153,13 @@ impl ExperimentsPanel {
                                     if !parses {
                                         edit = edit.text_color(col_error);
                                     }
-                                    let resp = ui.add(edit);
-                                    let resp = if !parses {
-                                        resp.on_hover_text(format!(
-                                            "Cannot parse as {ty}. Expected: {}",
-                                            match ty.as_str() {
-                                                "Real" => "decimal number, e.g. 1.5",
-                                                "Integer" | "Int" => "integer, e.g. 42",
-                                                "Boolean" | "Bool" => "true or false",
-                                                _ => "decimal number",
-                                            }
-                                        ))
+                                    let resp = ui.add_enabled(ty.is_some(), edit);
+                                    let resp = if ty.is_none() {
+                                        resp.on_hover_text(
+                                            "Run inputs require numeric or Boolean scalars",
+                                        )
+                                    } else if !parses {
+                                        resp.on_hover_text(parsed.unwrap_err())
                                     } else {
                                         resp
                                     };
@@ -1210,27 +1198,15 @@ impl ExperimentsPanel {
                 if s.is_empty() {
                     continue;
                 }
-                let v = match ty.as_str() {
-                    "Real" => s
-                        .parse::<f64>()
-                        .ok()
-                        .map(lunco_experiments::ParamValue::Real),
-                    "Integer" | "Int" => s
-                        .parse::<i64>()
-                        .ok()
-                        .map(lunco_experiments::ParamValue::Int),
-                    "Boolean" | "Bool" => match s {
-                        "true" => Some(lunco_experiments::ParamValue::Bool(true)),
-                        "false" => Some(lunco_experiments::ParamValue::Bool(false)),
-                        _ => None,
-                    },
-                    _ => s
-                        .parse::<f64>()
-                        .ok()
-                        .map(lunco_experiments::ParamValue::Real),
-                };
-                if let Some(v) = v {
-                    map.insert(lunco_experiments::ParamPath(name.clone()), v);
+                match lunco_modelica_runner::parse_scalar_run_value(*ty, s) {
+                    Ok(Some(value)) => {
+                        map.insert(lunco_experiments::ParamPath(name.clone()), value);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        ui.colored_label(col_error, format!("{name}: {error}"));
+                        return;
+                    }
                 }
             }
             ctx.resource_scope::<lunco_modelica_runner::ExperimentDrafts, _>(|_, drafts| {
@@ -1255,10 +1231,8 @@ impl ExperimentsPanel {
         }
     }
 
-    /// Override + bounds editor for the currently active document's
-    /// top-level model. Detects literal `parameter` declarations in
-    /// the source and shows them as an editable table; non-literal
-    /// params appear greyed with a tooltip.
+    /// Override editor for the selected class's resolved parameters.
+    /// Unsupported scalar overrides remain disabled with a reason.
     fn render_override_editor(&self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
             return;
@@ -1267,11 +1241,9 @@ impl ExperimentsPanel {
             Some(r) => r,
             None => return,
         };
-        let host = match registry.host(doc) {
-            Some(h) => h,
-            None => return,
-        };
-        let document = host.document();
+        if registry.host(doc).is_none() {
+            return;
+        }
 
         // Use the same selected class as the experiment setup surface.
         let Some(model_name) = crate::ui::context::default_simulation_class(ctx, doc) else {
@@ -1279,14 +1251,15 @@ impl ExperimentsPanel {
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
-        // Parameters come from the parsed AST of the resolved model class
-        // (no per-frame source regex — WP-8 / CQ-205).
-        let detected = document
-            .syntax()
-            .ast()
-            .get_class_by_qualified_name(&model_name)
-            .map(lunco_modelica_runner::detect_top_level_literal_parameters)
-            .unwrap_or_default();
+        let Some(members) = ctx
+            .resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
+            .and_then(|handle| handle.try_lock())
+            .and_then(|mut engine| engine.inherited_members_typed(&model_name))
+        else {
+            ui.weak("Class type metadata is not resolved");
+            return;
+        };
+        let detected = lunco_modelica_runner::parameter_rows(&members);
         if detected.is_empty() {
             return;
         }
@@ -1433,16 +1406,25 @@ impl ExperimentsPanel {
                                 let matches_default = existing.is_none() && text == default_text;
                                 if matches_default {
                                     ui.data_mut(|d| d.remove::<String>(cell_id));
-                                } else if let Some(v) = parse_override(&p.type_name, &text) {
-                                    updates.push((path.clone(), Some(v)));
-                                    // Latch the new value so the cell
-                                    // keeps showing it until the draft
-                                    // reflects the commit on the next
-                                    // frame.
-                                    ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
-                                } else if text.trim().is_empty() {
-                                    updates.push((path.clone(), None));
-                                    ui.data_mut(|d| d.remove::<String>(cell_id));
+                                } else {
+                                    match lunco_modelica_runner::parse_scalar_run_value(
+                                        p.scalar_type,
+                                        &text,
+                                    ) {
+                                        Ok(value) => {
+                                            updates.push((path.clone(), value));
+                                            if text.trim().is_empty() {
+                                                ui.data_mut(|data| data.remove::<String>(cell_id));
+                                            } else {
+                                                ui.data_mut(|data| {
+                                                    data.insert_temp(cell_id, text.clone())
+                                                });
+                                            }
+                                        }
+                                        Err(error) => {
+                                            ui.colored_label(ui.visuals().error_fg_color, error);
+                                        }
+                                    }
                                 }
                             } else if !resp.has_focus() {
                                 // Drop the latch once the committed
@@ -1477,39 +1459,6 @@ impl ExperimentsPanel {
                 });
             }
         });
-    }
-}
-
-fn parse_override(type_name: &str, text: &str) -> Option<lunco_experiments::ParamValue> {
-    use lunco_experiments::ParamValue;
-    let s = text.trim();
-    if s.is_empty() {
-        return None;
-    }
-    match type_name {
-        "Real" => s.parse::<f64>().ok().map(ParamValue::Real),
-        "Integer" | "Int" => s.parse::<i64>().ok().map(ParamValue::Int),
-        "Boolean" | "Bool" => match s {
-            "true" => Some(ParamValue::Bool(true)),
-            "false" => Some(ParamValue::Bool(false)),
-            _ => None,
-        },
-        "String" => {
-            if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-                Some(ParamValue::String(s[1..s.len() - 1].to_string()))
-            } else {
-                Some(ParamValue::String(s.to_string()))
-            }
-        }
-        _ => {
-            // Best-effort fallback: if it parses as a number, keep it
-            // as Real. Otherwise treat as Enum literal name.
-            if let Ok(x) = s.parse::<f64>() {
-                Some(ParamValue::Real(x))
-            } else {
-                Some(ParamValue::Enum(s.to_string()))
-            }
-        }
     }
 }
 

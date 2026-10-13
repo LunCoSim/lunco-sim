@@ -286,17 +286,15 @@ pub fn mirror_source_roots_to_status_bus(
     }
 }
 
-/// Feed UI input/workspace state into the core [`crate::engine_resource::ParsePacing`]
+/// Feed workspace focus into the core [`crate::engine_resource::ParsePacing`]
 /// hints that `drive_engine_sync` reads. The core parse scheduler consumes the
-/// hints (typing debounce, active-tab priority) without ever naming the UI
+/// active-tab priority hint without ever naming the UI
 /// resources. Ordered `.before(drive_engine_sync)` so the hints are fresh for
 /// this frame's parse decisions.
 pub fn feed_parse_pacing(
     mut pacing: ResMut<crate::engine_resource::ParsePacing>,
-    activity: Res<crate::ui::input_activity::InputActivity>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
-    pacing.input_active = activity.is_active();
     pacing.active_document = workspace.as_deref().and_then(|ws| ws.active_document);
 }
 

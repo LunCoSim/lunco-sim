@@ -992,18 +992,18 @@ pub fn stepper_options_from_bounds(
         .map_err(RunConfigurationError::Solver)
 }
 
-/// One detected top-level `parameter` declaration. Used by the
+/// One resolved `parameter` declaration, including inherited members. Used by the
 /// override editor UI to render an editable row per parameter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedParam {
     pub name: String,
     /// The parameter's declared type, e.g. `Real`, `Integer`, `Boolean`,
-    /// `String`, or a class-qualified type. Used to choose the editor
-    /// widget kind.
+    /// `String`, or a class-qualified type. Displayed in the editor.
     pub type_name: String,
-    /// Default literal as it appears in the source (e.g. `1.5`,
-    /// `"foo"`, `true`). `None` if the parameter has no literal
-    /// default (e.g. expression-bound, inherited).
+    /// Supported scalar type resolved from the declaration's scoped type.
+    pub scalar_type: Option<lunco_modelica_ast::PredefinedComponentType>,
+    /// Numeric default rendered from the declaration's binding or start.
+    /// Absent when the authored value cannot be projected as a number.
     pub default_literal: Option<String>,
     /// Whether this scalar declaration can enter the numeric run-options path.
     pub supportable: bool,
@@ -1016,76 +1016,106 @@ pub struct DetectedParam {
     pub description: Option<String>,
 }
 
-/// One parsed input declaration. Live sessions use `set_input`; batch runs use
-/// `initial_inputs`. An omitted override retains its compiled declaration value.
+/// One resolved input row. Only supported scalars admit a text override.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedInput {
     pub name: String,
     pub type_name: String,
+    /// Supported scalar type resolved from the declaration's scoped type.
+    pub scalar_type: Option<lunco_modelica_ast::PredefinedComponentType>,
 }
 
-/// Top-level `input` declarations of `class`, read from the **parsed
-/// AST** — no source regex, no reparse. Used by the Setup dialog to
-/// render an Inputs section and by the runner to pin input values.
-///
-/// Sourced via [`lunco_modelica_ast::ast_extract::extract_typed_inputs_for_class`],
-/// which classifies by the parser's `causality` and additionally
-/// catches connector-typed inputs (`RealInput`/`IntegerInput`/…) through the
-/// parser's typed class representation.
-pub fn detect_top_level_inputs(
-    class: &rumoca_compile::parsing::ast::ClassDef,
-) -> Vec<DetectedInput> {
-    lunco_modelica_ast::ast_extract::extract_typed_inputs_for_class(class)
-        .into_iter()
-        .map(|c| DetectedInput {
-            name: c.name,
-            type_name: c.type_name,
+fn run_scalar_type(
+    c: &lunco_modelica_ast::ast_extract::TypedComponent,
+) -> Option<lunco_modelica_ast::PredefinedComponentType> {
+    use lunco_modelica_ast::PredefinedComponentType as T;
+    if c.has_array_dimensions {
+        return None;
+    }
+    c.scalar_type
+        .filter(|kind| matches!(kind, T::Real | T::Integer | T::Boolean))
+}
+
+/// Input rows from Rumoca's inheritance-merged, scoped declarations.
+pub fn input_rows(members: &[lunco_modelica_core::engine::InheritedMember]) -> Vec<DetectedInput> {
+    members
+        .iter()
+        .filter(|member| {
+            matches!(
+                member.causality,
+                lunco_modelica_core::engine::InheritedCausality::Input
+            )
+        })
+        .map(|member| DetectedInput {
+            name: member.name.clone(),
+            type_name: member.type_name.clone(),
+            scalar_type: run_scalar_type(&member.metadata),
         })
         .collect()
 }
 
-/// Top-level `parameter` declarations of `class`, read from the
-/// **parsed AST** — no source regex, no reparse. Drives the override
-/// editor's table.
-///
-/// Sourced via [`lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class`]
-/// (filters on the parser's `variability == Parameter`), which gives the
-/// declared default and the Modelica description-comment directly, so the
-/// editor no longer textually re-scans the file every frame.
-///
-/// Numeric scalar values enter Rumoca's override-aware preparation. Arrays,
-/// records, and String values cannot enter that path. The compiler and lowering
-/// owner make the final admission decision for tunability and effective types.
-pub fn detect_top_level_literal_parameters(
-    class: &rumoca_compile::parsing::ast::ClassDef,
+/// Parameter rows from the same scoped declaration facts as input rows.
+/// The compiler and solver make the final tunability admission decision.
+pub fn parameter_rows(
+    members: &[lunco_modelica_core::engine::InheritedMember],
 ) -> Vec<DetectedParam> {
-    lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class(class)
-        .into_iter()
-        .map(|c| {
-            // Run values are scalar. Rumoca retains declaration dimensions
-            // independently of the type name, including symbolic dimensions.
-            let unsupported = c.has_array_dimensions || c.type_name == "String";
+    members
+        .iter()
+        .filter(|member| {
+            matches!(
+                member.variability,
+                lunco_modelica_core::engine::InheritedVariability::Parameter
+            )
+        })
+        .map(|member| {
+            let c = &member.metadata;
+            let scalar_type = run_scalar_type(c);
             DetectedParam {
-                name: c.name,
-                type_name: c.type_name,
-                // `default` carries the numeric literal binding (or `start`)
-                // straight from the AST; non-numeric defaults show as "—"
-                // but are still overridable.
+                name: c.name.clone(),
+                type_name: member.type_name.clone(),
+                scalar_type,
                 default_literal: c.default.map(|x| format!("{x}")),
-                supportable: !unsupported,
-                reason: unsupported
-                    .then(|| "run overrides require numeric or Boolean scalars".to_string()),
-                description: {
-                    let d = c.description.trim();
-                    if d.is_empty() {
-                        None
-                    } else {
-                        Some(d.to_string())
-                    }
-                },
+                supportable: scalar_type.is_some(),
+                reason: scalar_type
+                    .is_none()
+                    .then(|| "run overrides require numeric or Boolean scalars".to_owned()),
+                description: (!c.description.trim().is_empty()).then(|| c.description.clone()),
             }
         })
         .collect()
+}
+
+/// Parse a numeric run value against its resolved primitive type.
+/// Empty text omits the override; unsupported or malformed text is an error.
+pub fn parse_scalar_run_value(
+    kind: Option<lunco_modelica_ast::PredefinedComponentType>,
+    text: &str,
+) -> Result<Option<ParamValue>, String> {
+    use lunco_modelica_ast::PredefinedComponentType as T;
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let kind = kind.ok_or("run overrides require numeric or Boolean scalars")?;
+    let value = match kind {
+        T::Real => {
+            let value = text
+                .parse::<f64>()
+                .map_err(|_| "expected a decimal number")?;
+            if !value.is_finite() {
+                return Err("expected a finite decimal number".to_owned());
+            }
+            ParamValue::Real(value)
+        }
+        T::Integer => ParamValue::Int(text.parse::<i64>().map_err(|_| "expected an integer")?),
+        T::Boolean => match text {
+            "true" => ParamValue::Bool(true),
+            "false" => ParamValue::Bool(false),
+            _ => return Err("expected true or false".to_owned()),
+        },
+        T::String => return Err("run overrides require numeric or Boolean scalars".to_owned()),
+    };
+    Ok(Some(value))
 }
 
 /// Per-(document, model) parameter override + bounds draft state.
@@ -1335,12 +1365,12 @@ mod tests {
           parameter 'Bracket[Scalar]' scalar=1;
           parameter String text="label";
         end ShapeFacts;"#;
-        let ast = rumoca_compile::parsing::parse_source_to_ast(source, "shape-facts.mo")
-            .expect("valid declarations");
-        let class = ast
-            .get_class_by_qualified_name("ShapeFacts")
-            .expect("class");
-        let rows = detect_top_level_literal_parameters(class);
+        let mut engine = lunco_modelica_core::engine::ModelicaEngine::new();
+        engine.install_lenient(lunco_doc::DocumentId::new(1), source);
+        let members = engine
+            .inherited_members_typed("ShapeFacts")
+            .expect("resolved declarations");
+        let rows = parameter_rows(&members);
         for name in ["literal", "symbolic", "matrix", "text"] {
             let row = rows.iter().find(|row| row.name == name).expect("parameter");
             assert!(!row.supportable, "{name} must not accept a scalar override");
@@ -1350,6 +1380,34 @@ mod tests {
             let row = rows.iter().find(|row| row.name == name).expect("parameter");
             assert!(row.supportable, "{name} is a scalar declaration");
             assert!(row.reason.is_none());
+        }
+    }
+
+    #[test]
+    fn scalar_run_text_preserves_resolved_types_and_rejects_invalid_values() {
+        use lunco_modelica_ast::PredefinedComponentType as T;
+        assert_eq!(
+            parse_scalar_run_value(Some(T::Integer), "42").unwrap(),
+            Some(ParamValue::Int(42))
+        );
+        assert_eq!(
+            parse_scalar_run_value(Some(T::Boolean), "true").unwrap(),
+            Some(ParamValue::Bool(true))
+        );
+        assert_eq!(
+            parse_scalar_run_value(Some(T::Real), "1.5").unwrap(),
+            Some(ParamValue::Real(1.5))
+        );
+        assert_eq!(parse_scalar_run_value(None, " ").unwrap(), None);
+        for (kind, text) in [
+            (None, "1"),
+            (Some(T::String), "label"),
+            (Some(T::Boolean), "1"),
+            (Some(T::Integer), "1.5"),
+            (Some(T::Real), "NaN"),
+            (Some(T::Real), "inf"),
+        ] {
+            assert!(parse_scalar_run_value(kind, text).is_err());
         }
     }
 

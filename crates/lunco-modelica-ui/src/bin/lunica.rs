@@ -41,15 +41,6 @@ fn main() {
 
     // ── Native-only: cap rumoca's compiler parallelism ──────────────
     //
-    // History: when projection + ast_refresh still ran on rayon, the
-    // unconfigured pool grabbed `num_cpus - 1` threads and starved the
-    // renderer's pipelined extract — every Add/Move edit froze the UI
-    // for 1.5–2.5 s. After the SyntaxCache refactor those run on Bevy's
-    // `AsyncComputeTaskPool`; the only remaining global-pool caller is
-    // rumoca (`parse_files_parallel` / `Session`, short bursts at source library
-    // preload / file load). Our indexer runs on its own bounded pool and
-    // is unaffected either way.
-    //
     // Rumoca builds its own parser pool with bounded concurrency and 16 MB
     // stacks. Reserve capacity for Bevy; cap parsing at two threads on small
     // machines. No Rayon pool is configured on wasm.

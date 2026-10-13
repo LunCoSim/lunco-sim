@@ -361,14 +361,11 @@ pub struct EngineSyncCursor {
 ///
 /// The resource is shared by GUI and headless execution so scene loading and
 /// editing have the same bounded scheduling contract. UI code only refreshes
-/// the input/focus hints; the queue and completion budgets remain owned by the
+/// the focus hint; the queue and completion budgets remain owned by the
 /// core scheduler. A bounded native queue matters because Modelica parsing
 /// shares Bevy's compute pool with scene projection and other loading work.
 #[derive(Resource)]
 pub struct ParsePacing {
-    /// True while the user is actively typing — defers the edit-reparse
-    /// debounce so a keystroke burst settles before paying for a parse.
-    pub input_active: bool,
     /// The focused document, submitted at interactive priority across the
     /// shared async queue.
     pub active_document: Option<DocumentId>,
@@ -384,7 +381,6 @@ pub struct ParsePacing {
 impl Default for ParsePacing {
     fn default() -> Self {
         Self {
-            input_active: false,
             active_document: None,
             max_in_flight: 4,
             completion_budget_ms: 2,
@@ -403,8 +399,7 @@ impl Default for ParsePacing {
 /// advances the cursor.
 /// Edit-debounce window before re-parsing a document that was
 /// previously parsed. New docs (never parsed) spawn immediately —
-/// only the edit path is debounced. Mirrors the prior `ast_refresh`
-/// gate now that `drive_engine_sync` is the single parse driver.
+/// only the edit path is debounced. `drive_engine_sync` owns parse admission.
 ///
 /// The window is *size-adaptive*: small docs reparse near-instantly
 /// (rename feedback in tabs / browser / experiments lags otherwise),
@@ -431,30 +426,27 @@ fn engine_sync_is_due(
     handle: &ModelicaEngineHandle,
     registry: &lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     cursor: &EngineSyncCursor,
-    pacing: &ParsePacing,
     admission: &lunco_core_runtime::AsyncWorkAdmission,
 ) -> bool {
     registry.revision() != cursor.registry_revision
         || admission.capacity_revision() != cursor.admission_capacity_revision
         || handle.sync_wakeup_pending()
-        || parse_debounce_is_due(cursor, pacing)
+        || parse_debounce_is_due(cursor)
 }
 
-fn parse_debounce_is_due(cursor: &EngineSyncCursor, pacing: &ParsePacing) -> bool {
-    !pacing.input_active
-        && cursor
-            .next_debounce_at
-            .is_some_and(|deadline| web_time::Instant::now() >= deadline)
+fn parse_debounce_is_due(cursor: &EngineSyncCursor) -> bool {
+    cursor
+        .next_debounce_at
+        .is_some_and(|deadline| web_time::Instant::now() >= deadline)
 }
 
 fn engine_sync_due(
     handle: Res<ModelicaEngineHandle>,
     registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
     cursor: Res<EngineSyncCursor>,
-    pacing: Res<ParsePacing>,
     admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
 ) -> bool {
-    engine_sync_is_due(&handle, &registry, &cursor, &pacing, &admission)
+    engine_sync_is_due(&handle, &registry, &cursor, &admission)
 }
 
 pub fn drive_engine_sync(
@@ -568,7 +560,7 @@ pub fn drive_engine_sync(
     let admission_capacity_revision = admission.capacity_revision();
     if registry_revision == cursor.registry_revision
         && admission_capacity_revision == cursor.admission_capacity_revision
-        && !parse_debounce_is_due(&cursor, &pacing)
+        && !parse_debounce_is_due(&cursor)
     {
         handle.clear_sync_wakeup_if_idle();
         return;
@@ -662,11 +654,11 @@ pub fn drive_engine_sync(
     // task pool; wasm parses are posted to the Web Worker and return
     // through the parse-done channel.
     //
-    // Debounce gate (replaces the prior `ast_refresh` system):
+    // Source-edit debounce:
     //   - First parse for a doc (syntax.generation == 0) fires
     //     immediately — open-flow, user is waiting.
     //   - Edit reparse (syntax.generation > 0 but stale) waits for
-    //     `AST_DEBOUNCE_MS` of post-edit silence + no input activity.
+    //     the size-adaptive debounce of post-edit silence.
     //     Lets a typing burst settle before paying for a parse.
     let now = web_time::Instant::now();
     // Stable submission order keeps the per-owner parse cap from depending on
@@ -722,12 +714,7 @@ pub fn drive_engine_sync(
             let debounce_ms = ast_debounce_for_size(source.len());
             let deadline = last_edit
                 .map(|edited| edited + std::time::Duration::from_millis(debounce_ms as u64));
-            let elapsed_ok = match last_edit {
-                Some(t) => now.duration_since(t).as_millis() >= debounce_ms,
-                None => true,
-            };
-            if !elapsed_ok || pacing.input_active {
-                let wake_at = deadline.unwrap_or(now);
+            if let Some(wake_at) = deadline.filter(|deadline| now < *deadline) {
                 next_debounce_at = Some(match next_debounce_at {
                     Some(current) => current.min(wake_at),
                     None => wake_at,
@@ -1088,22 +1075,15 @@ mod tests {
             lunco_modelica_document::ModelicaDocument,
         >::default();
         let mut cursor = EngineSyncCursor::default();
-        let pacing = ParsePacing::default();
         let mut admission = lunco_core_runtime::AsyncWorkAdmission::default();
 
-        assert!(!engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &admission));
 
         registry.allocate_untitled("model A end A;".to_string());
-        assert!(engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &admission));
         cursor.registry_revision = registry.revision();
         cursor.admission_capacity_revision = admission.capacity_revision();
-        assert!(!engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &admission));
 
         admission
             .submit(
@@ -1118,14 +1098,10 @@ mod tests {
                 || {},
             )
             .unwrap();
-        assert!(!engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &admission));
 
         admission.set_limits(256, 3).unwrap();
-        assert!(engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &admission));
         cursor.admission_capacity_revision = admission.capacity_revision();
 
         {
@@ -1136,9 +1112,7 @@ mod tests {
             );
             handle.wake_sync();
         }
-        assert!(engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &admission));
     }
 
     #[test]
@@ -1147,24 +1121,17 @@ mod tests {
         let registry =
             lunco_doc_bevy::DocumentRegistry::<lunco_modelica_document::ModelicaDocument>::default(
             );
-        let cursor = EngineSyncCursor {
+        let mut cursor = EngineSyncCursor {
             next_debounce_at: Some(web_time::Instant::now() - std::time::Duration::from_millis(1)),
             ..Default::default()
         };
-        let pacing = ParsePacing::default();
         let admission = lunco_core_runtime::AsyncWorkAdmission::default();
 
-        assert!(engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        assert!(engine_sync_is_due(&handle, &registry, &cursor, &admission));
 
-        let pacing = ParsePacing {
-            input_active: true,
-            ..ParsePacing::default()
-        };
-        assert!(!engine_sync_is_due(
-            &handle, &registry, &cursor, &pacing, &admission
-        ));
+        cursor.next_debounce_at =
+            Some(web_time::Instant::now() + std::time::Duration::from_secs(1));
+        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &admission));
     }
 }
 
