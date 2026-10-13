@@ -55,19 +55,13 @@ pub mod class_ref;
 /// and inspector title all read through one path.
 pub mod class_metadata;
 
-/// Shared parse + I/O cache for Modelica classes. Drill-in, AddComponent
-/// preload, and compile dep-walk all funnel through here so every class file is
-/// read once, parsed once, and shared as an `Arc` across tabs and compile jobs.
-///
-/// The load is **synchronous** (`peek_or_load_class_blocking`), under a
-/// two-phase lock: probe → parse *outside* the lock → install. That is why
-/// [`ClassLookupMode::Cached`] exists — off-thread callers must never block on a
-/// cold parse, so they take the peek-only path and miss rather than stall.
+/// Source-aware class admission for document operations. Files are read and
+/// parsed outside the engine lock, then installed into the shared session.
 pub mod class_cache;
 pub mod library_documents;
 pub mod library_fs;
 
-/// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
+/// Immutable Rumoca diagram snapshots and their component-graph projection.
 pub mod diagram;
 
 // ── Shared headless domain modules. Presentation adapters live in

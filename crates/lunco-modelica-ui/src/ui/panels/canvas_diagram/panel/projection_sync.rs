@@ -1,8 +1,7 @@
 //! Projection task management and polling.
 
 use super::super::projection::{
-    ProjectedScene, project_scene, projection_relevant_source_hash, recover_edges_from_ast,
-    target_unit_instance,
+    ProjectedScene, project_scene, projection_relevant_source_hash, target_unit_instance,
 };
 use super::super::{
     CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world_ctx,
@@ -111,13 +110,6 @@ pub(crate) fn poll_and_swap_projection(
         docstate.projection_task = None;
         docstate.target_unit_instance = projected_target_unit_instance;
         docstate.projection_error = None;
-        if scene.node_count() == 0 && docstate.canvas.scene.node_count() > 0 {
-            docstate.last_seen_gen = r#gen;
-            docstate.last_seen_target = target;
-            docstate.last_seen_source_hash = source_hash;
-            return;
-        }
-
         let preserved_origins: std::collections::HashSet<String> = docstate
             .canvas
             .selection
@@ -454,26 +446,56 @@ fn spawn_projection_task(
                     });
                 }
                 bevy::tasks::futures_lite::future::yield_now().await;
-                let ast_for_recover = std::sync::Arc::clone(&ast_arc);
-                let mut diagram =
+                let target = target_for_log
+                    .clone()
+                    .or_else(|| {
+                        lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast_arc)
+                    })
+                    .ok_or_else(|| "the Modelica source contains no diagram target".to_owned())?;
+                if ast_arc.get_class_by_qualified_name(&target).is_none() {
+                    return Err(format!(
+                        "Modelica diagram target `{target}` is absent from the current source"
+                    ));
+                }
+                let handle = crate::engine_resource::global_engine_handle()
+                    .ok_or_else(|| "the shared Modelica engine is unavailable".to_owned())?;
+                let snapshot = match handle.lock().diagram_snapshot(&target) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        for root in lunco_modelica_ast::ast_extract::required_source_roots_from_ast(
+                            &ast_arc,
+                        ) {
+                            let _ = handle.ensure_source_root_async(&root);
+                        }
+                        return Err(error);
+                    }
+                };
+                let (snapshot, unit_instance) = {
+                    let mut engine = handle.lock();
+                    let unit_instance = root_model_name
+                        .as_deref()
+                        .filter(|root| *root != target)
+                        .and_then(|root| {
+                            engine
+                                .session_mut()
+                                .class_component_declarations_query(root)
+                        })
+                        .and_then(|members| target_unit_instance(&members, &target));
+                    (snapshot, unit_instance)
+                };
+                let diagram =
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                         ast_arc,
+                        std::sync::Arc::new(snapshot),
                         &source,
                         max_nodes,
-                        target_for_log.as_deref(),
                         &layout,
                     )?;
-                bevy::tasks::futures_lite::future::yield_now().await;
-                recover_edges_from_ast(&ast_for_recover, &mut diagram);
                 bevy::tasks::futures_lite::future::yield_now().await;
                 let (scene, _) = project_scene(&diagram);
                 Ok(ProjectedScene {
                     scene,
-                    target_unit_instance: target_unit_instance(
-                        &ast_for_recover,
-                        root_model_name.as_deref().unwrap_or_default(),
-                        target_for_log.as_deref(),
-                    ),
+                    target_unit_instance: unit_instance,
                 })
             },
         )

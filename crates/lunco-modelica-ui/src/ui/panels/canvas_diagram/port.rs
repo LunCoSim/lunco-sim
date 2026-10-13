@@ -6,8 +6,6 @@
 //! `Placement` is missing, and resolving a port's connector-class
 //! `Icon` from the source library palette / engine.
 
-use std::collections::HashMap;
-
 use bevy_egui::egui;
 
 use super::edge::PortDir;
@@ -290,77 +288,19 @@ pub(super) fn port_fallback_offset_for_size(
     (cx, cy.clamp(0.0, icon_h))
 }
 
-/// Resolve each port's connector-class `Icon` using the engine's
-/// indexed view, mirroring the candidate-path walk that the painter
-/// previously did inline. Runs off-thread inside the projection task,
-/// so the engine lock is taken once per port (typically 2–8 per
-/// component) at projection time — never during paint.
-///
-/// Empty `library_path` (port type not classified yet) → `None`.
-/// Qualified path that fails to resolve → walk parent's package
-/// chain trying `<pkg>.Interfaces.<name>` and `<pkg>.<name>` so
-/// older indexes that wrote unqualified types still find their
-/// connector class.
+/// Read the icon for the exact Rumoca-resolved connector identity.
+/// Projection has already warmed these icons in the shared engine snapshot.
 pub(super) fn resolve_port_icons(
-    parent_qualified: &str,
     ports: &[lunco_modelica_index::visual_diagram::PortDef],
 ) -> Vec<Option<lunco_modelica_ast::annotations::Icon>> {
-    let palette = lunco_modelica_index::visual_diagram::library_class_library();
-    let palette_lookup: HashMap<&str, &lunco_modelica_index::index::ClassEntry> =
-        palette.iter().map(|d| (d.name.as_str(), d)).collect();
     let handle = crate::engine_resource::global_engine_handle();
+    let mut engine = handle.as_ref().and_then(|handle| handle.try_lock());
     ports
         .iter()
-        .map(|p| {
-            let path = &p.library_path;
-            let candidates: Vec<String> = if path.contains('.') {
-                vec![path.clone()]
-            } else if !path.is_empty() {
-                // Canonical MLS §5.3 scope chain (single source of truth in
-                // `lunco_modelica_ast::scope_chain_candidates`), augmented with the
-                // connector convention that a port's connector class usually
-                // lives in an `Interfaces` subpackage of each enclosing
-                // package: for each scope candidate `<prefix>.<path>` also try
-                // `<prefix>.Interfaces.<path>`. Produces the same candidates,
-                // in the same order, as the previous inline walk.
-                let mut out = Vec::new();
-                for cand in lunco_modelica_ast::scope_chain_candidates(path, Some(parent_qualified))
-                {
-                    if let Some(prefix) = cand.strip_suffix(&format!(".{path}")) {
-                        out.push(format!("{prefix}.Interfaces.{path}"));
-                    }
-                    out.push(cand);
-                }
-                out
-            } else {
-                return None;
-            };
-            for c in &candidates {
-                if let Some(def) = palette_lookup.get(c.as_str()) {
-                    if let Some(icon) = def.icon.as_ref() {
-                        return Some(icon.clone());
-                    }
-                }
-                if let Some(handle) = handle.as_ref() {
-                    // Port painting runs as part of the background
-                    // projection, but it must still never wait behind a
-                    // parse or library install. A cache miss is retried by
-                    // the source-root completion re-projection.
-                    if let Some(mut engine) = handle.try_lock() {
-                        if let Some(icon) = engine.icon_for(c) {
-                            return Some(icon);
-                        }
-                        if let Some(cd) = engine.class_def(c) {
-                            if let Some(icon) =
-                                lunco_modelica_ast::annotations::extract_icon(&cd.annotation)
-                            {
-                                return Some(icon);
-                            }
-                        }
-                    }
-                }
-            }
-            None
+        .map(|port| {
+            engine
+                .as_mut()
+                .and_then(|engine| engine.cached_icon_for(&port.library_path).flatten())
         })
         .collect()
 }

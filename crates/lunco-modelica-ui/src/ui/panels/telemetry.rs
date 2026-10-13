@@ -915,23 +915,17 @@ impl FlatParam {
 /// double-emit (deriving class wins, Modelica-correct).
 /// Map a class's directly-declared parameter/component names to their
 /// Modelica description-comments. Resolves `type_name` against the
-/// index (direct key, then short-name suffix match) and harvests
+/// index by its exact resolved identity and harvests
 /// non-empty descriptions. Used for hover help on parameter rows.
 fn type_param_descriptions(
     index: &lunco_modelica_index::index::ModelicaIndex,
     type_name: &str,
 ) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
-    let type_path = if index.classes.contains_key(type_name) {
-        Some(type_name.to_string())
-    } else {
-        let short = type_name.rsplit('.').next().unwrap_or(type_name);
-        index
-            .classes
-            .keys()
-            .find(|k| k.rsplit('.').next() == Some(short))
-            .cloned()
-    };
+    let type_path = index
+        .classes
+        .contains_key(type_name)
+        .then(|| type_name.to_owned());
     if let Some(tp) = type_path {
         if let Some(keys) = index.components_by_class.get(&tp) {
             for key in keys {

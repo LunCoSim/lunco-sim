@@ -146,7 +146,10 @@ The application keeps no second class-to-document index or negative lookup cache
 `DescribeModel` returns the canonical authored class name. Explicit names select
 an exact qualified or document-relative declaration; a bare name is admitted
 only when unique in the owning document. Inherited member facts come from
-Rumoca's complete typed declaration query. Unresolved or cyclic bases are a
+Rumoca's complete typed declaration query, with exact qualified type identities
+and unchanged authored type spelling in the component AST. The source-library
+indexer and canvas consume a shared immutable diagram snapshot; neither guesses
+connector semantics from type names. Unresolved or cyclic bases are a
 terminal query diagnostic. UI inputs, parameters, icons, source editing, and
 metadata retain the selected class identity; missing metadata cannot select a
 similarly named class.

@@ -34,7 +34,8 @@ without reusing the completed trajectory or crashing the host.
 
 Authoring `DescribeModel`, experiment setup, and parameter rows consume Rumoca's cached
 `ClassComponentDeclaration` query. The session owns lexical/import lookup,
-inherited nested types, package aliases, effective causality, primitive type,
+inherited nested types, package aliases, exact qualified type identity, effective
+causality, primitive type,
 and type-alias dimensions. Authored expressions and source coordinates remain
 separate from those type facts. Missing or cyclic type information is a visible
 query rejection, never a name-based signal classification.
@@ -48,12 +49,34 @@ and entered text when validation rejects a value; the existing draft stays
 unchanged. Session revision invalidates the bounded declaration cache;
 repeated UI reads reuse its immutable result.
 
+Canvas projection captures an immutable `DiagramSnapshot` from the shared
+workbench engine's Rumoca session. The snapshot contains the selected class's
+cached inheritance-merged declarations, exact resolved component and connector
+identities, effective causality, flow members, and presentation annotations.
+The source-library indexer consumes the same ports, parameters and icons from
+this snapshot, and admits its paired parsed source set without reparsing.
+Unresolved indexed declarations carry an explicit diagnostic state.
+Graph projection performs no type-name classification, package guessing,
+source-library parsing, or independent inheritance lookup. Missing types and
+cyclic declarations reject snapshot capture visibly; source-root completion
+requests a new projection. Admission selects the bundled-package inventory or
+the installed source-library bundle; an absent root stays a visible failure.
+A complete current snapshot does not request unrelated library roots. Document generations still reject superseded work.
+
+Block and expanded connection graphs consume the same declaration ports. Wires
+come only from the selected class's equations; authored route annotations decorate
+those edges. Connector icon lookup uses the exact resolved identity. Parameter label units
+come from declaration metadata; type-name unit tables do not participate. A class
+without authored placement uses the configured deterministic grid; a class
+without an icon uses the renderer's named component presentation. These are
+presentation defaults and do not supply missing semantic facts.
+
 Canvas wires consume the projected `PortKind`. Rumoca's short-form class
-causality supplies signal connector direction, and declared flow members supply
-acausal ports. A connector's spelling does not change its wire direction.
-`modelica_declaration_shapes.rhai` and `modelica_type_prefixes.rhai` check the
-public declaration facts. Focused inline parser/projection tests cover parameter
-rows, typed scalar parsing, and connector kinds.
+causality supplies signal connector direction, and resolved flow members supply
+acausal ports. `modelica_declaration_shapes.rhai` and `modelica_type_prefixes.rhai`
+check public declaration facts. Inline snapshot/projection tests cover exact
+port names, inherited flow metadata, aliased direction, source scope, negative
+capture, and session-revision invalidation.
 
 ## Prepared execution and persistence
 

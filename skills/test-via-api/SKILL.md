@@ -522,17 +522,11 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
 - **Non-Unicode native CLI arguments**: the process rejects them with exit code
   2 before startup. Use the storage-owned file URI conversion when a native
   filesystem address must cross a Unicode command boundary.
-- **"0 nodes 0 edges" after drill-in**: the target class resolved but
-  conversion dropped nodes. Check:
-  1. `InspectActiveDoc` → are the components really there in the AST?
-     If not, parse failed.
-  2. If components exist: their TYPES probably aren't in
-     `local_classes_by_short` or the source-library palette. The diagram-builder
-     registers the target's nested + sibling classes (sibling-pass in
-     `panels/canvas_projection.rs`, the `local_classes_by_short`
-     registration); connector types need to be in
-     `library_index.json` (regenerate via
-     `cargo run -p lunco-modelica-assets --bin modelica_library_indexer`).
+- **Empty diagram after drill-in**: read `InspectActiveDoc` and the canvas
+  projection diagnostic. The selected class and its dependencies must be in
+  the shared Rumoca session. Source-root completion requests reprojection;
+  unresolved or cyclic declarations are terminal snapshot errors. The palette
+  cannot supply missing types or ports.
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
   reflect-registered. Put a shared Modelica-facing payload in
   `lunco-modelica-ui-core`; keep its observer in the owning UI package, give
@@ -541,10 +535,9 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
   `crates/lunco-modelica-ui/src/ui/commands/mod.rs` (see [§ Add a command](#add-a-command)).
 - **API returns 500 / silent no-op**: check `params` includes the
   empty object `{}` even for parameterless commands.
-- **Projection deadline exceeded (60s)**: rumoca parse stall, usually
-  from a synchronous library load inside the worker pool. Move heavy loads to
-  a separate `std::thread::spawn` and use the cache-only source-aware resolver
-  in the projection (`peek_class_cached`).
+- **Projection deadline exceeded**: inspect shared source-root admission and
+  engine query timing. Projection consumes an immutable declaration snapshot;
+  source reads and parsing belong to the asynchronous admission owner.
 - **A rebuilt binary is not visible**: replace the session through `Exit`, verify
   port 4101 is free, then start the rebuilt production binary.
 

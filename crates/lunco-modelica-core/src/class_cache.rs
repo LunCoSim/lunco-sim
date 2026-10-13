@@ -6,16 +6,6 @@
 //! qualified name to either a bundled package or a library file and
 //! feeds the result into the workspace engine's session.
 //!
-//! ## Why one engine
-//!
-//! Earlier the source library class cache lived in a separate process-wide
-//! `Session` (a `Mutex<ModelicaEngine>` here in `class_cache.rs`)
-//! disjoint from the workspace engine that holds user docs. That
-//! split made inheritance queries for a user class that extends a source library
-//! base return empty — the workspace engine couldn't see the base.
-//! Routing both into one session resolves cross-tier inheritance walks
-//! naturally.
-//!
 //! ## Bootstrap timing
 //!
 //! Web: `engine_resource::drive_source_bundle_bootstrap` calls
@@ -30,110 +20,6 @@
 use std::sync::Arc;
 
 use crate::library_fs::{locate_library_file, resolve_class_path_indexed};
-
-/// Class-lookup behaviour for resolver helpers in `diagram` and
-/// `canvas_projection`. Replaces the `&dyn Fn(&str) -> Option<...>`
-/// parameter that used to thread one of two static fn pointers
-/// through every helper.
-///
-/// Both modes route through the workspace [`crate::engine::ModelicaEngine`]
-/// (engine consolidation) — they differ only in what to do on a miss.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClassLookupMode {
-    /// Cache-only: a miss returns `None`. Use from off-thread tasks that must
-    /// not block on rumoca parses.
-    Cached,
-    /// Load on miss: the call blocks the thread to read + parse the
-    /// missing file into the engine session. Safe from the main
-    /// thread / tests / observers; risky from off-thread tasks
-    /// where the lock contention can stall the deadline.
-    Loading,
-}
-
-/// Availability reported by the shared source-root resolver. Rendering uses
-/// this to distinguish a class that is still loading from one that is truly
-/// absent; neither state is allowed to masquerade as a resolved class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClassAvailability {
-    Ready,
-    Loading,
-    Missing,
-}
-
-pub fn class_availability(qualified: &str) -> ClassAvailability {
-    let Some(handle) = crate::engine_resource::global_engine_handle() else {
-        return ClassAvailability::Loading;
-    };
-    let root = rumoca_core::qualified_name_segments(qualified)
-        .next()
-        .unwrap_or(qualified);
-    let is_bundled_root = lunco_assets_runtime::models::package_roots_live()
-        .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root));
-    let (has_class, has_root, root_failed) = {
-        let Some(mut engine) = handle.try_lock() else {
-            // The query is made from the projection worker. Contention is a
-            // normal in-flight state, never a reason to wait behind parsing
-            // or source-root installation.
-            if is_bundled_root {
-                let _ = handle.ensure_source_root_async(root);
-            }
-            return ClassAvailability::Loading;
-        };
-        let has_class = engine.has_class(qualified);
-        let has_root = engine.has_class(root);
-        let root_failed = engine.source_root_failure(root).is_some();
-        (has_class, has_root, root_failed)
-    };
-    if has_class {
-        return ClassAvailability::Ready;
-    }
-    let root = rumoca_core::qualified_name_segments(qualified)
-        .next()
-        .unwrap_or(qualified);
-    if is_bundled_root {
-        // A qualified reference is itself a normal Modelica search-path
-        // request. If the bundled root is not resident yet, start the shared
-        // asynchronous load here; callers do not need generated-document
-        // metadata or a library-specific prewarm branch to make a class
-        // visible in the editor.
-        if !root_failed && !has_root {
-            let _ = handle.ensure_source_root_async(root);
-        }
-        return if root_failed || has_root {
-            ClassAvailability::Missing
-        } else {
-            ClassAvailability::Loading
-        };
-    }
-    if resolve_class_path_indexed(qualified).is_some() || locate_library_file(qualified).is_some() {
-        ClassAvailability::Loading
-    } else {
-        ClassAvailability::Missing
-    }
-}
-
-/// Explain a terminal source-root failure to the diagram resolver without
-/// making UI code reach into the engine's private loading state.
-pub fn class_resolution_message(qualified: &str) -> Option<String> {
-    let handle = crate::engine_resource::global_engine_handle()?;
-    let root = rumoca_core::qualified_name_segments(qualified)
-        .next()
-        .unwrap_or(qualified);
-    let engine = handle.try_lock()?;
-    engine
-        .source_root_failure(root)
-        .map(|error| format!("source root `{root}` failed: {error}"))
-}
-
-impl ClassLookupMode {
-    /// Resolve `qualified` using this mode's policy.
-    pub fn lookup(self, qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
-        match self {
-            Self::Cached => peek_class_cached(qualified),
-            Self::Loading => peek_or_load_class_blocking(qualified),
-        }
-    }
-}
 
 /// Read library source bytes for a relative path, going through the
 /// process-wide [`lunco_assets_runtime::library::LibraryAssetSource`]. Returns
@@ -267,21 +153,4 @@ pub fn peek_or_load_class_blocking(
         }
         engine.class_def(qualified).map(Arc::new)
     }
-}
-
-/// Non-blocking variant of [`peek_or_load_class_blocking`] — returns the
-/// `Arc<ClassDef>` if the engine session already holds it, and
-/// `None` *without triggering a load* on a miss.
-///
-/// Use this from hot paths that must not block on rumoca parse —
-/// notably the projection task running on Bevy's AsyncComputeTaskPool,
-/// where a sync source library parse from inside a worker that's already serving
-/// a parent rumoca parse stalls for the projection deadline.
-pub fn peek_class_cached(qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
-    let handle = crate::engine_resource::global_engine_handle()?;
-    let mut engine = handle.try_lock()?;
-    if !engine.has_class(qualified) {
-        return None;
-    }
-    engine.class_def(qualified).map(Arc::new)
 }

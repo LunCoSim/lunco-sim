@@ -1,40 +1,9 @@
-//! Per-Twin Modelica domain engine.
+//! Modelica authoring engine for the active Twin.
 //!
-//! Wraps a long-lived [`rumoca_compile::Session`] populated with the
-//! source of every open Modelica document in the active Twin.
-//! Cross-file queries (inheritance-merged components, name resolution,
-//! completion) read from the session's fingerprinted phase caches
-//! instead of running their own AST walkers in lunco-modelica-core.
-//!
-//! ## Where this fits architecturally
-//!
-//! - **`lunco-twin`** stays domain-agnostic — it doesn't import rumoca.
-//! - **`lunco-doc::DomainEngine`** is the trait Twin/UI talks through.
-//! - **`ModelicaEngine`** (this file) is the Modelica-specific impl
-//!   that owns rumoca state. Per-Twin in scope; today there's a single
-//!   instance because the workbench hosts a single Twin.
-//!
-//! When multi-Twin lands, this resource becomes
-//! `Map<TwinId, ModelicaEngine>` and the trait dispatch routes
-//! (twin_id, doc_id) to the right engine. The internal API stays the
-//! same.
-//!
-//! ## What's wired today
-//!
-//! - `Self::upsert_document` / `Self::close_document` — add or
-//!   replace a document's source in the session.
-//! - `Self::inherited_components` — calls
-//!   `Session::class_component_members_query` so panels get
-//!   inheritance-merged member lists for free (no per-panel
-//!   reimplementation of `extract_*_inherited`).
-//!
-//! ## What's deferred (next commits)
-//!
-//! - Auto-sync system: a Bevy `Update` system that mirrors changes
-//!   from the generic Modelica document registry into the session. Today callers
-//!   call `upsert_document` explicitly.
-//! - Library-parent session for source library (`Session::with_library_parent`)
-//!   so cross-Twin source library state is shared once multi-Twin lands.
+//! The shared Rumoca session holds open documents and admitted source libraries.
+//! Generation-checked document synchronization and source-root admission update
+//! that session; typed member queries and diagram snapshots consume its caches.
+//! The separate compiler/worker host owns checked compilation and simulation.
 
 use lunco_doc::DocumentId;
 use rumoca_compile::Session;
@@ -90,9 +59,6 @@ fn map_causality_inherited(c: &lunco_modelica_ast::Causality) -> InheritedCausal
 ///
 /// Plain Rust — **not** a Bevy `Resource`. Bevy users wrap this in
 /// [`crate::engine::ModelicaEngineRes`] (below) which is the actual `Resource`.
-/// The split keeps the engine usable from headless contexts
-/// (`lunco-twin-server`, CLI, AI-agent runtimes, WASM thin clients)
-/// without forcing Bevy into the dependency graph of every consumer.
 ///
 /// Holds a single [`rumoca_compile::Session`] populated with the
 /// source of every open Modelica document; cross-file queries route
@@ -529,6 +495,23 @@ impl ModelicaEngine {
         count
     }
 
+    /// Complete a requested root from an admitted immutable source set.
+    pub fn finish_resident_source_root(&mut self, root: &str) -> bool {
+        self.pending_source_roots.remove(root);
+        if self.has_class(root) {
+            self.installed_source_sets.insert(root.to_owned());
+            self.failed_source_roots.remove(root);
+            self.completed_source_roots.push(root.to_owned());
+            true
+        } else {
+            self.failed_source_roots.insert(
+                root.to_owned(),
+                format!("source root `{root}` is not declared in the installed source library"),
+            );
+            false
+        }
+    }
+
     /// Return the terminal loading error for a bundled source root, if any.
     pub fn source_root_failure(&self, root: &str) -> Option<&str> {
         self.failed_source_roots.get(root).map(String::as_str)
@@ -593,6 +576,19 @@ impl ModelicaEngine {
                 })
                 .collect(),
         )
+    }
+
+    /// Capture semantic diagram facts and merged icons from the same session.
+    /// Called by background projection; no source reads or parsing occur here.
+    pub fn diagram_snapshot(
+        &mut self,
+        target: &str,
+    ) -> Result<crate::diagram::DiagramSnapshot, String> {
+        let mut snapshot = crate::diagram::DiagramSnapshot::capture(&mut self.session, target)?;
+        for (name, class) in snapshot.classes_mut() {
+            class.icon = self.icon_for(name);
+        }
+        Ok(snapshot)
     }
 
     /// Read-only access to the underlying session for advanced queries
@@ -813,6 +809,27 @@ mod tests {
         );
         assert!(!engine.begin_source_root_load("BrokenRoot"));
         assert!(!engine.ensure_source_root("BrokenRoot"));
+    }
+
+    #[test]
+    fn source_library_roots_complete_from_the_admitted_session() {
+        let mut engine = ModelicaEngine::new();
+        assert!(engine.begin_source_root_load("Library"));
+        let document = rumoca_compile::compile::ParsedSourceDocument::parse("library.mo", "package Library connector Data=input Real; model Device Data demand; end Device; end Library;").unwrap();
+        engine.replace_in_memory_source_set(
+            "source-bundle",
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
+            vec![document],
+        );
+        assert!(engine.finish_resident_source_root("Library"));
+        assert_eq!(engine.drain_completed_source_roots(), vec!["Library"]);
+        assert!(!engine.begin_source_root_load("Library"));
+        let snapshot = engine.diagram_snapshot("Library.Device").unwrap();
+        assert_eq!(snapshot.members[0].type_name, "Library.Data");
+        assert!(engine.begin_source_root_load("Missing"));
+        assert!(!engine.finish_resident_source_root("Missing"));
+        assert!(engine.source_root_failure("Missing").is_some());
+        assert!(engine.drain_completed_source_roots().is_empty());
     }
 
     #[test]

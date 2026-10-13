@@ -153,7 +153,7 @@ impl ModelicaEngineHandle {
         self.lock().ensure_source_root(root)
     }
 
-    /// Schedule loading of a bundled source root without blocking the caller.
+    /// Schedule admission from bundled packages or the installed source library.
     ///
     /// The reservation is deliberately made inside the worker, rather than
     /// before spawning it. A projection, parse install, or source library bootstrap may
@@ -177,6 +177,36 @@ impl ModelicaEngineHandle {
                     }
                 }
                 bevy::log::info!("[ModelicaLibrary] loading source root `{root}` asynchronously");
+                let is_bundled = lunco_assets_runtime::models::package_roots_live()
+                    .is_ok_and(|roots| roots.iter().any(|candidate| candidate == &root));
+                if !is_bundled {
+                    // The source-library owner decodes its retained source/AST
+                    // bundle outside the engine lock. Install that complete set
+                    // once, so inherited members see the same namespace.
+                    let bundle =
+                        lunco_modelica_library::source_library::parsed_source_bundle().cloned();
+                    let mut engine = handle.lock();
+                    if let Some(bundle) = bundle {
+                        if !engine.source_set_installed("source-bundle") && !bundle.is_empty() {
+                            engine.replace_in_memory_source_set(
+                                "source-bundle",
+                                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                                (*bundle).clone(),
+                            );
+                        }
+                    }
+                    let ready = engine.finish_resident_source_root(&root);
+                    if !ready {
+                        bevy::log::warn!(
+                            "[ModelicaLibrary] {}",
+                            engine
+                                .source_root_failure(&root)
+                                .unwrap_or("source root admission failed")
+                        );
+                    }
+                    handle.wake_sync();
+                    return;
+                }
                 let (parsed, diagnostics) =
                     match lunco_assets_runtime::models::package_files_live(&root) {
                         Ok(files) => {
@@ -198,9 +228,18 @@ impl ModelicaEngineHandle {
                 let mut engine = handle.lock();
                 let count = engine.finish_source_root_load(&root, parsed, diagnostics);
                 handle.wake_sync();
-                bevy::log::info!(
-                    "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)",
-                );
+                if count > 0 {
+                    bevy::log::info!(
+                        "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)"
+                    );
+                } else {
+                    bevy::log::warn!(
+                        "[ModelicaLibrary] {}",
+                        engine
+                            .source_root_failure(&root)
+                            .unwrap_or("source root admission failed")
+                    );
+                }
             })
             .detach();
         true

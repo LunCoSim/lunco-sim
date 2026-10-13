@@ -49,7 +49,8 @@ fn on_tick(me, params) {
     if parsed == () || parsed.ast_parsed != true { return; }
     let facts = query("DescribeModel", #{doc_id: this.doc, class: "PrefixFacts.Probe"});
     if facts == () || facts.ok == false { return; }
-    let vector=(); let caption=();
+    let vector=(); let caption=(); let receiver=();
+    for member in facts.inherited_members { if member.name=="u" { receiver=member; } }
     for parameter in facts.parameters {
         if parameter.name=="values" { vector=parameter; }
         if parameter.name=="label" { caption=parameter; }
@@ -58,6 +59,7 @@ fn on_tick(me, params) {
     let missing=query("DescribeModel", #{doc_id: this.doc, class: "PrefixFacts.Missing"});
     this = finish(this, [
         t_true(names(facts.inputs)==["u","u2"], "input roles follow scoped alias prefixes without name suffixes"),
+        t_true(receiver!=() && receiver.type_name=="PrefixFacts.Receiver", "inherited connector identity is fully qualified in its declaring scope"),
         t_true(names(facts.outputs)==["y"], "output roles follow type prefixes; record names do not create outputs"),
         t_true(vector!=() && vector.has_array_dimensions==true && vector.scalar_type=="Real", "array dimensions and primitive type survive a named type alias"),
         t_true(caption!=() && caption.scalar_type=="String", "String aliases retain their primitive type"),

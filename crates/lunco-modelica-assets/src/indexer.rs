@@ -1,8 +1,8 @@
 // Indexing admits paired source text and syntax through Rumoca's checked parser.
-use lunco_modelica_ast::{Causality, ClassType, Variability};
+use lunco_modelica_ast::ClassType;
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 // `web_time::Instant` keeps the elapsed-time type portable if this module is
@@ -131,51 +131,6 @@ fn encode_parsed_bundle<W: std::io::Write>(
 // Fallback strategy for ports without a Placement annotation
 // ---------------------------------------------------------------------------
 
-/// How to assign a diagram position to a connector that carries no
-/// `annotation(Placement(...))` declaration.
-///
-/// # Why this exists
-/// The Modelica Language Specification (§18.6) defines the *format* of the
-/// Placement annotation but **does not specify any default layout** when it is
-/// absent. Quote: "The Placement annotation ... is used to define the placement
-/// of the component in the diagram layer."  No default is stated — tools are free
-/// to do whatever they want.
-///
-/// In practice, every source library connector declares an explicit Placement, so this
-/// fallback only fires for:
-///   - User-defined components that have no graphical layer at all
-///   - Third-party libraries with incomplete annotations
-///   - Components whose Placement the rumoca parser cannot yet extract
-///
-/// # Rationale for `SideByCausality` as the active default
-/// Scanning the source library reveals an informal but consistent convention:
-///   - causal `input`  connectors sit at (-100..110, ~0)  → left side
-///   - causal `output` connectors sit at (+100..110, ~0)  → right side
-///   - acausal connectors in `extends OnePort` / `TwoPort` follow the same
-///     left/right pattern: `p` left, `n` right
-///
-/// This is **not a standard** — it is an observed pattern that produces
-/// sensible schematics for the vast majority of library components.
-///
-fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32) {
-    match causality {
-        Causality::Input(_) => (-100.0, 0.0),
-        Causality::Output(_) => (100.0, 0.0),
-        _ => match port_index % 4 {
-            0 => (-100.0, 0.0),
-            1 => (100.0, 0.0),
-            2 => (0.0, 100.0),
-            _ => (0.0, -100.0),
-        },
-    }
-}
-
-// The indexer emits the canonical
-// [`lunco_modelica_index::index::ClassEntry`] and
-// [`lunco_modelica_index::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
-// deserialises straight back into those types at runtime, so there is no
-// indexer-local mirror to keep field-aligned by hand.
-
 /// True when the top-level class `name` is actually the package
 /// declared by the containing folder — i.e. the `package.mo` file
 /// declares `package <FolderName> … end <FolderName>` per MLS.
@@ -203,11 +158,8 @@ fn is_top_level_self_ref(name: &str, current_path: &str, is_package_file: bool) 
 }
 
 struct SourceLibraryIndexer {
-    /// Workspace + library engine. Receives every parsed `.mo`
-    /// the indexer scans, then `engine.icon_for(name)` resolves
-    /// inheritance the same way the runtime workbench does —
-    /// rumoca's `class_lookup_query` does proper MLS § 5
-    /// scope-walks, no indexer-side resolver heuristic.
+    /// Shared source-aware engine. Indexed ports, parameters and icons consume
+    /// the same Rumoca-resolved snapshots as the workbench.
     ///
     /// Populated bulk after `scan_dir` finishes via
     /// `engine.session_mut().replace_in_memory_source_set("source-bundle", …)`
@@ -218,8 +170,7 @@ struct SourceLibraryIndexer {
     engine: lunco_modelica_core::engine::ModelicaEngine,
     /// Flat map of fully-qualified-name → own ClassDef. Used for
     /// fields that don't need inheritance (description,
-    /// class_kind, own diagram_graphics, port/param walks until
-    /// they migrate too). Inheritance-merged data comes from
+    /// class_kind and own diagram_graphics). Resolved members come from
     /// `engine.icon_for` and friends — single source of truth.
     classes: HashMap<String, ClassDef>,
     /// Per-class first-paragraph plain-text from
@@ -369,10 +320,11 @@ impl SourceLibraryIndexer {
     fn install_into_engine(&mut self) {
         let count = self.parsed_bundle.len();
         let started = Instant::now();
-        let session = self.engine.session_mut();
-        for document in &self.parsed_bundle {
-            let _ = session.add_document(document.uri(), document.source());
-        }
+        self.engine.replace_in_memory_source_set(
+            "source-bundle",
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
+            self.parsed_bundle.clone(),
+        );
         println!(
             "[indexer] installed {count} docs into engine session in {:.1}s",
             started.elapsed().as_secs_f64()
@@ -517,245 +469,7 @@ impl SourceLibraryIndexer {
         self.classes.insert(full_name.to_string(), class);
     }
 
-    /// Resolve a (possibly relative) `name` referenced from within
-    /// `context_class` by peeling the context's enclosing scope one
-    /// segment at a time and checking `self.classes` for a match.
-    /// Returns the first fully-qualified key that exists, or `None`.
-    ///
-    /// Reduced-form MLS §5.3 scope walk shared by `extends`-base and
-    /// component-type resolution below. NOTE: this is an indexer-side
-    /// heuristic — it doesn't consult imports and falls back on a
-    /// `Modelica.`-prefixed guess (at the `extends` call site). The
-    /// runtime resolves via rumoca's `class_lookup_query`; see the
-    /// icon resolver in `index_all`.
-    ///
-    /// CQ-109: the scope-chain candidate order is generated by the crate's
-    /// **single canonical** resolver, [`lunco_modelica_ast::scope_chain_candidates`],
-    /// rather than a hand-rolled parent walk — so index-time `extends`/type
-    /// resolution can't drift from the runtime diagram projector that uses
-    /// the same generator. This probes the indexer's `self.classes`; the
-    /// projector probes the lazily-loaded source library/engine index instead.
-    fn resolve_in_scope(&self, context_class: &str, name: &str) -> Option<String> {
-        lunco_modelica_ast::scope_chain_candidates(name, Some(context_class))
-            .into_iter()
-            .find(|cand| self.classes.contains_key(cand))
-    }
-
-    fn resolve_inheritance(
-        &self,
-        class_name: &str,
-        ports: &mut Vec<lunco_modelica_index::visual_diagram::PortDef>,
-        params: &mut Vec<lunco_modelica_index::visual_diagram::ParamDef>,
-        visited: &mut HashSet<String>,
-    ) {
-        if visited.contains(class_name) {
-            return;
-        }
-        visited.insert(class_name.to_string());
-
-        if let Some(class) = self.classes.get(class_name) {
-            // 1. Resolve base classes first (extends)
-            for ext in &class.extends {
-                let base_short_name = ext
-                    .base_name
-                    .name
-                    .iter()
-                    .map(|s| s.text.to_string())
-                    .collect::<Vec<String>>()
-                    .join(".");
-
-                // Scope-chain resolution; an unresolved reference remains
-                // unresolved and is reported by the normal compiler path.
-                let mut resolved_base = self.resolve_in_scope(class_name, &base_short_name);
-                if resolved_base.is_none() {
-                    if self.classes.contains_key(&base_short_name) {
-                        resolved_base = Some(base_short_name);
-                    }
-                }
-
-                if let Some(base) = resolved_base {
-                    self.resolve_inheritance(&base, ports, params, visited);
-                }
-            }
-
-            // 2. Add local components
-            for comp in class.components.values() {
-                if matches!(comp.variability, Variability::Parameter(_))
-                    && !params.iter().any(|p| p.name == comp.name)
-                {
-                    // Format the default value for `%paramName`
-                    // text substitution at render time. Prefer
-                    // the explicit binding (`= expr`); fall back
-                    // to `start=` modification (`parameter Real
-                    // R(start=1)`) when no binding is present.
-                    // Rumoca renders every parsed expression. An omitted binding
-                    // uses the declaration's start expression; Empty renders empty.
-                    let default = comp.binding.as_ref().unwrap_or(&comp.start).to_string();
-                    // TODO: resolve `unit` from the type definition.
-                    // For `parameter SI.Torque tau_constant` the
-                    // authoritative unit lives on `Modelica.Units.SI.Torque`
-                    // as `type Torque = Real(unit="N.m")`. Resolve
-                    // `comp.type_name` through the scope chain +
-                    // imports, walk the `extends Real(unit=...)`
-                    // modification, and store the result here so
-                    // the canvas substitution (currently using a
-                    // hand-maintained table in
-                    // `canvas_diagram::si_unit_suffix`) can read
-                    // `p.unit` directly. Until then `unit` is None
-                    // and user-defined SI types lose their suffix.
-                    params.push(lunco_modelica_index::visual_diagram::ParamDef {
-                        name: comp.name.clone(),
-                        param_type: comp.type_name.to_string(),
-                        default,
-                        unit: None,
-                    });
-                }
-
-                let type_str = comp.type_name.to_string();
-                let lower = type_str.to_lowercase();
-
-                let is_port = lower.contains("pin")
-                    || lower.contains("flange")
-                    || lower.contains("port")
-                    || lower.contains("input")
-                    || lower.contains("output");
-
-                let has_causality = matches!(comp.causality, Causality::Input(_))
-                    || matches!(comp.causality, Causality::Output(_));
-
-                if is_port || has_causality {
-                    // Skip conditional connectors (e.g. `BooleanInput
-                    // reset if use_reset` on Continuous.Integrator).
-                    // They're declared in the type's interface but
-                    // *not instantiated* unless the condition is true.
-                    // Including them in the index made every Integrator
-                    // instance render extra port dots for ports that
-                    // aren't actually present in this instance.
-                    //
-                    // We're conservative — `condition.is_some()` is
-                    // enough; we don't try to evaluate the condition.
-                    // Worst case: a connector that's always-on via
-                    // `if true` gets dropped, which is fine for the
-                    // index (the user can still wire it; the dot just
-                    // won't pre-render).
-                    //
-                    // TODO: per-instance conditional resolution.
-                    // -----------------------------------------------
-                    // The current uniform skip is correct for the
-                    // common "default-off source library conditional" case but
-                    // creates a UX gap when a user *enables* the
-                    // conditional on a specific instance (e.g.
-                    // `Integrator integrator(use_reset=true)`):
-                    // simulation works, but the canvas never renders
-                    // the `reset` dot, so the user can't drag a wire
-                    // to it in the diagram editor.
-                    //
-                    // The fix is a 3-step upgrade:
-                    //   1. Index the conditional ports too — add
-                    //      `PortDef.conditional: Option<String>`
-                    //      storing the condition expression source
-                    //      (e.g. `"use_reset"`).
-                    //   2. In the canvas projector, for each
-                    //      conditional port consult the *instance's*
-                    //      modifications (Integrator(use_reset=true))
-                    //      with the class's parameter default as
-                    //      fallback. Decide render-vs-skip per
-                    //      instance.
-                    //   3. Render conditionally-on ports in a slightly
-                    //      different style (dashed outline) so users
-                    //      see "this port only exists because the
-                    //      parameter is on."
-                    //
-                    // Most source library conditions are plain boolean parameter
-                    // refs (`use_reset`, `useSupport`, `useHeatPort`),
-                    // so a 90%-coverage implementation is small.
-                    if comp.condition.is_some() {
-                        continue;
-                    }
-                    // Skip protected components — they're internal to
-                    // the model (e.g. Integrator's `local_reset` /
-                    // `local_set`) and shouldn't render as external
-                    // ports. OMEdit / Dymola don't draw them either.
-                    if comp.is_protected {
-                        continue;
-                    }
-
-                    if !ports.iter().any(|p| p.name == comp.name) {
-                        // Read the placement straight from rumoca's
-                        // typed annotation tree — same code path the
-                        // workbench uses at runtime
-                        // (`lunco_modelica_ast::annotations::extract_placement`).
-                        // Replaces the prior text-regex scan that
-                        // (1) couldn't pull `origin=` when authored
-                        // before `extent=`, (2) silently dropped
-                        // placements declared in nested-class scopes,
-                        // and (3) was source library-specific by virtue of being
-                        // unable to handle parser variations from
-                        // other Modelica libraries. Going through
-                        // rumoca means any library rumoca can parse
-                        // also gets correctly-positioned ports.
-                        let placement =
-                            lunco_modelica_ast::annotations::extract_placement(&comp.annotation);
-                        // Shared extent→centre/size math (see
-                        // `Transformation::centre_size`); position and size
-                        // fall back independently when no placement is given.
-                        let centre_size =
-                            placement.as_ref().map(|p| p.transformation.centre_size());
-                        let (x, y) = centre_size
-                            .map(|(cx, cy, _, _)| (cx as f32, cy as f32))
-                            .unwrap_or_else(|| {
-                                fallback_port_position(&comp.causality, ports.len())
-                            });
-                        let (size_x, size_y) = centre_size
-                            .map(|(_, _, w, h)| (w as f32, h as f32))
-                            .unwrap_or((20.0, 20.0));
-                        let rotation_deg = placement
-                            .as_ref()
-                            .map(|p| p.transformation.rotation as f32)
-                            .unwrap_or(0.0);
-
-                        // Resolve `type_str` to a fully-qualified path so
-                        // runtime callers (canvas port-icon renderer,
-                        // wire-color resolver) can look the connector
-                        // class up directly via `class_cache`. Without
-                        // this, `parameter RealInput u` writes
-                        // `library_path = "RealInput"` and downstream
-                        // resolution fails.
-                        //
-                        // Mirrors the scope-chain walk used above for
-                        // `extends` resolution (no `Modelica.` fallback —
-                        // an unresolved type keeps its as-written name).
-                        let resolved_path = if self.classes.contains_key(&type_str) {
-                            type_str.clone()
-                        } else {
-                            self.resolve_in_scope(class_name, &type_str)
-                                .unwrap_or_else(|| type_str.clone())
-                        };
-                        ports.push(lunco_modelica_index::visual_diagram::PortDef {
-                            name: comp.name.clone(),
-                            connector_type: type_str.clone(),
-                            library_path: resolved_path,
-                            is_flow: is_port,
-                            x,
-                            y,
-                            size_x,
-                            size_y,
-                            rotation_deg,
-                            // Indexer doesn't compute these; the live
-                            // projector/painter fills wire color, port
-                            // kind, and flow-var metadata at runtime.
-                            color: None,
-                            kind: lunco_modelica_index::visual_diagram::PortKind::default(),
-                            flow_vars: Vec::new(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
     fn index_all(&mut self) -> Vec<lunco_modelica_index::index::ClassEntry> {
-        use std::sync::Arc;
         let mut all_comps = Vec::new();
 
         // Snapshot keys so we can iterate while mutably borrowing
@@ -764,61 +478,41 @@ impl SourceLibraryIndexer {
         let names: Vec<String> = self.classes.keys().cloned().collect();
         for full_name in &names {
             let full_name = full_name.as_str();
-            let class = match self.classes.get(full_name) {
-                Some(c) => c.clone(),
-                None => continue,
+            let Some(class) = self.classes.get(full_name) else {
+                continue;
             };
-            let class = &class;
-            // Original loop body resumes; `class` is &ClassDef, an
-            // owned clone here so we can freely &mut self for engine
-            // queries below. ClassDef cloning is cheap relative to
-            // an inheritance walk.
             if matches!(
                 class.class_type,
                 ClassType::Model | ClassType::Block | ClassType::Connector
             ) {
-                let mut ports = Vec::new();
-                let mut parameters = Vec::new();
-                let mut visited = HashSet::new();
-
-                self.resolve_inheritance(full_name, &mut ports, &mut parameters, &mut visited);
+                let snapshot = self.engine.diagram_snapshot(full_name);
+                let (ports, parameters, icon_graphics, resolution, resolution_message) =
+                    match snapshot {
+                        Ok(snapshot) => {
+                            let resolved =
+                                snapshot.class(full_name).expect("captured target class");
+                            (
+                                snapshot.class_ports(resolved),
+                                resolved.parameters(),
+                                resolved.icon.clone(),
+                                lunco_modelica_index::index::ClassResolutionState::Resolved,
+                                None,
+                            )
+                        }
+                        Err(error) => (
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                            lunco_modelica_index::index::ClassResolutionState::Missing,
+                            Some(error),
+                        ),
+                    };
 
                 let short_name = rumoca_core::top_level_last_segment(full_name).to_string();
                 let category = rumoca_core::parent_scope(full_name)
                     .unwrap_or("")
                     .replace('.', "/");
 
-                // Inheritance-merged icon. The merge logic lives in
-                // `extract_icon_inherited`; the resolver does
-                // class-name → ClassDef lookup. Use rumoca's
-                // `class_lookup_query` for the **lookup** (full MLS § 5
-                // scope-chain, no indexer-side heuristic), then fetch
-                // the ClassDef from `self.classes` (which is keyed by
-                // qualified name and populated during scan).
-                //
-                // Why two layers: rumoca's
-                // Rumoca's query would do this end-to-end, but its internal
-                // file lookup
-                // expects `parsed.classes` to contain the full-path
-                // nesting — and source library's `within X; model Y end Y;`
-                // shape only puts `Y` directly under `parsed.classes`.
-                // Our `self.classes` map sidesteps that — we pre-built
-                // the nested-name keying in `add_stored_definition`.
-                let resolver_classes = &self.classes;
-                let session = self.engine.session_mut();
-                let mut resolver = |name: &str| -> Option<Arc<ClassDef>> {
-                    // rumoca's MLS § 5 lookup. Returns the full
-                    // qualified name we keyed on.
-                    let qualified = session.class_lookup_query(name)?;
-                    resolver_classes.get(&qualified).cloned().map(Arc::new)
-                };
-                let mut icon_visited = HashSet::new();
-                let icon_graphics = lunco_modelica_ast::annotations::extract_icon_inherited(
-                    full_name,
-                    class,
-                    &mut resolver,
-                    &mut icon_visited,
-                );
                 // Diagram annotation — used when a connector instance
                 // is rendered on a parent's diagram (carries the
                 // `%name` Text label and the larger filled triangle
@@ -877,8 +571,8 @@ impl SourceLibraryIndexer {
                     children: Vec::new(),
                     equation_count: 0,
                     experiment: None,
-                    resolution: lunco_modelica_index::index::ClassResolutionState::Resolved,
-                    resolution_message: None,
+                    resolution,
+                    resolution_message,
                 });
             }
         }
@@ -1504,6 +1198,51 @@ enum WarmKind {
 mod parsed_bundle_tests {
     use super::{SourceLibraryIndexer, encode_parsed_bundle};
     use std::io::Read;
+
+    #[test]
+    fn index_uses_resolved_ports_and_reports_invalid_declarations() {
+        let mut indexer = SourceLibraryIndexer::new();
+        indexer.ingest_file(
+            std::path::Path::new("Facts.mo"),
+            r#"
+package Facts
+  connector Data = input Real;
+  model PinInput Real value; end PinInput;
+  model Base Data demand; end Base;
+  model Derived
+    extends Base;
+    PinInput ordinary;
+  end Derived;
+  model Invalid extends Missing; end Invalid;
+end Facts;
+"#,
+            "Facts.mo",
+            "",
+        );
+        assert!(indexer.source_errors.is_empty());
+        indexer.install_into_engine();
+        let entries = indexer.index_all();
+        let derived = entries
+            .iter()
+            .find(|entry| entry.name == "Facts.Derived")
+            .unwrap();
+        assert_eq!(derived.ports.len(), 1);
+        assert_eq!(derived.ports[0].name, "demand");
+        assert_eq!(derived.ports[0].library_path, "Facts.Data");
+        assert_eq!(
+            derived.ports[0].kind,
+            lunco_modelica_index::visual_diagram::PortKind::Input
+        );
+        let invalid = entries
+            .iter()
+            .find(|entry| entry.name == "Facts.Invalid")
+            .unwrap();
+        assert_eq!(
+            invalid.resolution,
+            lunco_modelica_index::index::ClassResolutionState::Missing
+        );
+        assert!(invalid.resolution_message.is_some());
+    }
 
     /// The generated parsed-source artifact is a zstd-compressed bincode
     /// stream. Keep this codec contract next to its sole producer without

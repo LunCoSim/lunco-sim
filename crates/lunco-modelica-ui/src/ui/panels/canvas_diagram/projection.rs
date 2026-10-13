@@ -2,8 +2,7 @@
 //!
 //! `project_scene` walks a `VisualDiagram` and produces a fully-laid-
 //! out `lunco_canvas::Scene` plus a `DiagramNodeId → CanvasNodeId`
-//! map. `recover_edges_from_ast` salvages connections from a recovery
-//! parse when the strict AST omits them. `projection_relevant_source_hash`
+//! map. `projection_relevant_source_hash`
 //! is the cache key. `ProjectionTask` carries the in-flight Bevy
 //! task handle so the panel can poll it for completion.
 
@@ -20,213 +19,24 @@ use lunco_modelica_index::visual_diagram::{DiagramNodeId, VisualDiagram};
 use super::edge::{ConnectionEdgeData, PortDir, port_edge_dir};
 use super::node::IconNodeData;
 use super::port::{port_fallback_offset_for_size, port_kind_str, resolve_port_icons};
-use super::si_unit_suffix;
 
-/// Resolve the root instance that owns a drilled class in a generated
-/// Modelica document. The solver publishes a drilled unit's values in root
-/// root (`network_system.Battery.p.i`), while the unit diagram addresses the
-/// same connector as `Battery.p.i`.
-///
-/// The projection task already owns the AST, so this stays off the per-frame
-/// snapshot path. Live painting consumes the resolved instance name only.
+/// Resolve a drilled class's unique owning instance from Rumoca declarations.
 pub(super) fn target_unit_instance(
-    ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    root_model_name: &str,
-    target: Option<&str>,
+    members: &[rumoca_compile::compile::ClassComponentDeclaration],
+    target: &str,
 ) -> Option<String> {
-    let target = target.filter(|target| !target.is_empty() && *target != root_model_name)?;
-    let root = ast.get_class_by_qualified_name(root_model_name)?;
-    let target_leaf = rumoca_core::top_level_last_segment(target);
-    let candidates: Vec<String> = root
-        .components
-        .iter()
-        .filter_map(|(name, component)| {
-            let type_name = component.type_name.to_string();
-            let type_leaf = type_name.rsplit('.').next().unwrap_or(&type_name);
-            (type_name == target || type_leaf == target_leaf).then(|| name.clone())
-        })
-        .collect();
-    (candidates.len() == 1).then(|| candidates[0].clone())
+    let mut candidates = members.iter().filter(|member| member.type_name == target);
+    let first = candidates.next()?;
+    candidates
+        .next()
+        .is_none()
+        .then(|| first.component.name.clone())
 }
 
 /// Result of one complete off-thread AST-to-canvas projection.
 pub struct ProjectedScene {
     pub scene: Scene,
     pub target_unit_instance: Option<String>,
-}
-
-/// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
-/// matching edges to `diagram`. Skips equations whose components
-/// aren't in the diagram (missing nodes stay visually missing) or
-/// that already exist as edges (keyed by unordered endpoint pair).
-///
-/// Deliberately permissive: doesn't validate port existence, doesn't
-/// care about the line-continuation form, doesn't consult
-/// annotations. "Text says A.x ↔ B.y; show a line between A and B".
-pub(super) fn recover_edges_from_ast(
-    ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    diagram: &mut VisualDiagram,
-) {
-    // Walk every class's `Equation::Connect` and add any edges the
-    // primary diagram-build path missed (top-level connectors that
-    // the component-graph builder skips because they aren't
-    // sub-components). Iterating the AST that the projection task
-    // already holds — no second parse.
-    //
-    // AST-as-source-of-truth: the previous implementation called
-    // `parse_to_ast(source, "recover.mo")` here, re-parsing the same
-    // bytes the projection task already received. Removed — re-parse
-    // inside a projection task is a bug.
-
-    // Build (instance_name → DiagramNodeId) index once per call.
-    let index: HashMap<String, DiagramNodeId> = diagram
-        .nodes
-        .iter()
-        .map(|n| (n.instance_name.clone(), n.id))
-        .collect();
-
-    // Track existing edges as unordered pairs so we don't double-
-    // add when the AST path already caught a connection.
-    let existing: std::collections::HashSet<((String, String), (String, String))> = diagram
-        .edges
-        .iter()
-        .map(|e| {
-            let a = (
-                diagram
-                    .get_node(e.source_node)
-                    .map(|n| n.instance_name.clone())
-                    .unwrap_or_default(),
-                e.source_port.clone(),
-            );
-            let b = (
-                diagram
-                    .get_node(e.target_node)
-                    .map(|n| n.instance_name.clone())
-                    .unwrap_or_default(),
-                e.target_port.clone(),
-            );
-            // Canonicalise to min/max so (A.x, B.y) == (B.y, A.x).
-            if a <= b { (a, b) } else { (b, a) }
-        })
-        .collect();
-
-    fn walk(
-        class: &rumoca_compile::parsing::ast::ClassDef,
-        diagram: &mut VisualDiagram,
-        index: &HashMap<String, DiagramNodeId>,
-        existing: &std::collections::HashSet<((String, String), (String, String))>,
-    ) {
-        use rumoca_compile::parsing::ast::Equation;
-        for eq in &class.equations {
-            let Equation::Connect { lhs, rhs, .. } = eq else {
-                continue;
-            };
-            // Only handle 2+ part references (`inst.port[.subport]`);
-            // single-part bare-connector connects are caught by the
-            // primary AST path that builds the component graph.
-            let (src_comp, src_port) = match lhs.parts.as_slice() {
-                [first, rest @ ..] if !rest.is_empty() => (
-                    first.ident.text.to_string(),
-                    rest.iter()
-                        .map(|p| p.ident.text.as_ref())
-                        .collect::<Vec<_>>()
-                        .join("."),
-                ),
-                _ => continue,
-            };
-            let (tgt_comp, tgt_port) = match rhs.parts.as_slice() {
-                [first, rest @ ..] if !rest.is_empty() => (
-                    first.ident.text.to_string(),
-                    rest.iter()
-                        .map(|p| p.ident.text.as_ref())
-                        .collect::<Vec<_>>()
-                        .join("."),
-                ),
-                _ => continue,
-            };
-            let (Some(&src_id), Some(&tgt_id)) = (index.get(&src_comp), index.get(&tgt_comp))
-            else {
-                continue;
-            };
-            let pair = {
-                let a = (src_comp.clone(), src_port.clone());
-                let b = (tgt_comp.clone(), tgt_port.clone());
-                if a <= b { (a, b) } else { (b, a) }
-            };
-            if existing.contains(&pair) {
-                continue;
-            }
-            diagram.add_edge(src_id, src_port, tgt_id, tgt_port);
-        }
-        // Generated USD networks use ordinary scalar Modelica inputs and
-        // outputs, so their causal wires are equations (`pump.in = tank.out`)
-        // rather than acausal `connect()` equations. Treat a direct
-        // component-to-component equality as a directed signal edge only
-        // when the two endpoints are authored input/output ports. Internal
-        // constitutive equations (`thrust = flow * velocity`) remain part of
-        // the component and do not become misleading diagram wires.
-        for eq in &class.equations {
-            let rumoca_compile::parsing::ast::Equation::Simple { lhs, rhs } = eq else {
-                continue;
-            };
-            let Some((lhs_component, lhs_port)) = simple_signal_reference(lhs) else {
-                continue;
-            };
-            let Some((rhs_component, rhs_port)) = simple_signal_reference(rhs) else {
-                continue;
-            };
-            let (Some(&lhs_id), Some(&rhs_id)) =
-                (index.get(&lhs_component), index.get(&rhs_component))
-            else {
-                continue;
-            };
-            let lhs_kind = diagram
-                .get_node(lhs_id)
-                .and_then(|node| node.component_def.ports.iter().find(|p| p.name == lhs_port))
-                .map(|port| port.kind);
-            let rhs_kind = diagram
-                .get_node(rhs_id)
-                .and_then(|node| node.component_def.ports.iter().find(|p| p.name == rhs_port))
-                .map(|port| port.kind);
-            let (source_id, source_port, target_id, target_port) = match (lhs_kind, rhs_kind) {
-                (
-                    Some(lunco_modelica_index::visual_diagram::PortKind::Input),
-                    Some(lunco_modelica_index::visual_diagram::PortKind::Output),
-                ) => (rhs_id, rhs_port, lhs_id, lhs_port),
-                (
-                    Some(lunco_modelica_index::visual_diagram::PortKind::Output),
-                    Some(lunco_modelica_index::visual_diagram::PortKind::Input),
-                ) => (lhs_id, lhs_port, rhs_id, rhs_port),
-                _ => continue,
-            };
-            diagram.add_edge(source_id, source_port, target_id, target_port);
-        }
-        for nested in class.classes.values() {
-            walk(nested, diagram, index, existing);
-        }
-    }
-    for class in ast.classes.values() {
-        walk(class, diagram, &index, &existing);
-    }
-}
-
-/// Extract the only equality shape that represents a visual causal wire:
-/// `component.port = other_component.port`. A bare model variable, literal,
-/// function call, or arithmetic expression is deliberately not a topology
-/// edge.
-fn simple_signal_reference(
-    expression: &rumoca_compile::parsing::ast::Expression,
-) -> Option<(String, String)> {
-    let rumoca_compile::parsing::ast::Expression::ComponentReference(reference) = expression else {
-        return None;
-    };
-    let mut parts = reference
-        .parts
-        .iter()
-        .map(|part| part.ident.text.to_string());
-    let component = parts.next()?;
-    let port = parts.collect::<Vec<_>>().join(".");
-    (!port.is_empty()).then_some((component, port))
 }
 
 pub(super) fn project_scene(
@@ -339,7 +149,7 @@ pub(super) fn project_scene(
                             .cloned()
                             .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| p.default.clone());
-                        let value = match si_unit_suffix(&p.param_type) {
+                        let value = match p.unit.as_deref().filter(|unit| !unit.is_empty()) {
                             Some(unit) if !v.is_empty() => format!("{v} {unit}"),
                             _ => v,
                         };
@@ -360,10 +170,7 @@ pub(super) fn project_scene(
                         )
                     })
                     .collect(),
-                port_connector_icons: resolve_port_icons(
-                    &node.component_def.name,
-                    &node.component_def.ports,
-                ),
+                port_connector_icons: resolve_port_icons(&node.component_def.ports),
                 is_conditional: node.is_conditional,
             }),
             ports,
@@ -411,12 +218,7 @@ pub(super) fn project_scene(
         // port-direction stubs without needing world access.
         let src_node = diagram.nodes.iter().find(|n| n.id == edge.source_node);
         let tgt_node = diagram.nodes.iter().find(|n| n.id == edge.target_node);
-        // Port lookup falls back to the head segment so qualified
-        // sub-port references like `flange.phi` (from
-        // `recover_edges_from_source`) still resolve to the
-        // outer `flange` PortDef. Without this, every recovered
-        // edge with a sub-port lost its colour + stub direction
-        // because the find() returned None.
+        // A nested field uses its outer connector's presentation metadata.
         let find_port = |defs: &[lunco_modelica_index::visual_diagram::PortDef],
                          name: &str|
          -> Option<lunco_modelica_index::visual_diagram::PortDef> {
@@ -741,53 +543,46 @@ pub struct ProjectionTask {
 mod tests {
     use super::target_unit_instance;
 
-    fn fixture() -> rumoca_compile::parsing::ast::StoredDefinition {
-        rumoca_phase_parse::parse_to_ast(
-            r#"
-model Root
-  Unit_One left;
-  Unit_Two right;
-end Root;
-
-model Unit_One
-  Real value;
-end Unit_One;
-
-model Unit_Two
-  Real value;
-end Unit_Two;
-"#,
-            "projection-scope.mo",
-        )
-        .expect("projection scope fixture must parse")
+    fn members(
+        source: &str,
+    ) -> std::sync::Arc<Vec<rumoca_compile::compile::ClassComponentDeclaration>> {
+        let mut session = rumoca_compile::Session::default();
+        session
+            .add_document("scope.mo", source)
+            .expect("fixture admission");
+        session
+            .class_component_declarations_query("Root")
+            .expect("resolved root")
     }
 
     #[test]
-    fn drilled_unit_scope_is_resolved_without_ui_reads() {
-        let ast = fixture();
-        assert_eq!(
-            target_unit_instance(&ast, "Root", Some("Unit_One")),
-            Some("left".to_string())
+    fn drilled_unit_scope_uses_exact_resolved_type_identity() {
+        let members = members(
+            r#"
+package A model Unit Real value; end Unit; end A;
+package B model Unit Real value; end Unit; end B;
+model Root
+  import Selected = A.Unit;
+  Selected left;
+  B.Unit right;
+end Root;
+"#,
         );
-        assert_eq!(target_unit_instance(&ast, "Root", Some("Root")), None);
+        assert_eq!(
+            target_unit_instance(&members, "A.Unit"),
+            Some("left".to_owned())
+        );
+        assert_eq!(
+            target_unit_instance(&members, "B.Unit"),
+            Some("right".to_owned())
+        );
+        assert_eq!(target_unit_instance(&members, "Unit"), None);
     }
 
     #[test]
-    fn repeated_unit_types_are_not_guessed() {
-        let ast = rumoca_phase_parse::parse_to_ast(
-            r#"
-model Root
-  Unit_One left;
-  Unit_One right;
-end Root;
-
-model Unit_One
-  Real value;
-end Unit_One;
-"#,
-            "projection-scope-repeated.mo",
-        )
-        .expect("repeated projection scope fixture must parse");
-        assert_eq!(target_unit_instance(&ast, "Root", Some("Unit_One")), None);
+    fn repeated_unit_types_are_ambiguous() {
+        let members =
+            members("model Root Unit left; Unit right; end Root; model Unit Real value; end Unit;");
+        assert_eq!(target_unit_instance(&members, "Unit"), None);
     }
 }

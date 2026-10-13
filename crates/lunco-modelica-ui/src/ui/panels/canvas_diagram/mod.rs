@@ -895,51 +895,6 @@ pub(super) fn render_target_ctx(
 
 // ─── Drill-in loading overlay ──────────────────────────────────────
 
-/// SI unit suffix for the most common `Modelica.Units.SI.*` types used
-/// by source library Mechanics / Electrical / Blocks. Returned string is appended
-/// to `%paramName` substitutions so the canvas matches OMEdit's
-/// "value + unit" presentation (`J=2 kg.m2`, `c=1e4 N.m/rad`, …).
-///
-/// TODO: replace with proper type resolution. The authoritative source
-/// is the type's declaration — `type Torque = Real(unit="N.m")` — not a
-/// hand-maintained table. Plumb `unit` through `modelica_library_indexer` (resolve
-/// `comp.type_name` via scope chain + `class_cache`, walk the
-/// `extends Real(unit=...)` modification) so `ParamDef.unit` is
-/// populated from source. Once that lands, drop this fn and read
-/// `p.unit` directly. Stopgap covers the high-frequency source library types so
-/// the PID example matches OMEdit; user-defined SI types (e.g.
-/// `type Pressure = Real(unit="Pa")` in user models) fall through to
-/// the bare value until the proper resolver is in.
-pub(super) fn si_unit_suffix(param_type: &str) -> Option<&'static str> {
-    let leaf = param_type.rsplit('.').next().unwrap_or(param_type);
-    Some(match leaf {
-        "Torque" => "N.m",
-        "Inertia" => "kg.m2",
-        "Mass" => "kg",
-        "Length" => "m",
-        "Distance" => "m",
-        "Time" => "s",
-        "Angle" => "rad",
-        "AngularVelocity" => "rad/s",
-        "AngularAcceleration" => "rad/s2",
-        "Velocity" => "m/s",
-        "Acceleration" => "m/s2",
-        "Force" => "N",
-        "Power" => "W",
-        "Energy" => "J",
-        "Frequency" => "Hz",
-        "Temperature" | "ThermodynamicTemperature" => "K",
-        "Voltage" => "V",
-        "Current" => "A",
-        "Resistance" => "Ohm",
-        "Capacitance" => "F",
-        "Inductance" => "H",
-        "RotationalSpringConstant" | "TranslationalSpringConstant" => "N.m/rad",
-        "RotationalDampingConstant" | "TranslationalDampingConstant" => "N.m.s/rad",
-        _ => return None,
-    })
-}
-
 // ─── Drill-in ───────────────────────────────────────────────────────
 
 /// User-facing canvas snap settings, read each frame by the canvas

@@ -1,7 +1,8 @@
 //! Modelica-to-diagram graph builder.
 //!
-//! Converts a parsed Modelica AST (`StoredDefinition`) into a `ComponentGraph`
-//! that can be rendered by any diagram viewer.
+//! Projects an immutable Rumoca declaration snapshot into a `ComponentGraph`.
+//! Package hierarchy reads the document AST; component semantics come from the
+//! shared session.
 //!
 //! ## Supported diagram types
 //!
@@ -9,25 +10,254 @@
 //! - **Connection Diagram**: Like block diagram but connector nodes expanded
 //! - **Package Hierarchy**: Packages as subsystem nodes with containment edges
 //!
-//! ## Usage
-//!
-//! ```ignore
-//! use rumoca_phase_parse::parse_to_ast;
-//! use lunco_modelica_core::diagram::ModelicaComponentBuilder;
-//!
-//! let ast = parse_to_ast(source, "model.mo").unwrap();
-//! let graph = ModelicaComponentBuilder::from_ast(&ast)
-//!     .diagram_type(DiagramType::BlockDiagram)
-//!     .build();
-//! ```
-
 use lunco_modelica_ast::diagram_model::{
-    ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
+    ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind, PortDirection,
 };
-use lunco_modelica_ast::scope_chain_candidates;
-use lunco_modelica_ast::{Causality, ClassType, Variability};
-use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
+use lunco_modelica_ast::{Causality, ClassType};
+use rumoca_compile::parsing::ast::{ClassDef, Equation, Expression, StoredDefinition};
+use rumoca_compile::{Session, compile::ClassComponentDeclaration};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Immutable presentation facts captured from the shared Rumoca session.
+/// Inheritance and type lookup are completed before graph projection; missing
+/// or cyclic declarations reject capture instead of inventing ports.
+#[derive(Debug, Clone)]
+pub struct DiagramSnapshot {
+    pub target: String,
+    pub members: Arc<Vec<ClassComponentDeclaration>>,
+    pub equations: Vec<Equation>,
+    classes: HashMap<String, DiagramClass>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiagramClass {
+    pub class_type: ClassType,
+    pub expandable: bool,
+    pub partial: bool,
+    pub annotation: Vec<Expression>,
+    pub icon: Option<lunco_modelica_ast::annotations::Icon>,
+    pub members: Arc<Vec<ClassComponentDeclaration>>,
+}
+
+impl DiagramSnapshot {
+    /// Capture only the selected class, its instantiated types and connector
+    /// declarations. Rumoca caches member results by session revision.
+    pub fn capture(session: &mut Session, target: &str) -> Result<Self, String> {
+        let equations = session
+            .class_definition_query(target)
+            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?
+            .equations
+            .clone();
+        let members = session
+            .class_component_declarations_query(target)
+            .ok_or_else(|| {
+                format!("Modelica diagram declarations for `{target}` are unresolved or cyclic")
+            })?;
+        let mut snapshot = Self {
+            target: target.to_owned(),
+            members,
+            equations,
+            classes: HashMap::new(),
+        };
+        snapshot.capture_class(session, target)?;
+        let types: Vec<String> = snapshot
+            .members
+            .iter()
+            .map(|member| member.type_name.clone())
+            .collect();
+        for name in types {
+            snapshot.capture_class(session, &name)?;
+        }
+        let port_types: Vec<String> = snapshot
+            .classes
+            .values()
+            .flat_map(|class| class.members.iter().map(|member| member.type_name.clone()))
+            .collect();
+        for name in port_types {
+            if session
+                .class_definition_query(&name)
+                .is_some_and(|class| class.class_type == ClassType::Connector)
+            {
+                snapshot.capture_class(session, &name)?;
+            }
+        }
+        Ok(snapshot)
+    }
+
+    fn capture_class(&mut self, session: &mut Session, name: &str) -> Result<(), String> {
+        if rumoca_core::is_builtin_type(name) || self.classes.contains_key(name) {
+            return Ok(());
+        }
+        let class = session
+            .class_definition_query(name)
+            .ok_or_else(|| format!("Modelica diagram type `{name}` is unavailable"))?;
+        let (class_type, expandable, partial, annotation, icon) = (
+            class.class_type.clone(),
+            class.expandable,
+            class.partial,
+            class.annotation.clone(),
+            lunco_modelica_ast::annotations::extract_icon(&class.annotation),
+        );
+        let members = session
+            .class_component_declarations_query(name)
+            .ok_or_else(|| {
+                format!("Modelica diagram declarations for `{name}` are unresolved or cyclic")
+            })?;
+        self.classes.insert(
+            name.to_owned(),
+            DiagramClass {
+                class_type,
+                expandable,
+                partial,
+                annotation,
+                icon,
+                members,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn class_ports(
+        &self,
+        class: &DiagramClass,
+    ) -> Vec<lunco_modelica_index::visual_diagram::PortDef> {
+        class.members.iter().filter(|member| self.is_port(member)).map(|member| {
+        let sub = &member.component;
+        let (x, y, size_x, size_y, rotation_deg) = lunco_modelica_ast::annotations::extract_placement(&sub.annotation).map(|placement| {
+            let (x, y, width, height) = placement.transformation.centre_size();
+            (x as f32, y as f32, width as f32, height as f32, placement.transformation.rotation as f32)
+        }).unwrap_or((0.0, 0.0, 20.0, 20.0, 0.0));
+        let connector = self.class(&member.type_name);
+        let flow_vars = connector.map(|class| class.members.iter().filter_map(|member| {
+            matches!(member.component.connection, rumoca_compile::parsing::ast::Connection::Flow(_)).then(|| {
+                lunco_modelica_index::visual_diagram::FlowVarMeta {
+                    name: member.component.name.clone(),
+                    unit: member.component.modifications.get("unit")
+                        .and_then(lunco_modelica_ast::ast_extract::string_literal_value).unwrap_or_default(),
+                }
+            })
+        }).collect::<Vec<_>>()).unwrap_or_default();
+        use lunco_modelica_index::visual_diagram::PortKind;
+        let kind = if !flow_vars.is_empty() { PortKind::Acausal } else {
+            match member.effective_causality {
+                lunco_modelica_ast::Causality::Input(_) => PortKind::Input,
+                lunco_modelica_ast::Causality::Output(_) => PortKind::Output,
+                lunco_modelica_ast::Causality::Empty => {
+                    let (n_in, n_out) = connector.map(|class| class.members.iter().fold((0,0), |(i,o), member| match member.effective_causality {
+                        lunco_modelica_ast::Causality::Input(_) => (i+1,o),
+                        lunco_modelica_ast::Causality::Output(_) => (i,o+1),
+                        lunco_modelica_ast::Causality::Empty => (i,o),
+                    })).unwrap_or((0,0));
+                    match (n_in,n_out) { (1,0) => PortKind::Input, (0,1) => PortKind::Output, _ => PortKind::Acausal }
+                }
+            }
+        };
+        lunco_modelica_index::visual_diagram::PortDef {
+            name: sub.name.clone(), connector_type: member.type_name.clone(), library_path: member.type_name.clone(),
+            is_flow: !flow_vars.is_empty(), x, y, size_x, size_y,
+            rotation_deg, color: connector.and_then(|class| connector_icon_color(&class.annotation)), kind, flow_vars,
+        }
+    }).collect()
+    }
+
+    pub(crate) fn classes_mut(&mut self) -> impl Iterator<Item = (&String, &mut DiagramClass)> {
+        self.classes.iter_mut()
+    }
+
+    pub fn class(&self, name: &str) -> Option<&DiagramClass> {
+        self.classes.get(name)
+    }
+
+    pub fn is_port(&self, member: &ClassComponentDeclaration) -> bool {
+        !member.component.is_protected
+            && (!matches!(member.effective_causality, Causality::Empty)
+                || self
+                    .class(&member.type_name)
+                    .is_some_and(|class| class.class_type == ClassType::Connector))
+    }
+
+    fn ports_for_component(&self, member: &ClassComponentDeclaration) -> Vec<ComponentPort> {
+        if self
+            .class(&member.type_name)
+            .is_some_and(|class| class.class_type == ClassType::Connector)
+            || !matches!(member.effective_causality, Causality::Empty)
+        {
+            return vec![declaration_port(member, &member.component.name)];
+        }
+        // Only built-in primitives lack a class in this validated snapshot.
+        self.class(&member.type_name)
+            .map(|class| {
+                class
+                    .members
+                    .iter()
+                    .filter(|sub| self.is_port(sub))
+                    .map(|sub| declaration_port(sub, &sub.component.name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+// The first authored graphic color supplies connector presentation.
+fn connector_icon_color(
+    annotation: &[rumoca_compile::parsing::ast::Expression],
+) -> Option<[u8; 3]> {
+    use lunco_modelica_ast::annotations::{GraphicItem, extract_icon};
+    let icon = extract_icon(annotation)?;
+    for g in &icon.graphics {
+        let (line, fill) = match g {
+            GraphicItem::Rectangle(r) => (r.shape.line_color, r.shape.fill_color),
+            GraphicItem::Polygon(p) => (p.shape.line_color, p.shape.fill_color),
+            GraphicItem::Ellipse(e) => (e.shape.line_color, e.shape.fill_color),
+            GraphicItem::Line(l) => (l.color, None),
+            GraphicItem::Text(_) | GraphicItem::Bitmap(_) => (None, None),
+        };
+        if let Some(c) = line.or(fill) {
+            return Some([c.r, c.g, c.b]);
+        }
+    }
+    None
+}
+
+impl DiagramClass {
+    pub fn parameters(&self) -> Vec<lunco_modelica_index::visual_diagram::ParamDef> {
+        self.members
+            .iter()
+            .filter(|member| {
+                matches!(
+                    member.component.variability,
+                    lunco_modelica_ast::Variability::Parameter(_)
+                )
+            })
+            .map(|member| lunco_modelica_index::visual_diagram::ParamDef {
+                name: member.component.name.clone(),
+                param_type: member.type_name.clone(),
+                default: member
+                    .component
+                    .binding
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+                unit: member
+                    .component
+                    .modifications
+                    .get("unit")
+                    .and_then(lunco_modelica_ast::ast_extract::string_literal_value),
+            })
+            .collect()
+    }
+}
+
+fn declaration_port(member: &ClassComponentDeclaration, name: &str) -> ComponentPort {
+    let mut port = ComponentPort::output(name).with_type(&member.type_name);
+    port.direction = match member.effective_causality {
+        Causality::Input(_) => PortDirection::Input,
+        Causality::Output(_) => PortDirection::Output,
+        Causality::Empty => PortDirection::Bidir,
+    };
+    port
+}
 
 /// The type of diagram to generate from a Modelica model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,43 +272,25 @@ pub enum DiagramType {
     PackageHierarchy,
 }
 
-/// Builder that converts a Modelica AST into a `ComponentGraph`.
+/// Project already-resolved Modelica declarations into a component graph.
 pub struct ModelicaComponentBuilder {
-    /// Shared reference to the parsed AST. Using `Arc` here instead
-    /// of an owned `StoredDefinition` is load-bearing: source library package
-    /// files like `Modelica/Blocks/package.mo` parse into trees
-    /// tens of megabytes deep, and a naïve `.clone()` of the
-    /// whole tree on every projection is enough to push the OS
-    /// into swap and freeze the whole device. Cloning the `Arc` is
-    /// a single pointer bump regardless of tree size.
-    ast: std::sync::Arc<StoredDefinition>,
+    ast: Arc<StoredDefinition>,
+    snapshot: Arc<DiagramSnapshot>,
     diagram_type: DiagramType,
-    /// If set, only build the diagram for this specific class name.
-    target_class: Option<String>,
 }
 
 impl ModelicaComponentBuilder {
-    /// Create a new builder from a shared parsed AST. The `Arc`
-    /// contract lets callers reuse the same AST across many
-    /// builders without any deep clone; see the `ast` field
-    /// comment for why this matters.
-    pub fn from_ast(ast: std::sync::Arc<StoredDefinition>) -> Self {
+    pub fn from_snapshot(ast: Arc<StoredDefinition>, snapshot: Arc<DiagramSnapshot>) -> Self {
         Self {
             ast,
+            snapshot,
             diagram_type: DiagramType::BlockDiagram,
-            target_class: None,
         }
     }
 
     /// Set the diagram type to generate.
     pub fn diagram_type(mut self, ty: DiagramType) -> Self {
         self.diagram_type = ty;
-        self
-    }
-
-    /// Set the target class to diagram (default: first non-package class).
-    pub fn target_class(mut self, name: impl Into<String>) -> Self {
-        self.target_class = Some(name.into());
         self
     }
 
@@ -96,62 +308,34 @@ impl ModelicaComponentBuilder {
     // -----------------------------------------------------------------------
 
     fn build_block_diagram(self) -> ComponentGraph {
-        let target = self.resolve_target_class();
-        let mut graph = ComponentGraph::titled(self.ast_title());
+        let target = &self.snapshot.target;
+        let mut graph = ComponentGraph::titled(target);
 
-        if let Some(class) = self.get_target_class(&target) {
+        {
             let mut name_to_id: HashMap<String, NodeId> = HashMap::new();
 
-            // Direct components first; then merge components inherited via
-            // `extends` so wires connecting to parent-class connectors
-            // (e.g. PID's u/y from `extends Modelica.Blocks.Interfaces.SISO`)
-            // actually find a node to land on. Direct declarations win
-            // on name collision (MLS §7 inheritance precedence).
-            // Borrow direct components in place; only the inherited set is
-            // owned (the `extends` walk rewrites type names, so those
-            // Components are freshly built). Deep-cloning every direct
-            // Component here was the hot-path stall on large package
-            // diagrams (CQ-203) — a single `merged` of references suffices.
-            let inherited = collect_inherited_components(class, Some(&target), &self.ast, 0);
-            let direct_names: std::collections::HashSet<&str> =
-                class.components.iter().map(|(n, _)| n.as_str()).collect();
-            let merged: Vec<(&str, &Component)> = class
-                .components
+            let merged: Vec<_> = self
+                .snapshot
+                .members
                 .iter()
-                .map(|(n, c)| (n.as_str(), c))
-                .chain(
-                    inherited
-                        .iter()
-                        .filter(|(n, _)| !direct_names.contains(n.as_str()))
-                        .map(|(n, c)| (n.as_str(), c)),
-                )
+                .map(|member| (member.component.name.as_str(), member))
                 .collect();
 
             // Add components as nodes
-            for &(comp_name, comp) in &merged {
-                let ports = ports_for_component(
-                    comp,
-                    &target,
-                    &self.ast,
-                    // Diagram building runs on the projection task —
-                    // Cached mode prevents synchronous source library parses
-                    // that stall the AsyncCompute pool. Misses fall
-                    // back to default port glyphs; the async warmer
-                    // upgrades on the next projection.
-                    crate::class_cache::ClassLookupMode::Cached,
-                );
+            for &(comp_name, member) in &merged {
+                let ports = self.snapshot.ports_for_component(member);
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id =
                     graph.add_node_named(NodeKind::Component, comp_name, qualified, ports);
                 // Store component type name in meta for display
                 graph.nodes[node_id.0 as usize]
                     .meta
-                    .insert("type_name".to_string(), comp.type_name.to_string());
+                    .insert("type_name".to_string(), member.type_name.clone());
                 name_to_id.insert(comp_name.to_string(), node_id);
             }
 
             // Add connections as edges
-            for eq in &class.equations {
+            for eq in &self.snapshot.equations {
                 if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
@@ -196,7 +380,7 @@ impl ModelicaComponentBuilder {
             // is represented by direct equalities rather than `connect()`;
             // preserve those signal links in the shared graph as directed
             // edges while leaving component-internal equations private.
-            for eq in &class.equations {
+            for eq in &self.snapshot.equations {
                 let Equation::Simple { lhs, rhs } = eq else {
                     continue;
                 };
@@ -260,54 +444,41 @@ impl ModelicaComponentBuilder {
     // -----------------------------------------------------------------------
 
     fn build_connection_diagram(self) -> ComponentGraph {
-        let target = self.resolve_target_class();
-        let mut graph = ComponentGraph::titled(self.ast_title());
+        let target = &self.snapshot.target;
+        let mut graph = ComponentGraph::titled(target);
 
-        if let Some(class) = self.get_target_class(&target) {
+        {
             let mut name_to_id: HashMap<String, NodeId> = HashMap::new();
 
             // Track connector instances: "comp.port" → info
             let mut connector_registry: HashMap<String, ConnectorInfo> = HashMap::new();
 
-            // Same borrow-don't-clone merge as block diagram — see
-            // `build_block_diagram` for the inheritance + CQ-203 rationale.
-            let inherited = collect_inherited_components(class, Some(&target), &self.ast, 0);
-            let direct_names: std::collections::HashSet<&str> =
-                class.components.iter().map(|(n, _)| n.as_str()).collect();
-            let merged: Vec<(&str, &Component)> = class
-                .components
+            let merged: Vec<_> = self
+                .snapshot
+                .members
                 .iter()
-                .map(|(n, c)| (n.as_str(), c))
-                .chain(
-                    inherited
-                        .iter()
-                        .filter(|(n, _)| !direct_names.contains(n.as_str()))
-                        .map(|(n, c)| (n.as_str(), c)),
-                )
+                .map(|member| (member.component.name.as_str(), member))
                 .collect();
 
             // First pass: identify all connector ports on components
-            for &(comp_name, comp) in &merged {
-                let conn_ports = get_connector_port_names(comp);
+            for &(comp_name, member) in &merged {
+                let conn_ports = self.snapshot.ports_for_component(member);
                 for conn_name in &conn_ports {
-                    let key = format!("{}.{}", comp_name, conn_name);
+                    let key = format!("{}.{}", comp_name, conn_name.name);
                     connector_registry
                         .entry(key.clone())
                         .or_insert_with(|| ConnectorInfo {
                             comp_name: comp_name.to_string(),
-                            port_name: conn_name.clone(),
-                            port_type: comp.type_name.to_string(),
+                            port_name: conn_name.name.clone(),
+                            port_type: member.type_name.clone(),
                         });
                 }
             }
 
             // Add component nodes (only those with connector ports)
-            for &(comp_name, comp) in &merged {
-                let conn_ports = get_connector_port_names(comp);
-                let ports: Vec<ComponentPort> = conn_ports
-                    .iter()
-                    .map(|name| ComponentPort::output(name).with_type(comp.type_name.to_string()))
-                    .collect();
+            for &(comp_name, member) in &merged {
+                let conn_ports = self.snapshot.ports_for_component(member);
+                let ports = conn_ports;
 
                 if !ports.is_empty() {
                     let node_id = graph.add_node_named(
@@ -344,7 +515,7 @@ impl ModelicaComponentBuilder {
             }
 
             // Connect connector nodes via `connect()` equations
-            for eq in &class.equations {
+            for eq in &self.snapshot.equations {
                 if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
@@ -445,414 +616,6 @@ impl ModelicaComponentBuilder {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-
-    fn ast_title(&self) -> String {
-        if let Some(w) = &self.ast.within {
-            format!("{}.{}", w, self.target_class.as_deref().unwrap_or("?"))
-        } else {
-            self.target_class
-                .clone()
-                .unwrap_or_else(|| "Model".to_string())
-        }
-    }
-
-    fn resolve_target_class(&self) -> String {
-        if let Some(name) = &self.target_class {
-            return name.clone();
-        }
-        resolve_primary_target(&self.ast).unwrap_or_default()
-    }
-
-    fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        self.ast.get_class_by_qualified_name(name)
-    }
-}
-
-/// The fully-qualified name of the class a package- or multi-class AST
-/// should open to on the canvas when no explicit drill target is given.
-///
-/// Mirrors the old `resolve_target_class` walk, extracted to a free
-/// function so the projection layer can resolve a sensible target for a
-/// package-shaped AST *instead of* rendering an empty card. Prepends the
-/// file's `within` clause so the returned name is fully-qualified —
-/// `extends` resolution walks the scope chain off this name, and a bare
-/// short name (e.g. `"PIDCopy"`) leaves `extends Interfaces.SISO` with no
-/// parent to walk up to.
-///
-/// Walk order:
-///   1. top-level models / blocks / classes
-///   2. nested-in-package models / blocks / classes (one level)
-///   3. any non-package class (connectors, records, types) — last resort
-///
-/// Returns `None` only when the AST has no classes at all.
-pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
-    let within_prefix: String = ast
-        .within
-        .as_ref()
-        .map(|w| w.to_string())
-        .unwrap_or_default();
-    let qualify =
-        |short: &str| -> String { lunco_modelica_ast::ast_extract::qualify(&within_prefix, short) };
-    // Models are the canonical "open this in the canvas" choice;
-    // connectors and types alone have no diagram.
-    let is_diagrammable =
-        |t: ClassType| matches!(t, ClassType::Model | ClassType::Block | ClassType::Class);
-    for (name, class) in &ast.classes {
-        if is_diagrammable(class.class_type.clone()) {
-            return Some(qualify(name));
-        }
-    }
-    for (pkg_name, pkg) in &ast.classes {
-        if pkg.class_type != ClassType::Package {
-            continue;
-        }
-        for (inner_name, inner) in &pkg.classes {
-            if is_diagrammable(inner.class_type.clone()) {
-                return Some(qualify(&lunco_modelica_ast::ast_extract::qualify(
-                    pkg_name, inner_name,
-                )));
-            }
-        }
-    }
-    // Fallback: first non-package anything (connectors, records, types).
-    // Better than picking the package and rendering nothing.
-    for (name, class) in &ast.classes {
-        if class.class_type != ClassType::Package {
-            return Some(qualify(name));
-        }
-    }
-    ast.classes.keys().next().map(|n| qualify(n))
-}
-
-/// Walk a class's `extends` chain and collect all components inherited
-/// from base classes. Direct (non-inherited) components are *not*
-/// returned — the caller is responsible for merging.
-///
-/// `class_qualified_path` is the dotted qualified name of `class`
-/// (e.g. `"Modelica.Blocks.Continuous.PID"`). It's used to resolve
-/// short-form `extends` references the way MLS §5.3 prescribes:
-/// walk enclosing scopes outward until a match is found. PID's
-/// `extends Interfaces.SISO` resolves to
-/// `Modelica.Blocks.Interfaces.SISO`, not the literal `Interfaces.SISO`.
-/// Pass `None` when no such context exists (e.g. a source-library base whose
-/// own qualified path we don't carry through).
-///
-/// Resolution order for each `extends` target:
-///   1. Local lookup inside the same `StoredDefinition`.
-///   2. The shared source-aware library engine via
-///      [`crate::class_cache::peek_or_load_class_blocking`].
-///   3. Both retried with each enclosing-scope prefix of
-///      `class_qualified_path`.
-///
-/// Honors `break_names` (MLS §7.4 selective model extension).
-/// Depth is capped to defend against pathological cycles.
-pub fn collect_inherited_components(
-    class: &ClassDef,
-    class_qualified_path: Option<&str>,
-    ast: &StoredDefinition,
-    depth: u32,
-) -> Vec<(String, Component)> {
-    collect_inherited_components_with(
-        class,
-        class_qualified_path,
-        ast,
-        depth,
-        crate::class_cache::ClassLookupMode::Cached,
-    )
-}
-
-/// Same as [`collect_inherited_components`] but takes an explicit
-/// [`crate::class_cache::ClassLookupMode`]. Tests pass
-/// [`crate::class_cache::ClassLookupMode::Loading`] to load synchronously
-/// from a non-worker thread; the projection task uses
-/// [`crate::class_cache::ClassLookupMode::Cached`] to avoid blocking on
-/// source library parses inside its task pool.
-pub fn collect_inherited_components_with(
-    class: &ClassDef,
-    class_qualified_path: Option<&str>,
-    ast: &StoredDefinition,
-    depth: u32,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> Vec<(String, Component)> {
-    const MAX_DEPTH: u32 = 8;
-    let mut out: Vec<(String, Component)> = Vec::new();
-    if depth >= MAX_DEPTH {
-        return out;
-    }
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Recursion into a base's *own* extends chain resolves against the base's
-    // qualified path, not this file's AST, so an empty definition is the right
-    // second-arg. Allocate it once for the whole walk rather than per-`extends`
-    // (CQ-203 — `StoredDefinition::default()` is not free at this fan-out).
-    let empty_definition = StoredDefinition::default();
-    for ext in &class.extends {
-        let raw = ext.base_name.to_string();
-        if raw.is_empty() {
-            continue;
-        }
-        let breaks: std::collections::HashSet<&str> =
-            ext.break_names.iter().map(|s| s.as_str()).collect();
-
-        let candidates = scope_chain_candidates(&raw, class_qualified_path);
-
-        // Resolution attempts:
-        //   1. Local AST lookup (same file / same package).
-        //   2. An *already-cached* library class from `peek_class_cached` —
-        //      MUST be cache-only, never trigger a fresh parse here.
-        //
-        // Why no fresh source library parse: this function is called inside the
-        // projection task running on Bevy's AsyncComputeTaskPool. The
-        // pool is small (≈ N/4 threads); a synchronous rumoca parse of
-        // a large source library file (e.g. `Continuous.mo`, 184 KB) from inside a
-        // worker that's *already* serving a parent rumoca parse stalls
-        // for the full 60 s projection deadline. Pre-warming
-        // cross-file source library inheritance belongs in a separate background
-        // task that runs at drill-in time and feeds the cache.
-        let mut found_local: Option<(&ClassDef, String)> = None;
-        let mut found_library: Option<(std::sync::Arc<ClassDef>, String)> = None;
-        for cand in &candidates {
-            if let Some(base) = ast.get_class_by_qualified_name(cand) {
-                found_local = Some((base, cand.clone()));
-                break;
-            }
-            if let Some(base_arc) = lookup_mode.lookup(cand) {
-                found_library = Some((base_arc, cand.clone()));
-                break;
-            }
-        }
-
-        let (base, base_qpath): (&ClassDef, String) = if let Some((b, q)) = found_local {
-            (b, q)
-        } else if let Some((ref arc, ref q)) = found_library {
-            (&**arc, q.clone())
-        } else {
-            continue;
-        };
-
-        for (name, comp) in &base.components {
-            if breaks.contains(name.as_str()) || seen.contains(name) {
-                continue;
-            }
-            seen.insert(name.clone());
-            // Inherited component types (e.g. SISO declares
-            // `RealInput u`) are resolved in the *base*'s scope, not
-            // the deriving class's. Without rewriting, the conversion
-            // at `panels/diagram.rs:2034` looks up "RealInput" in
-            // PID's scope (which doesn't import it) and the node gets
-            // dropped. Pre-resolve to a fully-qualified path here so
-            // the palette lookup succeeds.
-            let mut comp = comp.clone();
-            let resolved =
-                resolve_type_in_scope(&comp.type_name.to_string(), &base_qpath, lookup_mode);
-            if let Some(q) = resolved {
-                comp.type_name = rumoca_compile::parsing::ast::Name::from_string(&q);
-            }
-            out.push((name.clone(), comp));
-        }
-        for (name, comp) in collect_inherited_components_with(
-            base,
-            Some(&base_qpath),
-            &empty_definition,
-            depth + 1,
-            lookup_mode,
-        ) {
-            if breaks.contains(name.as_str()) || seen.contains(&name) {
-                continue;
-            }
-            seen.insert(name.clone());
-            out.push((name, comp));
-        }
-    }
-    out
-}
-
-/// Discover the connector ports of `comp` by looking up its type
-/// class. Walks the type's own components + its `extends` chain;
-/// any component whose type is itself a `connector` (or whose
-/// `causality` is Input/Output) is exposed as a port on the
-/// returned list.
-///
-/// Falls back to [`extract_component_ports`]'s causality heuristic
-/// when the type can't be resolved (cache cold or a source-aware
-/// class is still loading) — keeps the projection robust on first
-/// drill-in before the pre-warm has populated the cache.
-fn ports_for_component(
-    comp: &Component,
-    owner_qualified_path: &str,
-    ast: &StoredDefinition,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> Vec<ComponentPort> {
-    let type_ref = comp.type_name.to_string();
-    if type_ref.is_empty() {
-        return extract_component_ports(comp);
-    }
-
-    let candidates = scope_chain_candidates(&type_ref, Some(owner_qualified_path));
-    let mut found_local: Option<&ClassDef> = None;
-    let mut found_library: Option<std::sync::Arc<ClassDef>> = None;
-    let mut hit_qpath: Option<String> = None;
-    for cand in &candidates {
-        if let Some(c) = ast.get_class_by_qualified_name(cand) {
-            found_local = Some(c);
-            hit_qpath = Some(cand.clone());
-            break;
-        }
-        if let Some(arc) = lookup_mode.lookup(cand) {
-            found_library = Some(arc);
-            hit_qpath = Some(cand.clone());
-            break;
-        }
-    }
-    let (type_class, type_qpath): (&ClassDef, &str) = match (&found_local, &found_library) {
-        (Some(c), _) => (*c, hit_qpath.as_deref().unwrap_or("")),
-        (None, Some(arc)) => (&**arc, hit_qpath.as_deref().unwrap_or("")),
-        (None, None) => return extract_component_ports(comp),
-    };
-
-    // If the type itself is a connector class, the component is a
-    // single connector instance — expose one port named after the
-    // component's own name. Empty for the projection's empty-port
-    // fallback to handle (resolved to index 0).
-    use lunco_modelica_ast::ClassType;
-    if matches!(type_class.class_type, ClassType::Connector) {
-        return vec![ComponentPort::output(&comp.name).with_type(&type_ref)];
-    }
-
-    // Otherwise: walk the type class's components (direct + inherited)
-    // and emit a port for each connector-typed sub-component. This
-    // is what surfaces `u`/`y` on a `Gain` instance (Gain extends
-    // SISO; SISO has `RealInput u`, `RealOutput y`).
-    // Borrow direct sub-components; only the inherited set is owned. Cloning
-    // the type class's whole component list on every port query was a CQ-203
-    // hot-path cost (this runs once per component node, per projection).
-    let inherited =
-        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, lookup_mode);
-    let direct_names: std::collections::HashSet<&str> = type_class
-        .components
-        .iter()
-        .map(|(n, _)| n.as_str())
-        .collect();
-    let sub_components: Vec<(&str, &Component)> = type_class
-        .components
-        .iter()
-        .map(|(n, c)| (n.as_str(), c))
-        .chain(
-            inherited
-                .iter()
-                .filter(|(n, _)| !direct_names.contains(n.as_str()))
-                .map(|(n, c)| (n.as_str(), c)),
-        )
-        .collect();
-
-    let mut ports = Vec::new();
-    for &(sub_name, sub) in &sub_components {
-        let sub_type = sub.type_name.to_string();
-        // Causality wins when present (input/output declarations are
-        // unambiguously ports). Otherwise consult the type's class.
-        use lunco_modelica_ast::Causality;
-        let is_port = match sub.causality {
-            Causality::Input(_) | Causality::Output(_) => true,
-            Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, lookup_mode),
-        };
-        if !is_port {
-            continue;
-        }
-        let mut port = ComponentPort::output(sub_name);
-        if !sub_type.is_empty() {
-            port = port.with_type(&sub_type);
-        }
-        ports.push(port);
-    }
-
-    if ports.is_empty() {
-        // No connectors discovered (e.g. a Real-typed signal class
-        // with only flow variables) — keep the heuristic path so
-        // bare wires still attach somewhere.
-        return extract_component_ports(comp);
-    }
-    ports
-}
-
-/// Resolve a type reference to a `ClassDef` via the scope chain
-/// rooted at `owner_qualified_path`. Searches the local AST first,
-/// then falls back to the supplied source-aware resolver. Returns `None` if
-/// no candidate path resolves.
-///
-/// Public so the projector can read connector classes' `Icon`
-/// annotations (for OMEdit-style wire colors) without duplicating
-/// scope-chain logic.
-pub fn resolve_class_by_scope_pub(
-    type_ref: &str,
-    owner_qualified_path: &str,
-    ast: &StoredDefinition,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> Option<std::sync::Arc<ClassDef>> {
-    let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
-    for cand in &candidates {
-        if let Some(c) = ast.get_class_by_qualified_name(cand) {
-            return Some(std::sync::Arc::new(c.clone()));
-        }
-        if let Some(arc) = lookup_mode.lookup(cand) {
-            return Some(arc);
-        }
-    }
-    None
-}
-
-/// Public re-export of [`is_connector_type`] for callers outside this
-/// module (notably the projector's local-class port extractor).
-pub fn is_connector_type_pub(
-    type_ref: &str,
-    owner_qualified_path: &str,
-    ast: &StoredDefinition,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> bool {
-    is_connector_type(type_ref, owner_qualified_path, ast, lookup_mode)
-}
-
-/// True when `type_ref` resolves to a `connector` class via the
-/// scope chain anchored at `owner_qualified_path`.
-fn is_connector_type(
-    type_ref: &str,
-    owner_qualified_path: &str,
-    ast: &StoredDefinition,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> bool {
-    use lunco_modelica_ast::ClassType;
-    if type_ref.is_empty() {
-        return false;
-    }
-    let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
-    for cand in &candidates {
-        if let Some(c) = ast.get_class_by_qualified_name(cand) {
-            return matches!(c.class_type, ClassType::Connector);
-        }
-        if let Some(arc) = lookup_mode.lookup(cand) {
-            return matches!(arc.class_type, ClassType::Connector);
-        }
-    }
-    false
-}
-
-/// Resolve a short-form type reference to a fully-qualified path
-/// using a class's scope chain. Returns `None` if no candidate
-/// resolves via the supplied source-aware resolver. Already-qualified names
-/// (containing a `.`) are returned unchanged.
-fn resolve_type_in_scope(
-    type_ref: &str,
-    class_qualified_path: &str,
-    lookup_mode: crate::class_cache::ClassLookupMode,
-) -> Option<String> {
-    if type_ref.contains('.') {
-        return Some(type_ref.to_string());
-    }
-    let candidates = scope_chain_candidates(type_ref, Some(class_qualified_path));
-    for cand in &candidates {
-        if lookup_mode.lookup(cand).is_some() {
-            return Some(cand.clone());
-        }
-    }
-    None
 }
 
 /// Information about a connector instance in a Modelica model.
@@ -863,83 +626,10 @@ struct ConnectorInfo {
     port_type: String,
 }
 
-/// Extract diagram ports from a component's connectors.
-fn extract_component_ports(comp: &Component) -> Vec<ComponentPort> {
-    let mut ports = Vec::new();
-
-    match &comp.causality {
-        Causality::Input(_) => {
-            ports.push(ComponentPort::input("u").with_type(comp.type_name.to_string()));
-        }
-        Causality::Output(_) => {
-            ports.push(ComponentPort::output("y").with_type(comp.type_name.to_string()));
-        }
-        Causality::Empty => {
-            // Acausal connector (e.g., Resistor, Capacitor)
-            // Default to electrical-style p/n ports
-            ports.push(ComponentPort::output("p").with_type(comp.type_name.to_string()));
-            ports.push(ComponentPort::output("n").with_type(comp.type_name.to_string()));
-        }
-    }
-
-    // Parameter value as labeled output port
-    if matches!(comp.variability, Variability::Parameter(_)) {
-        if let Some(Expression::Terminal { token, .. }) = comp.binding.as_ref() {
-            ports.push(
-                ComponentPort::output("value")
-                    .with_type(comp.type_name.to_string())
-                    .with_description(format!("= {}", token.text)),
-            );
-        }
-    }
-
-    ports
-}
-
-/// Get the names of connector ports on a component (e.g., "p", "n" for
-/// electrical, "flange_a", "flange_b" for mechanical).
-fn get_connector_port_names(comp: &Component) -> Vec<String> {
-    let type_str = comp.type_name.to_string();
-    let lower = type_str.to_lowercase();
-
-    // Electrical connectors
-    if lower.contains("resistor")
-        || lower.contains("capacitor")
-        || lower.contains("inductor")
-        || lower.contains("voltage")
-        || lower.contains("current")
-        || lower.contains("pin")
-    {
-        return vec!["p".to_string(), "n".to_string()];
-    }
-
-    // Mechanical translational / rotational
-    if lower.contains("spring")
-        || lower.contains("damper")
-        || lower.contains("mass")
-        || lower.contains("flange")
-        || lower.contains("inertia")
-        || lower.contains("torque")
-    {
-        return vec!["flange_a".to_string(), "flange_b".to_string()];
-    }
-
-    // Generic block diagram I/O
-    if matches!(comp.causality, Causality::Input(_)) {
-        return vec!["u".to_string()];
-    }
-    if matches!(comp.causality, Causality::Output(_)) {
-        return vec!["y".to_string()];
-    }
-
-    // Default: electrical-style ports
-    vec!["p".to_string(), "n".to_string()]
-}
-
 /// Parse a Modelica component reference like `R1.p` into `(component, port)`.
 ///
-/// Handles simple two-part references (component.port). For more complex
-/// paths like `a.b.c.p`, returns the last two parts.
+/// The first segment identifies the graph node; the remaining path identifies
+/// its nested connector.
 fn parse_connect_reference(
     comp_ref: &rumoca_compile::parsing::ast::ComponentReference,
 ) -> (String, String) {
@@ -953,8 +643,8 @@ fn parse_connect_reference(
         0 => (String::new(), String::new()),
         1 => (parts[0].clone(), String::new()),
         _ => {
-            let port = parts.last().cloned().unwrap_or_default();
-            let comp = parts[..parts.len() - 1].join(".");
+            let port = parts[1..].join(".");
+            let comp = parts[0].clone();
             (comp, port)
         }
     }
@@ -993,10 +683,19 @@ fn collect_class_names(class: &ClassDef, prefix: &str, names: &mut Vec<(String, 
 mod tests {
     use super::*;
 
-    fn source_builder(source: &str) -> ModelicaComponentBuilder {
+    fn source_builder(source: &str, target: Option<&str>) -> ModelicaComponentBuilder {
         let ast = rumoca_phase_parse::parse_to_ast(source, "diagram-fixture.mo")
             .expect("valid diagram source fixture");
-        ModelicaComponentBuilder::from_ast(std::sync::Arc::new(ast))
+        let target = target
+            .map(str::to_owned)
+            .or_else(|| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
+            .expect("fixture target");
+        let mut session = Session::default();
+        session
+            .add_document("diagram-fixture.mo", source)
+            .expect("fixture admission");
+        let snapshot = DiagramSnapshot::capture(&mut session, &target).expect("resolved fixture");
+        ModelicaComponentBuilder::from_snapshot(Arc::new(ast), Arc::new(snapshot))
     }
 
     #[test]
@@ -1042,11 +741,8 @@ equation
   p.v - n.v = V;
 end VoltageSource;
 "#;
-        let builder = source_builder(source);
-        let graph = builder
-            .diagram_type(DiagramType::BlockDiagram)
-            .target_class("RC_Circuit")
-            .build();
+        let builder = source_builder(source, Some("RC_Circuit"));
+        let graph = builder.diagram_type(DiagramType::BlockDiagram).build();
 
         assert_eq!(graph.node_count(), 3, "Should have R1, C1, V1");
         assert_eq!(graph.edge_count(), 3, "Should have 3 connect() equations");
@@ -1079,7 +775,7 @@ equation
   m * der(v) = -k * x;
 end SpringMass;
 "#;
-        let builder = source_builder(source);
+        let builder = source_builder(source, None);
         let graph = builder.build();
 
         // SpringMass has no connect() equations, so no edges
@@ -1106,15 +802,49 @@ model Capacitor
   Pin p;
   Pin n;
 end Capacitor;
+connector Pin
+  Real v;
+  flow Real i;
+end Pin;
 "#;
-        let builder = source_builder(source);
-        let graph = builder
-            .diagram_type(DiagramType::ConnectionDiagram)
-            .target_class("RC_Circuit")
-            .build();
+        let builder = source_builder(source, Some("RC_Circuit"));
+        let graph = builder.diagram_type(DiagramType::ConnectionDiagram).build();
 
         // Should have R1, C1, plus connector nodes (R1.p, R1.n, C1.p, C1.n)
         assert!(graph.node_count() >= 2, "Should have at least R1 and C1");
+    }
+
+    #[test]
+    fn connection_diagram_uses_resolved_port_names() {
+        let source = r#"
+model Circuit
+  VoltageWidget a;
+  VoltageWidget b;
+equation
+  connect(a.outlet, b.inlet);
+end Circuit;
+model VoltageWidget
+  Socket inlet;
+  Socket outlet;
+end VoltageWidget;
+connector Socket
+  Real potential;
+  flow Real transfer;
+end Socket;
+"#;
+        let graph = source_builder(source, Some("Circuit"))
+            .diagram_type(DiagramType::ConnectionDiagram)
+            .build();
+        let node = graph.find_node("Circuit.a").expect("component node");
+        assert_eq!(
+            node.ports
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["inlet", "outlet"]
+        );
+        assert!(graph.find_node("Circuit.a.outlet").is_some());
+        assert!(graph.find_node("Circuit.a.p").is_none());
     }
 
     #[test]
@@ -1135,7 +865,7 @@ package MyLib
   end Circuits;
 end MyLib;
 "#;
-        let builder = source_builder(source);
+        let builder = source_builder(source, None);
         let graph = builder.diagram_type(DiagramType::PackageHierarchy).build();
 
         // Should have MyLib, Components, Resistor, Circuits, RC
@@ -1174,8 +904,8 @@ end MyLib;
 
         let r = make_ref(&[("A", "A"), ("B", "B"), ("p", "p")]);
         let (node, port) = parse_connect_reference(&r);
-        assert_eq!(node, "A.B");
-        assert_eq!(port, "p");
+        assert_eq!(node, "A");
+        assert_eq!(port, "B.p");
     }
 
     #[test]
@@ -1209,18 +939,10 @@ block Gain
   RealOutput y;
 end Gain;
 "#;
-        let builder = source_builder(source);
-        let graph = builder
-            .diagram_type(DiagramType::BlockDiagram)
-            .target_class("PID")
-            .build();
+        let builder = source_builder(source, Some("PID"));
+        let graph = builder.diagram_type(DiagramType::BlockDiagram).build();
 
-        // Core regression: inherited connectors must show up as nodes
-        // so wires targeting them have something to land on. Edge
-        // count is not asserted — port-name matching for `connect(u, k.u)`
-        // depends on per-type port introspection (see
-        // `extract_component_ports` / `get_connector_port_names`),
-        // which is a separate gap.
+        assert_eq!(graph.edge_count(), 2);
         assert!(
             graph.find_node("PID.u").is_some(),
             "u (inherited from SISO) must be a node"
@@ -1233,6 +955,35 @@ end Gain;
             graph.find_node("PID.k").is_some(),
             "k (direct) must be a node"
         );
+    }
+
+    #[test]
+    fn snapshot_rejects_invalid_types_and_tracks_session_revision() {
+        let mut session = Session::default();
+        session
+            .add_document("facts.mo", "model Root MissingType child; end Root;")
+            .unwrap();
+        assert!(DiagramSnapshot::capture(&mut session, "Root").is_err());
+        session
+            .add_document(
+                "facts.mo",
+                "model Root extends Base; end Root; model Base extends Root; end Base;",
+            )
+            .unwrap();
+        assert!(DiagramSnapshot::capture(&mut session, "Root").is_err());
+        session
+            .add_document("facts.mo", "model Root input Real demand; end Root;")
+            .unwrap();
+        let first = DiagramSnapshot::capture(&mut session, "Root").unwrap();
+        let repeated = DiagramSnapshot::capture(&mut session, "Root").unwrap();
+        assert!(Arc::ptr_eq(&first.members, &repeated.members));
+        session
+            .add_document("facts.mo", "model Root output Real delivered; end Root;")
+            .unwrap();
+        let edited = DiagramSnapshot::capture(&mut session, "Root").unwrap();
+        assert_eq!(edited.members[0].component.name, "delivered");
+        assert_eq!(first.members[0].component.name, "demand");
+        assert!(!Arc::ptr_eq(&first.members, &edited.members));
     }
 
     #[test]
