@@ -56,7 +56,7 @@ pub struct UsdInstanceProjection {
     pub source_asset: Handle<UsdStageAsset>,
     /// Shared canonical closure, unscoped plan and actual source revision.
     pub reference_snapshot: Arc<UsdReferenceSnapshot>,
-    /// An instance-scoped view over the source asset's shared prepared plan.
+    /// Immutable facts captured from the native composed stage.
     pub plan: Arc<UsdStageProjectionPlan>,
     /// Exact authored asset identity of the native scene reference.
     pub asset_path: String,

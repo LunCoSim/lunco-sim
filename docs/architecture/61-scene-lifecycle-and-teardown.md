@@ -292,8 +292,9 @@ unloading, rather than presenting a partially projected scene as ready.
 
 Authored control and program projection use the same composed reader contract:
 the prepared projection plan supplies facts before the live canonical stage is
-installed, and the canonical reader supplies later edits. Referenced instances
-read through their path-remapped plan until their canonical generation changes.
+installed, and the canonical reader supplies later edits. Reference namespaces
+and root opinions come from native USD composition. Prepared plans capture
+those facts directly; referenced runtime entities use the live scene reader.
 
 Doc-backed Twin admission is event-driven at the asset boundary. The Twin source
 is loaded as `UsdSourceBytes`; `AssetEvent` marks successful availability and

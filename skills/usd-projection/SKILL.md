@@ -142,12 +142,12 @@ never inject transport aliases into the resolver. Publication rechecks exact
 stage lifetime/generation, source, operation, live mount and loaded source
 revision; worker panics become terminal completion errors. Current reference
 and document-projection holds remain through ordered projection, and replaced
-requests cannot consume outgoing completions. Each instance carries only its
-namespace, root identity, and root overrides; descendants
-reuse that view through the same queue. The entity reader invalidates that
-prepared source when the canonical stage generation changes, so authored
-overrides are always read from the live composed stage. Do not add frame-count
-timeouts, per-frame load polls, or direct filesystem reads to this path. After admission,
+requests cannot consume outgoing completions. Native USD composition owns
+reference namespaces, relationship and connection targets, material bindings,
+and root opinions. Prepared asset plans snapshot those composed facts without
+remapping or overriding them; runtime entity reads use the live scene stage.
+Do not add frame-count timeouts, per-frame load polls, or direct filesystem
+reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
@@ -405,10 +405,9 @@ set before the asynchronous asset admission emits a stage notice; pending
 references elsewhere in the mounted stage do not delay this edit or retain its
 document-projection hold. The document-projection key remains held until those active roots are in ECS.
 Partial ancestor sink notices are accumulated into that one completion event.
-Each live `UsdInstanceProjection`
-retains its source asset handle with its remapped immutable plan. Sibling
-instances of the same asset reuse that prepared composition while any live
-instance still uses it.
+The reference admission owner retains the source asset handle and prepares
+the layer closure before authoring its native arc. The canonical stage sink
+projects the resulting composed namespace through the normal ECS queues.
 
 Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).

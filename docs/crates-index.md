@@ -778,11 +778,10 @@ Renderer-independent composed-USD stage boundary. It owns the
 `UsdRead`/`StageView` contract, resolver-backed composition, `UsdStageAsset`
 loading, canonical stage ownership, authored-layer readers, instance identity,
 projection plans, standard material/purpose/variant readers, transform and unit
-decoding, authoring helpers, and the stage integration tests. A live referenced
-instance retains its prepared source asset and an instance-scoped view over the
-shared immutable plan, so sibling instances reuse the cached composition
-without copying its prim tree. It deliberately contains no runtime projection
-systems.
+decoding, authoring helpers, and the stage integration tests. Projection plans
+capture the native stage's composed namespace, bindings and root opinions
+directly. Runtime referenced entities read the canonical scene stage. It
+deliberately contains no runtime projection systems.
 `admitted_recipe` captures its owned resolver closure with native root/session
 identities. `recipe_snapshot` adds separate changed-layer `Sdf Data` snapshots;
 the worker encodes those layers through the authoring owner's native codec

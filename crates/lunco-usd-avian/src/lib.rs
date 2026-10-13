@@ -3846,27 +3846,12 @@ def Cube "Part" (
         assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
         assert_eq!(live_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
 
-        let child_recipe = StageRecipe::new(
-            "child.usda",
-            HashMap::from([("child.usda".to_string(), child.as_bytes().to_vec())]),
-        );
-        let prepared = UsdStageAsset::from_recipe(child_recipe).expect("prepare referenced body");
-        let instance = prepared
-            .projection_plan
-            .for_instance("/Scene/PreparedAssembly")
-            .expect("remap referenced body plan");
-        let instance_root = SdfPath::new("/Scene/PreparedAssembly").unwrap();
-        assert!(instance.has_prim(&SdfPath::new("/Scene/PreparedAssembly/EndCap").unwrap()));
-        let prepared_parts = collect_child_colliders_from_usd(&instance, &instance_root)
-            .expect("prepared reference has valid collision transforms");
-        assert_eq!(
-            prepared_parts.source_paths,
-            [
-                "/Scene/PreparedAssembly",
-                "/Scene/PreparedAssembly/BaseCap",
-                "/Scene/PreparedAssembly/EndCap"
-            ]
-        );
+        let prepared =
+            UsdStageAsset::from_recipe(recipe).expect("prepare composed referenced body");
+        let prepared_parts =
+            collect_child_colliders_from_usd(&*prepared.projection_plan, &assembly)
+                .expect("prepared reference has valid collision transforms");
+        assert_eq!(prepared_parts.source_paths, live_parts.source_paths);
         let prepared_shapes = prepared_parts.shapes;
         assert_eq!(
             prepared_shapes.len(),

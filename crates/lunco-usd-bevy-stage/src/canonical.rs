@@ -2008,28 +2008,11 @@ mod recipe_tests {
                 .is_none()
         );
 
-        let instance = crate::UsdInstanceProjection::new(
-            bevy::asset::Handle::default(),
-            Arc::clone(&snapshot),
-            Arc::new(plan.for_instance("/Instance").expect("instance plan")),
-            recipe.root_id.clone(),
-            None,
-            None,
-        );
-        let second_instance = crate::UsdInstanceProjection::new(
-            bevy::asset::Handle::default(),
-            Arc::clone(&sibling),
-            Arc::new(plan.for_instance("/Sibling").expect("sibling plan")),
-            recipe.root_id.clone(),
-            None,
-            None,
-        );
+        let instance = Arc::clone(&snapshot);
+        let second_instance = Arc::clone(&sibling);
         drop(snapshot);
         drop(sibling);
-        assert!(Arc::ptr_eq(
-            &instance.reference_snapshot,
-            &second_instance.reference_snapshot
-        ));
+        assert!(Arc::ptr_eq(&instance, &second_instance));
         assert!(
             canonical
                 .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &source_plan)

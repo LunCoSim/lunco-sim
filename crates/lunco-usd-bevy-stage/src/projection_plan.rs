@@ -9,7 +9,6 @@
 //! Native composition and snapshot extraction run on Bevy's async-compute pool
 //! after source-layer reads complete.
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -89,7 +88,6 @@ impl UsdPrimProjectionPlan {
 struct UsdStageProjectionData {
     default_prim: Option<String>,
     prims: Vec<UsdPrimProjectionPlan>,
-    default_prim_subtree: Vec<usize>,
     children: HashMap<String, Vec<usize>>,
     /// Composed schema type → prim indices, built while the load is prepared.
     type_indices: HashMap<String, Vec<usize>>,
@@ -101,27 +99,14 @@ struct UsdStageProjectionData {
     time_codes_per_second: f64,
 }
 
-#[derive(Clone, Debug)]
-struct InstanceNamespace {
-    source_root: String,
-    instance_root: String,
-}
-
 /// A Send-safe snapshot of the composed USD read surface for one asset.
 ///
-/// Instance plans share this immutable snapshot and carry only a namespace
-/// mapping plus root overrides. Creating a runtime instance is therefore
-/// constant-time with respect to the number of prims in its source asset.
-/// Runtime edits still use the canonical live stage as their owner.
+/// Paths, relationships, bindings and transforms are already composed by native
+/// USD. Runtime edits use the canonical live stage as their owner.
 #[derive(Clone, Debug, Default)]
 pub struct UsdStageProjectionPlan {
     native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
     data: Arc<UsdStageProjectionData>,
-    namespace: Option<InstanceNamespace>,
-    instance_default_prim: Option<String>,
-    instance_root_pose: Option<Transform>,
-    instance_root_scale: Option<bevy::math::DVec3>,
-    instance_root_attributes: HashMap<String, (String, Value)>,
 }
 
 impl UsdStageProjectionPlan {
@@ -384,22 +369,6 @@ impl UsdStageProjectionPlan {
                     .push(index);
             }
         }
-        if let Some(default_prim) = data.default_prim.as_deref() {
-            let root_path = format!("/{}", default_prim.trim_start_matches('/'));
-            data.default_prim_subtree = data
-                .prims
-                .iter()
-                .enumerate()
-                .filter_map(|(index, prim)| {
-                    (prim.path == root_path
-                        || prim
-                            .path
-                            .strip_prefix(&root_path)
-                            .is_some_and(|suffix| suffix.starts_with('/')))
-                    .then_some(index)
-                })
-                .collect();
-        }
         Ok(Self {
             data: Arc::new(data),
             ..Self::default()
@@ -407,8 +376,6 @@ impl UsdStageProjectionPlan {
     }
 
     /// Iterate prims with one composed USD schema type from the source stage.
-    /// Instance callers receive these source paths; use `UsdRead` for paths in
-    /// a remapped reference namespace.
     pub fn prims_of_type(
         &self,
         type_name: &str,
@@ -423,10 +390,9 @@ impl UsdStageProjectionPlan {
 
     /// Return direct children in composed USD order.
     pub(crate) fn child_indices(&self, parent: &str) -> &[usize] {
-        let source_parent = self.source_path(parent);
         self.data
             .children
-            .get(source_parent.as_ref())
+            .get(parent)
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
@@ -451,20 +417,9 @@ impl UsdStageProjectionPlan {
 
     /// Return the prepared prim for a composed path.
     pub(crate) fn prim(&self, path: &SdfPath) -> Option<&UsdPrimProjectionPlan> {
-        if let Some(namespace) = &self.namespace {
-            let path_text = path.as_str();
-            let is_instance_path = path_text == namespace.instance_root
-                || path_text
-                    .strip_prefix(&namespace.instance_root)
-                    .is_some_and(|suffix| suffix.starts_with('/'));
-            if !is_instance_path {
-                return None;
-            }
-        }
-        let source_path = self.source_path(path.as_str());
         self.data
             .prim_indices
-            .get(source_path.as_ref())
+            .get(path.as_str())
             .and_then(|index| self.data.prims.get(*index))
     }
 
@@ -490,178 +445,14 @@ impl UsdStageProjectionPlan {
         Ok(plan)
     }
 
-    fn source_path<'a>(&self, path: &'a str) -> Cow<'a, str> {
-        let Some(namespace) = &self.namespace else {
-            return Cow::Borrowed(path);
-        };
-        if path == namespace.instance_root {
-            return Cow::Owned(namespace.source_root.clone());
-        }
-        path.strip_prefix(&namespace.instance_root)
-            .filter(|suffix| suffix.starts_with('/'))
-            .map(|suffix| Cow::Owned(format!("{}{suffix}", namespace.source_root)))
-            .unwrap_or(Cow::Borrowed(path))
-    }
-
-    fn instance_path<'a>(&self, path: &'a str) -> Cow<'a, str> {
-        let Some(namespace) = &self.namespace else {
-            return Cow::Borrowed(path);
-        };
-        if path == namespace.source_root {
-            return Cow::Owned(namespace.instance_root.clone());
-        }
-        path.strip_prefix(&namespace.source_root)
-            .filter(|suffix| suffix.starts_with('/'))
-            .map(|suffix| Cow::Owned(format!("{}{suffix}", namespace.instance_root)))
-            .unwrap_or(Cow::Borrowed(path))
-    }
-
-    fn source_path_is_in_instance(&self, path: &str) -> bool {
-        self.namespace.as_ref().is_none_or(|namespace| {
-            path == namespace.source_root
-                || path
-                    .strip_prefix(&namespace.source_root)
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-        })
-    }
-
-    fn instance_property_path<'a>(&self, path: &'a str) -> Cow<'a, str> {
-        if self.namespace.is_none() {
-            return Cow::Borrowed(path);
-        }
-        let Some(separator) = path.find('.') else {
-            return self.instance_path(path);
-        };
-        let mapped_prim = self.instance_path(&path[..separator]);
-        if matches!(mapped_prim, Cow::Borrowed(_)) {
-            return Cow::Borrowed(path);
-        }
-        Cow::Owned(format!("{}{}", mapped_prim, &path[separator..]))
-    }
-
-    fn is_instance_root(&self, path: &SdfPath) -> bool {
-        self.namespace
-            .as_ref()
-            .is_some_and(|namespace| path.as_str() == namespace.instance_root)
-    }
-
-    fn root_source_prim(&self) -> Option<&UsdPrimProjectionPlan> {
-        let namespace = self.namespace.as_ref()?;
-        self.data
-            .prim_indices
-            .get(namespace.source_root.as_str())
-            .and_then(|index| self.data.prims.get(*index))
-    }
-
     /// Composed default prim name, without a leading slash.
     pub fn default_prim_name(&self) -> Option<&str> {
-        self.instance_default_prim
-            .as_deref()
-            .or(self.data.default_prim.as_deref())
+        self.data.default_prim.as_deref()
     }
 
     /// Number of composed prims in the immutable source snapshot.
     pub fn prim_count(&self) -> usize {
         self.data.prims.len()
-    }
-
-    /// Create the prepared read surface for one USD reference instance.
-    ///
-    /// A reference composes the source asset's default prim at the authored
-    /// instance path. The source asset has already paid the async composition
-    /// cost, so runtime projection must reuse that immutable plan instead of
-    /// reading the live scene stage once per prim. The returned plan is still
-    /// derived exclusively from the source asset plan; the live canonical stage
-    /// remains the owner for subsequent edits.
-    pub fn for_instance(&self, instance_root: &str) -> Result<Self> {
-        let instance_root = SdfPath::new(instance_root)
-            .map_err(|error| anyhow!("invalid USD instance root {instance_root}: {error}"))?;
-        if !instance_root.is_abs() {
-            anyhow::bail!("USD instance root must be absolute: {instance_root}");
-        }
-        if self.namespace.is_some() {
-            anyhow::bail!("an instance namespace cannot be remapped a second time");
-        }
-        let source_root = self
-            .data
-            .default_prim
-            .as_deref()
-            .map(|default_prim| format!("/{}", default_prim.trim_start_matches('/')))
-            .ok_or_else(|| anyhow!("prepared USD asset has no defaultPrim"))?;
-        if !self.data.prim_indices.contains_key(&source_root) {
-            anyhow::bail!("prepared USD asset default prim `{source_root}` is absent");
-        }
-        let instance_root = instance_root.to_string();
-        Ok(Self {
-            data: Arc::clone(&self.data),
-            native_paths: self.native_paths.clone(),
-            namespace: Some(InstanceNamespace {
-                source_root,
-                instance_root: instance_root.clone(),
-            }),
-            instance_default_prim: Some(instance_root.trim_start_matches('/').to_owned()),
-            ..Self::default()
-        })
-    }
-
-    /// Apply the explicit position and rotation authored for a runtime
-    /// reference root, preserving the source root's composed scale.
-    pub fn set_instance_root_pose(&mut self, pose: Transform) -> Result<()> {
-        let root = self
-            .root_source_prim()
-            .ok_or_else(|| anyhow!("prepared instance root is absent"))?;
-        if self.namespace.is_none() {
-            anyhow::bail!("root pose overrides require an instance namespace");
-        }
-        let mut pose = pose;
-        if let Some(source_transform) = root.transform {
-            pose.scale = source_transform.scale;
-        }
-        if !pose.translation.is_finite() || !pose.rotation.is_finite() || !pose.scale.is_finite() {
-            anyhow::bail!("prepared instance root pose is not finite");
-        }
-        self.instance_root_pose = Some(pose);
-        Ok(())
-    }
-
-    /// Apply an authored USD scale override to the remapped instance root.
-    pub fn set_instance_root_scale(&mut self, scale: [f64; 3]) -> Result<()> {
-        self.root_source_prim()
-            .ok_or_else(|| anyhow!("prepared instance root is absent"))?;
-        if self.namespace.is_none() {
-            anyhow::bail!("root scale overrides require an instance namespace");
-        }
-        if scale.iter().any(|component| !component.is_finite()) {
-            anyhow::bail!("prepared instance root scale is not finite");
-        }
-        let scale = bevy::math::DVec3::from_array(scale);
-        if !scale.as_vec3().is_finite() {
-            anyhow::bail!("prepared instance root scale is outside the render range");
-        }
-        self.instance_root_scale = Some(scale);
-        Ok(())
-    }
-
-    /// Add the runtime catalog identity to the remapped instance root's
-    /// composed read facts.
-    pub fn set_instance_root_string_attribute(
-        &mut self,
-        name: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Result<()> {
-        self.root_source_prim()
-            .ok_or_else(|| anyhow!("prepared instance root is absent"))?;
-        if self.namespace.is_none() {
-            anyhow::bail!("root attributes require an instance namespace");
-        }
-        let name = name.into();
-        if name.is_empty() {
-            anyhow::bail!("prepared instance root attribute name is empty");
-        }
-        let value = value.into();
-        self.instance_root_attributes
-            .insert(name, ("string".to_owned(), Value::String(value)));
-        Ok(())
     }
 
     fn schema_facts_for<'a>(
@@ -690,7 +481,7 @@ impl UsdStageProjectionPlan {
                     return None;
                 }
                 Some(UsdReadPrimFacts {
-                    path: SdfPath::new(&self.instance_path(&prim.path)).ok()?,
+                    path: SdfPath::new(&prim.path).ok()?,
                     type_name: prim.type_name.clone(),
                     api_schemas: prim.api_schemas.clone(),
                     has_attr_prefix,
@@ -725,29 +516,16 @@ impl UsdRead for UsdStageProjectionPlan {
     }
 
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
-        if self.is_instance_root(prim)
-            && let Some((_, value)) = self.instance_root_attributes.get(name)
-        {
-            return Some(value.clone());
-        }
         self.prim(prim)
             .and_then(|prim| prim.attributes.get(name).cloned())
     }
 
     fn attr_type_name(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        if self.is_instance_root(prim)
-            && let Some((type_name, _)) = self.instance_root_attributes.get(name)
-        {
-            return Some(type_name.clone());
-        }
         self.prim(prim)
             .and_then(|prim| prim.attribute_types.get(name).cloned())
     }
 
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
-        if self.is_instance_root(prim) && self.instance_root_attributes.contains_key(name) {
-            return true;
-        }
         self.prim(prim)
             .is_some_and(|prim| prim.authored_attributes.contains(name))
     }
@@ -771,7 +549,7 @@ impl UsdRead for UsdStageProjectionPlan {
         self.prim(prim)
             .and_then(|prim| prim.relationships.get(name))
             .and_then(|values| values.first())
-            .map(|target| self.instance_path(target).into_owned())
+            .cloned()
     }
 
     fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
@@ -779,8 +557,7 @@ impl UsdRead for UsdStageProjectionPlan {
             .and_then(|prim| prim.relationships.get(name))
             .into_iter()
             .flatten()
-            .map(|target| self.instance_path(target))
-            .filter_map(|target| SdfPath::new(&target).ok())
+            .filter_map(|target| SdfPath::new(target).ok())
             .collect()
     }
 
@@ -794,9 +571,6 @@ impl UsdRead for UsdStageProjectionPlan {
         self.prim(prim)
             .and_then(|prim| prim.connections.get(name).cloned())
             .unwrap_or_default()
-            .into_iter()
-            .map(|path| self.instance_property_path(&path).into_owned())
-            .collect()
     }
 
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
@@ -806,8 +580,7 @@ impl UsdRead for UsdStageProjectionPlan {
         self.child_indices(prim.as_str())
             .iter()
             .filter_map(|index| self.data.prims.get(*index))
-            .map(|prim| self.instance_path(&prim.path))
-            .filter_map(|path| SdfPath::new(&path).ok())
+            .filter_map(|prim| SdfPath::new(&prim.path).ok())
             .collect()
     }
 
@@ -819,16 +592,14 @@ impl UsdRead for UsdStageProjectionPlan {
         if self.prim(prim).is_none() {
             return Err(format!("prim {prim} does not exist"));
         }
-        let source_prim = self.source_path(prim.as_str());
         self.data
             .collections
-            .get(&(source_prim.into_owned(), instance_name.to_string()))
+            .get(&(prim.to_string(), instance_name.to_string()))
             .map(|members| {
                 members.as_ref().map_err(Clone::clone).and_then(|members| {
                     members
                         .iter()
-                        .map(|member| self.instance_path(member))
-                        .map(|member| SdfPath::new(&member).map_err(|error| error.to_string()))
+                        .map(|member| SdfPath::new(member).map_err(|error| error.to_string()))
                         .collect()
                 })
             })
@@ -836,20 +607,10 @@ impl UsdRead for UsdStageProjectionPlan {
     }
 
     fn prim_paths(&self) -> Vec<SdfPath> {
-        let indices = if self.namespace.is_some() {
-            self.data.default_prim_subtree.as_slice()
-        } else {
-            return self
-                .data
-                .prims
-                .iter()
-                .filter_map(|prim| SdfPath::new(&prim.path).ok())
-                .collect();
-        };
-        indices
+        self.data
+            .prims
             .iter()
-            .filter_map(|index| self.data.prims.get(*index))
-            .filter_map(|prim| SdfPath::new(&self.instance_path(&prim.path)).ok())
+            .filter_map(|prim| SdfPath::new(&prim.path).ok())
             .collect()
     }
 
@@ -880,9 +641,7 @@ impl UsdRead for UsdStageProjectionPlan {
         indices
             .into_iter()
             .filter_map(|index| self.data.prims.get(index))
-            .filter(|prim| self.source_path_is_in_instance(&prim.path))
-            .map(|prim| self.instance_path(&prim.path))
-            .filter_map(|path| SdfPath::new(&path).ok())
+            .filter_map(|prim| SdfPath::new(&prim.path).ok())
             .collect()
     }
 
@@ -895,57 +654,25 @@ impl UsdRead for UsdStageProjectionPlan {
         if type_names.is_empty() && api_schemas.is_empty() && attr_prefix.is_empty() {
             return Vec::new();
         }
-        if self.namespace.is_some() {
-            self.schema_facts_for(
-                self.data
-                    .default_prim_subtree
-                    .iter()
-                    .filter_map(|index| self.data.prims.get(*index)),
-                type_names,
-                api_schemas,
-                attr_prefix,
-            )
-        } else {
-            self.schema_facts_for(self.data.prims.iter(), type_names, api_schemas, attr_prefix)
-        }
+        self.schema_facts_for(self.data.prims.iter(), type_names, api_schemas, attr_prefix)
     }
 
     fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
-        let mut names = self
-            .prim(prim)
+        self.prim(prim)
             .map(|prim| prim.property_names.clone())
-            .unwrap_or_default();
-        if self.is_instance_root(prim) {
-            for name in self.instance_root_attributes.keys() {
-                if !names.contains(name) {
-                    names.push(name.clone());
-                }
-            }
-            names.sort();
-        }
-        names
+            .unwrap_or_default()
     }
 
     fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool {
-        (self.is_instance_root(prim)
-            && self
-                .instance_root_attributes
-                .keys()
-                .any(|name| name.starts_with(prefix)))
-            || self.prim(prim).is_some_and(|prim| {
-                prim.property_names
-                    .iter()
-                    .any(|name| name.starts_with(prefix))
-            })
+        self.prim(prim).is_some_and(|prim| {
+            prim.property_names
+                .iter()
+                .any(|name| name.starts_with(prefix))
+        })
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
         let prim_plan = self.prim(prim)?;
-        if self.is_instance_root(prim)
-            && let Some((_, value)) = self.instance_root_attributes.get(name)
-        {
-            return Some(value.clone());
-        }
         if let Some(samples) = prim_plan.time_sample_values.get(name) {
             if let Some((_, value)) = samples.iter().find(|(sample_time, _)| *sample_time == time) {
                 return Some(value.clone());
@@ -962,31 +689,7 @@ impl UsdRead for UsdStageProjectionPlan {
         prim: &SdfPath,
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
-        let plan = self.transform_snapshot(prim, time)?;
-        let mut matrix = plan.transform_matrix_d;
-        if self.is_instance_root(prim) {
-            if let Some(pose) = self.instance_root_pose {
-                let scale = matrix
-                    .map(|m| m.to_scale_rotation_translation().0)
-                    .unwrap_or(bevy::math::DVec3::ONE);
-                matrix = Some(bevy::math::DMat4::from_scale_rotation_translation(
-                    scale,
-                    pose.rotation.as_dquat(),
-                    pose.translation.as_dvec3(),
-                ));
-            }
-            if let Some(scale) = self.instance_root_scale {
-                let (_, rotation, translation) = matrix
-                    .unwrap_or(bevy::math::DMat4::IDENTITY)
-                    .to_scale_rotation_translation();
-                matrix = Some(bevy::math::DMat4::from_scale_rotation_translation(
-                    scale,
-                    rotation,
-                    translation,
-                ));
-            }
-        }
-        Ok(matrix)
+        Ok(self.transform_snapshot(prim, time)?.transform_matrix_d)
     }
 
     fn local_transform_at(
@@ -994,15 +697,7 @@ impl UsdRead for UsdStageProjectionPlan {
         prim: &SdfPath,
         time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError> {
-        let prim_plan = self.transform_snapshot(prim, time)?;
-        if self.is_instance_root(prim) {
-            let mut transform = self.instance_root_pose.or(prim_plan.transform);
-            if let Some(scale) = self.instance_root_scale {
-                transform.get_or_insert(Transform::IDENTITY).scale = scale.as_vec3();
-            }
-            return Ok(transform);
-        }
-        Ok(prim_plan.transform)
+        Ok(self.transform_snapshot(prim, time)?.transform)
     }
 
     fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
@@ -1012,7 +707,7 @@ impl UsdRead for UsdStageProjectionPlan {
     fn bound_material(&self, prim: &SdfPath, purpose: MaterialPurpose) -> Option<String> {
         self.prim(prim)
             .and_then(|prim| prim.bound_materials.get(&purpose))
-            .map(|material| self.instance_path(material).into_owned())
+            .cloned()
     }
 
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
@@ -1029,9 +724,7 @@ impl UsdRead for UsdStageProjectionPlan {
     }
 
     fn default_prim(&self) -> Option<String> {
-        self.instance_default_prim
-            .clone()
-            .or_else(|| self.data.default_prim.clone())
+        self.data.default_prim.clone()
     }
 
     fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint> {
@@ -1161,112 +854,6 @@ def Xform "World"
         assert_eq!(
             plan.attr_type_name(&world, "point").as_deref(),
             Some("point3f")
-        );
-    }
-
-    #[test]
-    fn instance_plan_remaps_the_composed_namespace_without_rebuilding_usd() {
-        let recipe = StageRecipe::from_source(
-            "rover.usda",
-            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
-def Xform \"Rover\" (\n\
-    prepend apiSchemas = [\"CollectionAPI:components\"]\n\
-)\n\
-{\n\
-    uniform token collection:components:expansionRule = \"explicitOnly\"\n\
-    prepend rel collection:components:includes = [</Rover/Body>]\n\
-    def Cube \"Body\" (\n\
-        prepend apiSchemas = [\"MaterialBindingAPI\"]\n\
-    )\n\
-    {\n\
-        rel material:binding = </Rover/Looks/Body>\n\
-        rel route:target = </Rover/Body>\n\
-        float outputs:signal = 1\n\
-        float inputs:signal.connect = </Rover/Body.outputs:signal>\n\
-    }\n\
-    def Scope \"Looks\"\n\
-    {\n\
-        def Material \"Body\" {}\n\
-    }\n\
-}\n\
-def Scope \"OutsideDefaultPrim\" {}\n",
-        );
-        let source = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
-        let instance = source
-            .for_instance("/Traverse/rover_1")
-            .expect("instance view shares and remaps the prepared plan");
-        let root = SdfPath::new("/Traverse/rover_1").unwrap();
-        let body = SdfPath::new("/Traverse/rover_1/Body").unwrap();
-        let looks = SdfPath::new("/Traverse/rover_1/Looks").unwrap();
-
-        assert!(Arc::ptr_eq(&source.data, &instance.data));
-        assert_eq!(instance.prim_count(), source.prim_count());
-        assert_eq!(instance.default_prim_name(), Some("Traverse/rover_1"));
-        assert!(instance.has_prim(&root));
-        assert!(instance.has_prim(&body));
-        assert_eq!(instance.children(&root), vec![body.clone(), looks]);
-        assert_eq!(
-            instance.bound_material(&body, MaterialPurpose::Render),
-            Some("/Traverse/rover_1/Looks/Body".to_owned()),
-            "instance material bindings must follow the canonical namespace remap"
-        );
-        assert_eq!(
-            instance.rel_target(&body, "route:target").as_deref(),
-            Some("/Traverse/rover_1/Body")
-        );
-        assert_eq!(
-            instance.connections(&body, "inputs:signal"),
-            vec!["/Traverse/rover_1/Body.outputs:signal"]
-        );
-        assert_eq!(
-            instance.collection_members(&root, "components").unwrap(),
-            vec![body.clone()]
-        );
-
-        let mut with_overrides = instance.clone();
-        with_overrides
-            .set_instance_root_pose(Transform::from_xyz(1.0, 2.0, 3.0))
-            .expect("root pose is valid");
-        with_overrides
-            .set_instance_root_scale([2.0, 3.0, 4.0])
-            .expect("root scale is valid");
-        with_overrides
-            .set_instance_root_string_attribute("lunco:catalogId", "rover.test")
-            .expect("catalog identity is valid");
-        let root_transform = with_overrides
-            .local_transform_at(&root, 0.0)
-            .expect("instance root exists")
-            .expect("root pose is projected");
-        assert_eq!(
-            root_transform.translation,
-            bevy::math::Vec3::new(1.0, 2.0, 3.0)
-        );
-        assert_eq!(root_transform.scale, bevy::math::Vec3::new(2.0, 3.0, 4.0));
-        assert_eq!(
-            with_overrides.text(&root, "lunco:catalogId").as_deref(),
-            Some("rover.test")
-        );
-        assert!(!instance.has_prim(&SdfPath::new("/Rover").unwrap()));
-        let outside = SdfPath::new("/OutsideDefaultPrim").unwrap();
-        assert!(source.has_prim(&outside));
-        assert!(!instance.has_prim(&outside));
-        assert!(
-            instance
-                .prim_paths()
-                .iter()
-                .all(|path| path.as_str() != "/OutsideDefaultPrim")
-        );
-        assert!(
-            instance
-                .prim_paths_matching(&["Scope"], &[])
-                .iter()
-                .all(|path| path.as_str() != "/OutsideDefaultPrim")
-        );
-        assert!(
-            instance
-                .prim_schema_facts_matching(&["Scope"], &[], "")
-                .iter()
-                .all(|facts| facts.path.as_str() != "/OutsideDefaultPrim")
         );
     }
 
