@@ -115,7 +115,11 @@ and the ribbon's USD identity are disposable `@view@` presentation. A standard
 `BasisCurves` seed references
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 once so the existing USD renderer supplies a stable path, material, and
-pointer-interaction contract. `UpdateUsdCurveView` captures ordered f64
+pointer-interaction contract. The seed authors only the reference root and its
+anchor. The reference owner admits and projects the asset before the route
+policy submits curve points; child geometry and interaction defaults belong to
+the reusable asset. Rejected view edits are terminal presentation results and
+clear pending admission until a new route revision. `UpdateUsdCurveView` captures ordered f64
 parent-local route points and resolves them into the owning terrain's local
 plane. The terrain annotation owner builds a bounded spatial index off-thread;
 its production and diagnostic fragments paint the route on their own surface,

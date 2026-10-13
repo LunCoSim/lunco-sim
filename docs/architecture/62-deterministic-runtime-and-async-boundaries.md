@@ -110,8 +110,10 @@ catalog identity. The first such edit composes the reference into the canonical
 stage once, then a shared promotion state moves every entity reader to that
 stage. Deleting an unpromoted root removes the lightweight root and its ECS
 subtree without composing the reference. Simple `QueryUsdPrim` reads use the
-same prepared plan; explicit geometry and topology queries read the owning
-document's composed stage. Promotion errors fault the mounted scene and reject
+same prepared plan, selected from the nearest instance root even when the
+queried child already has a live entity. A promoted nested root stops an
+unpromoted ancestor from selecting its older plan. Explicit geometry and
+topology queries read the owning document's composed stage. Promotion errors fault the mounted scene and reject
 the live projection of the edit.
 
 An edit to a document's root scene is already owned by that scene's canonical

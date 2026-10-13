@@ -2,61 +2,49 @@
 (
     defaultPrim = "RouteRibbon"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# A reusable standard USD oriented curve for route visualisation. The route tool
-# supplies points, topology, and surface orientation; the USD renderer owns the
-# fast flat-strip projection. This asset contains no route or vessel semantics.
 def Xform "RouteRibbon"
 {
     def Scope "Looks"
     {
         def Material "RouteRibbon_Mat"
         {
+            token outputs:surface
             token outputs:surface.connect = </RouteRibbon/Looks/RouteRibbon_Mat/Surface.outputs:surface>
-
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                # A route ribbon is a signal/annotation, not a terrain surface.
-                # Keep it visible on the lunar night side by using the standard
-                # UsdPreviewSurface emissive channel rather than scene lighting.
                 color3f inputs:diffuseColor = (0.0, 0.0, 0.0)
                 color3f inputs:specularColor = (0.0, 0.0, 0.0)
-                float inputs:useSpecularWorkflow = 1
+                float inputs:useSpecularWorkflow = 1.0
                 float inputs:roughness = 1.0
-                color3f inputs:emissiveColor = (0.2, 1.4, 0.55)
-                float inputs:opacity = 0.85
+                color3f inputs:emissiveColor = (0.20000000298023224, 1.399999976158142, 0.550000011920929)
+                float inputs:opacity = 0.8500000238418579
                 token outputs:surface
             }
         }
     }
-
-    def BasisCurves "Geometry"
-    (
-        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
+    def BasisCurves "Geometry" (
+        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI", "LunCoPointerInteractionAPI"]
     )
     {
         token type = "linear"
         token wrap = "nonperiodic"
-        # The route tool offsets each sampled vertex along its support normal.
-        # Keep this reusable geometry at the local origin so a route's authored
-        # frame remains the only transform applied to the generated view.
-        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int[] curveVertexCounts = [2]
-        point3f[] points = [(0, 0, 0), (0, 0, 1)]
-        # UsdGeomCurves interprets widths as full ribbon width when normals are
-        # authored. Keep this a narrow readable annotation, not a road-sized
-        # surface.
-        float[] widths = [0.12]
-        normal3f[] normals = [(0, 1, 0), (0, 1, 0)]
+        point3f[] points = [(0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
+        float[] widths = [0.11999999731779099]
+        normal3f[] normals = [(0.0, 1.0, 0.0), (0.0, 1.0, 0.0)]
         rel material:binding = </RouteRibbon/Looks/RouteRibbon_Mat>
         bool doubleSided = true
-        color3f[] primvars:displayColor = [(0.20, 1.0, 0.55)]
-        float[] primvars:displayOpacity = [0.85]
+        color3f[] primvars:displayColor = [(0.20000000298023224, 1.0, 0.550000011920929)]
+        float[] primvars:displayOpacity = [0.8500000238418579]
         bool lunco:surface:additive = true
         bool primvars:doNotCastShadows = true
+        uniform token lunco:interaction:left = "pass_through"
+        uniform token lunco:interaction:right = "context"
     }
 }

@@ -438,6 +438,8 @@ Pass the exact document id as the first argument to every stage-reading helper,
 then the explicit manifest. Use `()` only for a mounted live-scene audit, never
 to select the focused preview. `QueryUsdPrim` rejects closed, unmapped, and stale
 document projections; wait for the document projection before auditing it.
+Referenced child facts use the nearest instance owner's prepared plan until
+promotion; a live child entity alone does not change that reader ownership.
 Standalone previews own their canonical stage through the explicit document's
 preview lease; they do not need a simulation scene root. Geometry bounds and
 material reads must follow the ready document generation after an edit.

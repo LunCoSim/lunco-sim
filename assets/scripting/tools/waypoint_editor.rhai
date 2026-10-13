@@ -167,10 +167,7 @@ fn apply_view_ops(doc, label, ops) {
         ops: ops,
     });
     if result == () || result.ok != true {
-        // Presentation is disposable @view@ state. A projection-generation
-        // race is retried by its owner and is never reported as a failed
-        // durable authoring command.
-        return #{ ok: false, retryable: true,
+        return #{ ok: false, retryable: false,
             error: if result == () { "USD view edit returned no result" } else {
                 result.error
             } };
@@ -756,15 +753,6 @@ fn point_literal(point) {
         + point[1].to_string() + ", " + point[2].to_string() + ")"
 }
 
-fn point_vectors_literal(points) {
-    let text = "[";
-    for i in 0..points.len() {
-        if i > 0 { text += ", "; }
-        text += point_literal(points[i]);
-    }
-    text + "]"
-}
-
 fn ribbon_path(route) {
     // Keep the generated view under the route scope. Route points and their
     // annotation then share the same USD parent frame, including when a Twin
@@ -776,18 +764,8 @@ fn ribbon_geometry_path(route) {
     ribbon_path(route) + "/Geometry"
 }
 
-fn ribbon_seed_ops(route, points) {
+fn ribbon_seed_ops(route, anchor) {
     let ribbon = ribbon_path(route);
-    let geometry = ribbon_geometry_path(route);
-    let first = points[0];
-    let local_points = [];
-    let normals = [];
-    for point in points {
-        local_points.push([
-            point[0] - first[0], point[1] - first[1], point[2] - first[2],
-        ]);
-        normals.push([0.0, 1.0, 0.0]);
-    }
     [
         #{ AddPrim: #{
             edit_target: "@view@",
@@ -797,29 +775,7 @@ fn ribbon_seed_ops(route, points) {
             reference: "lunco://markers/route_ribbon.usda",
             reference_prim_path: "",
         }},
-        #{ SetTranslate: #{ edit_target: "@view@", path: ribbon, value: first }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "type", type_name: "token", value: "\"linear\"" }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "wrap", type_name: "token", value: "\"nonperiodic\"" }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "curveVertexCounts", type_name: "int[]",
-            value: "[" + points.len().to_string() + "]" }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "points", type_name: "point3f[]",
-            value: point_vectors_literal(local_points) }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "widths", type_name: "float[]",
-            value: "[" + route_ribbon_width().to_string() + "]" }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "normals", type_name: "normal3f[]",
-            value: point_vectors_literal(normals) }},
-        #{ SetApiSchemas: #{ edit_target: "@view@", path: geometry,
-            schemas: ["MaterialBindingAPI", "LunCoSurfaceAPI", "LunCoPointerInteractionAPI"] }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "lunco:interaction:left", type_name: "token", value: "\"pass_through\"" }},
-        #{ SetAttribute: #{ edit_target: "@view@", path: geometry,
-            name: "lunco:interaction:right", type_name: "token", value: "\"context\"" }},
+        #{ SetTranslate: #{ edit_target: "@view@", path: ribbon, value: anchor }},
     ]
 }
 
@@ -840,14 +796,14 @@ fn update_ribbon_view(doc, route, points) {
             width_m: route_ribbon_width(),
         });
         if result == () || result.ok != true {
-            return #{ ok: false, retryable: true,
+            return #{ ok: false, retryable: false,
                 error: if result == () { "route mesh update returned no result" } else { result.error } };
         }
         return #{ ok: true, pending: false };
     }
     if !prim_exists(doc, ribbon) {
         if points.len() < 2 { return #{ ok: true, pending: false }; }
-        let result = apply_view_ops(doc, "Create route ribbon view", ribbon_seed_ops(route, points));
+        let result = apply_view_ops(doc, "Create route ribbon view", ribbon_seed_ops(route, points[0]));
         if result.ok != true { return result; }
         return #{ ok: true, pending: true };
     }

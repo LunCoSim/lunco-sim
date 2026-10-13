@@ -137,7 +137,9 @@ admitted dependency closure. The projected stage supplies only the live
 identity needed to validate dynamic ports. Scalar length declarations use the
 native composed prim type, and transform inverses retain the native composed
 operation order. Missing connection-source declarations and native failures
-reject at this owner.
+reject at this owner. Document queries capture the mounted canonical stage's
+current admitted dependency closure, including newly loaded references; an
+unmounted stage uses its worker-prepared source recipe.
 
 `StageRecipe` captures root bytes and an optional explicit session layer.
 `lunco-usd-compose::open_recipe` is the shared native stage factory for document

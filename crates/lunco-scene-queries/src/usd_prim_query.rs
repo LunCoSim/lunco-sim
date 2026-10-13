@@ -913,7 +913,8 @@ mod query_generation_tests {
             "/World/Elsewhere",
         ]);
 
-        let roots = prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()));
+        let roots =
+            prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()), false);
 
         assert_eq!(roots.get("/World/Spawned"), Some(&root));
         assert_eq!(roots.get("/World/Spawned/Box"), Some(&root));
@@ -921,7 +922,7 @@ mod query_generation_tests {
         projection.mark_promoted();
         world.entity_mut(root).insert(projection);
         assert!(
-            prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()),)
+            prepared_instance_roots_for_paths(&world, &requested, Some(stage_handle.id()), false)
                 .is_empty()
         );
     }
@@ -972,6 +973,7 @@ fn prepared_instance_roots_for_paths(
     world: &World,
     paths: &HashSet<&str>,
     live_stage: Option<bevy::asset::AssetId<UsdStageAsset>>,
+    include_previews: bool,
 ) -> HashMap<String, Entity> {
     let Some(live_stage) = live_stage else {
         return HashMap::new();
@@ -984,12 +986,12 @@ fn prepared_instance_roots_for_paths(
     };
     let mut roots = roots
         .iter(world)
-        .filter(|(entity, prim, projection)| {
+        .filter(|(entity, prim, _)| {
             prim.stage_handle.id() == live_stage
-                && !projection.is_promoted()
-                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+                && (include_previews
+                    || !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
         })
-        .map(|(entity, prim, _)| (prim.path.clone(), entity))
+        .map(|(entity, prim, projection)| (prim.path.clone(), entity, projection.is_promoted()))
         .collect::<Vec<_>>();
     roots.sort_by(|left, right| {
         right
@@ -1004,13 +1006,14 @@ fn prepared_instance_roots_for_paths(
         .filter_map(|path| {
             roots
                 .iter()
-                .find(|(root, _)| {
+                .find(|(root, _, _)| {
                     *path == root
                         || path
                             .strip_prefix(root.as_str())
                             .is_some_and(|suffix| suffix.starts_with('/'))
                 })
-                .map(|(_, entity)| ((*path).to_owned(), *entity))
+                .filter(|(_, _, promoted)| !promoted)
+                .map(|(_, entity, _)| ((*path).to_owned(), *entity))
         })
         .collect()
 }
@@ -1321,12 +1324,11 @@ fn execute_query_paths(
         .collect::<HashSet<_>>();
     let spawned = spawned_entities_for_paths(world, &requested_paths, doc, live_stage)?;
     let prepared_instance_roots =
-        prepared_instance_roots_for_paths(world, &requested_paths, live_stage);
+        prepared_instance_roots_for_paths(world, &requested_paths, query_stage, doc.is_some());
     let query_uses_unpromoted_instance = paths.iter().any(|(path, _)| {
-        spawned
+        prepared_instance_roots
             .get(path)
             .copied()
-            .or_else(|| prepared_instance_roots.get(path).copied())
             .and_then(|entity| world.get::<UsdInstanceProjection>(entity))
             .is_some_and(|projection| !projection.is_promoted())
     });
@@ -1352,8 +1354,7 @@ fn execute_query_paths(
             .iter()
             .map(|(path, prim)| {
                 let entity = spawned.get(path).copied();
-                let instance_entity = entity
-                    .or_else(|| prepared_instance_roots.get(path).copied())
+                let instance_entity = prepared_instance_roots.get(path).copied()
                     .filter(|entity| {
                         world
                             .get::<UsdInstanceProjection>(*entity)
