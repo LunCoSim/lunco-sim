@@ -783,6 +783,10 @@ instance retains its prepared source asset and an instance-scoped view over the
 shared immutable plan, so sibling instances reuse the cached composition
 without copying its prim tree. It deliberately contains no runtime projection
 systems.
+`admitted_recipe` captures its owned resolver closure with native root/session
+identities. `recipe_snapshot` adds separate changed-layer `Sdf Data` snapshots;
+the worker encodes those layers through the authoring owner's native codec
+selection before preparing a generation-fenced projection plan.
 
 **`lunco-usd-bevy-core`**
 Focused runtime projection mechanisms built on `lunco-usd-bevy-stage`. It owns

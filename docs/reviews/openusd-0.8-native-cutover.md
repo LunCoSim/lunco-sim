@@ -51,6 +51,14 @@ identity; missing session bytes are rejected. Unmounted authoring captures the
 separate native root/runtime/view layers and fetches their dependency closure
 within one budget. It does not serialize a custom merged layer.
 
+Canonical topology snapshots preserve native root/session identities and the
+full admitted byte closure, including unopened dependencies. The native change
+sink records edited layer identities; capture copies only those authored layers
+to send-safe `Sdf Data`. Encoding occurs on the worker through the native codec
+selected by the original identifier. Unedited binary layers retain their
+admitted buffers. The empty-closure substitution for foreign resolvers is
+removed. Authoring-context capture failures terminate commands before mutation.
+
 Transient document composition copies authored base specs through native Sdf
 operations into the identified root; runtime and view use native USDC buffers.
 The original root identity anchors relative arcs.
@@ -158,6 +166,13 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   Pixar OpenUSD 26.08 opened the native writer's schema output and matched all
   55 root prim names and 54 inheritance opinions. Cargo still uses published
   0.8.0; publication of the SDK commit is awaiting explicit user authorization.
+- The canonical snapshot codec/session/captured-edit mechanism check passed.
+  The production binary rebuilt after fast-forwarding the checkout to main's
+  Rumoca integration `126b79827`, retaining its session edit-target fix.
+  `USD_QUERY_API` passed five checks on owned port 4164; the malformed endpoint
+  gate raised its expected `usd-physics-joint-invalid` fault on port 4165;
+  `ASSEMBLY_EDITOR_PROPOSAL` passed fifteen checks in the windowed Editor on
+  port 4166. Process identity, exit, and port release were verified.
 
 Logs are in `/tmp/luncosim-sysml-*.log`, `/tmp/luncosim-openusd-*.log` and
 `/tmp/luncosim-native-*.log`. Agent-owned sessions and ports were released.
