@@ -499,13 +499,15 @@ survive inside large ones), power-law size-frequency population (2–60 m,
 exponent −1.8) with azimuth-lobed secondaries around large parents, and a
 degradation morph (fresh paraboloid → soft flat dish via `bowl_power` 2–6, rim
 decay), all band-limited per consumer; **error-driven CDLOD** —
-`select_with_error` over memoized `measure_node_error` per node
-(`TerrainNodeErrors`), range factor from the canonical screen metric
-(`pixel_error` knob) with **budget fitting by metric coarsening** (tile budget
-exceeded → raise `pixel_error`, so morph bands move with the detail radius),
-morph bands snapped to log-lattice buckets so batching survives per-parent
-bands, and **dynamic bodies as forced visual refinement foci** (the ground under
-a rover always draws at max visual depth); **streaming** — off-thread tile bakes (budgeted per frame,
+a persistent restricted cover using memoized `measure_node_geometry` per node
+(`TerrainNodeGeometry`). The existing vertex/interior probes provide both
+geometric error and a sampled height range. Selection measures nearest 3D
+camera distance to each node's square lifted by that range; the near-detail
+floor and retention band use the same distance. Camera poses are resolved in
+the terrain-local f64 frame through `lunco-spatial`'s shared-grid `big_space`
+conversion. Range factor comes from the canonical screen metric (`pixel_error`),
+and bounded deterministic split/merge edits retain an exact cover under the tile
+budget. Dynamic bodies drive the independent physics collider ring; **streaming** — off-thread tile bakes (budgeted per frame,
 bounded in flight) keeps a root fallback queued first while refined tiles
 publish, then orders selected work by screen-space benefit weighted toward the
 camera heading, with a reveal morph settling each child onto its parent's lattice,

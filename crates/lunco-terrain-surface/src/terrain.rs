@@ -1620,7 +1620,7 @@ fn assemble_dem_build(
                     crate::stream_viz::TerrainLodViz,
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
-                    crate::stream_viz::TerrainNodeErrors::default(),
+                    crate::stream_viz::TerrainNodeGeometry::default(),
                 ));
             }
             if collider_ring {

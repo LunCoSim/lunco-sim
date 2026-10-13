@@ -528,6 +528,22 @@ Application session metadata such as recents follows the same boundary:
 load, normalize, and persist it on workers, merge typed results on the app
 schedule, serialize writes, and finish the final write during shutdown.
 
+For native source-library loading, separate scan, declaration indexing, bundle
+writing and editor-index publication.
+For cold indexing, compare `modelica_diagram_capture` with `modelica_icon` and
+its `modelica_icon_members`/`modelica_icon_merge` children. Do not sum nested
+durations. The shared declaration owner distinguishes base-class lookup before
+current-class inheritance from member-type lookup after inheritance; verify
+scope-read growth with the inline multiple-base fixture, inherited enclosing
+types and missing/cyclic base diagnostics. The indexer consumes one admitted AST
+per file and retains qualified documentation identity. Use an owned library root
+without generated artifacts for cold measurements, then run the exact normal
+production binary separately. Concurrent builds and simulators limit wall-time
+claims.
+Check interface ownership too: each scope lookup should share the cached immutable
+class interface, rather than deep-cloning its complete member/header inventory.
+Retain per-file fingerprint invalidation and snapshot isolation.
+
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `prepare_fmi_component`, and ordered result commit. When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a

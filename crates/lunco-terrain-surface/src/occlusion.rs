@@ -56,12 +56,7 @@ impl SurfaceOcclusionCache {
         if let Some(bounds) = self.cells.get(&(cell, node)) {
             return Ok(*bounds);
         }
-        let bounds = surface
-            .height_bounds_in_cell(cell, rect)
-            .ok_or("terrain modifier has no conservative height bounds")?;
-        if !bounds[0].is_finite() || !bounds[1].is_finite() || bounds[0] > bounds[1] {
-            return Err("invalid terrain height enclosure".into());
-        }
+        let bounds = surface.height_bounds_in_cell(cell, rect)?;
         while self.cells.len() >= capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.cells.remove(&oldest);
@@ -152,6 +147,24 @@ impl SurfaceOracle {
             if pa.y.max(pb.y) < bounds[0] {
                 return Ok(Some(true));
             }
+            // The shared cell certificate includes terrain beside the ray.
+            // Restrict the same oracle enclosure to the segment's footprint
+            // before subdividing: transverse relief cannot block this segment.
+            let bounds = self.height_bounds_in_cell(
+                cell,
+                [
+                    pa.x.min(pb.x),
+                    pa.z.min(pb.z),
+                    pa.x.max(pb.x),
+                    pa.z.max(pb.z),
+                ],
+            )?;
+            if pa.y.min(pb.y) > bounds[1] {
+                return Ok(Some(false));
+            }
+            if pa.y.max(pb.y) < bounds[0] {
+                return Ok(Some(true));
+            }
             // Actual samples only certify blockers. A clear ray still requires
             // conservative enclosures over every interval it traverses.
             for t in [a, a + (b - a) * 0.5, b] {
@@ -168,18 +181,22 @@ impl SurfaceOracle {
             }
             Ok(None)
         };
-        while near < far {
-            let p = origin + direction * near;
-            let cell_axis = |v: f64, d: f64| {
-                let f = ((v + half) / spacing).clamp(0.0, (self.base_resolution() - 1) as f64);
-                let i = if d < 0.0 && (f - f.round()).abs() < 1.0e-9 {
-                    f.round() as isize - 1
-                } else {
-                    f.floor() as isize
-                };
-                i.clamp(0, self.base_resolution() as isize - 2) as usize
+        let p = origin + direction * near;
+        let cell_axis = |v: f64, d: f64| {
+            let f = ((v + half) / spacing).clamp(0.0, (self.base_resolution() - 1) as f64);
+            let i = if d < 0.0 {
+                f.ceil() as isize - 1
+            } else {
+                f.floor() as isize
             };
-            let cell = [cell_axis(p.x, direction.x), cell_axis(p.z, direction.z)];
+            i.clamp(0, self.base_resolution() as isize - 2) as usize
+        };
+        let mut cell = [cell_axis(p.x, direction.x), cell_axis(p.z, direction.z)];
+        // Advance integer cell identities at the crossed boundaries. Recovering
+        // them from origin + direction * t can round into the cell just exited.
+        // Each iteration crosses at least one boundary, including zero-length
+        // entry spans; no offset or epsilon changes the physical ray.
+        while near < far {
             let exit = |axis: usize, d: f64, o: f64| {
                 if d == 0.0 {
                     f64::INFINITY
@@ -193,12 +210,11 @@ impl SurfaceOracle {
                     (boundary - o) / d
                 }
             };
-            let end = far
-                .min(exit(0, direction.x, origin.x))
-                .min(exit(1, direction.z, origin.z));
-            if end <= near {
-                return Err("terrain cell traversal failed to advance".into());
-            }
+            let exits = [
+                exit(0, direction.x, origin.x),
+                exit(1, direction.z, origin.z),
+            ];
+            let end = far.min(exits[0]).min(exits[1]);
             let boundary = |i: usize| {
                 if i == self.base_resolution() - 1 {
                     half
@@ -212,12 +228,26 @@ impl SurfaceOracle {
                 boundary(cell[0] + 1),
                 boundary(cell[1] + 1),
             ];
-            match classify(cell, near, end, 1_u64, rect)? {
-                Some(true) => return Ok(true),
-                Some(false) => {}
-                None => pending.push_back((cell, near, end, 0, 1_u64, rect)),
+            if end > near {
+                match classify(cell, near, end, 1_u64, rect)? {
+                    Some(true) => return Ok(true),
+                    Some(false) => {}
+                    None => pending.push_back((cell, near, end, 0, 1_u64, rect)),
+                }
             }
-            near = end;
+            near = near.max(end);
+            if near >= far {
+                break;
+            }
+            for axis in 0..2 {
+                if exits[axis] <= end {
+                    let d = if axis == 0 { direction.x } else { direction.z };
+                    cell[axis] = cell[axis]
+                        .checked_add_signed(if d > 0.0 { 1 } else { -1 })
+                        .filter(|index| *index < self.base_resolution() - 1)
+                        .ok_or("terrain cell traversal left its clipped interval")?;
+                }
+            }
         }
         // Search all coarse cells before refining uncertain boundaries. A
         // grazing contact must not consume the budget before a later definite
@@ -295,6 +325,57 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn certified_occlusion_excludes_transverse_relief_from_grazing_rays() {
+        let mut grid = HeightGrid::new_flat(17, 8.0);
+        for z in 0..grid.res {
+            for x in 0..grid.res {
+                grid.heights[z * grid.res + x] = (z as f64 - 8.0) * 1000.0;
+            }
+        }
+        let surface = SurfaceOracle::bare(Arc::new(grid));
+        let budget = SurfaceOcclusionBudget {
+            max_intervals: 32,
+            ..Default::default()
+        };
+        let mut remaining = budget.max_tick_intervals;
+        assert_eq!(
+            surface.occludes_ray(
+                DVec3::new(-7.5, 0.001, 0.0),
+                DVec3::X,
+                budget,
+                &mut remaining,
+                &mut SurfaceOcclusionCache::default(),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn certified_occlusion_advances_across_rounded_cell_boundaries() {
+        let surface = SurfaceOracle::new(Arc::new(HeightGrid::new_flat(257, 500.0)), vec![]);
+        let budget = SurfaceOcclusionBudget::default();
+        let x = -0.7388253175039277_f64;
+        let z = 0.6592623470722384_f64;
+        let y = (1.0 - x * x - z * z).sqrt();
+        for sx in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let mut remaining = budget.max_tick_intervals;
+                assert_eq!(
+                    surface.occludes_ray(
+                        DVec3::new(sx * 9.132788318890832, 1.5, sz * 2.583824965637831),
+                        DVec3::new(sx * x, y, sz * z),
+                        budget,
+                        &mut remaining,
+                        &mut SurfaceOcclusionCache::default(),
+                    ),
+                    Ok(false),
+                    "a finite upward ray must cross every raster boundary"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn certified_occlusion_reuses_shared_interval_endpoints() {
         struct CountedSurface(Arc<std::sync::atomic::AtomicUsize>);
         impl HeightModifier for CountedSurface {
@@ -333,10 +414,11 @@ mod tests {
                 )
                 .unwrap()
         );
-        // Eight coarse intervals have nine distinct endpoints and eight
-        // midpoints. Repeated endpoints must not evaluate the modifier again.
-        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 17);
-        assert_eq!(budget.max_tick_intervals - remaining, 23);
+        // The half-cell entry certifies from its ray footprint. The other seven
+        // coarse spans have eight distinct endpoints and seven midpoints.
+        // Repeated endpoints must not evaluate the modifier again.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 15);
+        assert_eq!(budget.max_tick_intervals - remaining, 22);
     }
 
     #[test]

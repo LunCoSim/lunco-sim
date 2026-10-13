@@ -173,14 +173,6 @@ struct SourceLibraryIndexer {
     /// class_kind and own diagram_graphics). Resolved members come from
     /// `engine.icon_for` and friends — single source of truth.
     classes: HashMap<String, ClassDef>,
-    /// Per-class first-paragraph plain-text from
-    /// `annotation(Documentation(info="…"))`. Keyed by the simple
-    /// class name (not fully-qualified) — good enough at source library scale
-    /// because `Examples.*` class names are unique within a file
-    /// and the browser looks it up from the `short_name`. Populated
-    /// by `extract_documentation_infos` during `scan_dir` while the
-    /// `.mo` source is still in memory.
-    doc_infos: HashMap<String, String>,
     /// Per-file logging during scan_dir when true; otherwise a tick
     /// every couple seconds with running counters.
     verbose: bool,
@@ -195,53 +187,6 @@ struct SourceLibraryIndexer {
     /// runtime's `parsed-*.bin.zst` strategy on native.
     parsed_bundle: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     source_errors: Vec<String>,
-}
-
-/// Scan a Modelica source buffer and map each class's simple name to
-/// the **plain-text first paragraph** of its
-/// `annotation(Documentation(info="…"))`, if any.
-///
-/// Walks the rumoca AST: parses the source, recursively visits every
-/// nested class (`classes`), and pulls the class-level
-/// Documentation via the same `extract_documentation` helper that
-/// the workbench's model_view panel uses. Consistent path for
-/// boundary detection + doc extraction; no regex.
-///
-/// After matching, strip HTML tags and common entities, collapse
-/// whitespace, and keep only the first paragraph (`</p>` boundary,
-/// falling back to a double-newline). Dropping the rest means the
-/// index stays small (~200 examples × < 200 chars each).
-///
-/// Last-write wins on duplicate short names (different source library files can
-/// define classes with the same simple name; the indexer keys by
-/// short name for the palette tagline lookup, full qualified names
-/// are matched elsewhere).
-fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
-    let Ok(ast) = rumoca_phase_parse::parse_to_ast(source, "library.mo") else {
-        return HashMap::new();
-    };
-    let mut out: HashMap<String, String> = HashMap::new();
-    for (name, class_def) in &ast.classes {
-        collect_documentation(name, class_def, &mut out);
-    }
-    out
-}
-
-/// Recursively visit a class and its nested classes, recording each
-/// one's `Documentation(info=…)` keyed by short name.
-fn collect_documentation(
-    short_name: &str,
-    class_def: &rumoca_compile::parsing::ast::ClassDef,
-    out: &mut HashMap<String, String>,
-) {
-    let (info, _revisions) =
-        lunco_modelica_index::doc_extract::extract_documentation(&class_def.annotation);
-    if let Some(info) = info {
-        out.insert(short_name.to_string(), clean_info_text(&info));
-    }
-    for (nested_name, nested_def) in class_def.classes.iter() {
-        collect_documentation(nested_name, nested_def, out);
-    }
 }
 
 /// HTML-tag and whitespace-collapse patterns for [`clean_info_text`].
@@ -305,7 +250,6 @@ impl SourceLibraryIndexer {
         Self {
             engine: lunco_modelica_core::engine::ModelicaEngine::new(),
             classes: HashMap::new(),
-            doc_infos: HashMap::new(),
             verbose: false,
             files_scanned: 0,
             bytes_scanned: 0,
@@ -423,13 +367,8 @@ impl SourceLibraryIndexer {
             }
         };
         let ast = parsed.definition().clone();
-        {
-            for (k, v) in extract_documentation_infos(source) {
-                self.doc_infos.entry(k).or_insert(v);
-            }
-            self.parsed_bundle.push(parsed);
-            self.add_stored_definition(ast, package_prefix, is_package_file);
-        }
+        self.parsed_bundle.push(parsed);
+        self.add_stored_definition(ast, package_prefix, is_package_file);
     }
 
     /// Top-level companion-file shorthand: load a flat `.mo` at the
@@ -462,8 +401,10 @@ impl SourceLibraryIndexer {
         }
     }
 
-    fn add_class(&mut self, class: ClassDef, full_name: &str) {
-        for (nested_name, nested_class) in class.classes.clone() {
+    fn add_class(&mut self, mut class: ClassDef, full_name: &str) {
+        // The flat index stores each declaration once, without cloning its
+        // descendants again at every level of the package hierarchy.
+        for (nested_name, nested_class) in std::mem::take(&mut class.classes) {
             self.add_class(nested_class, &format!("{}.{}", full_name, nested_name));
         }
         self.classes.insert(full_name.to_string(), class);
@@ -475,7 +416,8 @@ impl SourceLibraryIndexer {
         // Snapshot keys so we can iterate while mutably borrowing
         // `self.engine` for icon queries. The classes themselves
         // stay borrowed read-only via per-iteration `self.classes.get`.
-        let names: Vec<String> = self.classes.keys().cloned().collect();
+        let mut names: Vec<String> = self.classes.keys().cloned().collect();
+        names.sort();
         for full_name in &names {
             let full_name = full_name.as_str();
             let Some(class) = self.classes.get(full_name) else {
@@ -485,7 +427,10 @@ impl SourceLibraryIndexer {
                 class.class_type,
                 ClassType::Model | ClassType::Block | ClassType::Connector
             ) {
-                let snapshot = self.engine.diagram_snapshot(full_name);
+                let snapshot = self.engine.diagram_snapshot(
+                    full_name,
+                    lunco_modelica_core::diagram::DiagramScope::ClassInterface,
+                );
                 let (ports, parameters, icon_graphics, resolution, resolution_message) =
                     match snapshot {
                         Ok(snapshot) => {
@@ -508,7 +453,6 @@ impl SourceLibraryIndexer {
                         ),
                     };
 
-                let short_name = rumoca_core::top_level_last_segment(full_name).to_string();
                 let category = rumoca_core::parent_scope(full_name)
                     .unwrap_or("")
                     .replace('.', "/");
@@ -538,7 +482,9 @@ impl SourceLibraryIndexer {
 
                 let short_description =
                     lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
-                let documentation_info = self.doc_infos.get(&short_name).cloned();
+                let (documentation_info, _) =
+                    lunco_modelica_index::doc_extract::extract_documentation(&class.annotation);
+                let documentation_info = documentation_info.map(|info| clean_info_text(&info));
                 // `expandable connector` (MLS §9.1.3) is a connector
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
@@ -1214,12 +1160,24 @@ package Facts
     PinInput ordinary;
   end Derived;
   model Invalid extends Missing; end Invalid;
+  package A
+    model Shared annotation(Documentation(info="<p>First class.</p>")); end Shared;
+  end A;
+  package B
+    model Shared annotation(Documentation(info="<p>Second class.</p>")); end Shared;
+  end B;
 end Facts;
 "#,
             "Facts.mo",
             "",
         );
         assert!(indexer.source_errors.is_empty());
+        assert!(
+            indexer
+                .classes
+                .values()
+                .all(|class| class.classes.is_empty())
+        );
         indexer.install_into_engine();
         let entries = indexer.index_all();
         let derived = entries
@@ -1242,6 +1200,22 @@ end Facts;
             lunco_modelica_index::index::ClassResolutionState::Missing
         );
         assert!(invalid.resolution_message.is_some());
+        for (name, documentation) in [
+            ("Facts.A.Shared", "First class."),
+            ("Facts.B.Shared", "Second class."),
+        ] {
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .unwrap()
+                    .documentation
+                    .0
+                    .as_deref(),
+                Some(documentation),
+            );
+        }
+        assert!(entries.windows(2).all(|pair| pair[0].name < pair[1].name));
     }
 
     /// The generated parsed-source artifact is a zstd-compressed bincode

@@ -1,0 +1,234 @@
+//! Unified compilation session management for Rumoca.
+//!
+//! This crate provides a standardized interface for compiling Modelica code
+//! across different frontends: CLI, LSP, WASM, etc.
+//!
+//! # Features
+//!
+//! - **Session management**: Track open documents and compilation state
+//! - **Multi-file support**: Combine multiple files with within clause handling
+//! - **Parallel compilation**: Compile multiple models concurrently
+//! - **Incremental updates**: Update single documents without full recompilation
+//! - **Thread-safe**: Safe for concurrent use from multiple threads
+//! - **Explicit compile contracts**: Phase-local failures and structured
+//!   `NeedsInner`/`Failed` outcomes via `PhaseResult`
+//!
+//! ## Pipeline Invariants
+//!
+//! The orchestrator phase ordering and failure contracts are documented in:
+//! `crates/rumoca-compile/PIPELINE_INVARIANTS.md`
+//!
+//! ## Public API Surface
+//!
+//! `Session` and `SessionConfig` are intentionally available at the crate root.
+//! All other APIs are namespaced (`compile`, `parsing`, `codegen`,
+//! `source_roots`, `project`) to prevent root facade growth.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use rumoca_compile::{Session, SessionConfig};
+//!
+//! // Create a session
+//! let mut session = Session::new(SessionConfig::default());
+//!
+//! // Add a source document
+//! session.add_document("Model.mo", source_code)?;
+//!
+//! // Compile a specific model
+//! let result = session.compile_model("MyPackage.MyModel")?;
+//! ```
+
+pub mod cache;
+mod codegen_api;
+mod codegen_target;
+mod experiment;
+mod instrumentation;
+#[cfg(test)]
+mod instrumentation_tests;
+mod merge;
+mod package_layout;
+pub mod parallelism;
+mod parse;
+mod parsed_artifact_cache;
+mod portable_source_root_cache;
+mod scenario_config;
+mod session;
+mod source_root_cache;
+mod source_root_discovery;
+mod traversal_adapter;
+mod workspace_config;
+
+/// Source-root discovery and cache helpers.
+pub mod source_roots {
+    pub use crate::package_layout::PackageLayoutError;
+    pub use crate::portable_source_root_cache::{
+        PortableSourceRoot, PortableSourceRootCacheIssue, PortableSourceRootCacheReport,
+        decode_source_root_snapshot, encode_source_root_snapshot, write_portable_source_root_cache,
+    };
+    pub use crate::session::SourceRootRefreshPlan;
+    pub use crate::source_root_cache::{
+        ParsedSourceRoot, SourceRootCacheStatus, SourceRootCacheTiming,
+        parse_source_root_with_cache, parse_source_root_with_cache_in,
+        resolve_source_root_cache_dir, set_cache_root_override,
+    };
+    pub use crate::source_root_discovery::{
+        SourceRootDuplicateSkip, SourceRootLoadPlan, canonical_path_key,
+        classify_configured_source_root_kind, merge_source_root_paths, plan_source_root_loads,
+        referenced_unloaded_source_root_paths, render_source_root_indexing_failed_message,
+        render_source_root_indexing_finished_message, render_source_root_indexing_started_message,
+        render_source_root_status_message, source_requires_unloaded_source_roots,
+        source_root_paths_changed, source_root_source_set_key, source_root_status_display_name,
+        sources_require_loaded_source_roots,
+    };
+}
+
+/// Parsing and merge helpers.
+pub mod parsing {
+    pub use rumoca_ir_ast as ast;
+    pub use rumoca_ir_ast::{
+        ClassDef, ComponentReference, Expression, StoredDefinition, TerminalType,
+        walk_component_reference_default,
+    };
+
+    pub use crate::merge::{
+        collect_class_type_counts, collect_model_declarations, collect_model_names,
+        merge_stored_definitions, qualify_stored_definition_class_name,
+    };
+    pub use crate::package_layout::collect_compile_unit_source_files;
+    pub use crate::parse::{
+        LenientParseResult, ParseError, ParseFailure, ParseResult, ParseSuccess,
+        expand_source_to_standard_modelica, parse_and_merge_parallel, parse_files_parallel,
+        parse_files_parallel_lenient, parse_source_to_ast, parse_source_to_ast_with_errors,
+        source_map_for_parsed_files, validate_source_syntax,
+    };
+}
+
+/// Workspace colocated model config helpers.
+pub mod scenario {
+    pub use crate::scenario_config::{
+        CodegenConfig, EffectiveSimulationConfig, EffectiveSimulationPreset, ModelConfig,
+        PlotConfig, PlotDefaults, PlotModelConfig, PlotViewConfig, RumocaTaskMarker,
+        ScenarioConfig, ScenarioConfigFile, ScenarioSimulationSnapshot, ScenarioTask,
+        ScenarioViewerConfig, ScenarioViewerMode, SimulationConfig, SimulationDefaults,
+        SimulationModelOverride, clear_model_simulation_preset, codegen_config_from_json,
+        codegen_config_to_json, is_rumoca_task_filename, load_codegen_config_for_model,
+        load_plot_views_for_model, load_simulation_snapshot_for_model, load_source_roots_for_model,
+        load_source_roots_for_model_task, normalize_solver_opt, parse_fallback_simulation,
+        parse_scenario_config_file, parse_views_payload, scenario_config_full_to_json,
+        scenario_config_response, scenario_config_text_from_json, simulation_override_from_json,
+        simulation_preset_to_json, simulation_settings_to_json, source_roots_from_json,
+        source_roots_to_json, visualization_views_to_json, write_codegen_config_for_model,
+        write_model_simulation_preset, write_plot_views_for_model, write_source_roots_for_model,
+        write_source_roots_for_model_task,
+    };
+}
+
+/// Workspace context config shared by editors, WASM, and docs.
+pub mod workspace {
+    pub use crate::workspace_config::{
+        WORKSPACE_CONFIG_FILE_NAME, WorkspaceConfig, WorkspaceConfigFile, WorkspaceSourceRootScope,
+        collect_workspace_config_paths, is_workspace_config_filename,
+    };
+}
+
+/// Curated code-generation helpers for proven-valid compiler artifacts.
+pub mod codegen {
+    pub use crate::codegen_api::templates;
+    pub use crate::codegen_api::{
+        CodegenError, SolveTemplateRenderer, dae_to_template_json,
+        render_algorithm_code_template_with_artifact, render_ast_template_with_name,
+        render_dae_template, render_dae_template_with_name, render_flat_template_with_name,
+        render_solve_template_with_name,
+    };
+    pub mod targets {
+        pub use crate::codegen_target::{
+            AssetBundle, BuiltinTargetDescriptor, ChecksumAlgorithm, ChecksumNeed,
+            RenderedTargetFile, TargetArchive, TargetArchiveFormat, TargetArchiveRoot,
+            TargetAssetFile, TargetBundle, TargetCapabilities, TargetCompatibilityEntry,
+            TargetFeatureSupport, TargetFile, TargetIntegerDomain, TargetManifest, TargetPackage,
+            TargetPartial, TargetTemplateIr, TargetTemplateSource, TensorCapabilities,
+            TensorCapability, TensorLayoutCapability, builtin_target_compatibility_matrix,
+            builtin_target_descriptors_for_ir, ensure_target_has_rendered_files,
+            parse_target_manifest, render_dae_target_files, safe_target_join,
+            target_ir_is_dae_renderable, target_manifest_ir, validate_dae_target_capabilities,
+            validate_solve_target_capabilities, validate_solve_tensor_inventory,
+        };
+    }
+}
+
+/// Read-only DAE analysis helpers exposed through the compile facade.
+pub mod analysis {
+    pub use rumoca_phase_dae::balance::{BalanceBreakdown, BalanceDetail};
+}
+
+/// Structural-analysis primitives over a branded checked-DAE view.
+pub mod phase_structural {
+    pub use rumoca_phase_structural::{
+        AlgebraicLoop, BltBlock, EquationRef, Incidence, SortedDae, StructuralDiagnostics,
+        StructuralError, StructuredScalarBlock, TearingResult, UnknownId, analyze,
+        build_blt_from_incidence, runtime_defined_continuous_unknown_names,
+        runtime_defined_unknown_names, sort, tear_algebraic_loop,
+    };
+}
+
+/// Compilation session API and result structures.
+pub mod compile {
+    pub use rumoca_ir_dae::{
+        ClockOperation, ConditionId, ContinuousOwnerView, CoordinateView, Dae, DaeProvenance,
+        DaeView, DiscreteBranchActivation, DiscreteRealActivation, DiscreteRealEquationView,
+        ExprId, ExpressionOperation, ResidualEquationView, VariableId, VariableRole, VariableView,
+        for_each_expression,
+    };
+    pub use rumoca_ir_flat::Model as FlatModel;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SourceSpanLocation {
+        pub file_name: String,
+        pub start: rumoca_core::text_position::TextPosition,
+        pub end: rumoca_core::text_position::TextPosition,
+    }
+
+    pub fn source_span_location(
+        source_map: &rumoca_core::SourceMap,
+        span: rumoca_core::Span,
+    ) -> Option<SourceSpanLocation> {
+        if span.is_dummy() {
+            return None;
+        }
+        let (file_name, source) = source_map.get_source(span.source)?;
+        let start_byte = span.start.0;
+        let end_byte = span.end.0;
+        if end_byte <= start_byte || end_byte > source.len() {
+            return None;
+        }
+        Some(SourceSpanLocation {
+            file_name: file_name.to_string(),
+            start: rumoca_core::text_position::byte_offset_to_position(source, start_byte),
+            end: rumoca_core::text_position::byte_offset_to_position(source, end_byte),
+        })
+    }
+
+    pub use crate::instrumentation::{
+        SessionCacheStatsSnapshot, reset_session_cache_stats, session_cache_stats,
+    };
+    pub use crate::session::{
+        ClassComponentDeclaration, ClassLocalCompletionItem, ClassLocalCompletionKind,
+        CompilationMode, CompilationResult, CompilationSummary, CompilePhaseEvent,
+        CompilePhaseObserverGuard, CompilePhaseTimingSnapshot, CompilePhaseTimingStat,
+        CompiledSourceClosure, CompiledSourceContribution, CompiledSourceRoot,
+        DaeCompilationResult, Document, DocumentSymbol, DocumentSymbolKind, FailedPhase,
+        LocalComponentInfo, ModelDiagnostics, ModelFailureDiagnostic, NavigationClassTargetInfo,
+        ParsedSourceDocument, ParsedSourceRootLoad, PhaseResult, SemanticDiagnosticsMode, Session,
+        SessionChange, SessionConfig, SessionSnapshot, SourceRootActivityKind,
+        SourceRootActivityPhase, SourceRootActivitySnapshot, SourceRootDurability, SourceRootKind,
+        SourceRootLoadMode, SourceRootLoadReport, SourceRootStatusSnapshot, StrictCheckTiming,
+        StrictCompilation, StrictCompileFailure, StrictCompileReport, StructuralOverride,
+        WorkspaceSymbol, WorkspaceSymbolKind, WorkspaceSymbolSnapshotTiming,
+        compile_phase_timing_stats, install_compile_phase_observer,
+        reset_compile_phase_timing_stats,
+    };
+}
+
+// Root exports intentionally kept minimal to avoid a "god facade".
+pub use compile::{Session, SessionConfig};

@@ -46,7 +46,7 @@ use lunco_materials::{
     ShaderLookReady, TextureLayer,
 };
 use lunco_obstacle_field::grid_mesh;
-use lunco_terrain_core::{HeightSource, measure_node_error};
+use lunco_terrain_core::{HeightSource, NodeGeometry, measure_node_geometry};
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
@@ -138,11 +138,11 @@ struct VisualDemand {
 #[derive(Clone, Copy)]
 struct TerrainVisualDemand {
     focus: [f64; 2],
-    eye_height: f64,
+    camera_y: f64,
     heading: Option<bevy::math::DVec2>,
     screen_height_px: f64,
     fov_y_rad: f64,
-    /// The camera's actual ground position.
+    /// This demand comes from an active rendering camera.
     required: bool,
     near_detail_radius_m: f64,
     near_detail_hysteresis_m: f64,
@@ -314,29 +314,22 @@ fn camera_pose_in_terrain(
 /// Convert a camera pose into the visual demand used by the finite terrain
 /// selector.
 ///
-/// A finite DEM is still visible when the camera is outside its footprint —
-/// the opening shot commonly sits just beyond an edge while looking across the
-/// surface. The camera position must therefore remain the metric focus so
-/// `Square::distance_to` measures the real camera-to-tile distance. Only the
-/// ground sample is clamped to the DEM boundary, because the surface has no
-/// authored height outside that boundary.
+/// The camera remains in the terrain-local f64 frame even outside the DEM.
+/// Per-node sampled height envelopes supply the vertical distance independently.
 fn terrain_visual_demand(
     demand: &VisualDemand,
     terrain_local: DVec3,
     local_forward: DVec3,
-    oracle: &SurfaceOracle,
 ) -> Option<TerrainVisualDemand> {
     if !terrain_local.is_finite() || !local_forward.is_finite() {
         return None;
     }
     let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
     let heading = (heading.length() > 1e-3).then(|| heading.normalize());
-    let h = oracle.half_extent() as f64;
     let focus = [terrain_local.x, terrain_local.z];
-    let ground = oracle.height_at(focus[0].clamp(-h, h), focus[1].clamp(-h, h));
     Some(TerrainVisualDemand {
         focus,
-        eye_height: (terrain_local.y - ground).max(0.0),
+        camera_y: terrain_local.y,
         heading,
         screen_height_px: demand.screen_height_px,
         fov_y_rad: demand.fov_y_rad,
@@ -590,7 +583,7 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 ///
 /// Split priority is `dist / refine_range`, so the budget is spent nearest-first.
 /// Merges run before splits (they free budget) and only past the same
-/// configured hysteresis band the recursive walk uses, so a camera parked on a
+/// configured hysteresis band, so a camera parked on a
 /// threshold cannot flip a quad every frame.
 ///
 /// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
@@ -603,8 +596,7 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 /// induction: every merge is guarded ([`merge_violates_restriction`]) and every
 /// split first force-splits any coarser edge-neighbour (which, ON a restricted
 /// cover, is at most one level up — so the cascade is depth-1 per neighbour,
-/// recursing only through the chain it builds). The recursive `select_with_error`
-/// walk never enforced this, which is one of the reasons it was replaced.
+/// recursing only through the chain it builds).
 ///
 /// Returns the number of splits refused because they would exceed `budget` —
 /// zero at any fixed point whose wanted set fits (see
@@ -614,11 +606,11 @@ fn evolve_cover(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
     focus: [f64; 2],
-    eye_height: f64,
+    camera_y: f64,
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
 ) -> usize {
-    evolve_cover_for_foci(qt, cover, &[(focus, eye_height)], node_error, budget)
+    evolve_cover_for_foci(qt, cover, &[(focus, camera_y)], node_error, budget)
 }
 
 /// Multi-viewport form of [`evolve_cover`]. A node uses its nearest visual focus,
@@ -637,6 +629,7 @@ fn evolve_cover_for_foci(
         cover,
         foci,
         node_error,
+        &|_, _| [0.0, 0.0],
         budget,
         TEST_MAX_COVER_EDITS,
         TEST_LOD_HYSTERESIS_RATIO,
@@ -669,6 +662,7 @@ fn evolve_cover_for_foci_with_retention(
     cover: &mut HashSet<QuadCoord>,
     foci: &[([f64; 2], f64)],
     node_error: &impl Fn(QuadCoord, Square) -> f64,
+    node_heights: &impl Fn(QuadCoord, Square) -> [f64; 2],
     budget: usize,
     max_cover_edits: usize,
     hysteresis_ratio: f64,
@@ -687,7 +681,13 @@ fn evolve_cover_for_foci_with_retention(
     let range = |c: QuadCoord| qt.error_refine_range(node_error(c, qt.region(c)));
     let dist = |c: QuadCoord| {
         foci.iter()
-            .map(|(focus, eye_height)| qt.focus_distance(c, *focus, *eye_height))
+            .map(|(focus, camera_y)| {
+                qt.focus_distance(
+                    c,
+                    [focus[0], *camera_y, focus[1]],
+                    node_heights(c, qt.region(c)),
+                )
+            })
             .reduce(f64::min)
             .unwrap_or(f64::INFINITY)
     };
@@ -1328,22 +1328,15 @@ fn on_set_terrain_rendering_quality(
 
 register_commands!(on_set_terrain_rendering_quality);
 
-/// Memoized per-node measured geometric error for a terrain's current oracle —
-/// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
-/// whenever the composed surface changes (live re-compose). Errors are measured
-/// lazily for nodes the selection walk actually visits (O(visited), a few tens of
-/// µs each, then cached for the surface's lifetime).
-/// Cap on memoized per-node error measurements per terrain. The memo is keyed
-/// by every node the selection ever probed and nothing else evicted it, so a
-/// long traverse grew it without bound. ~32 B/entry ⇒ ≈1 MB at the cap — an
-/// order of magnitude above the live cover plus its ancestor chains (≲8 k
-/// nodes at the default budget), so steady-state selection never hits the trim.
-const NODE_ERROR_CACHE_CAP: usize = 32 * 1024;
+/// Cap on lazily measured node geometry per terrain, keyed by quadtree node.
+/// At roughly 48 bytes per entry the cap retains about 1.5 MB, above the live
+/// cover and ancestor chains. Complete surface identity invalidates the cache.
+const NODE_GEOMETRY_CACHE_CAP: usize = 32 * 1024;
 
 #[derive(Component, Default)]
-pub struct TerrainNodeErrors {
-    map: HashMap<QuadCoord, f64>,
-    /// `surface_key()` of the oracle the cached errors were measured against —
+pub struct TerrainNodeGeometry {
+    map: HashMap<QuadCoord, NodeGeometry>,
+    /// `surface_key()` of the oracle the cached geometry was measured against —
     /// content identity, never the Arc pointer (allocator address reuse would
     /// keep a stale map alive).
     oracle_key: u64,
@@ -2651,9 +2644,10 @@ pub struct TerrainStreamStatus {
     /// camera means areas hold on coarser parents until `tile_budget` is raised
     /// or `pixel_error` coarsened.
     pub budget_refused: usize,
-    /// Active camera positions inside a streaming terrain footprint.
+    /// Active camera demands resolved in a streaming terrain frame.
     pub focus_wanted: usize,
-    /// Camera positions whose exact selected tile (not a coarse fallback) is ready.
+    /// Camera positions whose exact selected tile is ready; positions outside
+    /// the finite footprint have no selected tile.
     pub focus_resident: usize,
 }
 
@@ -2701,9 +2695,17 @@ fn required_focus_depth(
         .min()
 }
 
-fn near_field_error_floor(region: Square, tile_res: usize, demands: &[TerrainVisualDemand]) -> f64 {
+fn near_field_error_floor(
+    region: Square,
+    heights: [f64; 2],
+    tile_res: usize,
+    demands: &[TerrainVisualDemand],
+) -> f64 {
     if demands.iter().any(|focus| {
-        focus.required && region.distance_to(focus.focus) <= focus.near_detail_radius_m
+        focus.required
+            && region
+                .distance_to_height_range([focus.focus[0], focus.camera_y, focus.focus[1]], heights)
+                <= focus.near_detail_radius_m
     }) {
         region.side() / (tile_res - 1) as f64
     } else {
@@ -2711,19 +2713,24 @@ fn near_field_error_floor(region: Square, tile_res: usize, demands: &[TerrainVis
     }
 }
 
-fn near_field_retains_refinement(region: Square, demands: &[TerrainVisualDemand]) -> bool {
+fn near_field_retains_refinement(
+    region: Square,
+    heights: [f64; 2],
+    demands: &[TerrainVisualDemand],
+) -> bool {
     demands.iter().any(|focus| {
         focus.required
-            && region.distance_to(focus.focus)
+            && region
+                .distance_to_height_range([focus.focus[0], focus.camera_y, focus.focus[1]], heights)
                 <= focus.near_detail_radius_m + focus.near_detail_hysteresis_m
     })
 }
 
-fn cached_node_error(
-    cache: &std::cell::RefCell<&mut HashMap<QuadCoord, f64>>,
+fn cached_node_geometry(
+    cache: &std::cell::RefCell<&mut HashMap<QuadCoord, NodeGeometry>>,
     coord: QuadCoord,
-    measure: impl FnOnce() -> f64,
-) -> f64 {
+    measure: impl FnOnce() -> NodeGeometry,
+) -> NodeGeometry {
     // Copy the value out in its own scope. Keeping the `Ref` temporary alive
     // through the miss branch and then calling `borrow_mut` is a runtime panic.
     if let Some(error) = { cache.borrow().get(&coord).copied() } {
@@ -2886,7 +2893,7 @@ struct TerrainCoverCompletion {
 struct PreparedTerrainCover {
     cover: HashSet<QuadCoord>,
     selected: Vec<Selected>,
-    node_errors: HashMap<QuadCoord, f64>,
+    node_geometry: HashMap<QuadCoord, NodeGeometry>,
     budget_refused: usize,
     settled_sig: Option<u64>,
     more_work: bool,
@@ -2898,7 +2905,7 @@ struct TerrainCoverRequest {
     oracle_key: u64,
     demands: Vec<TerrainVisualDemand>,
     cover: HashSet<QuadCoord>,
-    node_errors: HashMap<QuadCoord, f64>,
+    node_geometry: HashMap<QuadCoord, NodeGeometry>,
     bootstrap_ready: bool,
     settled_sig: Option<u64>,
     budget_refused: usize,
@@ -2913,7 +2920,7 @@ struct TerrainCoverRequest {
 
 fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCover {
     if request.oracle_key != request.oracle.surface_key() {
-        request.node_errors.clear();
+        request.node_geometry.clear();
         request.oracle_key = request.oracle.surface_key();
     }
     let TerrainCoverRequest {
@@ -2922,7 +2929,7 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
         oracle_key: _,
         demands,
         mut cover,
-        mut node_errors,
+        mut node_geometry,
         bootstrap_ready,
         mut settled_sig,
         mut budget_refused,
@@ -2937,18 +2944,27 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
     let mut selected = Vec::new();
     let mut more_work = false;
     {
-        let error_cache = std::cell::RefCell::new(&mut node_errors);
-        let node_error = |coord: QuadCoord, region: Square| -> f64 {
-            cached_node_error(&error_cache, coord, || {
+        let geometry_cache = std::cell::RefCell::new(&mut node_geometry);
+        let geometry = |coord: QuadCoord, region: Square| {
+            cached_node_geometry(&geometry_cache, coord, || {
                 let probe_step = region.side() / (probe_resolution - 1) as f64;
                 let limited = oracle.detail_limited(probe_step);
-                measure_node_error(&limited, region, probe_resolution)
+                measure_node_geometry(&limited, region, probe_resolution)
             })
-            .max(near_field_error_floor(region, tile_resolution, &demands))
+        };
+        let node_heights = |coord, region| geometry(coord, region).height_range;
+        let node_error = |coord, region| {
+            let measured = geometry(coord, region);
+            measured.error.max(near_field_error_floor(
+                region,
+                measured.height_range,
+                tile_resolution,
+                &demands,
+            ))
         };
         let focus_metric = demands
             .iter()
-            .map(|demand| (demand.focus, demand.eye_height))
+            .map(|demand| (demand.focus, demand.camera_y))
             .collect::<Vec<_>>();
         let mut cover_scratch = CoverScratch::default();
         if cover.is_empty() {
@@ -2960,10 +2976,13 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
                     &mut cover,
                     &focus_metric,
                     &node_error,
+                    &node_heights,
                     tile_budget,
                     cover_edits_per_cycle,
                     hysteresis_ratio,
-                    &|_, region| near_field_retains_refinement(region, &demands),
+                    &|coord, region| {
+                        near_field_retains_refinement(region, node_heights(coord, region), &demands)
+                    },
                     &mut cover_scratch,
                 );
                 budget_refused += refused;
@@ -2978,10 +2997,13 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
                 &mut cover,
                 &focus_metric,
                 &node_error,
+                &node_heights,
                 tile_budget,
                 cover_edits_per_cycle,
                 hysteresis_ratio,
-                &|_, region| near_field_retains_refinement(region, &demands),
+                &|coord, region| {
+                    near_field_retains_refinement(region, node_heights(coord, region), &demands)
+                },
                 &mut cover_scratch,
             );
             budget_refused = refused;
@@ -3001,7 +3023,7 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
     PreparedTerrainCover {
         cover,
         selected,
-        node_errors,
+        node_geometry,
         budget_refused,
         settled_sig,
         more_work,
@@ -3010,7 +3032,7 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
 
 fn commit_prepared_terrain_cover(
     tiles: &mut LodTiles,
-    node_errors: &mut TerrainNodeErrors,
+    node_geometry: &mut TerrainNodeGeometry,
     prepared: PreparedTerrainCover,
     oracle_key: u64,
     signature: u64,
@@ -3021,8 +3043,8 @@ fn commit_prepared_terrain_cover(
     tiles.settled_sig = prepared.settled_sig;
     tiles.last_sig = (!prepared.more_work).then_some(signature);
     tiles.failed_cover_signature = None;
-    node_errors.oracle_key = oracle_key;
-    node_errors.map = prepared.node_errors;
+    node_geometry.oracle_key = oracle_key;
+    node_geometry.map = prepared.node_geometry;
 }
 
 type TerrainBakeSortKey = (u8, f64, Selected);
@@ -3162,7 +3184,7 @@ pub fn update_lod_tiles(
                 &TerrainLodViz,
                 &mut LodTiles,
                 &mut PendingTileBakes,
-                &mut TerrainNodeErrors,
+                &mut TerrainNodeGeometry,
                 Option<&TerrainDerivedMaps>,
                 Option<&TerrainAuthoredMaps>,
                 Option<&TileShadowCache>,
@@ -3496,7 +3518,7 @@ pub fn update_lod_tiles(
                     continue;
                 };
                 if let Some(visual_demand) =
-                    terrain_visual_demand(demand, terrain_local, local_forward, oracle)
+                    terrain_visual_demand(demand, terrain_local, local_forward)
                 {
                     visual_foci.push(visual_demand);
                 }
@@ -3554,7 +3576,7 @@ pub fn update_lod_tiles(
                 for visual in visual_foci.iter() {
                     sig.write_u64(q(visual.focus[0]));
                     sig.write_u64(q(visual.focus[1]));
-                    sig.write_u64(q(visual.eye_height));
+                    sig.write_u64(q(visual.camera_y));
                     sig.write_u64(visual.screen_height_px.to_bits());
                     sig.write_u64(visual.fov_y_rad.to_bits());
                     sig.write_u64(visual.near_detail_radius_m.to_bits());
@@ -3717,7 +3739,7 @@ pub fn update_lod_tiles(
                         oracle_key,
                         demands: visual_foci.clone(),
                         cover: tiles.cover.clone(),
-                        node_errors: errs.map.clone(),
+                        node_geometry: errs.map.clone(),
                         bootstrap_ready: tiles.bootstrap_ready,
                         settled_sig: tiles.settled_sig,
                         budget_refused: tiles.budget_refused,
@@ -3794,7 +3816,7 @@ pub fn update_lod_tiles(
             // parent fallbacks and every ancestor chain (the coords the next
             // selection pass re-reads) — so the trim costs the live cover no
             // re-probes (a full clear would re-measure ~1.6 k nodes in one frame).
-            if errs.map.len() > NODE_ERROR_CACHE_CAP {
+            if errs.map.len() > NODE_GEOMETRY_CACHE_CAP {
                 let mut keep: HashSet<QuadCoord> = HashSet::with_capacity(
                     wanted.len() * (profile.terrain_lod_max_depth as usize + 1),
                 );
@@ -4661,7 +4683,7 @@ mod draw_partition_tests {
                 oracle_key: oracle.surface_key(),
                 demands: vec![TerrainVisualDemand {
                     focus: [12.0, -8.0],
-                    eye_height: 35.0,
+                    camera_y: 35.0,
                     heading: None,
                     screen_height_px: 720.0,
                     fov_y_rad: std::f64::consts::FRAC_PI_3,
@@ -4670,7 +4692,7 @@ mod draw_partition_tests {
                     near_detail_hysteresis_m: 12.0,
                 }],
                 cover,
-                node_errors: HashMap::new(),
+                node_geometry: HashMap::new(),
                 bootstrap_ready: true,
                 settled_sig: None,
                 budget_refused: 0,
@@ -4689,7 +4711,7 @@ mod draw_partition_tests {
 
         assert_eq!(forward.cover, reverse.cover);
         assert_eq!(forward.selected, reverse.selected);
-        assert_eq!(forward.node_errors, reverse.node_errors);
+        assert_eq!(forward.node_geometry, reverse.node_geometry);
         assert_eq!(forward.budget_refused, reverse.budget_refused);
         assert_eq!(forward.settled_sig, reverse.settled_sig);
         assert_eq!(forward.more_work, reverse.more_work);
@@ -5247,9 +5269,6 @@ mod draw_partition_tests {
 
     #[test]
     fn finite_terrain_keeps_a_demand_when_camera_is_beyond_its_edge() {
-        let oracle = SurfaceOracle::bare(std::sync::Arc::new(
-            lunco_obstacle_field::field::HeightGrid::new_flat(3, 500.0),
-        ));
         let camera = VisualDemand {
             entity: Entity::PLACEHOLDER,
             position: DVec3::new(-550.0, 100.0, -550.0),
@@ -5260,11 +5279,11 @@ mod draw_partition_tests {
             near_detail_hysteresis_m: 12.0,
         };
 
-        let visual = terrain_visual_demand(&camera, camera.position, camera.forward, &oracle)
+        let visual = terrain_visual_demand(&camera, camera.position, camera.forward)
             .expect("finite camera pose remains a valid visual demand");
 
         assert_eq!(visual.focus, [-550.0, -550.0]);
-        assert_eq!(visual.eye_height, 100.0);
+        assert_eq!(visual.camera_y, 100.0);
         assert!(visual.required);
         assert!(visual.near_detail_radius_m > 0.0);
     }
@@ -5659,7 +5678,7 @@ mod draw_partition_tests {
         );
         let actual = TerrainVisualDemand {
             focus: [0.0, 0.0],
-            eye_height: 3.0,
+            camera_y: 3.0,
             heading: None,
             screen_height_px: 1080.0,
             fov_y_rad: std::f64::consts::FRAC_PI_4,
@@ -5668,13 +5687,22 @@ mod draw_partition_tests {
             near_detail_hysteresis_m: 12.0,
         };
         let demands = [actual];
+        let elevated = [TerrainVisualDemand {
+            camera_y: 200.0,
+            ..actual
+        }];
+        let root = qt.region(QuadCoord::ROOT);
+        assert_eq!(near_field_error_floor(root, [0.0, 0.0], 49, &elevated), 0.0);
+        assert!(!near_field_retains_refinement(root, [0.0, 0.0], &elevated));
+        assert!(near_field_error_floor(root, [190.0, 200.0], 49, &elevated) > 0.0);
         let foci = demands
             .iter()
-            .map(|demand| (demand.focus, demand.eye_height))
+            .map(|demand| (demand.focus, demand.camera_y))
             .collect::<Vec<_>>();
         let error = |_coord: QuadCoord, region: Square| {
             near_field_error_floor(
                 region,
+                [0.0, 0.0],
                 terrain_quality().terrain_lod_tile_resolution,
                 &demands,
             )
@@ -5725,7 +5753,7 @@ mod draw_partition_tests {
             .collect::<Vec<_>>();
         let demand = TerrainVisualDemand {
             focus: [0.0, 0.0],
-            eye_height: 3.0,
+            camera_y: 3.0,
             heading: None,
             screen_height_px: 1080.0,
             fov_y_rad: std::f64::consts::FRAC_PI_4,
@@ -5789,18 +5817,27 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn repeated_same_frame_node_error_cache_miss_then_hits_do_not_overlap_borrows() {
+    fn repeated_same_frame_node_geometry_cache_miss_then_hits_do_not_overlap_borrows() {
         let coord = QuadCoord::ROOT;
         let mut storage = HashMap::new();
         let cache = std::cell::RefCell::new(&mut storage);
         let measurements = std::cell::Cell::new(0usize);
 
         for _ in 0..16 {
-            let error = cached_node_error(&cache, coord, || {
+            let error = cached_node_geometry(&cache, coord, || {
                 measurements.set(measurements.get() + 1);
-                42.0
+                NodeGeometry {
+                    error: 42.0,
+                    height_range: [-5.0, 10.0],
+                }
             });
-            assert_eq!(error, 42.0);
+            assert_eq!(
+                error,
+                NodeGeometry {
+                    error: 42.0,
+                    height_range: [-5.0, 10.0]
+                }
+            );
         }
 
         assert_eq!(
@@ -6337,6 +6374,7 @@ mod draw_partition_tests {
                 &mut a,
                 &[([x, 0.0], 2.0)],
                 &err,
+                &|_, _| [0.0, 0.0],
                 64,
                 TEST_MAX_COVER_EDITS,
                 TEST_LOD_HYSTERESIS_RATIO,
@@ -6348,6 +6386,7 @@ mod draw_partition_tests {
                 &mut b,
                 &[([x, 0.0], 2.0)],
                 &err,
+                &|_, _| [0.0, 0.0],
                 64,
                 TEST_MAX_COVER_EDITS,
                 TEST_LOD_HYSTERESIS_RATIO,
@@ -6378,6 +6417,7 @@ mod draw_partition_tests {
                 cover,
                 &[([0.0, 0.0], 5.0)],
                 &err,
+                &|_, _| [0.0, 0.0],
                 16,
                 TEST_MAX_COVER_EDITS,
                 TEST_LOD_HYSTERESIS_RATIO,
@@ -6475,6 +6515,7 @@ mod draw_partition_tests {
             &mut cover,
             &[([-700.0, -700.0], 5.0)],
             &err,
+            &|_, _| [0.0, 0.0],
             13,
             TEST_MAX_COVER_EDITS,
             TEST_LOD_HYSTERESIS_RATIO,

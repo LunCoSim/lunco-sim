@@ -44,8 +44,23 @@ containing only packages, records, connectors, types, or functions has no
 simulation target. Component metadata uses Rumoca's complete expression
 rendering and already-decoded string values; preserve literal quotes,
 backslashes, and description concatenation when inspecting authored facts.
+A prolonged native `source-library` loading phase after parsing requires tracing
+declaration indexing, not clearing its status. The Rumoca package-definition map
+reuses its validated session revision, avoiding a whole-library signature rebuild
+per lookup while preserving edit/removal invalidation. For cold validation, use
+an owned local library root through `library.local_root_override`; preserve the
+user's shared source and generated caches and wait for actual editor-index readiness.
+Cold indexing reads documentation from the admitted AST and stores each qualified
+class once in its flat inventory. For deep multiple inheritance, Rumoca's shared
+lookup resolves base names before expanding the current class's inherited
+contents; member lookup still includes inherited types. Keep these contexts
+distinct and retain missing-base/cycle diagnostics when tracing indexing delays.
+Scope reads share immutable cached interfaces; source edits replace the affected
+file's facts and leave retained snapshots isolated.
 Canvas diagrams consume the shared engine's resolved declaration snapshot.
-The source-library indexer uses the same snapshot. Missing or cyclic types
+The source-library indexer requests the same owner's `ClassInterface` scope;
+canvas projection requests `ComponentGraph`. Bulk indexing must not construct
+unused internal component graphs or icons. Missing or cyclic types
 reject projection visibly; indexed classes retain their diagnostic state. Wait for source-root admission
 and inspect the projection diagnostic; a type's spelling cannot supply ports,
 causality or an `Interfaces` package. Routes decorate edges from the selected

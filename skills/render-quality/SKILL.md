@@ -83,6 +83,19 @@ view restoration can replace an early camera command.
    Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
    multiplication. If broad terrain colour patches match a low-frequency AO
    map, inspect that channel routing before touching assets or exposure.
+   For tile-shaped holes with a fully resident/prepared cover, inspect native GPU
+   output-buffer stride before changing material lighting. `UninitBufferVec`
+   allocates by `ShaderSize::SHADER_SIZE`, not Rust `size_of`; enhanced-determinism
+   scalar math changes the host mesh layout. Keep the pinned renderer patch,
+   native GPU culling and physics scalar math intact.
+   Terrain selection uses nearest 3D distance to each node's sampled height
+   envelope, including the near-detail/retention rules. Resolve camera and terrain
+   through the existing shared-grid `big_space` path; ground clearance beneath
+   the camera is not the elevation of every tile.
+   For accelerated celestial failures, inspect the terminal solar diagnostic and
+   run `celestial_terrain_clock.rhai` with the settled probe ID. Preserve physical
+   fixed-step semantics and conservative bounds; do not raise quotas or fabricate
+   sunlight to hide a traversal/certificate failure.
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a

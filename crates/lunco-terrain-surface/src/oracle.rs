@@ -95,12 +95,17 @@ impl SurfaceOracle {
         &self,
         cell: [usize; 2],
         rect: [f64; 4],
-    ) -> Option<[f64; 2]> {
+    ) -> Result<[f64; 2], String> {
         let mut bounds = self.base.cell_height_bounds(cell, rect);
         for modifier in &self.modifiers {
-            bounds = modifier.height_bounds(rect, bounds)?;
+            bounds = modifier
+                .height_bounds(rect, bounds)
+                .ok_or("terrain modifier has no conservative height bounds")?;
         }
-        Some(bounds)
+        if !bounds[0].is_finite() || !bounds[1].is_finite() || bounds[0] > bounds[1] {
+            return Err("invalid terrain height enclosure".into());
+        }
+        Ok(bounds)
     }
     pub(crate) fn base_resolution(&self) -> usize {
         self.base.res

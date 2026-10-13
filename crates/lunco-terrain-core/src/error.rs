@@ -1,25 +1,6 @@
-//! Measured geometric error — detail earned by the surface, not by camera distance.
-//!
-//! Today [`Quadtree::geometric_error`](crate::quadtree::Quadtree::geometric_error)
-//! is **uniform** (`root / 2^depth`): every node at a depth is assumed equally
-//! detailed, so a dead-flat mare and a jagged crater rim refine on the same
-//! schedule. That wastes triangles on the flats and starves the rims.
-//!
-//! [`measure_node_error`] instead asks the [`HeightSource`] how much vertical
-//! detail a node actually *loses* when drawn at its own mesh resolution: it
-//! bilinearly interpolates the node's corner/vertex grid and compares that against
-//! the true surface sampled at interior points, returning the worst deviation
-//! (metres). A flat node measures ≈0 (refine nothing); a node straddling a crater
-//! rim measures large (refine early, refine deep). Because it is a pure function of
-//! the source, every peer computes the same error → the error-driven selection in
-//! [`Quadtree::select_with_error`](crate::quadtree::Quadtree::select_with_error)
-//! stays view-independent and deterministic, exactly like the uniform path.
-//!
-//! It is a *sampled* estimate, not a strict bound: a feature hiding entirely
-//! between the interior sample points is missed. The interior sample pattern is
-//! chosen dense enough (cell centre, edge midpoints, quarter points) that any
-//! feature comparable to the node's cell size shows up — which is all the LOD needs
-//! to decide "is there detail here worth refining toward."
+//! Sampled node geometry shared by visual error and camera-distance selection.
+//! The existing vertex and interior probes estimate both lost detail and the
+//! node's height envelope. These are visual estimates, not physical certificates.
 
 use crate::quadtree::Square;
 use crate::source::HeightSource;
@@ -40,11 +21,16 @@ const CELL_SAMPLES: &[(f64, f64)] = &[
     (0.75, 0.75),
 ];
 
-/// Worst vertical deviation (metres) between a node's `res × res` bilinear mesh and
-/// the true `src` surface, sampled at interior points of every cell. `res` is the
-/// node's mesh vertex count per side (≥ 2). Zero for a surface the mesh represents
-/// exactly (e.g. planar); grows with detail the mesh cannot capture.
-pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) -> f64 {
+/// Visual estimate from one shared set of node probes, in metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NodeGeometry {
+    pub error: f64,
+    pub height_range: [f64; 2],
+}
+
+/// Measure lost bilinear detail and the height envelope using the node's mesh
+/// vertices and interior probes. `res` is the vertex count per side (at least two).
+pub fn measure_node_geometry(src: &dyn HeightSource, region: Square, res: usize) -> NodeGeometry {
     thread_local! {
         /// Reused vertex-height scratch — this runs per LOD node (on cache miss),
         /// so a fresh `Vec` per call churned the allocator. Purely local, so the
@@ -60,7 +46,7 @@ pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) ->
 
     // TAKE the scratch buffer out of the cell for the duration instead of holding a
     // `borrow_mut` across `src.height_at()`. `HeightSource` is a PUBLIC trait: an
-    // implementation that transitively re-enters `measure_node_error` (a composed
+    // implementation that transitively re-enters `measure_node_geometry` (a composed
     // oracle, an LOD-aware source) would otherwise hit `BorrowMutError` and PANIC.
     // With `take`, the re-entrant call simply allocates its own Vec — slower, never
     // fatal — and the outer call puts its buffer back at the end.
@@ -73,6 +59,11 @@ pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) ->
         }
     }
 
+    let mut height_range = [f64::INFINITY, f64::NEG_INFINITY];
+    for &height in &verts {
+        height_range[0] = height_range[0].min(height);
+        height_range[1] = height_range[1].max(height);
+    }
     let mut max_err = 0.0f64;
     for cj in 0..n - 1 {
         for ci in 0..n - 1 {
@@ -85,6 +76,8 @@ pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) ->
                 let px = x0 + (ci as f64 + u) * step;
                 let pz = z0 + (cj as f64 + v) * step;
                 let truth = src.height_at(px, pz);
+                height_range[0] = height_range[0].min(truth);
+                height_range[1] = height_range[1].max(truth);
                 let e = (truth - bil).abs();
                 if e > max_err {
                     max_err = e;
@@ -95,7 +88,10 @@ pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) ->
     // Return the buffer for the next call (a re-entrant inner call may have parked
     // its own — either is fine; the buffer is pure scratch).
     VERT_SCRATCH.with(|s| s.replace(verts));
-    max_err
+    NodeGeometry {
+        error: max_err,
+        height_range,
+    }
 }
 
 /// Bilinear interpolation of a cell's four corner heights at unit-cell `(u, v)`.
@@ -141,29 +137,41 @@ mod tests {
     #[test]
     fn flat_surface_has_zero_error() {
         // A plane is represented exactly by any bilinear mesh → no error anywhere.
-        assert_eq!(measure_node_error(&Flat, sq(0.0, 0.0, 100.0), 8), 0.0);
-        assert_eq!(measure_node_error(&Flat, sq(500.0, -300.0, 50.0), 16), 0.0);
+        assert_eq!(
+            measure_node_geometry(&Flat, sq(0.0, 0.0, 100.0), 8).error,
+            0.0
+        );
+        assert_eq!(
+            measure_node_geometry(&Flat, sq(500.0, -300.0, 50.0), 16).error,
+            0.0
+        );
+        assert_eq!(
+            measure_node_geometry(&Flat, sq(0.0, 0.0, 100.0), 8).height_range,
+            [42.0, 42.0]
+        );
     }
 
     #[test]
     fn feature_gives_positive_error_scaling_with_amplitude() {
         let region = sq(0.0, 0.0, 100.0);
-        let small = measure_node_error(
+        let small = measure_node_geometry(
             &Bump {
                 amp: 1.0,
                 sigma: 20.0,
             },
             region,
             8,
-        );
-        let big = measure_node_error(
+        )
+        .error;
+        let big = measure_node_geometry(
             &Bump {
                 amp: 10.0,
                 sigma: 20.0,
             },
             region,
             8,
-        );
+        )
+        .error;
         assert!(small > 0.0, "a bump must register error");
         assert!(big > small * 5.0, "error scales ~linearly with amplitude");
     }
@@ -176,8 +184,8 @@ mod tests {
             sigma: 30.0,
         };
         let region = sq(0.0, 0.0, 100.0);
-        let coarse = measure_node_error(&src, region, 4);
-        let fine = measure_node_error(&src, region, 32);
+        let coarse = measure_node_geometry(&src, region, 4).error;
+        let fine = measure_node_geometry(&src, region, 32).error;
         assert!(
             fine < coarse,
             "finer mesh {fine} should beat coarse {coarse}"
@@ -191,8 +199,8 @@ mod tests {
             amp: 10.0,
             sigma: 15.0,
         };
-        let over = measure_node_error(&src, sq(0.0, 0.0, 40.0), 8);
-        let away = measure_node_error(&src, sq(2000.0, 2000.0, 40.0), 8);
+        let over = measure_node_geometry(&src, sq(0.0, 0.0, 40.0), 8).error;
+        let away = measure_node_geometry(&src, sq(2000.0, 2000.0, 40.0), 8).error;
         assert!(over > 1.0, "node over feature should measure real error");
         assert!(away < 1e-6, "node far from feature should be ~flat");
     }
@@ -202,12 +210,12 @@ mod tests {
         let src = AnalyticHeightSource::default();
         let region = sq(123.0, -456.0, 250.0);
         assert_eq!(
-            measure_node_error(&src, region, 16),
-            measure_node_error(&src, region, 16)
+            measure_node_geometry(&src, region, 16),
+            measure_node_geometry(&src, region, 16)
         );
     }
 
-    /// A `HeightSource` that re-enters `measure_node_error` from `height_at` — the
+    /// A `HeightSource` that re-enters `measure_node_geometry` from `height_at` — the
     /// scratch buffer must not be borrow-locked across the callback (it used to be:
     /// `BorrowMutError` panic).
     struct Reentrant {
@@ -218,7 +226,7 @@ mod tests {
             use std::sync::atomic::Ordering::SeqCst;
             if self.depth.load(SeqCst) == 0 {
                 self.depth.store(1, SeqCst);
-                let inner = measure_node_error(self, sq(0.0, 0.0, 10.0), 4);
+                let inner = measure_node_geometry(self, sq(0.0, 0.0, 10.0), 4).error;
                 self.depth.store(0, SeqCst);
                 return x + inner;
             }
@@ -231,7 +239,7 @@ mod tests {
         let src = Reentrant {
             depth: std::sync::atomic::AtomicU32::new(0),
         };
-        let e = measure_node_error(&src, sq(0.0, 0.0, 100.0), 8);
+        let e = measure_node_geometry(&src, sq(0.0, 0.0, 100.0), 8).error;
         assert!(e.is_finite());
     }
 }

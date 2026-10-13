@@ -523,7 +523,11 @@ mod composite_slim_slice_tests {
             .map(str::to_owned)
             .or_else(|| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
             .expect("fixture target");
-        let snapshot = crate::diagram::DiagramSnapshot::capture(&mut session, &target)?;
+        let snapshot = crate::diagram::DiagramSnapshot::capture(
+            &mut session,
+            &target,
+            crate::diagram::DiagramScope::ComponentGraph,
+        )?;
         import_model_to_diagram_from_ast(ast, Arc::new(snapshot), source, max_nodes, layout)
     }
 

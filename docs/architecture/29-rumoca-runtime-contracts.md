@@ -49,12 +49,46 @@ and entered text when validation rejects a value; the existing draft stays
 unchanged. Session revision invalidates the bounded declaration cache;
 repeated UI reads reuse its immutable result.
 
+The session package-definition map records its validated session revision.
+Unchanged declaration queries reuse it without rebuilding the whole-library
+source signature. After a revision changes, the existing dependency signature
+validates reuse or triggers reconstruction. The maintained Rumoca revision
+supplies this cache contract. The local `rumoca-compile` correction owns the
+base-class lookup context described below; see
+`third_party/rumoca-compile/LUNCOSIM-PROVENANCE.md`.
+Native editor indexing retains the real loading state until metadata publication
+completes; clearing a progress indicator does not complete that work.
+
+The shared declaration lookup distinguishes member types from base-class names.
+Base names are resolved before expanding the current class's inherited contents
+(MLS 5.6.1.4), while inherited types in enclosing scopes remain visible. Recursive
+base lookup uses this same context; sibling `extends` clauses do not recursively
+resolve each other. Mutable session and snapshot readers share the lookup owner.
+Missing bases and inheritance cycles still reject declaration capture.
+Cached class interfaces share immutable facts across scope reads and snapshots;
+lookups do not deep-clone the interface's members or nested headers. The existing
+file fingerprint invalidates edited facts, and retained snapshots stay isolated
+from the replacement.
+
+The native indexer parses each source once. Its flat class inventory moves nested
+declarations out of the one AST copy, rather than cloning descendants at every
+package level. Documentation comes from each qualified class's own annotation;
+there is no second documentation parse or short-name documentation map. Qualified
+class order is stable. Paired source/AST documents remain complete for session
+installation and the persisted parsed bundle.
+
 Canvas projection captures an immutable `DiagramSnapshot` from the shared
 workbench engine's Rumoca session. The snapshot contains the selected class's
 cached inheritance-merged declarations, exact resolved component and connector
 identities, effective causality, flow members, and presentation annotations.
-The source-library indexer consumes the same ports, parameters and icons from
-this snapshot, and admits its paired parsed source set without reparsing.
+Capture takes an explicit `DiagramScope`. Canvas consumers request
+`ComponentGraph`; the source-library indexer requests `ClassInterface` from the
+same declaration owner. Interface capture retains the target's declarations,
+public connector facts and merged target icon, without internal component graphs,
+internal icons or equations. Each indexed class retains its own interface
+resolution diagnostic; graph projection and compilation validate their required
+bodies independently. The indexer admits the paired parsed source set without
+reparsing.
 Unresolved indexed declarations carry an explicit diagnostic state.
 Graph projection performs no type-name classification, package guessing,
 source-library parsing, or independent inheritance lookup. Missing types and

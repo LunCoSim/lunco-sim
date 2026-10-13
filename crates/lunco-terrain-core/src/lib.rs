@@ -4,11 +4,9 @@
 //! - [`quadtree`] — CDLOD quadtree selection over an abstract square region:
 //!   distance-range refinement from a fixed canonical screen metric (view-
 //!   independent → deterministic across peers), 3D-Tiles geometric-error, and
-//!   CDLOD geomorph bands. [`Quadtree::select_with_error`] is the one-shot
-//!   selection over MEASURED per-node error (the reference form; the live
-//!   streamer evolves a persistent cover incrementally against the same metric);
-//!   `select`/`select_3d` are the uniform `root / 2^depth` schedule, kept for
-//!   tests and as the spine's simple form.
+//!   CDLOD geomorph bands. The live surface streamer evolves a persistent,
+//!   restricted cover using the shared error range and nearest 3D node distance.
+//! - [`error`] — one sampled node descriptor for geometric error and height range.
 //! - [`tile`] — uniform planar tile-grid math: world↔tile mapping, the resident
 //!   ring of tiles around a focus (the physics-collider-ring substrate).
 //! - [`source`] — the [`HeightSource`] trait (`height_at` as a pure function of
@@ -46,7 +44,7 @@ pub use crater::{
     ANALYTIC_RADIUS_FLOOR_M, CRATER_REACH, Crater, CraterField, Craters, MAX_CRATERS_PER_HA,
     crater_profile, crater_profile_rim_limited,
 };
-pub use error::measure_node_error;
+pub use error::{NodeGeometry, measure_node_geometry};
 // `FieldKind` is NOT re-exported: it has no definition (optimization removed it as dead
 // code) and nothing referenced it but this line.
 pub use derive::{

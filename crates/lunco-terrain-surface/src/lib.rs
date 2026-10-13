@@ -89,7 +89,7 @@ pub use oracle::{
 pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet, TerrainSurfaceVisualizationPlugin};
 pub use query::{TerrainHeightProvider, register_terrain_queries};
 pub use stream_viz::{
-    LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
+    LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeGeometry,
     TerrainStreamFrameDriven, TerrainStreamStatus, TerrainVisualContinuation, TerrainVisualFocus,
     TileShadowCache,
 };

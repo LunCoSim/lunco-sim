@@ -10,6 +10,12 @@ overlays (slope, minerals), a lat/lon graticule, and **time-dependent maps**
 (connectivity, illumination) — as a single extensible, live-tunable, USD-authored
 system, without a bespoke shader per layer.
 
+Native GPU preprocessing allocates each uninitialized output record using its
+`ShaderSize::SHADER_SIZE` stride. The pinned `bevy_render` patch owns this buffer
+contract; Rust `size_of` is not the shader stride under scalar math. Physics
+keeps enhanced determinism and the renderer keeps native GPU culling and shadows.
+See `third_party/bevy_render/LUNCOSIM-PROVENANCE.md` for the patch and its test.
+
 ## Terrain material decision record (2026-09-21)
 
 The current source inventory has one authored terrain appearance contract, one
@@ -203,8 +209,18 @@ not exact cell coverage or solar-disc penumbra.
 fixed co-simulation exchange. Terrain queries traverse native raster cells and
 check coarse cells before breadth-first refinement using conservative enclosures
 of the same bicubic surface and analytic modifiers used by the terrain oracle.
+The raster owner converts Catmull–Rom patches to tensor-product Bézier controls
+and uses their restricted convex hull for conservative bicubic bounds, preserving
+coefficient correlation. If a reusable canonical cell enclosure is unresolved,
+the same oracle bounds are restricted to the actual ray segment's XZ footprint
+before subdivision. Terrain beside that footprint cannot block the ray. Work
+quotas and unavailable/error semantics remain independent of cache residency.
 Actual surface samples certify blockers; clear results require complete
-interval coverage. Within one ray, exact coordinate-bit identities reuse
+interval coverage. Raster traversal advances integer cell identities at the
+crossed boundaries, advancing both axes at a corner. It does not recover the
+next cell from a rounded ray position or perturb the ray with an epsilon.
+Zero-length entry spans advance the cell without consuming a sampling interval.
+Within one ray, exact coordinate-bit identities reuse
 height samples at shared endpoints and refinement positions. This cache is
 discarded with the ray and holds at most three samples per admitted interval;
 it changes neither interval budgets nor the classification order. This search
@@ -218,6 +234,11 @@ and optical geometry before the next Twin loads.
 Canonical cell subdivisions are shared across sampling points and moving probes, with bounded FIFO
 admission and complete surface-key invalidation. Exact pose, direction, surface
 identity and participating shape revisions fence complete-sample memo reuse.
+
+`scenarios/tests/celestial_terrain_clock.rhai` attaches to a settled celestial DEM
+through `RunScenarioAsset`, with the wired environment probe's `probe_id`. Its
+40-second fixed-step window at 100,000× covers more than forty celestial days and
+checks every demanded solar sample, physical elapsed time and transport rate.
 
 Equipment optical proxies are explicitly selected with standard
 `CollectionAPI:occluders` on the probe. Members must expose an admitted collision

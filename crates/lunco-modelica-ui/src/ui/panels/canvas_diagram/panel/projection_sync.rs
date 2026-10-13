@@ -459,7 +459,10 @@ fn spawn_projection_task(
                 }
                 let handle = crate::engine_resource::global_engine_handle()
                     .ok_or_else(|| "the shared Modelica engine is unavailable".to_owned())?;
-                let snapshot = match handle.lock().diagram_snapshot(&target) {
+                let snapshot = match handle
+                    .lock()
+                    .diagram_snapshot(&target, crate::diagram::DiagramScope::ComponentGraph)
+                {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
                         for root in lunco_modelica_ast::ast_extract::required_source_roots_from_ast(

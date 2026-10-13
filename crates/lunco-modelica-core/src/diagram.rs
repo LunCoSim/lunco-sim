@@ -19,6 +19,15 @@ use rumoca_compile::{Session, compile::ClassComponentDeclaration};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// The declaration facts required by the consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagramScope {
+    /// Target ports, parameters and icon; no internal component graph.
+    ClassInterface,
+    /// Target and instantiated components, including their connector ports.
+    ComponentGraph,
+}
+
 /// Immutable presentation facts captured from the shared Rumoca session.
 /// Inheritance and type lookup are completed before graph projection; missing
 /// or cyclic declarations reject capture instead of inventing ports.
@@ -26,6 +35,7 @@ use std::sync::Arc;
 pub struct DiagramSnapshot {
     pub target: String,
     pub members: Arc<Vec<ClassComponentDeclaration>>,
+    /// Authored target equations for component-graph capture; omitted from interface capture.
     pub equations: Vec<Equation>,
     classes: HashMap<String, DiagramClass>,
 }
@@ -41,14 +51,20 @@ pub struct DiagramClass {
 }
 
 impl DiagramSnapshot {
-    /// Capture only the selected class, its instantiated types and connector
-    /// declarations. Rumoca caches member results by session revision.
-    pub fn capture(session: &mut Session, target: &str) -> Result<Self, String> {
-        let equations = session
+    /// Capture the selected interface or its component graph. Rumoca owns
+    /// declaration resolution and caches member results by session revision.
+    pub fn capture(
+        session: &mut Session,
+        target: &str,
+        scope: DiagramScope,
+    ) -> Result<Self, String> {
+        let definition = session
             .class_definition_query(target)
-            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?
-            .equations
-            .clone();
+            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?;
+        let equations = match scope {
+            DiagramScope::ClassInterface => Vec::new(),
+            DiagramScope::ComponentGraph => definition.equations.clone(),
+        };
         let members = session
             .class_component_declarations_query(target)
             .ok_or_else(|| {
@@ -64,22 +80,32 @@ impl DiagramSnapshot {
         let types: Vec<String> = snapshot
             .members
             .iter()
+            .filter(|member| {
+                scope == DiagramScope::ComponentGraph
+                    || (!member.component.is_protected
+                        && (!matches!(member.effective_causality, Causality::Empty)
+                            || session
+                                .class_definition_query(&member.type_name)
+                                .is_some_and(|class| class.class_type == ClassType::Connector)))
+            })
             .map(|member| member.type_name.clone())
             .collect();
         for name in types {
             snapshot.capture_class(session, &name)?;
         }
-        let port_types: Vec<String> = snapshot
-            .classes
-            .values()
-            .flat_map(|class| class.members.iter().map(|member| member.type_name.clone()))
-            .collect();
-        for name in port_types {
-            if session
-                .class_definition_query(&name)
-                .is_some_and(|class| class.class_type == ClassType::Connector)
-            {
-                snapshot.capture_class(session, &name)?;
+        if scope == DiagramScope::ComponentGraph {
+            let port_types: Vec<String> = snapshot
+                .classes
+                .values()
+                .flat_map(|class| class.members.iter().map(|member| member.type_name.clone()))
+                .collect();
+            for name in port_types {
+                if session
+                    .class_definition_query(&name)
+                    .is_some_and(|class| class.class_type == ClassType::Connector)
+                {
+                    snapshot.capture_class(session, &name)?;
+                }
             }
         }
         Ok(snapshot)
@@ -683,6 +709,53 @@ fn collect_class_names(class: &ClassDef, prefix: &str, names: &mut Vec<(String, 
 mod tests {
     use super::*;
 
+    #[test]
+    fn interface_capture_retains_ports_without_projecting_internal_bodies() {
+        let mut session = Session::default();
+        session
+            .add_document(
+                "interface.mo",
+                r#"
+package Library
+  connector Pin
+    flow Real current(unit="A");
+    Real voltage(unit="V");
+  end Pin;
+  model Internal Missing unresolved; end Internal;
+  model Root
+    Pin terminal;
+    Internal internal;
+    parameter Real gain=2;
+  end Root;
+end Library;
+"#,
+            )
+            .unwrap();
+        let interface =
+            DiagramSnapshot::capture(&mut session, "Library.Root", DiagramScope::ClassInterface)
+                .unwrap();
+        assert!(interface.class("Library.Internal").is_none());
+        assert!(interface.equations.is_empty());
+        let root = interface.class("Library.Root").unwrap();
+        let ports = interface.class_ports(root);
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].name, "terminal");
+        assert_eq!(ports[0].flow_vars[0].unit, "A");
+        assert_eq!(root.parameters()[0].name, "gain");
+        assert!(
+            DiagramSnapshot::capture(&mut session, "Library.Root", DiagramScope::ComponentGraph)
+                .is_err()
+        );
+        assert!(
+            DiagramSnapshot::capture(
+                &mut session,
+                "Library.Internal",
+                DiagramScope::ClassInterface
+            )
+            .is_err()
+        );
+    }
+
     fn source_builder(source: &str, target: Option<&str>) -> ModelicaComponentBuilder {
         let ast = rumoca_phase_parse::parse_to_ast(source, "diagram-fixture.mo")
             .expect("valid diagram source fixture");
@@ -694,7 +767,9 @@ mod tests {
         session
             .add_document("diagram-fixture.mo", source)
             .expect("fixture admission");
-        let snapshot = DiagramSnapshot::capture(&mut session, &target).expect("resolved fixture");
+        let snapshot =
+            DiagramSnapshot::capture(&mut session, &target, DiagramScope::ComponentGraph)
+                .expect("resolved fixture");
         ModelicaComponentBuilder::from_snapshot(Arc::new(ast), Arc::new(snapshot))
     }
 
@@ -963,24 +1038,31 @@ end Gain;
         session
             .add_document("facts.mo", "model Root MissingType child; end Root;")
             .unwrap();
-        assert!(DiagramSnapshot::capture(&mut session, "Root").is_err());
+        assert!(
+            DiagramSnapshot::capture(&mut session, "Root", DiagramScope::ComponentGraph).is_err()
+        );
         session
             .add_document(
                 "facts.mo",
                 "model Root extends Base; end Root; model Base extends Root; end Base;",
             )
             .unwrap();
-        assert!(DiagramSnapshot::capture(&mut session, "Root").is_err());
+        assert!(
+            DiagramSnapshot::capture(&mut session, "Root", DiagramScope::ComponentGraph).is_err()
+        );
         session
             .add_document("facts.mo", "model Root input Real demand; end Root;")
             .unwrap();
-        let first = DiagramSnapshot::capture(&mut session, "Root").unwrap();
-        let repeated = DiagramSnapshot::capture(&mut session, "Root").unwrap();
+        let first =
+            DiagramSnapshot::capture(&mut session, "Root", DiagramScope::ComponentGraph).unwrap();
+        let repeated =
+            DiagramSnapshot::capture(&mut session, "Root", DiagramScope::ComponentGraph).unwrap();
         assert!(Arc::ptr_eq(&first.members, &repeated.members));
         session
             .add_document("facts.mo", "model Root output Real delivered; end Root;")
             .unwrap();
-        let edited = DiagramSnapshot::capture(&mut session, "Root").unwrap();
+        let edited =
+            DiagramSnapshot::capture(&mut session, "Root", DiagramScope::ComponentGraph).unwrap();
         assert_eq!(edited.members[0].component.name, "delivered");
         assert_eq!(first.members[0].component.name, "demand");
         assert!(!Arc::ptr_eq(&first.members, &edited.members));

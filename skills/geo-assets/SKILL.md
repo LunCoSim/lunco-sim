@@ -19,6 +19,11 @@ read back the authored value. Do not patch `.usd*` text directly; if the
 available command surface cannot author a required standard field, add the
 smallest typed operation at the owning USD layer first.
 
+For distance-dependent missing tiles after asset readiness, use `render-quality`.
+`TerrainLodStatus` describes CPU cover readiness; native GPU buffer layout and
+actual drawing still require visual acceptance. The visual metric uses each
+node's sampled height envelope in the shared `big_space` terrain frame.
+
 ## Quick commands (run from this repo's root)
 
 ```bash

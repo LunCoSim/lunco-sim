@@ -290,6 +290,7 @@ impl ModelicaEngine {
     /// AST-as-source-of-truth: the session IS the AST store;
     /// consulting it is consulting the AST.
     pub fn icon_for(&mut self, qualified: &str) -> Option<lunco_modelica_ast::annotations::Icon> {
+        let _span = bevy::log::info_span!("modelica_icon", class = qualified).entered();
         // Result cache — see `icon_cache`. The inheritance-walk +
         // per-base ClassDef clones in the engine adapter are far
         // too costly to repeat every frame for a static class. Cleared
@@ -297,6 +298,7 @@ impl ModelicaEngine {
         if let Some(hit) = self.icon_cache.peek(qualified) {
             return hit;
         }
+        let _members_span = bevy::log::info_span!("modelica_icon_members").entered();
         let falsy_params: HashSet<String> = self
             .inherited_members_typed(qualified)?
             .into_iter()
@@ -304,6 +306,8 @@ impl ModelicaEngine {
             .filter(|member| member.default_value.as_deref() == Some("false"))
             .map(|member| member.name)
             .collect();
+        drop(_members_span);
+        let _merge_span = bevy::log::info_span!("modelica_icon_merge").entered();
         let top = self.class_def(qualified)?;
         let mut resolver =
             |name: &str| -> Option<std::sync::Arc<rumoca_compile::parsing::ast::ClassDef>> {
@@ -583,10 +587,17 @@ impl ModelicaEngine {
     pub fn diagram_snapshot(
         &mut self,
         target: &str,
+        scope: crate::diagram::DiagramScope,
     ) -> Result<crate::diagram::DiagramSnapshot, String> {
-        let mut snapshot = crate::diagram::DiagramSnapshot::capture(&mut self.session, target)?;
+        let _span = bevy::log::info_span!("modelica_diagram_snapshot", class = target).entered();
+        let _capture_span = bevy::log::info_span!("modelica_diagram_capture").entered();
+        let mut snapshot =
+            crate::diagram::DiagramSnapshot::capture(&mut self.session, target, scope)?;
+        drop(_capture_span);
         for (name, class) in snapshot.classes_mut() {
-            class.icon = self.icon_for(name);
+            if scope == crate::diagram::DiagramScope::ComponentGraph || name == target {
+                class.icon = self.icon_for(name);
+            }
         }
         Ok(snapshot)
     }
@@ -824,7 +835,12 @@ mod tests {
         assert!(engine.finish_resident_source_root("Library"));
         assert_eq!(engine.drain_completed_source_roots(), vec!["Library"]);
         assert!(!engine.begin_source_root_load("Library"));
-        let snapshot = engine.diagram_snapshot("Library.Device").unwrap();
+        let snapshot = engine
+            .diagram_snapshot(
+                "Library.Device",
+                crate::diagram::DiagramScope::ComponentGraph,
+            )
+            .unwrap();
         assert_eq!(snapshot.members[0].type_name, "Library.Data");
         assert!(engine.begin_source_root_load("Missing"));
         assert!(!engine.finish_resident_source_root("Missing"));

@@ -34,42 +34,22 @@ pub struct MeshData {
 impl HeightGrid {
     /// Conservative height enclosure inside one raster cell. Interval
     /// evaluation uses the same Catmull-Rom polynomial as `height_at`, including
-    /// extrapolated boundary posts; sub-cell features cannot fall between rays.
+    /// extrapolated boundary posts. Kurbo restricts its tensor-product Bézier
+    /// control net to the query rectangle; the convex hull encloses the surface
+    /// without losing correlations between polynomial coefficients.
     pub fn cell_height_bounds(&self, cell: [usize; 2], rect: [f64; 4]) -> [f64; 2] {
-        fn add(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-            [a[0] + b[0], a[1] + b[1]]
-        }
-        fn scale(a: [f64; 2], k: f64) -> [f64; 2] {
-            if k >= 0.0 {
-                [a[0] * k, a[1] * k]
-            } else {
-                [a[1] * k, a[0] * k]
-            }
-        }
-        fn mul(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-            let v = [a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1]];
-            [
-                v.into_iter().fold(f64::INFINITY, f64::min),
-                v.into_iter().fold(f64::NEG_INFINITY, f64::max),
-            ]
-        }
-        fn cubic(p: [[f64; 2]; 4], t: [f64; 2]) -> [f64; 2] {
-            let a = scale(
-                add(
-                    add(scale(p[0], -1.0), scale(p[1], 3.0)),
-                    add(scale(p[2], -3.0), p[3]),
-                ),
-                0.5,
-            );
-            let b = scale(
-                add(
-                    add(scale(p[0], 2.0), scale(p[1], -5.0)),
-                    add(scale(p[2], 4.0), scale(p[3], -1.0)),
-                ),
-                0.5,
-            );
-            let c = scale(add(scale(p[0], -1.0), p[2]), 0.5);
-            add(mul(add(mul(add(mul(a, t), b), t), c), t), p[1])
+        fn restricted_controls(p: [f64; 4], t: [f64; 2]) -> [f64; 4] {
+            use kurbo::{CubicBez, ParamCurve};
+            // Catmull-Rom's interpolating endpoints and tangents define the
+            // equivalent Bézier curve. Kurbo owns subsegment construction.
+            let curve = CubicBez::new(
+                (0.0, p[1]),
+                (1.0 / 3.0, p[1] + (p[2] - p[0]) / 6.0),
+                (2.0 / 3.0, p[2] - (p[3] - p[1]) / 6.0),
+                (1.0, p[2]),
+            )
+            .subsegment(t[0]..t[1]);
+            [curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y]
         }
         let s = self.spacing() as f64;
         let half = self.half_extent as f64;
@@ -82,18 +62,25 @@ impl HeightGrid {
         let tx = t(rect[0], rect[2], cell[0]);
         let tz = t(rect[1], rect[3], cell[1]);
         let anchor = self.sample_extrapolated(cell[0] as isize, cell[1] as isize);
-        let mut rows = [[0.0; 2]; 4];
+        let mut rows = [[0.0; 4]; 4];
         for (r, row) in rows.iter_mut().enumerate() {
             let p = std::array::from_fn(|c| {
                 let v = self.sample_extrapolated(
                     cell[0] as isize + c as isize - 1,
                     cell[1] as isize + r as isize - 1,
                 ) - anchor;
-                [v, v]
+                v
             });
-            *row = cubic(p, tx);
+            *row = restricted_controls(p, tx);
         }
-        let mut b = cubic(rows, tz);
+        let mut b = [f64::INFINITY, f64::NEG_INFINITY];
+        for column in 0..4 {
+            let controls = restricted_controls(std::array::from_fn(|row| rows[row][column]), tz);
+            for height in controls {
+                b[0] = b[0].min(height);
+                b[1] = b[1].max(height);
+            }
+        }
         b[0] += anchor;
         b[1] += anchor;
         let pad = 64.0 * f64::EPSILON * b[0].abs().max(b[1].abs()).max(1.0);
@@ -604,6 +591,25 @@ mod tests {
 #[cfg(test)]
 mod enclosure_tests {
     use super::*;
+    #[test]
+    fn planar_bicubic_enclosure_preserves_correlated_coefficients() {
+        let mut grid = HeightGrid::new_flat(7, 3.0);
+        for z in 0..7 {
+            for x in 0..7 {
+                grid.heights[z * 7 + x] = 1000.0 + 0.2 * x as f64 + 0.1 * z as f64;
+            }
+        }
+        let rect = [-0.83, -0.77, -0.27, -0.19];
+        let bounds = grid.cell_height_bounds([2, 2], rect);
+        let low = grid.height_at(rect[0], rect[1]);
+        let high = grid.height_at(rect[2], rect[3]);
+        assert!(bounds[0] <= low && bounds[1] >= high);
+        assert!(
+            bounds[1] - bounds[0] <= high - low + 1.0e-9,
+            "an exact planar cell must not acquire polynomial interval inflation: {bounds:?}"
+        );
+    }
+
     #[test]
     fn bicubic_enclosures_cover_interior_and_extrapolated_edges() {
         let mut grid = HeightGrid::new_flat(7, 3.0);

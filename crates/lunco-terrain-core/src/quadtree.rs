@@ -55,6 +55,13 @@ impl Square {
         (dx * dx + dz * dz).sqrt()
     }
 
+    /// Nearest distance to the box formed by this square and a height interval.
+    pub fn distance_to_height_range(&self, p: [f64; 3], heights: [f64; 2]) -> f64 {
+        let horizontal = self.distance_to([p[0], p[2]]);
+        let vertical = (heights[0] - p[1]).max(p[1] - heights[1]).max(0.0);
+        horizontal.hypot(vertical)
+    }
+
     /// Side length.
     pub fn side(&self) -> f64 {
         2.0 * self.half
@@ -129,7 +136,7 @@ impl QuadCoord {
     }
 }
 
-/// A node chosen by [`Quadtree::select`], ready to draw / collide / cache.
+/// A node in the selected cover, ready to draw / collide / cache.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Selected {
     pub coord: QuadCoord,
@@ -262,24 +269,20 @@ impl Quadtree {
         }
     }
 
-    /// Distance at which a node with MEASURED surface `error` refines — the same
-    /// `range_factor · error` the recursive walk uses, exposed so an incremental
-    /// selector evolves the cover under the identical metric instead of a copy of
-    /// it that can drift.
+    /// Distance at which a node with measured surface error refines.
+    /// Shared by incremental cover selection and the CDLOD morph windows.
     pub fn error_refine_range(&self, error: f64) -> f64 {
         self.range_factor * error.max(0.0)
     }
 
-    /// Camera distance the refine test compares against (horizontal distance to the
-    /// node's square, lifted by the eye height).
-    pub fn focus_distance(&self, coord: QuadCoord, focus_xz: [f64; 2], eye_height: f64) -> f64 {
-        let horizontal = self.region(coord).distance_to(focus_xz);
-        (horizontal * horizontal + eye_height * eye_height).sqrt()
+    /// Nearest 3D distance to a node's square lifted by its sampled height range.
+    pub fn focus_distance(&self, coord: QuadCoord, focus: [f64; 3], height_range: [f64; 2]) -> f64 {
+        self.region(coord)
+            .distance_to_height_range(focus, height_range)
     }
 
-    /// The [`Selected`] record for a leaf drawn at `coord`, given the refine range of
-    /// its PARENT (`f64::INFINITY` for the root). Shares the geomorph-window rule
-    /// with the recursive walk, so a cover built either way morphs identically.
+    /// The leaf's CDLOD geomorph window from its parent's measured refine range.
+    /// The root has no parent and uses `f64::INFINITY`.
     pub fn selected(&self, coord: QuadCoord, parent_refine_range: f64) -> Selected {
         let morph_end = parent_refine_range;
         let morph_start = if morph_end.is_finite() {
@@ -477,6 +480,23 @@ impl Quadtree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_distance_uses_its_height_range_and_signed_camera_altitude() {
+        let q = Quadtree::new(10.0, 1, 1.0, 1.0);
+        let c = QuadCoord::ROOT;
+        assert_eq!(q.focus_distance(c, [0.0, 100.0, 0.0], [90.0, 95.0]), 5.0);
+        assert_eq!(
+            q.focus_distance(c, [0.0, 100.0, 0.0], [-50.0, -40.0]),
+            140.0
+        );
+        assert_eq!(
+            q.focus_distance(c, [0.0, -100.0, 0.0], [-50.0, -40.0]),
+            50.0
+        );
+        assert_eq!(q.focus_distance(c, [13.0, 104.0, 10.0], [90.0, 100.0]), 5.0);
+        assert_eq!(q.focus_distance(c, [0.0, 95.0, 0.0], [90.0, 100.0]), 0.0);
+    }
 
     fn qt() -> Quadtree {
         // 16 km root region, up to 6 levels deep, error-derived ranges.
