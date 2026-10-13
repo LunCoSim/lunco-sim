@@ -518,6 +518,31 @@ pub fn open_doc_stage_with_layers(
     populate_doc_root(stage, base)
 }
 
+/// Explicit identities of one document's native authored layer stack.
+/// Each root gets its own session opinions, even beside another root file.
+pub struct DocumentLayerIds {
+    /// Original authored root layer identity.
+    pub base: String,
+    /// Simulation and document runtime opinions.
+    pub runtime: String,
+    /// Editor presentation opinions.
+    pub view: String,
+    /// Native session layer containing view and runtime sublayers.
+    pub session: String,
+}
+
+impl DocumentLayerIds {
+    /// Derive distinct native layer identities from the exact root identity.
+    pub fn for_root(root_id: &str) -> Self {
+        Self {
+            base: root_id.to_owned(),
+            runtime: format!("{root_id}.__luncosim_document_runtime__.usdc"),
+            view: format!("{root_id}.__luncosim_document_view__.usdc"),
+            session: format!("{root_id}.__luncosim_document_session__.usdc"),
+        }
+    }
+}
+
 /// Capture the document's separate layers as a send-safe native stage input.
 /// The root codec matches its identifier; runtime and view use native USDC.
 /// Authored arcs and the original root identity are preserved. Runtime and view
@@ -532,30 +557,24 @@ pub fn document_stage_recipe(
         .map(|recipe| recipe.root_id.as_str())
         .unwrap_or(DOC_ROOT_ID)
         .to_owned();
-    let root_anchor = ResolvedPath::new(&root_id);
-    let runtime_asset = ".__luncosim_document_runtime__.usdc";
-    let view_asset = ".__luncosim_document_view__.usdc";
-    let session_asset = ".__luncosim_document_session__.usdc";
-    let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor))?;
-    let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor))?;
-    let session_id = lunco_usd_compose::canonicalize_at(session_asset, Some(&root_anchor))?;
+    let ids = DocumentLayerIds::for_root(&root_id);
     let mut session = sdf::Data::new();
     session
         .create_spec(SdfPath::abs_root(), sdf::SpecType::PseudoRoot)
         .add(
             sdf::FieldKey::SubLayers.as_str(),
-            Value::StringVec(vec![view_asset.to_owned(), runtime_asset.to_owned()]),
+            Value::StringVec(vec![ids.view.clone(), ids.runtime.clone()]),
         );
     let mut output = recipe.cloned().unwrap_or_else(|| {
         lunco_usd_compose::recipe::StageRecipe::new(root_id.clone(), Default::default())
     });
-    output.session_layer = Some(session_id.clone());
+    output.session_layer = Some(ids.session.clone());
     let root_bytes = layer_bytes(&root_id, base)?;
     output.bytes.insert(root_id, root_bytes);
     for (id, data) in [
-        (runtime_id, runtime),
-        (view_id, view),
-        (session_id, &session),
+        (ids.runtime, runtime),
+        (ids.view, view),
+        (ids.session, &session),
     ] {
         let bytes = layer_bytes(&id, data)?;
         output.bytes.insert(id, bytes);
@@ -570,6 +589,7 @@ fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
         .layer_mut(&root_id)
         .ok_or_else(|| anyhow!("document stage has no root layer"))?;
     root.edit(|edit| {
+        edit.pseudo_root_mut()?;
         sdf::copy_spec(
             &source,
             &SdfPath::abs_root(),
@@ -927,6 +947,7 @@ mod tests {
     fn layered_stage_preserves_inheritance_identity_and_opinion_strength() {
         let base = usda_to_data(
             r#"#usda 1.0
+(defaultPrim = "World")
 class "Template" { double inherited = 17 }
 def "World" (
     inherits = </Template>

@@ -99,6 +99,84 @@ pub struct UsdLoader {
     roots: Option<lunco_assets_core::TwinRoots>,
 }
 
+/// Native stage input at Bevy's asset-metadata adapter boundary. Root bytes
+/// remain owned by the asset reader; a captured session participates in the
+/// same bounded layer closure and source-read receipt graph.
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UsdStageLoadSettings {
+    pub session_layer: Option<String>,
+    /// Live document input is runtime metadata, never a serialized asset setting.
+    #[serde(skip)]
+    pub document_input: Option<DocumentStageInputReader>,
+}
+
+/// The document lease owns publication and retirement of immutable native input.
+pub struct DocumentStageInputOwner(
+    Arc<std::sync::Mutex<Option<Arc<lunco_usd_compose::recipe::StageRecipe>>>>,
+);
+
+/// A loader may capture input but cannot publish or retain its document lease.
+#[derive(Clone)]
+pub struct DocumentStageInputReader(
+    Arc<std::sync::Mutex<Option<Arc<lunco_usd_compose::recipe::StageRecipe>>>>,
+);
+
+impl DocumentStageInputOwner {
+    pub fn new(recipe: lunco_usd_compose::recipe::StageRecipe) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(Some(Arc::new(recipe)))))
+    }
+
+    pub fn reader(&self) -> DocumentStageInputReader {
+        DocumentStageInputReader(Arc::clone(&self.0))
+    }
+
+    pub fn publish(&self, recipe: lunco_usd_compose::recipe::StageRecipe) -> Result<()> {
+        let mut current = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("document stage input lock poisoned"))?;
+        let previous = current
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("document stage input lease retired"))?;
+        anyhow::ensure!(
+            previous.root_id == recipe.root_id,
+            "document stage input cannot change its root identity"
+        );
+        *current = Some(Arc::new(recipe));
+        Ok(())
+    }
+}
+
+impl Drop for DocumentStageInputOwner {
+    fn drop(&mut self) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = None;
+        }
+    }
+}
+
+impl DocumentStageInputReader {
+    pub fn capture(&self) -> Result<Arc<lunco_usd_compose::recipe::StageRecipe>> {
+        self.0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("document stage input lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("document stage input lease retired"))
+    }
+
+    fn validate_capture(
+        &self,
+        captured: &Arc<lunco_usd_compose::recipe::StageRecipe>,
+    ) -> Result<()> {
+        let current = self.capture()?;
+        anyhow::ensure!(
+            Arc::ptr_eq(&current, captured),
+            "document stage input changed during preparation"
+        );
+        Ok(())
+    }
+}
+
 impl bevy::prelude::FromWorld for UsdLoader {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
         Self {
@@ -111,27 +189,46 @@ impl bevy::prelude::FromWorld for UsdLoader {
 
 impl AssetLoader for UsdLoader {
     type Asset = UsdStageAsset;
-    type Settings = ();
+    type Settings = UsdStageLoadSettings;
     type Error = anyhow::Error;
 
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-
         // Preserve the named Bevy asset source when anchoring relative USD
         // arcs. The asset-path module owns both scheme reconstruction and
         // platform separator normalization.
         let origin = load_context.path().clone().into_owned();
         let roots = self.roots.clone();
         let root_asset_path = anchor_of(load_context.path());
-
-        let fetched =
-            fetch_layer_closure(load_context, &root_asset_path, bytes, roots.as_ref()).await?;
+        let captured = settings
+            .document_input
+            .as_ref()
+            .map(DocumentStageInputReader::capture)
+            .transpose()?;
+        let input = match &captured {
+            Some(input) => {
+                anyhow::ensure!(
+                    input.root_id == root_asset_path,
+                    "document input root does not match its asset source"
+                );
+                (**input).clone()
+            }
+            None => {
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes).await?;
+                let mut input = lunco_usd_compose::recipe::StageRecipe::new(
+                    root_asset_path.clone(),
+                    std::collections::HashMap::from([(root_asset_path, bytes)]),
+                );
+                input.session_layer = settings.session_layer.clone();
+                input
+            }
+        };
+        let fetched = fetch_layer_closure(load_context, input, roots.as_ref()).await?;
         let FetchedStageClosure {
             recipe,
             source_dependencies,
@@ -158,10 +255,39 @@ impl AssetLoader for UsdLoader {
             }
             (recipe, projection_plan)
         };
+        if let (Some(owner), Some(captured)) = (&settings.document_input, &captured) {
+            owner.validate_capture(captured)?;
+        }
         UsdStageAsset::from_prepared_recipe(recipe, source_dependencies, projection_plan)
     }
 
     fn extensions(&self) -> &[&str] {
         &["usd", "usda", "usdc"]
+    }
+}
+
+#[cfg(test)]
+mod document_input_tests {
+    use super::*;
+
+    fn recipe(root: &str) -> lunco_usd_compose::recipe::StageRecipe {
+        lunco_usd_compose::recipe::StageRecipe::from_source(root, "#usda 1.0\n")
+    }
+
+    #[test]
+    fn layered_stage_input_fences_revisions_identity_and_retirement() {
+        let owner = DocumentStageInputOwner::new(recipe("scene.usda"));
+        let reader = owner.reader();
+        let first = reader.capture().unwrap();
+        reader.validate_capture(&first).unwrap();
+        assert!(owner.publish(recipe("other.usda")).is_err());
+        reader.validate_capture(&first).unwrap();
+        owner.publish(recipe("scene.usda")).unwrap();
+        assert!(reader.validate_capture(&first).is_err());
+        let second = reader.capture().unwrap();
+        reader.validate_capture(&second).unwrap();
+        drop(owner);
+        assert!(reader.capture().is_err());
+        assert!(reader.validate_capture(&second).is_err());
     }
 }

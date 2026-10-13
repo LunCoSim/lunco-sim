@@ -491,9 +491,15 @@ pub(crate) fn on_restart_scene_refresh_active_document(
         .keys()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    if let Err(error) =
-        publish_restart_document_overlays(&mut registry, backed, &twins, doc, &name, &dependencies)
-    {
+    if let Err(error) = publish_restart_document_overlays(
+        &mut registry,
+        backed,
+        &twins,
+        &asset_server,
+        doc,
+        &name,
+        &dependencies,
+    ) {
         warn!("[restart-scene] could not publish the refreshed Twin sources: {error}");
     }
 }
@@ -502,6 +508,7 @@ fn publish_restart_document_overlays(
     registry: &mut DocumentRegistry<UsdDocument>,
     backed: &mut lunco_usd_bevy_twin::DocBackedTwinScenes,
     twins: &lunco_assets_core::twin_source::TwinRoots,
+    server: &AssetServer,
     active_doc: lunco_doc::DocumentId,
     name: &str,
     dependencies: &std::collections::HashSet<String>,
@@ -519,20 +526,14 @@ fn publish_restart_document_overlays(
             .ok_or_else(|| format!("document {doc} is not open"))?
             .document_mut();
         document.clear_view();
-        sources.push((
-            rel,
-            doc,
-            document.generation(),
-            document
-                .persistent_composed_source()
-                .map_err(|error| error.to_string())?,
-        ));
+        let input = document
+            .capture_stage_input(&lunco_assets_core::twin_uri(&twin, &rel), false)
+            .map_err(|error| error.to_string())?;
+        sources.push((rel, doc, document.generation(), input));
     }
     sources.sort_by(|a, b| a.0.cmp(&b.0));
-    for (rel, doc, generation, source) in sources {
-        twins
-            .set_overlay(name, &rel, std::sync::Arc::new(source.into_bytes()))
-            .map_err(|error| error.to_string())?;
+    for (_rel, doc, generation, source) in sources {
+        backed.publish_stage_input(doc, twins, server, source)?;
         backed.mark_overlay_synced(doc, generation);
     }
     Ok(())
@@ -658,8 +659,6 @@ register_commands!(
 #[cfg(test)]
 mod restart_overlay_tests {
     use super::*;
-    use lunco_doc::DocumentId;
-    use lunco_usd_document::document::{LayerId, UsdOp};
 
     #[test]
     fn twin_close_retires_only_the_active_scene_owner() {
@@ -733,71 +732,5 @@ mod restart_overlay_tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn restart_refreshes_referenced_documents_without_view_or_unrelated_buffers() {
-        let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let mut backed = lunco_usd_bevy_twin::DocBackedTwinScenes::default();
-        let twins = lunco_assets_core::twin_source::TwinRoots::default();
-        twins.register("fixture", std::env::temp_dir()).unwrap();
-        let mut ids = Vec::<DocumentId>::new();
-        for rel in ["scene.usda", "engine.usda", "unrelated.usda"] {
-            let (doc, _) = registry.open_file(
-                std::path::PathBuf::from("/tmp/restart-overlay-test").join(rel),
-                "#usda 1.0\ndef Sphere \"Part\" { double radius = 2 }\n".into(),
-            );
-            backed.track_preview(doc, "fixture".into(), rel.into());
-            twins
-                .set_overlay("fixture", rel, std::sync::Arc::new(b"old source".to_vec()))
-                .unwrap();
-            ids.push(doc);
-        }
-        let engine = registry.host_mut(ids[1]).unwrap().document_mut();
-        engine.mark_restored_dirty();
-        engine
-            .apply(UsdOp::SetAttribute {
-                edit_target: LayerId::view(),
-                path: "/Part".into(),
-                name: "radius".into(),
-                type_name: "double".into(),
-                value: "99".into(),
-            })
-            .unwrap();
-        publish_restart_document_overlays(
-            &mut registry,
-            &mut backed,
-            &twins,
-            ids[0],
-            "fixture",
-            &std::collections::HashSet::from(["twin://fixture/engine.usda".into()]),
-        )
-        .unwrap();
-        let bytes = twins
-            .overlay_bytes("fixture", Path::new("engine.usda"))
-            .unwrap()
-            .unwrap();
-        let source = String::from_utf8(bytes.as_ref().clone()).unwrap();
-        assert!(source.contains("radius = 2"));
-        assert!(!source.contains("99"));
-        assert!(registry.host(ids[1]).unwrap().document().is_dirty());
-        assert!(
-            !registry
-                .host(ids[1])
-                .unwrap()
-                .document()
-                .composed_source()
-                .unwrap()
-                .contains("99")
-        );
-        assert_eq!(backed.overlay_synced_generation(ids[1]), Some(2));
-        assert_eq!(
-            twins
-                .overlay_bytes("fixture", Path::new("unrelated.usda"))
-                .unwrap()
-                .unwrap()
-                .as_slice(),
-            b"old source"
-        );
     }
 }

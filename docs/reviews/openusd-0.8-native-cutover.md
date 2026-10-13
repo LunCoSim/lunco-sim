@@ -179,6 +179,39 @@ Logs are in `/tmp/luncosim-sysml-*.log`, `/tmp/luncosim-openusd-*.log` and
 No push, packaged acceptance, Windows CI, full mission verdict, or FPS result
 is claimed.
 
+## Native document input acceptance
+
+Startup, previews,
+and coarse rebuilds carry codec-correct root bytes and separate native session
+opinions. Document input publication has a scoped owner, a retained asset handle,
+and revision/retirement fences. Every root gets distinct runtime/view/session
+identities; incremental and deferred reference edits select their named target.
+The root-copy owner establishes the native pseudo-root before `SdfCopySpec`.
+Generic program projection records the admitted executable selection and resolved
+asset address so unchanged sources survive whole-stage projection.
+
+Terrain authoring reads one current native document stage, commits complete
+atomic groups, reserves referenced/inactive names, scopes counters to the
+document lifecycle, and rejects exhaustion. Explicit-target internal references
+use the native SDF contract. Replacement root notices enter native address
+admission before ECS reset and document acknowledgment.
+
+The USDC terrain fixture was authored through the document API and verified by
+Pixar OpenUSD 26.08. The integrated production build passes. Focused tests
+`layered_stage_preserves_inheritance_identity_and_opinion_strength` and
+`layered_stage_input_fences_revisions_identity_and_retirement` pass. Production
+`TERRAIN_DOCUMENT_AUTHORING` passes six checks on owned port 4176, including
+native referenced children, atomic rock/brush/settings writes, inactive-name
+reservation, counter exhaustion, and rejected ambiguous references without a
+partial edit. `USD_QUERY_API` passes five checks on port 4177;
+`ASSEMBLY_EDITOR_PROPOSAL` passes fifteen checks in the windowed Editor on
+port 4178. All three process identities, exits, and port releases were verified.
+The Editor driver reads native document metadata for the fixture default prim.
+Skill validation and Python syntax checks pass. Evidence is in
+`/tmp/luncosim-native-terrain-authoring-final-verdict.log`,
+`/tmp/luncosim-native-integrated-query-api.log`, and
+`/tmp/luncosim-native-integrated-editor-proposal.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -193,9 +226,12 @@ is claimed.
    runbooks. A fixed native library must replace the guard and its rejection
    assertion with successful interoperability coverage.
 2. `author::compose_layers`, the document's composed-data memo, and consumers
-   of its merged source remain. Runtime mounting, previews, persistence, and
-   terrain/light readers must carry explicit native layer stacks/recipes before
-   that merge and its tests can be deleted.
+   of its merged source remain in dependent-layer projection, composed-text
+   preview, persistence, and light readers. Those consumers must use their native
+   owner before that merge and its tests can be deleted. Loader metadata settings
+   are applied on first asset admission; document publication into an already
+   admitted source asset must preserve its current native input ownership and
+   reload graph. That lifecycle still requires production coverage.
    Native `Stage::flatten` resolves and removes composition arcs, so it cannot replace an authored-layer merge or save.
    This review does not claim that all reinvention or fallback paths are gone.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance

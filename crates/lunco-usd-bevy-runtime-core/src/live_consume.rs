@@ -499,9 +499,15 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
                 .stages
                 .iter()
                 .filter(|(stage_id, projection)| {
-                    !world
-                        .get_resource::<crate::native_assets::PendingNativeAssetPaths>()
-                        .is_some_and(|pending| pending.contains(**stage_id))
+                    world
+                        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                        .and_then(|stages| stages.get(**stage_id))
+                        .is_none_or(|stage| {
+                            stage.native_asset_paths_ready() && !stage.root_projection_pending()
+                        })
+                        && !world
+                            .get_resource::<crate::native_assets::PendingNativeAssetPaths>()
+                            .is_some_and(|pending| pending.contains(**stage_id))
                         && !crate::twin_projection::has_pending_reference_projection(
                             world,
                             **stage_id,
@@ -1244,6 +1250,10 @@ pub(crate) fn reconcile_structural_live(
     )
     .entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
+    if resync_paths.iter().any(|path| path == "/") {
+        crate::twin_projection::refresh_scene_visuals(world, id);
+        return;
+    }
     let mut visited = BTreeSet::new();
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else {

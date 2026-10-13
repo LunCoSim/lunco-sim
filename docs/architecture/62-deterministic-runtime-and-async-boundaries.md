@@ -678,6 +678,15 @@ The receiver rejects stale or out-of-order results at the owner. It does not
 retry by polling, substitute a default, or infer a new identity from completion
 time.
 
+Document startup captures codec-correct root bytes and separate runtime/view
+session opinions on its preparation worker. The Twin projection lease owns
+publication of that immutable recipe and retains its asset handle; loader
+completion checks that the captured input is still current and live. The native
+stage remains thread-affine. Incremental replay and deferred reference
+materialization select the operation's native edit target with a scoped OpenUSD
+edit context. A replacement's root notice enters native asset admission before
+ECS reset, projection, and document synchronization acknowledgment.
+
 The USD simulation projector captures the native root/session identities and
 admitted dependency buffers, plus separate `Sdf Data` copies of layers changed
 since admission. The canonical stage's change sink owns that changed-layer set;

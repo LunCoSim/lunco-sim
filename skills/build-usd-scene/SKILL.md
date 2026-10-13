@@ -211,3 +211,21 @@ runtime prim or caching an entity id.
 - ❌ `SetDocumentSource` to build a scene incrementally — use the typed scene commands and their USD operation path.
 - ❌ Branching placement math on up-axis/units — the frame is fixed; convert only at the importer.
 - ❌ Mutating ECS `Transform` directly and expecting USD to remember it — author the USD.
+
+## Native document stage inputs
+
+Startup and previews publish a native recipe under the document projection
+lease: original root bytes, distinct per-root runtime/view layers, and a session
+layer containing those opinions. Root bytes retain the source codec, including
+USDC. Do not merge or flatten these layers into a transport root. Previews
+include view opinions; restart clears them and publishes root/runtime input.
+Incremental edits and deferred reference roots use the named native edit target.
+A coarse replacement waits for native address admission and its root projection
+notice before document synchronization completes. Closing or rehoming the
+projection retires the source-input lease and retained stage handle.
+
+The numeric production gate `scenes/tests/terrain_document_authoring.usdc`
+uses verdict channel `TERRAIN_DOCUMENT_AUTHORING`. It covers native internal
+references, reserved child names, grouped terrain edits, and terminal rejection
+without document mutation. The editor driver reads composed `defaultPrim` through
+`InspectUsdDocument`, so the same driver supports text and binary fixtures.

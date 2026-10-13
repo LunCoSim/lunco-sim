@@ -61,39 +61,24 @@ fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {
 /// The runtime adapter opens the same recipe in its live canonical-stage owner.
 pub async fn fetch_layer_closure(
     load_context: &mut LoadContext<'_>,
-    root_asset_path: &str,
-    root_bytes: Vec<u8>,
+    input: StageRecipe,
     roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<FetchedStageClosure> {
-    fetch_layer_closure_with_limits(
-        load_context,
-        root_asset_path,
-        root_bytes,
-        StageClosureLimits::default(),
-        roots,
-    )
-    .await
+    fetch_layer_closure_with_limits(load_context, input, StageClosureLimits::default(), roots).await
 }
 
-/// Fetch a USD layer closure with an explicit resource budget.
-///
-/// A missing transitive layer is a recoverable USD composition diagnostic: the
-/// remaining siblings continue loading and OpenUSD drops only the unresolved
-/// arc. Every other reader error remains terminal because treating malformed,
-/// forbidden, or unavailable storage as a missing file would hide the actual
-/// ownership failure.
+/// Fetch captured native layers and transitive sources within one resource budget.
+/// Root/session inputs are required; missing transitive arcs remain diagnostics.
 pub async fn fetch_layer_closure_with_limits(
     load_context: &mut LoadContext<'_>,
-    root_asset_path: &str,
-    root_bytes: Vec<u8>,
+    input: StageRecipe,
     limits: StageClosureLimits,
     roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<FetchedStageClosure> {
     let origin = load_context.path().clone().into_owned();
     fetch_layer_closure_inner(
         &mut ClosureReader::Loader(load_context),
-        root_asset_path,
-        root_bytes,
+        input,
         limits,
         roots,
         origin,
@@ -111,10 +96,10 @@ pub async fn fetch_layer_closure_from_asset_reader(
     limits: StageClosureLimits,
 ) -> Result<StageRecipe> {
     let root_id = lunco_assets_core::asset_path::anchor_of(&origin);
+    let input = StageRecipe::new(root_id.clone(), HashMap::from([(root_id, root_bytes)]));
     Ok(fetch_layer_closure_inner(
         &mut ClosureReader::Registered(asset_server),
-        &root_id,
-        root_bytes,
+        input,
         limits,
         roots,
         origin,
@@ -183,8 +168,7 @@ enum ClosureReader<'a, 'b> {
 
 async fn fetch_layer_closure_inner(
     transport: &mut ClosureReader<'_, '_>,
-    root_asset_path: &str,
-    root_bytes: Vec<u8>,
+    input: StageRecipe,
     limits: StageClosureLimits,
     roots: Option<&lunco_assets_core::TwinRoots>,
     origin: AssetPath<'static>,
@@ -193,19 +177,74 @@ async fn fetch_layer_closure_inner(
         limits.max_parallel_reads > 0,
         "USD layer closure parallel read limit must be greater than zero"
     );
-    let root_id = lunco_usd_compose::canonicalize_at(root_asset_path, None)?;
-    check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
-
-    // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
-    let mut total_bytes = root_bytes.len();
-    let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
-    bytes.insert(root_id.clone(), root_bytes);
-    let mut seen = HashSet::from([root_id.clone()]);
+    let root_id = lunco_usd_compose::canonicalize_at(&input.root_id, None)?;
+    ensure!(
+        input.bytes.contains_key(&root_id),
+        "required USD root `{root_id}` has no captured bytes"
+    );
+    let mut bytes = input.bytes;
+    let mut total_bytes = bytes
+        .values()
+        .try_fold(0usize, |total, raw| total.checked_add(raw.len()))
+        .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
+    let session_layer = input
+        .session_layer
+        .map(|id| lunco_usd_compose::canonicalize_at(&id, None))
+        .transpose()?;
+    let mut source_dependencies = Vec::new();
+    if let Some(identifier) = &session_layer {
+        ensure!(
+            identifier != &root_id,
+            "USD root and session must have distinct layer identities"
+        );
+        if !bytes.contains_key(identifier) {
+            let path = lunco_assets_core::asset_path::load_asset_path(
+                identifier,
+                Some(&origin),
+                roots,
+                None,
+            )
+            .map_err(|error| anyhow!("invalid USD session load address `{identifier}`: {error}"))?;
+            let raw = match transport {
+                ClosureReader::Loader(context) => {
+                    let mut child = context.begin_labeled_asset();
+                    let raw = child.read_asset_bytes(path).await.map_err(|error| {
+                        anyhow!("required USD session `{identifier}` could not be read: {error}")
+                    })?;
+                    let receipt = child.finish(UsdLayerReadReceipt);
+                    source_dependencies.push(
+                        context
+                            .add_loaded_labeled_asset("usd-session-layer-read".to_owned(), receipt),
+                    );
+                    raw
+                }
+                ClosureReader::Registered(server) => read_registered_asset_bytes(
+                    server,
+                    &path,
+                    limits.max_bytes.saturating_sub(total_bytes),
+                )
+                .await
+                .map_err(|error| {
+                    anyhow!("required USD session `{identifier}` could not be read: {error}")
+                })?,
+            };
+            total_bytes = total_bytes
+                .checked_add(raw.len())
+                .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
+            bytes.insert(identifier.clone(), raw);
+        }
+    }
+    check_stage_closure_limits(&limits, bytes.len(), 0, 0, total_bytes)?;
+    let mut seen = bytes.keys().cloned().collect::<HashSet<_>>();
     let mut missing_ids = HashSet::new();
-    let mut frontier = vec![(root_id.clone(), 0_usize)];
+    let mut frontier = bytes
+        .keys()
+        .cloned()
+        .map(|id| (id, 0usize))
+        .collect::<Vec<_>>();
+    frontier.sort();
     let mut dependency_diagnostics = Vec::new();
     let mut next_dependency_order = 0_usize;
-    let mut source_dependencies = Vec::new();
     let mut source_label = 0_usize;
 
     while !frontier.is_empty() {
@@ -385,6 +424,7 @@ async fn fetch_layer_closure_inner(
 
     dependency_diagnostics.sort_by_key(|(order, _)| *order);
     let mut recipe = StageRecipe::new(root_id, bytes);
+    recipe.session_layer = session_layer;
     recipe.dependency_diagnostics = dependency_diagnostics
         .into_iter()
         .map(|(_, diagnostic)| diagnostic)
@@ -455,7 +495,10 @@ where
 /// The runtime adapter owns the live canonical stage.
 pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
     let _span = bevy::log::info_span!("usd_live_open_stage").entered();
-    lunco_usd_compose::open_recipe(recipe.clone(), lunco_usd_authoring::schema::native_registry())
+    lunco_usd_compose::open_recipe(
+        recipe.clone(),
+        lunco_usd_authoring::schema::native_registry(),
+    )
 }
 
 #[cfg(test)]

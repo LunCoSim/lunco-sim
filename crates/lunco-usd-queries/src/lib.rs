@@ -97,19 +97,22 @@ fn document_stage_recipe(
     world: &World,
     doc: DocumentId,
 ) -> Result<Option<lunco_usd_compose::recipe::StageRecipe>, ApiQueryError> {
-    if let Some(stage) = canonical_stage_for_document(world, doc) {
-        return stage
-            .admitted_recipe()
-            .map(Some)
-            .map_err(native_query_error);
-    }
-    let recipe = world
-        .get_resource::<DocBackedTwinScenes>()
-        .and_then(|backed| stage_asset_for_document(backed, doc))
-        .and_then(|stage_id| world.get_resource::<Assets<UsdStageAsset>>()?.get(stage_id))
-        .and_then(|asset| asset.recipe.as_deref())
-        .cloned();
-    Ok(recipe)
+    let Some(backed) = world.get_resource::<DocBackedTwinScenes>() else {
+        return Ok(None);
+    };
+    let Some(stage_id) = stage_asset_for_document(backed, doc) else {
+        return Ok(None);
+    };
+    let assets = world
+        .get_resource::<Assets<UsdStageAsset>>()
+        .ok_or_else(|| native_query_error("USD stage asset registry is unavailable"))?;
+    let stages = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .ok_or_else(|| native_query_error("USD canonical stage registry is unavailable"))?;
+    stages
+        .admitted_recipe_for(stage_id, assets)
+        .map(Some)
+        .map_err(native_query_error)
 }
 
 fn native_query_error(error: impl std::fmt::Display) -> ApiQueryError {

@@ -250,6 +250,7 @@ impl Default for LayerId {
 /// One explicit USD reference arc used by [`UsdOp::SetReferenceArcs`].
 /// `asset_path` is the resolver identity without USDA `@` delimiters;
 /// `prim_path` is omitted when the referenced layer's default prim is used.
+/// An empty asset path with an explicit prim target is a native internal reference.
 #[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
 pub struct UsdReferenceArc {
     pub asset_path: String,
@@ -349,6 +350,7 @@ pub enum UsdOp {
         /// Optional schema type (`Xform`, `Cube`, `Mesh`, …).
         type_name: Option<String>,
         /// Optional asset reference (`@vessels/rover.usda@`, bare path, no `@`).
+        /// An empty asset path uses the explicit `reference_prim_path` internally.
         /// `Some` authors a `references` arc so the prim instances that asset —
         /// this is how a runtime spawn persists (the referenced content + a
         /// local `xformOp` override compose into the rendered prim).
@@ -1100,6 +1102,15 @@ pub struct UsdDocument {
     composed_cache: std::sync::Mutex<Option<(UsdCompositionKey, std::sync::Arc<sdf::Data>)>>,
 }
 
+/// Worker-prepared document input for native stage loading. The root buffer
+/// serves the asset transport; the recipe retains the separate authored stack.
+pub struct DocumentStageInput {
+    /// Native root, session, and admitted dependency buffers.
+    pub recipe: StageRecipe,
+    /// Codec-correct root buffer published to the asset transport.
+    pub root_bytes: std::sync::Arc<Vec<u8>>,
+}
+
 /// Inputs to the document's authored-layer composition memo.
 ///
 /// Full USD stage composition remains owned by `lunco-usd-compose` and its
@@ -1318,6 +1329,66 @@ impl UsdDocument {
     /// excluded from source Save and runtime persistence.
     pub fn view_data(&self) -> &sdf::Data {
         &self.view
+    }
+
+    /// Share the exact authored layer selected by an operation or history entry.
+    pub fn authored_layer(&self, id: &LayerId) -> Result<std::sync::Arc<sdf::Data>, DocumentError> {
+        match TargetLayer::from_id(id) {
+            Some(TargetLayer::Base) => Ok(std::sync::Arc::clone(&self.base)),
+            Some(TargetLayer::Runtime) => Ok(std::sync::Arc::clone(&self.runtime)),
+            Some(TargetLayer::View) => Ok(std::sync::Arc::clone(&self.view)),
+            None => Err(DocumentError::ValidationFailed(format!(
+                "unknown USD edit target {}",
+                id.as_str()
+            ))),
+        }
+    }
+
+    /// Capture the native authored layer stack for a source transport identity.
+    /// Persistent consumers exclude the disposable view; presented consumers
+    /// include it. Encoding belongs on the caller's preparation worker.
+    pub fn stage_recipe(
+        &self,
+        root_id: &str,
+        include_view: bool,
+    ) -> Result<StageRecipe, DocumentError> {
+        if let Some(error) = &self.parse_error {
+            return Err(DocumentError::ValidationFailed(format!(
+                "invalid USD document source: {error}"
+            )));
+        }
+        let context = match self.authoring_recipe() {
+            Some(recipe) => recipe.reanchor(root_id).map_err(author_err)?,
+            None => StageRecipe::new(root_id.to_owned(), Default::default()),
+        };
+        let empty = sdf::Data::new();
+        author::document_stage_recipe(
+            &self.base,
+            &self.runtime,
+            if include_view { &self.view } else { &empty },
+            Some(&context),
+        )
+        .map_err(author_err)
+    }
+
+    /// Prepare the native source input and its transport root on a worker.
+    pub fn capture_stage_input(
+        &self,
+        root_id: &str,
+        include_view: bool,
+    ) -> Result<DocumentStageInput, DocumentError> {
+        let recipe = self.stage_recipe(root_id, include_view)?;
+        let root_bytes = recipe
+            .bytes
+            .get(&recipe.root_id)
+            .ok_or_else(|| {
+                DocumentError::Internal(format!("captured root {} has no bytes", recipe.root_id))
+            })?
+            .clone();
+        Ok(DocumentStageInput {
+            recipe,
+            root_bytes: std::sync::Arc::new(root_bytes),
+        })
     }
 
     /// Attach the send-safe layer closure used to rebuild the live stage.
@@ -1799,16 +1870,18 @@ impl UsdDocument {
                     })?
                     .identifier()
                     .to_owned();
-                // Native sub_layers includes the session parent before its children.
-                let layers = stage.sub_layers(&session_id);
-                let index = match target {
-                    TargetLayer::View => 1,
-                    TargetLayer::Runtime => 2,
+                let ids = author::DocumentLayerIds::for_root(stage.root_layer().identifier());
+                let identifier = match target {
+                    TargetLayer::View => ids.view,
+                    TargetLayer::Runtime => ids.runtime,
                     TargetLayer::Base => unreachable!(),
                 };
-                layers.get(index).cloned().ok_or_else(|| {
-                    DocumentError::Internal("document overlay layer is missing".into())
-                })?
+                if !stage.sub_layers(&session_id).contains(&identifier) {
+                    return Err(DocumentError::Internal(format!(
+                        "document overlay layer is missing: {identifier}"
+                    )));
+                }
+                identifier
             }
         };
         stage
@@ -2044,14 +2117,23 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
 
 fn validate_reference_asset_path(
     asset_path: &str,
+    prim_path: Option<&str>,
     operation: &str,
 ) -> Result<String, DocumentError> {
-    if asset_path.is_empty() || asset_path.contains('\0') {
+    if asset_path.contains('\0') {
         return Err(DocumentError::ValidationFailed(format!(
-            "{operation} requires a non-empty USD asset path without NUL"
+            "{operation} USD asset path must not contain NUL"
         )));
     }
-    lunco_usd_compose::canonicalize_at(asset_path, None).map_err(author_err)?;
+    if asset_path.is_empty() {
+        if prim_path.is_none() {
+            return Err(DocumentError::ValidationFailed(format!(
+                "{operation} internal reference requires an explicit prim target"
+            )));
+        }
+    } else {
+        lunco_usd_compose::canonicalize_at(asset_path, None).map_err(author_err)?;
+    }
     Ok(asset_path.to_owned())
 }
 
@@ -2396,10 +2478,17 @@ impl Document for UsdDocument {
                 reference_prim_path,
                 ..
             } => {
+                let reference_prim_path =
+                    normalize_reference_prim_path(reference_prim_path.as_deref())?;
                 let reference = reference
-                    .map(|asset_path| validate_reference_asset_path(&asset_path, "AddPrim"))
+                    .map(|asset_path| {
+                        validate_reference_asset_path(
+                            &asset_path,
+                            reference_prim_path.as_deref(),
+                            "AddPrim",
+                        )
+                    })
                     .transpose()?;
-                let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
                 // A child under a referenced/payloaded parent is a valid local
                 // USD opinion even though that parent has no spec in this
                 // document's authored layers. Materialize the parent as an
@@ -2453,7 +2542,7 @@ impl Document for UsdDocument {
                 // is set at the sdf level) — turns the prim into a runtime spawn.
                 if reference_prim_path.is_some() && reference.is_none() {
                     return Err(DocumentError::ValidationFailed(
-                        "AddPrim: reference_prim_path requires a reference asset".into(),
+                        "AddPrim: reference_prim_path requires a reference opinion".into(),
                     ));
                 }
                 if let Some(asset_path) = &reference {
@@ -4107,12 +4196,13 @@ impl Document for UsdDocument {
                 let arcs = references
                     .iter()
                     .map(|reference| {
-                        let asset_path = validate_reference_asset_path(
-                            &reference.asset_path,
-                            "SetReferenceArcs",
-                        )?;
                         let prim_path =
                             normalize_reference_prim_path(reference.prim_path.as_deref())?;
+                        let asset_path = validate_reference_asset_path(
+                            &reference.asset_path,
+                            prim_path.as_deref(),
+                            "SetReferenceArcs",
+                        )?;
                         Ok((asset_path, prim_path))
                     })
                     .collect::<Result<Vec<_>, DocumentError>>()?;

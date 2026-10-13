@@ -179,6 +179,16 @@ pub struct ResolvedProgram {
     pub source: ProgramSource,
 }
 
+/// Last admitted authored executable selection on this projected owner.
+/// Pending source markers are consumed by the executor; this owner fact keeps
+/// an unchanged projection from resubmitting the same executable source.
+#[derive(bevy::prelude::Component, PartialEq, Eq)]
+struct ProjectedProgramSelection {
+    stage: AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
+    resolved: ResolvedProgram,
+    asset_path: Option<bevy::asset::AssetPath<'static>>,
+}
+
 /// Apply one resolved generic program to its owning ECS entity.
 ///
 /// The USD program contract is shared by the initial visual projection and
@@ -212,7 +222,28 @@ pub fn apply_program_resolution(
             )
         })
     });
+    let selection = resolved
+        .as_ref()
+        .filter(|_| rhai_asset.as_ref().is_none_or(|path| path.is_ok()))
+        .map(|resolved| ProjectedProgramSelection {
+            stage: stage_id,
+            resolved: resolved.clone(),
+            asset_path: rhai_asset
+                .as_ref()
+                .and_then(|path| path.as_ref().ok())
+                .cloned(),
+        });
+    if selection
+        .as_ref()
+        .is_some_and(|selection| world.get::<ProjectedProgramSelection>(entity) == Some(selection))
+    {
+        return;
+    }
     let mut entity = world.entity_mut(entity);
+    entity.remove::<ProjectedProgramSelection>();
+    if let Some(selection) = selection {
+        entity.insert(selection);
+    }
     entity
         .remove::<lunco_core::programs::ProgramDriverId>()
         .remove::<lunco_core::EmbeddedScenarioSource>()

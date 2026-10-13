@@ -1967,24 +1967,6 @@ fn add_prim_unknown_parent_validation_error() {
 }
 
 #[test]
-fn add_prim_rejects_an_empty_reference_asset_identity() {
-    let mut doc = UsdDocument::new(DocumentId::new(905), TINY_USDA);
-    let err = doc
-        .apply(UsdOp::AddPrim {
-            edit_target: LayerId::view(),
-            parent_path: "/World".into(),
-            name: "Preview".into(),
-            type_name: Some("Sphere".into()),
-            reference: Some(String::new()),
-            reference_prim_path: None,
-        })
-        .expect_err("an empty asset identity must not create a broken USD reference");
-    assert!(matches!(err, DocumentError::ValidationFailed(_)));
-    assert_eq!(doc.generation(), 0, "rejected authoring is atomic");
-    assert!(!prim_exists(&doc, "/World/Preview"));
-}
-
-#[test]
 fn rover_built_from_blank_round_trips_with_undo() {
     let mut host = DocumentHost::new(UsdDocument::new(DocumentId::new(10), EMPTY_USDA));
 

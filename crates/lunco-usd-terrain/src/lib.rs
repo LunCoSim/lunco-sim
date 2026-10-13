@@ -28,15 +28,13 @@ use bevy::prelude::*;
 use lunco_terrain_globe::TerrainTile;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
-// Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
-// projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
-// document registry hands back for the authoring tier's child walks.
+// Runtime projection reads the live stage; authoring reads the current native
+// document stack. Raw layer reads are reserved for local authored opinions.
 use lunco_usd_bevy_scene::{ShapeDims, UsdGeomAxis, read_shape_dims};
 use lunco_usd_bevy_stage::{
     StageView, UsdInstanceProjection, UsdRead, UsdStageAsset, UsdStageProjectionPlan,
     read_transform_from_usd,
 };
-use lunco_usd_data::usd_data::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
 /// edits back onto the backing document's runtime layer.
@@ -171,6 +169,7 @@ impl Plugin for UsdTerrainPlugin {
         // runtime layer (journaled, non-destructive) instead of mutating the runtime
         // layer stack directly. Document-free terrains are handled in lunco-terrain-surface.
         app.init_resource::<TerrainEditPrimSeq>()
+            .add_observer(close_terrain_edit_sequence)
             .add_observer(on_brush_terrain_authored)
             .add_observer(on_flatten_terrain_authored)
             .add_observer(on_place_crater_authored)
@@ -730,51 +729,127 @@ struct TerrainDocument {
 /// session so a removed edit's name is never reused. Starts at 0 but is re-seeded past
 /// any existing children at every authoring site ([`seed_edit_seq_past_children`]) — a
 /// runtime overlay restored from `.lunco/runtime/…` carries last session's prims, and
-/// reusing a taken name would make the `AddPrim` fail (the edit silently dropped).
+/// existing names remain reserved across restored and referenced opinions.
 #[derive(Resource, Default)]
-struct TerrainEditPrimSeq(u64);
+struct TerrainEditPrimSeq(HashMap<lunco_doc::DocumentId, u64>);
+
+fn close_terrain_edit_sequence(
+    event: On<lunco_doc_bevy::DocumentClosed>,
+    mut sequences: ResMut<TerrainEditPrimSeq>,
+) {
+    sequences.0.remove(&event.event().doc);
+}
+
+fn terrain_document_stage(
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    prim: &lunco_usd_bevy_scene::UsdPrimPath,
+    stages: &lunco_usd_bevy_stage::canonical::CanonicalStages,
+    assets: &Assets<UsdStageAsset>,
+) -> Result<openusd::usd::Stage, String> {
+    let document = registry
+        .host(doc)
+        .ok_or_else(|| format!("terrain document {doc} is unavailable"))?
+        .document();
+    let recipe = stages
+        .admitted_recipe_for(prim.stage_handle.id(), assets)
+        .map_err(|error| error.to_string())?;
+    document
+        .open_composed_stage_with_recipe(&recipe)
+        .map_err(|error| error.to_string())
+}
 
 /// Advance `seq` past every `edit_<n>` / `rock_<n>` child already present under
-/// `terrain_path` in the composed (`base ⊕ runtime`) document, so the next authored
+/// `terrain_path` in the native document stage, so the next authored
 /// name can never collide with a restored or historical prim. Runs at authoring time
 /// (not doc-mount time) so it cannot race the `DocumentOpened` runtime-overlay
-/// restore; `composed_arc` is memoized by generation, so this is a cheap child walk.
+/// restore. Referenced and inactive children also reserve their authored names.
 fn seed_edit_seq_past_children(
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    stage: &openusd::usd::Stage,
     doc: lunco_doc::DocumentId,
     terrain_path: &str,
     seq: &mut TerrainEditPrimSeq,
-) {
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    let Ok(sdf) = openusd::sdf::Path::new(terrain_path) else {
-        return;
-    };
-    let composed = host.document().composed_arc();
-    for child in composed.prim_children(&sdf) {
-        let Some(name) = child.as_str().rsplit('/').next() else {
-            continue;
-        };
+) -> Result<(), String> {
+    let prim = stage
+        .prim(terrain_path)
+        .map_err(|error| error.to_string())?;
+    if !prim.is_valid().map_err(|error| error.to_string())? {
+        return Err(format!(
+            "terrain prim is absent from document {doc}: {terrain_path}"
+        ));
+    }
+    let sequence = seq.0.entry(doc).or_default();
+    for name in prim.child_names().map_err(|error| error.to_string())? {
         for prefix in ["edit_", "rock_"] {
             if let Some(n) = name
+                .as_str()
                 .strip_prefix(prefix)
                 .and_then(|s| s.parse::<u64>().ok())
             {
-                seq.0 = seq.0.max(n + 1);
+                let next = n.checked_add(1).ok_or_else(|| {
+                    format!("terrain edit name counter exhausted at {terrain_path}/{name}")
+                })?;
+                *sequence = (*sequence).max(next);
             }
         }
     }
+    Ok(())
 }
 
-/// Author one edit onto every **doc-backed** terrain as USD ops on its document's
-/// **runtime** layer — non-destructive, ephemeral over the base DEM (Omniverse
-/// session-layer pattern): an `AddPrim` for the edit prim + a `SetAttribute` per
-/// `LunCoTerrainEditAPI` parameter. `registry.apply` records them to the journal (undo
-/// / sync), then the twin projection re-projects the composed `base ⊕ runtime` →
-/// `parse_edit` → the one `EditsLayer`. The direct-path observer in
-/// lunco-terrain-surface handles document-FREE terrains (`Without<DocBackedTerrain>`),
-/// so exactly one path fires per terrain.
+fn take_terrain_edit_name(
+    seq: &mut TerrainEditPrimSeq,
+    doc: lunco_doc::DocumentId,
+    prefix: &str,
+) -> Result<String, String> {
+    let sequence = seq.0.entry(doc).or_default();
+    let next = sequence
+        .checked_add(1)
+        .ok_or_else(|| format!("terrain edit name counter exhausted in {doc}"))?;
+    let name = format!("{prefix}_{sequence}");
+    *sequence = next;
+    Ok(name)
+}
+
+fn terrain_authoring_outcome(
+    outcome: Result<Option<lunco_doc::Ack>, String>,
+    active: Option<&lunco_core::ActiveCommandId>,
+    results: Option<&mut lunco_core::CommandResults>,
+) {
+    let result = match outcome {
+        Ok(None) => return,
+        Ok(Some(ack)) => Ok(ack),
+        Err(error) => {
+            warn!("[terrain-edit] {error}");
+            Err(lunco_doc::Reject::InvalidOp(error))
+        }
+    };
+    if let (Some(id), Some(results)) = (active.and_then(|active| active.get()), results) {
+        results.record_handler_result(id, result);
+    }
+}
+
+fn commit_terrain_group(
+    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    ops: Vec<lunco_usd_document::document::UsdOp>,
+    label: &str,
+    journal: Option<&lunco_doc_bevy::JournalResource>,
+) -> Result<lunco_doc::Ack, String> {
+    let apply = || {
+        registry
+            .apply_group(doc, ops)
+            .map_err(|error| error.to_string())
+    };
+    match journal {
+        Some(journal) => journal.change_set(label, apply),
+        None => apply(),
+    }
+}
+
+/// Author each document-backed terrain edit as one atomic runtime-layer group.
+/// The journal records the complete edit; native stage projection supplies the
+/// resulting edit facts to the terrain owner. The terrain-surface observer owns
+/// document-free terrain edits, so each terrain has one authoring path.
 fn author_terrain_edit(
     kind: lunco_terrain_surface::EditKind,
     terrains: &Query<
@@ -782,24 +857,21 @@ fn author_terrain_edit(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    stages: &lunco_usd_bevy_stage::canonical::CanonicalStages,
+    assets: &Assets<UsdStageAsset>,
     seq: &mut TerrainEditPrimSeq,
     journal: Option<&lunco_doc_bevy::JournalResource>,
-) {
+) -> Result<Option<lunco_doc::Ack>, String> {
+    let mut ack = None;
     for (prim_path, td) in terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
-        seed_edit_seq_past_children(registry, doc, &prim_path.path, seq);
-        let name = format!("edit_{}", seq.0);
-        seq.0 += 1;
+        let stage = terrain_document_stage(registry, doc, prim_path, stages, assets)?;
+        seed_edit_seq_past_children(&stage, doc, &prim_path.path, seq)?;
+        let name = take_terrain_edit_name(seq, doc, "edit")?;
         let edit_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
         // The edit prim + its `LunCoTerrainEditAPI` attributes, on the ephemeral
         // runtime layer (non-destructive), committed as ONE journal change set — so an
         // edit stays a single undo step even though it is now five ops rather than two.
-        //
-        // The parameters used to be PACKED into one string attribute precisely so that
-        // undo could be a single op. That traded a real USD type for an undo trick:
-        // nothing validated the string, `allowedTokens` could not constrain the kind,
-        // and no other DCC could read it. The change set gives us the atomicity without
-        // the encoding.
         let mut ops = vec![lunco_usd_document::document::UsdOp::AddPrim {
             edit_target: lunco_usd_document::document::LayerId::runtime(),
             parent_path: prim_path.path.clone(),
@@ -820,20 +892,15 @@ fn author_terrain_edit(
             });
         }
 
-        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
-            lunco_usd_document::document::UsdDocument,
-        >| {
-            for op in ops {
-                if let Err(e) = registry.apply(doc, op) {
-                    warn!("[terrain-edit] {edit_prim} op rejected — edit may be partial: {e:?}");
-                }
-            }
-        };
-        match journal {
-            Some(j) => j.change_set("Terrain edit", || apply_all(registry)),
-            None => apply_all(registry),
-        }
+        ack = Some(commit_terrain_group(
+            registry,
+            doc,
+            ops,
+            "Terrain edit",
+            journal,
+        )?);
     }
+    Ok(ack)
 }
 
 fn on_brush_terrain_authored(
@@ -846,6 +913,10 @@ fn on_brush_terrain_authored(
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
+    stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Res<Assets<UsdStageAsset>>,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    mut results: Option<ResMut<lunco_core::CommandResults>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -857,7 +928,7 @@ fn on_brush_terrain_authored(
         return;
     }
     let Some(mut registry) = registry else { return };
-    author_terrain_edit(
+    let outcome = author_terrain_edit(
         lunco_terrain_surface::EditKind::Brush {
             center: [ev.x as f64, ev.z as f64],
             radius: ev.radius as f64,
@@ -865,9 +936,12 @@ fn on_brush_terrain_authored(
         },
         &terrains,
         &mut registry,
+        &stages,
+        &assets,
         &mut seq,
         journal.as_deref(),
     );
+    terrain_authoring_outcome(outcome, active.as_deref(), results.as_deref_mut());
 }
 
 fn on_flatten_terrain_authored(
@@ -880,6 +954,10 @@ fn on_flatten_terrain_authored(
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
+    stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Res<Assets<UsdStageAsset>>,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    mut results: Option<ResMut<lunco_core::CommandResults>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -891,7 +969,7 @@ fn on_flatten_terrain_authored(
         return;
     }
     let Some(mut registry) = registry else { return };
-    author_terrain_edit(
+    let outcome = author_terrain_edit(
         lunco_terrain_surface::EditKind::Flatten {
             center: [ev.x as f64, ev.z as f64],
             radius: ev.radius as f64,
@@ -899,9 +977,12 @@ fn on_flatten_terrain_authored(
         },
         &terrains,
         &mut registry,
+        &stages,
+        &assets,
         &mut seq,
         journal.as_deref(),
     );
+    terrain_authoring_outcome(outcome, active.as_deref(), results.as_deref_mut());
 }
 
 fn on_place_crater_authored(
@@ -914,6 +995,10 @@ fn on_place_crater_authored(
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
+    stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Res<Assets<UsdStageAsset>>,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    mut results: Option<ResMut<lunco_core::CommandResults>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -925,7 +1010,7 @@ fn on_place_crater_authored(
         return;
     }
     let Some(mut registry) = registry else { return };
-    author_terrain_edit(
+    let outcome = author_terrain_edit(
         lunco_terrain_surface::EditKind::Crater {
             center: [ev.x as f64, ev.z as f64],
             radius: ev.radius as f64,
@@ -933,9 +1018,12 @@ fn on_place_crater_authored(
         },
         &terrains,
         &mut registry,
+        &stages,
+        &assets,
         &mut seq,
         journal.as_deref(),
     );
+    terrain_authoring_outcome(outcome, active.as_deref(), results.as_deref_mut());
 }
 
 /// Doc-backed manual rock placement: author ONE `lunco:layer = "rock"` child prim
@@ -951,6 +1039,10 @@ fn on_place_rock_authored(
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
+    stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Res<Assets<UsdStageAsset>>,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    mut results: Option<ResMut<lunco_core::CommandResults>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -961,9 +1053,16 @@ fn on_place_rock_authored(
     let Some(mut registry) = registry else { return };
     for (prim_path, td) in &terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
-        seed_edit_seq_past_children(&registry, doc, &prim_path.path, &mut seq);
-        let name = format!("rock_{}", seq.0);
-        seq.0 += 1;
+        let name = terrain_document_stage(&registry, doc, prim_path, &stages, &assets)
+            .and_then(|stage| seed_edit_seq_past_children(&stage, doc, &prim_path.path, &mut seq))
+            .and_then(|()| take_terrain_edit_name(&mut seq, doc, "rock"));
+        let name = match name {
+            Ok(name) => name,
+            Err(error) => {
+                terrain_authoring_outcome(Err(error), active.as_deref(), results.as_deref_mut());
+                return;
+            }
+        };
         let rock_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
 
         // `LunCoTerrainLayerAPI`. Namespaced, not bare: a bare `size` here is
@@ -1002,20 +1101,14 @@ fn on_place_rock_authored(
             });
         }
 
-        // ONE change set: a rock is one undo step, not six. (It used to apply each op
-        // on its own, so undo peeled a rock apart attribute by attribute.)
-        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
-            lunco_usd_document::document::UsdDocument,
-        >| {
-            for op in ops {
-                if let Err(e) = registry.apply(doc, op) {
-                    warn!("[terrain-edit] {rock_prim} op rejected — rock may be partial: {e:?}");
-                }
-            }
-        };
-        match journal.as_deref() {
-            Some(j) => j.change_set("Place rock", || apply_all(&mut registry)),
-            None => apply_all(&mut registry),
+        // Native document group validation commits the complete rock atomically.
+        // The enclosing journal change set makes that group one undo step.
+        let outcome =
+            commit_terrain_group(&mut registry, doc, ops, "Place rock", journal.as_deref());
+        let rejected = outcome.is_err();
+        terrain_authoring_outcome(outcome.map(Some), active.as_deref(), results.as_deref_mut());
+        if rejected {
+            return;
         }
     }
 }
@@ -1271,78 +1364,59 @@ fn push_layer_attr(
     });
 }
 
-/// Find an already composed terrain layer in the document authoring view.
-/// This also sees a runtime AddPrim immediately, before the canonical stage has
-/// had a chance to recompose, so repeated UI edits cannot queue a duplicate.
-fn document_layer_path(
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
-    doc: lunco_doc::DocumentId,
-    terrain_path: &str,
-    layer_type: &str,
-) -> Option<String> {
-    let host = registry.host(doc)?;
-    let terrain = openusd::sdf::Path::new(terrain_path).ok()?;
-    let composed = host.document().composed_arc();
-    composed
-        .prim_children(&terrain)
-        .into_iter()
-        .find_map(|child| {
-            let kind = composed
-                .prim_attribute_value::<openusd::tf::Token>(&child, "lunco:layer")
-                .map(|token| token.to_string())
-                .or_else(|| composed.prim_attribute_value::<String>(&child, "lunco:layer"));
-            (kind.as_deref() == Some(layer_type)).then(|| child.as_str().to_string())
-        })
+/// Current layer identities from one native document composition.
+fn terrain_layer_paths(
+    stage: &openusd::usd::Stage,
+    terrain: &openusd::sdf::Path,
+) -> Result<Vec<(String, String)>, String> {
+    let mut layers = Vec::new();
+    for child in stage
+        .prim(terrain)
+        .map_err(|error| error.to_string())?
+        .children()
+        .map_err(|error| error.to_string())?
+    {
+        match child
+            .attribute("lunco:layer")
+            .get::<openusd::sdf::Value>()
+            .map_err(|error| format!("{} lunco:layer: {error}", child.path()))?
+        {
+            Some(openusd::sdf::Value::Token(kind)) => {
+                layers.push((child.path().to_string(), kind.to_string()))
+            }
+            None => {}
+            Some(_) => return Err(format!("{} lunco:layer must be a token", child.path())),
+        }
+    }
+    layers.sort();
+    Ok(layers)
 }
 
-/// Pick a deterministic free child name for a newly authored generic layer.
-/// Both the live composed stage and the document authoring view are checked:
-/// the former includes referenced children and the latter includes runtime-only
-/// children that have not reached the stage yet.
+/// Pick a deterministic free name from the native document's complete children.
 fn next_layer_name(
-    reader: &StageView<'_>,
+    stage: &openusd::usd::Stage,
     terrain: &openusd::sdf::Path,
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
-    doc: lunco_doc::DocumentId,
     base: &str,
-) -> String {
-    let stage_names: Vec<String> = reader
-        .children(terrain)
+) -> Result<String, String> {
+    let names: HashSet<String> = stage
+        .prim(terrain)
+        .map_err(|error| error.to_string())?
+        .child_names()
+        .map_err(|error| error.to_string())?
         .into_iter()
-        .filter_map(|child| child.as_str().rsplit('/').next().map(str::to_owned))
+        .map(|name| name.to_string())
         .collect();
-    let document_names: Vec<String> = registry
-        .host(doc)
-        .map(|host| {
-            let composed = host.document().composed_arc();
-            composed
-                .prim_children(terrain)
-                .into_iter()
-                .map(|child| {
-                    child
-                        .as_str()
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or_default()
-                        .to_owned()
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    (0..)
-        .map(|suffix| {
-            if suffix == 0 {
-                base.to_string()
-            } else {
-                format!("{base}_{suffix}")
-            }
-        })
-        .find(|name| {
-            !stage_names.iter().any(|existing| existing == name)
-                && !document_names.iter().any(|existing| existing == name)
-        })
-        .expect("an unbounded layer name search always finds a free name")
+    for suffix in 0..=u64::MAX {
+        let name = if suffix == 0 {
+            base.to_owned()
+        } else {
+            format!("{base}_{suffix}")
+        };
+        if !names.contains(&name) {
+            return Ok(name);
+        }
+    }
+    Err(format!("terrain layer name space exhausted at {terrain}"))
 }
 
 /// Return the minimal runtime-overlay `AddPrim` operations needed to author below
@@ -1497,16 +1571,10 @@ fn author_rock_layer_attrs(
     push_layer_attr(ops, path, "seed", "int64", (seed as i64).to_string());
 }
 
-/// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
-/// onto its USD `craters`/`overzoom`/`rocks` layer prims (runtime layer) rather than mutating the
-/// `TerrainLayerStack` directly. The USD mutation then drives everything automatically
-/// — the registry document's generation advances → `refresh_docbacked_terrain_from_doc`
-/// re-parses the stack from the composed (`base ⊕ runtime`) doc → `start_dem_restamp`
-/// re-bakes off the retained base grid (off-thread, debounced; no GeoTIFF re-read). The
-/// terrain's `LiveRebuildExempt` marker suppresses the twin whole-scene reload this edit
-/// would otherwise trigger. This is the USD-source-of-truth path; the direct
-/// `on_obstacle_spec_rebuild_layers` handles only document-free terrains
-/// (`Without<DocBackedTerrain>`), so exactly one path fires.
+/// Commit obstacle parameters as one runtime-layer document group. Native
+/// projection supplies the terrain owner with the resulting layer facts and
+/// triggers its retained-grid restamp. Document-free terrains use the separate
+/// terrain-surface observer. The initiating command receives the group's result.
 fn on_obstacle_spec_authored(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     status: Res<TerrainSchemaStatus>,
@@ -1515,15 +1583,18 @@ fn on_obstacle_spec_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Res<Assets<UsdStageAsset>>,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    mut results: Option<ResMut<lunco_core::CommandResults>>,
     registry: Option<
-        Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
-    mut commands: Commands,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
     if !status.is_valid() {
         return;
     }
-    let Some(registry) = registry else {
+    let Some(mut registry) = registry else {
         debug!("[obstacle-usd] spec update ignored: USD document registry is unavailable");
         return;
     };
@@ -1542,23 +1613,21 @@ fn on_obstacle_spec_authored(
             continue;
         };
         let doc = lunco_doc::DocumentId::new(td.doc);
-        // The backing document intentionally retains references instead of
-        // flattening them. Its `sdf::Data` therefore cannot enumerate the
-        // referenced terrain children. Discover layer paths on the canonical
-        // composed stage (the same runtime read surface that built the stack),
-        // then author the override into this document's runtime layer.
-        let Some(stage) = stages.get(prim_path.stage_handle.id()) else {
-            continue;
+        let stage = match terrain_document_stage(&registry, doc, prim_path, &stages, &assets) {
+            Ok(stage) => stage,
+            Err(error) => {
+                terrain_authoring_outcome(Err(error), active.as_deref(), results.as_deref_mut());
+                return;
+            }
         };
-        let reader = stage.view();
-        let mut layers: Vec<(String, String)> = sorted_terrain_children(&reader, &sdf)
-            .into_iter()
-            .filter_map(|child| {
-                reader
-                    .text(&child, "lunco:layer")
-                    .map(|ty| (child.as_str().to_string(), ty))
-            })
-            .collect();
+        let reader = StageView::new(&stage);
+        let mut layers = match terrain_layer_paths(&stage, &sdf) {
+            Ok(layers) => layers,
+            Err(error) => {
+                terrain_authoring_outcome(Err(error), active.as_deref(), results.as_deref_mut());
+                return;
+            }
+        };
         let mut ops = Vec::new();
         let has_crater_layer = layers.iter().any(|(_, ty)| ty == "craters");
         let has_enabled_overzoom_layer = layers
@@ -1569,7 +1638,7 @@ fn on_obstacle_spec_authored(
         let mut parent_chain_added = false;
 
         // A Twin need not pre-author either generic layer. Enabling the relevant
-        // Inspector switch creates the missing prim in the runtime overlay. A
+        // Inspector switch creates the missing prim in the runtime overlay.
         // A Twin that already has enabled overzoom uses that prim for the
         // Craters master switch. An authored-but-disabled overzoom layer does
         // not block adding the regular crater layer when the user enables it.
@@ -1584,9 +1653,7 @@ fn on_obstacle_spec_authored(
             if layers.iter().any(|(_, ty)| ty == kind) {
                 continue;
             }
-            if let Some(path) = document_layer_path(&registry, doc, &prim_path.path, kind) {
-                layers.push((path, kind.to_string()));
-            } else if should_add {
+            if should_add {
                 if !parent_chain_added {
                     let Some(parent_ops) =
                         ensure_document_parent_chain_ops(&registry, doc, &prim_path.path)
@@ -1600,7 +1667,17 @@ fn on_obstacle_spec_authored(
                     ops.extend(parent_ops);
                     parent_chain_added = true;
                 }
-                let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
+                let name = match next_layer_name(&stage, &sdf, base_name) {
+                    Ok(name) => name,
+                    Err(error) => {
+                        terrain_authoring_outcome(
+                            Err(error),
+                            active.as_deref(),
+                            results.as_deref_mut(),
+                        );
+                        return;
+                    }
+                };
                 let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
                 ops.push(lunco_usd_document::document::UsdOp::AddPrim {
                     edit_target: lunco_usd_document::document::LayerId::runtime(),
@@ -1687,12 +1764,18 @@ fn on_obstacle_spec_authored(
             }
         }
         if !ops.is_empty() {
-            commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
-                doc_id: doc,
-                parent_gen: None,
-                label: "Terrain obstacle settings".to_owned(),
+            let outcome = commit_terrain_group(
+                &mut registry,
+                doc,
                 ops,
-            });
+                "Terrain obstacle settings",
+                journal.as_deref(),
+            );
+            let rejected = outcome.is_err();
+            terrain_authoring_outcome(outcome.map(Some), active.as_deref(), results.as_deref_mut());
+            if rejected {
+                return;
+            }
         }
     }
 }

@@ -156,7 +156,8 @@ DOCUMENT — authored USD opinions and derived view, composed in strength order.
   [ ECS       ] continuous simulation and editor session state
 ```
 
-`@runtime@` is an authored document layer, not a USD session layer. User edits
+`@runtime@` is a persisted authored document layer mounted beneath the native
+session layer. User edits
 such as route points and gizmo transforms are journaled typed operations and
 can be saved independently of the source `.usda`. When the owning Twin enables
 `usd.runtime_persistence`, the runtime layer is serialized to
@@ -167,16 +168,33 @@ marker colors. `ApplyUsdOps` rejects this target; derived presentation uses the
 transient USD command, which updates the live stage but does not alter the
 runtime sidecar or undo history.
 
-The initial Twin scene asset contains `@root@` and `@runtime@` only. Its live
+Each root has distinct native runtime, view, and session identifiers derived
+from its exact source identity. The session sublayer order is view then runtime;
+the original root retains its own authored arcs and native codec.
+`DocBackedTwinScenes` owns a publication lease and strong asset handle for this
+immutable input. The asset loader captures the lease revision and rejects it if
+publication changed or the document retired before preparation completed.
+Closing or rehoming a projection retires that input and its stage handle.
+
+The initial Twin scene asset includes `@root@` and `@runtime@`; its view layer is
+empty. Its live
 projection tracks `@view@` operations separately and replays them onto the
 mounted canonical stage, including view operations authored before that stage
 was mounted. This keeps transient annotations visible in the live View without
-adding them to the Twin overlay.
+adding them to persistent source bytes. Editor previews include the view layer
+in their captured native input. Restart publishes fresh root/runtime input and
+clears view opinions before reloading. Incremental operations and pending
+reference materialization select the exact native edit target through OpenUSD's
+scoped edit context; property reconciliation reads that authored layer.
+Replacement stages publish a root notice through native address admission
+before ECS reset and projection acknowledgment. Generic program projection
+retains its admitted source selection and resolved asset address on the owner;
+unrelated stage edits do not resubmit an unchanged executable source.
 
 Omniverse makes the active authoring layer visible in its Layers panel, while its
 Session Layer is temporary working state. LunCoSim's persisted `@runtime@` is a
-different contract: it is Twin-owned authoring that can survive reopening, not
-the transient Session Layer. Route and runtime tools select it by policy today.
+Twin-owned authoring that can survive reopening; its native session placement
+does not change its separate persistence contract. Route and runtime tools select it by policy today.
 The expected editor experience is to name that target beside the active tool,
 show whether runtime persistence is enabled, and expose save progress and the
 last durable state. A user should be able to tell that a waypoint was authored
@@ -232,24 +250,14 @@ disposable view-layer presentation, and continuous ECS/Modelica simulation.
 Keep those owners separate so an editor gesture cannot rebuild the running
 simulation or persist presentation state.
 
-## 6. Target: the resolver is the only local/client seam
+## 6. Asset transport and native resolution
 
-```rust
-StageBuilder::new().resolver(DiskResolver)        // local: reads the file
-StageBuilder::new().resolver(ReplicatedResolver)  // client: bytes off the wire
-```
-
-A client has **no file and no cache** — it has a layer stack whose base is
-resolved and whose live layer is replicated. Caching exists only inside the
-client's resolver, because that is the only place with no disk. Asset sync (DEM,
-meshes) is the same seam: content-addressed fetch over the USD reference closure.
-
-Today USD layers are routed through **Bevy's `AssetServer`** instead — a
-load-once/cache-by-path content pipeline built for meshes that never change under
-you. That is why documents went stale, and why the overlay hack exists to force
-our own truth back *into* that cache. `ar::Resolver` is the seam USD provides for
-exactly this; our fork exposes `StageBuilder::resolver` and
-`Resolver::get_modification_timestamp` already.
+`StageRecipe` is the immutable input to `lunco-usd-compose::open_recipe`.
+`LuncoUsdResolver` interprets native USD dependency identities over that captured
+closure. Bevy's asset loader owns asynchronous source reads and dependency
+receipts; documents own authored opinions and their publication leases. DEM,
+meshes, and other payloads cross the typed asset transport boundary with their
+source identity and preparation owner intact.
 
 ## 7. Target: collaboration (the Nucleus model)
 

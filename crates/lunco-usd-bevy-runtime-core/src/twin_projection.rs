@@ -1,31 +1,17 @@
 //! Doc-backed twin default scene — web-ready via the twin asset source.
 //!
-//! This is the **doc-backed live-projection path**: the default twin scene loads
-//! through the `twin://` asset source and the async [`UsdLoader`], which
-//! re-attaches the scheme so co-located refs (terrain `.glb`) resolve on every
-//! platform the source supports. It is made doc-backed by serving the scene
-//! document's **persistent** (`base ⊕ runtime`) source as a *byte-overlay* on
-//! the Twin source, so runtime edits appear in the initial mount. Disposable
-//! `view` opinions stay out of that overlay and are replayed to the canonical
-//! stage through their separate projection cursor.
+//! The document projection lease publishes codec-correct base bytes and a
+//! separate native runtime/view/session stack to the async [`UsdLoader`].
+//! Native USD composition preserves source identity and opinion strength;
+//! disposable view opinions have a separate live projection cursor.
 //!
-//! Flow (doc-first: the document exists and its persistent source is the overlay
-//! BEFORE the scene mounts, so the world is projected exactly once):
-//! 1. The authored Twin loading policy selects a scene and dispatches
-//!    `OpenTwinScene`; this owner kicks an async [`UsdSourceBytes`] load of
-//!    `twin://<name>/<scene>` (raw base layer, read
-//!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
-//!    The scene mount is admitted after the source asset reaches a terminal
-//!    success or failure event.
-//! 2. [`drain_pending_twin_docs`] — once the source asset emits its terminal
-//!    event, admit parsing of that exact text revision through
-//!    `AsyncWorkAdmission`. The document registry commits the prepared source
-//!    under its path identity and dirty-document policy. After restoring the
-//!    persisted `.lunco/runtime` overlay, a cloned document snapshot is
-//!    serialized on the worker pool; the owner accepts it only while its
-//!    generation remains current. It then publishes the persistent source as
-//!    the Twin overlay, records the document lease, and fires `LoadScene` —
-//!    the single mount composes `base ⊕ runtime`.
+//! Flow:
+//! 1. Twin loading policy dispatches `OpenTwinScene`. This owner loads exact
+//!    source bytes through the Twin asset source and records `PendingTwinDocs`.
+//! 2. `AsyncWorkAdmission` prepares the native source revision. The document
+//!    registry commits it under its path identity and dirty-document policy.
+//!    After runtime persistence restore, a worker captures the native stage
+//!    input. Its generation fence guards lease publication and `LoadScene`.
 //! 3. [`sync_twin_overlays`] — later document edits author typed deltas onto the
 //!    live composed stage: translates and structural spawns/removes are
 //!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
@@ -120,11 +106,11 @@ enum TwinDocPreparationStage {
     PreparingSource {
         operation: u64,
     },
-    AwaitingPersistentSource {
+    AwaitingStageInput {
         doc: DocumentId,
         generation: u64,
     },
-    PreparingPersistentSource {
+    PreparingStageInput {
         operation: u64,
         doc: DocumentId,
         generation: u64,
@@ -138,7 +124,7 @@ struct TwinDocCompletion {
 
 enum TwinDocCompletionResult {
     Source(Result<PreparedUsdSource, String>),
-    PersistentSource(Result<String, String>),
+    StageInput(Result<lunco_usd_document::document::DocumentStageInput, String>),
 }
 
 /// Coalesced dependent-layer patches and worker-prepared plans for later mounts.
@@ -397,11 +383,11 @@ impl PendingTwinDocs {
                     || (self.ready.contains(&item.handle.id())
                         && item.capacity_revision != Some(capacity_revision))
             }
-            TwinDocPreparationStage::AwaitingPersistentSource { .. } => {
+            TwinDocPreparationStage::AwaitingStageInput { .. } => {
                 item.capacity_revision != Some(capacity_revision)
             }
             TwinDocPreparationStage::PreparingSource { .. }
-            | TwinDocPreparationStage::PreparingPersistentSource { .. }
+            | TwinDocPreparationStage::PreparingStageInput { .. }
             | TwinDocPreparationStage::Finished
             | TwinDocPreparationStage::Failed => false,
         })
@@ -441,11 +427,9 @@ impl PendingTwinDocs {
             .iter()
             .filter_map(|item| match item.stage {
                 TwinDocPreparationStage::PreparingSource { operation }
-                | TwinDocPreparationStage::PreparingPersistentSource { operation, .. } => {
-                    Some(operation)
-                }
+                | TwinDocPreparationStage::PreparingStageInput { operation, .. } => Some(operation),
                 TwinDocPreparationStage::AwaitingSource
-                | TwinDocPreparationStage::AwaitingPersistentSource { .. }
+                | TwinDocPreparationStage::AwaitingStageInput { .. }
                 | TwinDocPreparationStage::Finished
                 | TwinDocPreparationStage::Failed => None,
             })
@@ -468,6 +452,7 @@ impl PendingTwinDocs {
 /// the openusd change sink fires and `project_stage_changes` instantiates the
 /// composed subtree — no whole-scene reload.
 struct RefSpawn {
+    edit_target: lunco_usd_document::document::LayerId,
     /// Stable identity for this reference admission operation.
     progress_key: SimulationProgressKey,
     /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
@@ -1362,6 +1347,7 @@ pub(crate) fn drain_pending_twin_docs(
     mut backed: ResMut<DocBackedTwinScenes>,
     wake: Res<TwinProjectionWake>,
     sources: Res<Assets<UsdSourceBytes>>,
+    asset_server: Res<AssetServer>,
     twin_roots: Res<TwinRoots>,
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     runtime_saves: Res<lunco_usd_bevy_runtime_persistence::RuntimeSaveJobs>,
@@ -1485,7 +1471,7 @@ pub(crate) fn drain_pending_twin_docs(
                     };
                     backed.track(doc, item.twin, item.name.clone(), item.rel.clone());
                     item.doc = Some(doc);
-                    item.stage = TwinDocPreparationStage::AwaitingPersistentSource {
+                    item.stage = TwinDocPreparationStage::AwaitingStageInput {
                         doc,
                         generation: host.document().generation(),
                     };
@@ -1501,12 +1487,12 @@ pub(crate) fn drain_pending_twin_docs(
                 }
             },
             (
-                TwinDocPreparationStage::PreparingPersistentSource {
+                TwinDocPreparationStage::PreparingStageInput {
                     operation,
                     doc,
                     generation,
                 },
-                TwinDocCompletionResult::PersistentSource(result),
+                TwinDocCompletionResult::StageInput(result),
             ) if *operation == completion.operation => {
                 let (doc, generation) = (*doc, *generation);
                 let Some(current_generation) =
@@ -1522,34 +1508,34 @@ pub(crate) fn drain_pending_twin_docs(
                     continue;
                 };
                 if current_generation != generation {
-                    item.stage = TwinDocPreparationStage::AwaitingPersistentSource {
+                    item.stage = TwinDocPreparationStage::AwaitingStageInput {
                         doc,
                         generation: current_generation,
                     };
                     continue;
                 }
                 let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
-                let composed = match result {
-                    Ok(composed) => composed,
+                let input = match result {
+                    Ok(input) => input,
                     Err(error) => {
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
                             &twin_path,
-                            format!("persistent USD source serialization failed: {error}"),
+                            format!("native USD layer preparation failed: {error}"),
                         );
                         item.stage = TwinDocPreparationStage::Failed;
                         continue;
                     }
                 };
                 if let Err(error) =
-                    twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()))
+                    backed.publish_stage_input(doc, &twin_roots, &asset_server, input)
                 {
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
                         &twin_path,
-                        format!("could not publish the composed Twin source: {error}"),
+                        error,
                     );
                     item.stage = TwinDocPreparationStage::Failed;
                     continue;
@@ -1557,7 +1543,7 @@ pub(crate) fn drain_pending_twin_docs(
                 wake.wake();
                 backed.mark_initial_projection(doc, generation);
                 info!(
-                    "[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed"
+                    "[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting native layers"
                 );
                 commands.trigger(LoadScene {
                     path: twin_path,
@@ -1675,7 +1661,7 @@ pub(crate) fn drain_pending_twin_docs(
                 }
                 still.push(item);
             }
-            TwinDocPreparationStage::AwaitingPersistentSource { doc, generation: _ } => {
+            TwinDocPreparationStage::AwaitingStageInput { doc, generation: _ } => {
                 if item.capacity_revision == Some(capacity_revision) {
                     still.push(item);
                     continue;
@@ -1693,6 +1679,7 @@ pub(crate) fn drain_pending_twin_docs(
                 };
                 let generation = host.document().generation();
                 let snapshot = host.document().clone();
+                let root_id = twin_path.clone();
                 let Some(operation) = pending.allocate_operation() else {
                     report_twin_doc_load_failed(
                         &mut empty_reason,
@@ -1709,23 +1696,21 @@ pub(crate) fn drain_pending_twin_docs(
                 let job = move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         snapshot
-                            .persistent_composed_source()
+                            .capture_stage_input(&root_id, false)
                             .map_err(|error| error.to_string())
                     }))
-                    .unwrap_or_else(|_| {
-                        Err("persistent USD source serializer panicked".to_owned())
-                    });
+                    .unwrap_or_else(|_| Err("native USD layer preparation panicked".to_owned()));
                     completions
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(TwinDocCompletion {
                             operation,
-                            result: TwinDocCompletionResult::PersistentSource(result),
+                            result: TwinDocCompletionResult::StageInput(result),
                         });
                 };
                 match admission.submit(AsyncWorkPriority::SimulationRequired, key, job) {
                     Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
-                        item.stage = TwinDocPreparationStage::PreparingPersistentSource {
+                        item.stage = TwinDocPreparationStage::PreparingStageInput {
                             operation,
                             doc,
                             generation,
@@ -1736,7 +1721,7 @@ pub(crate) fn drain_pending_twin_docs(
                     Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
                         item.capacity_revision = Some(capacity_revision);
                         item.stage =
-                            TwinDocPreparationStage::AwaitingPersistentSource { doc, generation };
+                            TwinDocPreparationStage::AwaitingStageInput { doc, generation };
                     }
                     Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
                         report_twin_doc_load_failed(
@@ -1753,7 +1738,7 @@ pub(crate) fn drain_pending_twin_docs(
             TwinDocPreparationStage::Finished => {}
             TwinDocPreparationStage::Failed => still.push(item),
             TwinDocPreparationStage::PreparingSource { .. }
-            | TwinDocPreparationStage::PreparingPersistentSource { .. } => still.push(item),
+            | TwinDocPreparationStage::PreparingStageInput { .. } => still.push(item),
         }
     }
     pending.items.extend(still);
@@ -1766,11 +1751,9 @@ impl PendingTwinDoc {
     fn operation(&self) -> Option<u64> {
         match self.stage {
             TwinDocPreparationStage::PreparingSource { operation }
-            | TwinDocPreparationStage::PreparingPersistentSource { operation, .. } => {
-                Some(operation)
-            }
+            | TwinDocPreparationStage::PreparingStageInput { operation, .. } => Some(operation),
             TwinDocPreparationStage::AwaitingSource
-            | TwinDocPreparationStage::AwaitingPersistentSource { .. }
+            | TwinDocPreparationStage::AwaitingStageInput { .. }
             | TwinDocPreparationStage::Finished
             | TwinDocPreparationStage::Failed => None,
         }
@@ -1792,7 +1775,7 @@ fn twin_usd_work_key(item: &PendingTwinDoc, source_revision: u64, operation: u64
 /// lifecycle events; it does not poll every frame. Durable runtime-layer I/O
 /// is owned separately by the asynchronous persistence plugin. Drops entries
 /// whose document has closed.
-/// Publish an already-serialized persistent source into the in-memory Twin
+/// Publish the document's native input under its admitted Twin
 /// asset overlay for the next stage mount. Default Twin startup prepares that
 /// source on the worker pool before calling this path; editor-preview initial
 /// snapshots remain event-driven. Ordinary edits use typed incremental
@@ -1805,24 +1788,30 @@ fn write_twin_overlay(
     generation: u64,
 ) -> bool {
     let _span = bevy::log::info_span!("usd_twin_overlay_serialize_publish").entered();
-    let source = world
+    let root_id = lunco_assets_core::twin_uri(name, rel);
+    let input = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
-        .map(|h| h.document().persistent_composed_source());
-    let Some(source) = source else { return false };
-    let source = match source {
-        Ok(source) => source,
+        .ok_or_else(|| format!("document {doc} is not open"))
+        .and_then(|host| {
+            host.document()
+                .capture_stage_input(&root_id, false)
+                .map_err(|error| error.to_string())
+        });
+    let input = match input {
+        Ok(input) => input,
         Err(error) => {
-            warn!("[usd-e1b] cannot serialize persistent source for document {doc}: {error}");
+            warn!("[usd-e1b] {error}");
             return false;
         }
     };
-    if let Err(error) =
-        world
-            .resource::<TwinRoots>()
-            .set_overlay(name, rel, Arc::new(source.into_bytes()))
-    {
-        warn!("[usd-e1b] could not publish persistent source for document {doc}: {error}");
+    let roots = world.resource::<TwinRoots>().clone();
+    let server = world.resource::<AssetServer>().clone();
+    let result = world
+        .resource_mut::<DocBackedTwinScenes>()
+        .publish_stage_input(doc, &roots, &server, input);
+    if let Err(error) = result {
+        warn!("[usd-e1b] {error}");
         return false;
     }
     world
@@ -2059,31 +2048,12 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let _delta_span =
             bevy::log::info_span!("usd_twin_projection_commit_document_delta").entered();
         match pending_ops {
-            // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
-            // removal / composition arc — no incremental stage-author yet,
-            // and whole-source undo may change surviving prims' values): rebuild the
-            // stage from composed_source + the already-loaded closure. The
-            // next mount rebuilds its in-memory Twin overlay from the
-            // document's persistent source.
+            // A journal gap requires the complete native authored stack;
+            // its admitted dependency closure preserves source identities.
             None => {
                 let _span =
                     bevy::log::info_span!("usd_twin_projection_rebuild_history_gap").entered();
-                let cs = match world
-                    .resource::<DocumentRegistry<UsdDocument>>()
-                    .host(doc)
-                    .ok_or_else(|| format!("USD document {doc} is no longer open"))
-                    .and_then(|host| {
-                        host.document()
-                            .composed_source()
-                            .map_err(|error| error.to_string())
-                    }) {
-                    Ok(source) => source,
-                    Err(error) => {
-                        error!("[usd] refusing document projection: {error}");
-                        continue;
-                    }
-                };
-                if !rebuild_scene_from_composed(world, scene_id, &cs) {
+                if !rebuild_scene_from_document(world, scene_id, doc) {
                     continue;
                 }
             }
@@ -2099,22 +2069,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     // incomplete composition.
                     continue;
                 }
-                let cs = match world
-                    .resource::<DocumentRegistry<UsdDocument>>()
-                    .host(doc)
-                    .ok_or_else(|| format!("USD document {doc} is no longer open"))
-                    .and_then(|host| {
-                        host.document()
-                            .composed_source()
-                            .map_err(|error| error.to_string())
-                    }) {
-                    Ok(source) => source,
-                    Err(error) => {
-                        error!("[usd] refusing document projection: {error}");
-                        continue;
-                    }
-                };
-                if !rebuild_scene_from_composed(world, scene_id, &cs) {
+                if !rebuild_scene_from_document(world, scene_id, doc) {
                     continue;
                 }
             }
@@ -2950,22 +2905,6 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         continue;
                     }
                 };
-                {
-                    let _span =
-                        bevy::log::info_span!("usd_twin_projection_dependent_reset_prepare")
-                            .entered();
-                    if !prepare_stage_projection_reset(world, completion.stage) {
-                        retain_dependent_stage_plan_failure(
-                            world,
-                            completion.stage,
-                            pending_refresh,
-                            "dependent stage reset could not prepare its live projection"
-                                .to_owned(),
-                        );
-                        continue;
-                    }
-                }
-
                 let replaced = world
                     .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
                     .is_some_and(|mut stages| {
@@ -2992,10 +2931,6 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                             stages.mark_prepared_plan_snapshot(completion.stage, projection_plan);
                         }
                     }
-                    let _span =
-                        bevy::log::info_span!("usd_twin_projection_dependent_visual_refresh")
-                            .entered();
-                    refresh_scene_visuals_prepared(world, completion.stage);
                 } else {
                     let error =
                         "dependent stage plan was ready but its canonical stage could not be replaced"
@@ -3896,6 +3831,7 @@ fn report_instance_promotion_failure(
 fn document_projection_source(
     world: &World,
     scene_id: AssetId<UsdStageAsset>,
+    edit_target: &lunco_usd_document::document::LayerId,
 ) -> Result<Arc<openusd::sdf::Data>, String> {
     let document = world
         .get_resource::<DocBackedTwinScenes>()
@@ -3912,12 +3848,60 @@ fn document_projection_source(
             "live property projection has invalid document source: {error}"
         ));
     }
-    Ok(document.document().composed_arc())
+    document
+        .document()
+        .authored_layer(edit_target)
+        .map_err(|error| error.to_string())
 }
 
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     let _span = bevy::log::info_span!("usd_twin_projection_apply_incremental_op").entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
+
+    let native_stage = world
+        .get_non_send::<CanonicalStages>()
+        .and_then(|stages| stages.get(scene_id))
+        .map(|stage| stage.stage().clone());
+    let _edit_context = match native_stage.as_ref() {
+        Some(stage) => {
+            let root_id = stage.root_layer().identifier().to_owned();
+            let ids = lunco_usd_authoring::author::DocumentLayerIds::for_root(&root_id);
+            let target = op.edit_target();
+            let identifier = if target.is_root() {
+                ids.base
+            } else if target.is_runtime() {
+                ids.runtime
+            } else if target.is_view() {
+                ids.view
+            } else {
+                report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("unknown USD projection target {}", target.as_str()),
+                );
+                return;
+            };
+            match stage.edit_context(openusd::usd::EditTarget::for_layer(identifier)) {
+                Ok(context) => Some(context),
+                Err(error) => {
+                    report_stage_projection_reset_failure(
+                        world,
+                        scene_id,
+                        format!("native document edit target unavailable: {error}"),
+                    );
+                    return;
+                }
+            }
+        }
+        None => {
+            report_stage_projection_reset_failure(
+                world,
+                scene_id,
+                "native stage missing for document projection".to_owned(),
+            );
+            return;
+        }
+    };
 
     // A referenced AddPrim may be waiting on its asset closure. Preserve every
     // later edit whose owner is inside that not-yet-live subtree; otherwise a
@@ -4185,7 +4169,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
                 .map(|stage| {
-                    let source = document_projection_source(world, scene_id)?;
+                    let source = document_projection_source(world, scene_id, op.edit_target())?;
                     stage
                         .projector()
                         .reconcile_document_property(&sp, name, &source)
@@ -4315,6 +4299,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 type_name.clone(),
                 reference.clone(),
                 reference_prim_path.clone(),
+                op.edit_target().clone(),
             );
         }
         UsdOp::RemovePrim { path, .. } => {
@@ -4359,7 +4344,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
                 .map(|stage| {
-                    let source = document_projection_source(world, scene_id)?;
+                    let source = document_projection_source(world, scene_id, op.edit_target())?;
                     stage
                         .projector()
                         .reconcile_document_property(&sp, name, &source)
@@ -4426,7 +4411,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
                 .map(|stage| {
-                    let source = document_projection_source(world, scene_id)?;
+                    let source = document_projection_source(world, scene_id, op.edit_target())?;
                     stage
                         .projector()
                         .reconcile_document_property(&sp, name, &source)
@@ -4639,6 +4624,7 @@ fn spawn_prim_op(
     type_name: Option<String>,
     reference: Option<String>,
     reference_prim_path: Option<String>,
+    edit_target: lunco_usd_document::document::LayerId,
 ) {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
@@ -4663,6 +4649,32 @@ fn spawn_prim_op(
         }
         return;
     };
+
+    if asset_path.is_empty() {
+        let result = openusd::sdf::Path::new(prim_path)
+            .map_err(|error| error.to_string())
+            .and_then(|path| {
+                let stages = world
+                    .get_non_send::<CanonicalStages>()
+                    .ok_or_else(|| "native stage registry missing".to_owned())?;
+                let stage = stages
+                    .get(scene_id)
+                    .ok_or_else(|| "native stage missing for internal reference".to_owned())?;
+                stage
+                    .projector()
+                    .author_referenced_prim(
+                        &path,
+                        type_name.as_deref(),
+                        "",
+                        reference_prim_path.as_deref(),
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = result {
+            report_stage_projection_reset_failure(world, scene_id, error);
+        }
+        return;
+    }
 
     let Some(progress_key) = world
         .resource_mut::<PendingRefSpawns>()
@@ -4699,6 +4711,7 @@ fn spawn_prim_op(
             type_name,
             &asset_path,
             reference_prim_path,
+            edit_target.clone(),
             detail.clone(),
         );
         item.held = report_reference_failure(
@@ -4727,6 +4740,7 @@ fn spawn_prim_op(
                 type_name,
                 &asset_path,
                 reference_prim_path,
+                edit_target.clone(),
                 detail.to_owned(),
             );
             item.held = report_reference_failure(
@@ -4779,6 +4793,7 @@ fn spawn_prim_op(
                 type_name,
                 &asset_path,
                 reference_prim_path,
+                edit_target.clone(),
                 detail.clone(),
             );
             item.held = report_reference_failure(
@@ -4799,6 +4814,7 @@ fn spawn_prim_op(
     enqueue_reference_spawn(
         world,
         RefSpawn {
+            edit_target: edit_target.clone(),
             progress_key,
             scene_id,
             prim_path: prim_path.to_string(),
@@ -4825,9 +4841,11 @@ fn failed_ref_spawn(
     type_name: Option<String>,
     asset_path: &str,
     reference_prim_path: Option<String>,
+    edit_target: lunco_usd_document::document::LayerId,
     detail: String,
 ) -> RefSpawn {
     RefSpawn {
+        edit_target,
         progress_key,
         scene_id,
         prim_path: prim_path.to_owned(),
@@ -5093,19 +5111,13 @@ fn edit_confined_to_exempt_subtree(
     })
 }
 
-/// Rebuild the scene's live `CanonicalStage` from the composed document source
-/// (`base ⊕ runtime`) plus the resolver's already-loaded layer closure, then
-/// re-instantiate the scene — the coarse whole-source path (Save-As / MovePrim /
-/// whole-source undo). A rebuild picks up attribute-value changes on surviving
-/// prims too, so undoing a `SetAttribute` (which inverts to a `ReplaceSource`)
-/// actually reverts the material/param in the live world. References that were
-/// already loaded recompose from the byte snapshot with no re-fetch; a brand-new
-/// reference introduced by the edit (rare) would fail to resolve — logged by
-/// `CanonicalStages::rebuild`.
-fn rebuild_scene_from_composed(
+/// Replace the live stage with the document's exact native authored stack and
+/// admitted dependency closure. The replacement's root notice owns address
+/// admission and ECS projection before document synchronization completes.
+fn rebuild_scene_from_document(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,
-    composed_source: &str,
+    doc: DocumentId,
 ) -> bool {
     use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
     let snapshot = {
@@ -5120,11 +5132,20 @@ fn rebuild_scene_from_composed(
     };
     let replacement = match {
         let _span = bevy::log::info_span!("usd_twin_rebuild_prepare_live_stage").entered();
-        snapshot.and_then(|mut recipe| {
-            let data = lunco_usd_authoring::author::usda_to_data(composed_source)?;
-            let bytes = lunco_usd_authoring::author::layer_bytes(&recipe.root_id, &data)?;
-            recipe.bytes.insert(recipe.root_id.clone(), bytes);
-            CanonicalStage::from_recipe(&recipe)
+        snapshot.and_then(|recipe| {
+            let document = world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .ok_or_else(|| {
+                    std::io::Error::other(format!("document {doc} closed before native rebuild"))
+                })?;
+            let input = lunco_usd_authoring::author::document_stage_recipe(
+                document.document().data(),
+                document.document().runtime_data(),
+                document.document().view_data(),
+                Some(&recipe),
+            )?;
+            CanonicalStage::from_recipe(&input)
         })
     } {
         Ok(stage) => stage,
@@ -5132,18 +5153,11 @@ fn rebuild_scene_from_composed(
             report_stage_projection_reset_failure(
                 world,
                 scene_id,
-                format!("edited composed source could not rebuild the live stage: {error}"),
+                format!("native document stack could not rebuild the live stage: {error}"),
             );
             return false;
         }
     };
-    let reset_ready = {
-        let _span = bevy::log::info_span!("usd_twin_rebuild_prepare_world_reset").entered();
-        prepare_stage_projection_reset(world, scene_id)
-    };
-    if !reset_ready {
-        return false;
-    }
     let rebuilt = {
         let _span = bevy::log::info_span!("usd_twin_rebuild_commit_live_stage").entered();
         if let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() {
@@ -5154,14 +5168,14 @@ fn rebuild_scene_from_composed(
         }
     };
     if rebuilt {
-        // Fresh stage (new, empty sink) — re-instantiate every scene root off it.
-        let _span = bevy::log::info_span!("usd_twin_rebuild_refresh_scene_visuals").entered();
-        refresh_scene_visuals_prepared(world, scene_id)
+        // The replacement's root notice enters native address admission before
+        // the live consumer resets and reprojects stage-owned ECS state.
+        true
     } else {
         report_stage_projection_reset_failure(
             world,
             scene_id,
-            "prepared composed source could not replace the canonical stage".to_owned(),
+            "prepared native document stack could not replace the canonical stage".to_owned(),
         );
         false
     }
@@ -5724,51 +5738,68 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
-        let stage_result = {
-            let _span = bevy::log::info_span!(
-                "usd_reference_layer_closure_merge",
-                layer_count = recipe.bytes.len(),
-            )
-            .entered();
-            let prepared_paths = prepared_native
-                .as_ref()
-                .and_then(|prepared| prepared.snapshot.plan.native_asset_paths_snapshot());
-            match world.get_non_send_mut::<CanonicalStages>() {
-                Some(mut stages) => match stages.get_mut(item.scene_id) {
-                    Some(cs) => {
-                        let preparation = if let Some(paths) = prepared_paths {
-                            let mut paths_for_stage = cs
-                                .cached_native_asset_paths()
-                                .map(|current| current.as_ref().clone())
-                                .unwrap_or_else(|| paths.as_ref().clone());
-                            paths_for_stage
-                                .merge(paths.as_ref().clone())
-                                .map(|()| cs.set_native_asset_paths(Arc::new(paths_for_stage)))
-                                .map_err(|error| error.to_string())
-                        } else {
-                            Ok(())
-                        };
-                        if let Err(error) = preparation {
-                            Some(Err(format!(
-                                "native reference preparation owner mismatch: {error}"
-                            )))
-                        } else if !cs.add_reference_snapshot(&reference_snapshot) {
-                            Some(Err(
-                                "the owning stage cannot accept referenced layer bytes".to_owned()
-                            ))
-                        } else {
-                            let _author_span =
-                                bevy::log::info_span!("usd_reference_root_author").entered();
-                            let result = if let Some((snapshot_usda, sibling_order)) =
-                                root_restore.as_ref()
-                            {
-                                cs.projector()
+        let stage_result =
+            {
+                let _span = bevy::log::info_span!(
+                    "usd_reference_layer_closure_merge",
+                    layer_count = recipe.bytes.len(),
+                )
+                .entered();
+                let prepared_paths = prepared_native
+                    .as_ref()
+                    .and_then(|prepared| prepared.snapshot.plan.native_asset_paths_snapshot());
+                match world.get_non_send_mut::<CanonicalStages>() {
+                    Some(mut stages) => match stages.get_mut(item.scene_id) {
+                        Some(cs) => {
+                            let preparation = if let Some(paths) = prepared_paths {
+                                let mut paths_for_stage = cs
+                                    .cached_native_asset_paths()
+                                    .map(|current| current.as_ref().clone())
+                                    .unwrap_or_else(|| paths.as_ref().clone());
+                                paths_for_stage
+                                    .merge(paths.as_ref().clone())
+                                    .map(|()| cs.set_native_asset_paths(Arc::new(paths_for_stage)))
+                                    .map_err(|error| error.to_string())
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(error) = preparation {
+                                Some(Err(format!(
+                                    "native reference preparation owner mismatch: {error}"
+                                )))
+                            } else if !cs.add_reference_snapshot(&reference_snapshot) {
+                                Some(Err("the owning stage cannot accept referenced layer bytes"
+                                    .to_owned()))
+                            } else {
+                                let ids = lunco_usd_authoring::author::DocumentLayerIds::for_root(
+                                    &cs.scene_layer,
+                                );
+                                let identifier = if item.edit_target.is_root() {
+                                    ids.base
+                                } else if item.edit_target.is_runtime() {
+                                    ids.runtime
+                                } else {
+                                    ids.view
+                                };
+                                let context = cs
+                                    .stage()
+                                    .edit_context(openusd::usd::EditTarget::for_layer(identifier));
+                                Some(context.map_err(|error| error.to_string()).and_then(
+                                    |_context| {
+                                        let _author_span =
+                                            bevy::log::info_span!("usd_reference_root_author")
+                                                .entered();
+                                        let result =
+                                            if let Some((snapshot_usda, sibling_order)) =
+                                                root_restore.as_ref()
+                                            {
+                                                cs.projector()
                                     .restore_prim_subtree(&sp, snapshot_usda, sibling_order)
                                     .map_err(|error| {
                                         format!("failed to restore the prim subtree: {error}")
                                     })
-                            } else if authoritative && compose_reference {
-                                cs.projector()
+                                            } else if authoritative && compose_reference {
+                                                cs.projector()
                                     .author_referenced_prim(
                                         &sp,
                                         item.type_name.as_deref(),
@@ -5778,14 +5809,14 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                                     .map_err(|error| {
                                         format!("failed to author the reference: {error}")
                                     })
-                            } else if authoritative {
-                                cs.projector()
+                                            } else if authoritative {
+                                                cs.projector()
                                     .author_prim(&sp, item.type_name.as_deref())
                                     .map_err(|error| {
                                         format!("failed to author the instance root: {error}")
                                     })
-                            } else {
-                                cs.projector()
+                                            } else {
+                                                cs.projector()
                                     .author_referenced_prim(
                                         &sp,
                                         item.type_name.as_deref(),
@@ -5795,8 +5826,8 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                                     .map_err(|error| {
                                         format!("failed to author the reference: {error}")
                                     })
-                            };
-                            Some(result.and_then(|()| {
+                                            };
+                                        result.and_then(|()| {
                                 let translate =
                                     root_restore.is_none().then_some(item.translate).flatten();
                                 if let Some(translate) = translate {
@@ -5807,14 +5838,16 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                                     )?;
                                 }
                                 Ok(translate.is_some())
-                            }))
+                            })
+                                    },
+                                ))
+                            }
                         }
-                    }
+                        None => None,
+                    },
                     None => None,
-                },
-                None => None,
-            }
-        };
+                }
+            };
         let translated = match stage_result {
             None => {
                 fail_reference_spawn(
@@ -6662,6 +6695,7 @@ mod tests {
             Some("Xform".to_owned()),
             asset,
             None,
+            LayerId::root(),
             detail.to_owned(),
         );
         item.held = report_reference_failure(&mut world, key, scene_id, path, asset, detail);
@@ -6800,6 +6834,7 @@ mod tests {
             .allocate_progress_key()
             .expect("successor reference operation identity");
         let make_spawn = |progress_key, prim_path: &str, asset_path: &str, ref_handle| RefSpawn {
+            edit_target: lunco_usd_document::document::LayerId::root(),
             progress_key,
             scene_id,
             prim_path: prim_path.to_owned(),
@@ -7014,6 +7049,7 @@ mod tests {
             .expect("reference operation identity");
         app.world_mut().resource_mut::<PendingRefSpawns>().push(
             RefSpawn {
+                edit_target: lunco_usd_document::document::LayerId::root(),
                 progress_key,
                 scene_id,
                 prim_path: "/World/Vehicle".to_owned(),
@@ -7141,6 +7177,7 @@ mod tests {
             .resource_mut::<PendingRefSpawns>()
             .items
             .push(RefSpawn {
+                edit_target: lunco_usd_document::document::LayerId::root(),
                 progress_key: reference_key,
                 scene_id: stage_id,
                 prim_path: "/World/Route/W5".into(),
@@ -7243,6 +7280,7 @@ mod tests {
             .resource_mut::<PendingRefSpawns>()
             .items
             .push(RefSpawn {
+                edit_target: lunco_usd_document::document::LayerId::root(),
                 progress_key: unrelated_reference_key,
                 scene_id: stage_id,
                 prim_path: "/World/Rover".into(),
@@ -7378,6 +7416,7 @@ mod tests {
                 .expect("second reference operation identity");
             let make_spawn =
                 |progress_key, prim_path: &str, asset_path: &str, ref_handle| RefSpawn {
+                    edit_target: lunco_usd_document::document::LayerId::root(),
                     progress_key,
                     scene_id,
                     prim_path: prim_path.to_owned(),
@@ -7557,43 +7596,6 @@ mod tests {
                 .len(),
             1,
             "the owning document still receives a visible diagnostic"
-        );
-    }
-
-    /// The bytes pushed into the overlay are the document's *composed* source —
-    /// so a runtime-layer spawn rides into the live world's composition.
-    #[test]
-    fn composed_source_overlay_carries_runtime_spawn() {
-        let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let abs = PathBuf::from("/twins/moonbase/scene.usda");
-        let (doc, _) = registry.open_file(abs, TINY.to_string());
-        registry
-            .host_mut(doc)
-            .unwrap()
-            .document_mut()
-            .apply(UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
-                parent_path: "/World".into(),
-                name: "rover_1".into(),
-                type_name: Some("Xform".into()),
-                reference: Some("lunco://vessels/rovers/skid_rover.usda".into()),
-                reference_prim_path: None,
-            })
-            .unwrap();
-
-        let composed = registry
-            .host(doc)
-            .unwrap()
-            .document()
-            .composed_source()
-            .unwrap();
-        assert!(
-            composed.contains("rover_1"),
-            "overlay bytes carry the runtime spawn:\n{composed}"
-        );
-        assert!(
-            composed.contains("@lunco://vessels/rovers/skid_rover.usda@"),
-            "and its asset reference (resolved by the async loader at the twin:// anchor)"
         );
     }
 }

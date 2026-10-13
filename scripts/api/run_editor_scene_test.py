@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -20,17 +19,6 @@ def tail(path: Path, lines: int = 20) -> str:
         return ""
 
 
-def scene_root(scene: str) -> str:
-    scene_path = Path(scene)
-    if not scene_path.is_absolute():
-        scene_path = ROOT / "assets" / scene_path
-    source = scene_path.read_text(encoding="utf-8")
-    match = re.search(r'\bdefaultPrim\s*=\s*"([^"]+)"', source)
-    if match is None:
-        raise RuntimeError(f"editor test scene has no defaultPrim: {scene_path}")
-    return match.group(1)
-
-
 def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> None:
     """Require the requested fixture root in the mounted live USD stage."""
     deadline = time.monotonic() + timeout
@@ -38,8 +26,7 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
     if not scene_path.is_absolute():
         scene_path = ROOT / "assets" / scene_path
     expected_path = scene_path.resolve()
-    root = scene_root(scene)
-    path = f"/{root}"
+    path = "<unresolved defaultPrim>"
     last_error = "no query result"
     while time.monotonic() < deadline:
         try:
@@ -66,6 +53,18 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
                 if fixture_doc_id is None:
                     last_error = f"fixture document is not open: {expected_path}"
                 else:
+                    inspection = session.post({
+                        "type": "ExecuteCommand",
+                        "command": "InspectUsdDocument",
+                        "params": {"doc_id": fixture_doc_id},
+                    })
+                    if inspection.get("error"):
+                        raise RuntimeError(str(inspection["error"]))
+                    metadata = inspection["data"]["metadata"]["defaultPrim"]["composed"]
+                    root = metadata.get("value")
+                    if not metadata.get("present") or not isinstance(root, str) or not root:
+                        raise RuntimeError(f"fixture has no valid composed defaultPrim: {metadata!r}")
+                    path = f"/{root}"
                     response = session.post({
                         "type": "ExecuteCommand",
                         "command": "QueryUsdPrim",

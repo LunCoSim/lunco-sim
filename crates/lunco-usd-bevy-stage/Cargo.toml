@@ -8,6 +8,7 @@ description = "Composed OpenUSD stage reader and immutable projection plans"
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
 anyhow = { workspace = true }
+serde = { workspace = true }
 openusd = { workspace = true }
 openusd-schemas = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }

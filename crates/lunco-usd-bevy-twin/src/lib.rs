@@ -1,10 +1,11 @@
 //! Render-free Twin-backed USD projection state for Bevy hosts.
 //!
 //! This package owns the identity and lifetime seam between a document in the
-//! document registry and a `twin://` USD stage asset. It does not load stages,
-//! compose layers, or project entities. Those runtime mechanisms remain in
-//! `lunco-usd-bevy-runtime-core`; UI packages consume this contract without
-//! importing that runtime package's visual adapters.
+//! document registry and a `twin://` USD stage asset. It publishes immutable native
+//! layer inputs and retains their asset handles for the projection lease.
+//! Decoding and composition belong to `lunco-usd-bevy-stage`; entity projection
+//! belongs to `lunco-usd-bevy-runtime-core`. UI packages consume this contract
+//! without importing runtime visual adapters.
 
 use lunco_workspace::TwinId;
 use std::collections::{HashMap, HashSet};
@@ -45,6 +46,8 @@ struct TwinSceneRef {
     applied_view_generation: Option<u64>,
     synced_generation: Option<u64>,
     stage_id: Option<AssetId<UsdStageAsset>>,
+    source_stage: Option<Handle<UsdStageAsset>>,
+    source_input: Option<lunco_usd_bevy_stage::asset::DocumentStageInputOwner>,
     overlay_synced_generation: Option<u64>,
 }
 
@@ -61,6 +64,72 @@ pub struct DocBackedTwinScenes {
 }
 
 impl DocBackedTwinScenes {
+    /// Publish one native source snapshot under its admitted document lease.
+    /// Layer decoding and composition remain owned by the stage asset loader.
+    pub fn publish_stage_input(
+        &mut self,
+        doc: DocumentId,
+        roots: &lunco_assets_core::TwinRoots,
+        server: &AssetServer,
+        input: lunco_usd_document::document::DocumentStageInput,
+    ) -> Result<(), String> {
+        let (name, rel) = self
+            .coords_of(doc)
+            .ok_or_else(|| format!("document {doc} has no projection lease"))?;
+        let root_id = lunco_assets_core::twin_uri(&name, &rel);
+        if input.recipe.root_id != root_id {
+            return Err(format!(
+                "document input root {} does not match {root_id}",
+                input.recipe.root_id
+            ));
+        }
+        roots
+            .set_overlay(&name, &rel, input.root_bytes)
+            .map_err(|error| error.to_string())?;
+        if let Some(owner) = self.source_input(doc) {
+            return owner
+                .publish(input.recipe)
+                .map_err(|error| error.to_string());
+        }
+        let path = lunco_assets_core::asset_path::load_asset_path(&root_id, None, None, None)
+            .map_err(|error| error.to_string())?;
+        let owner = lunco_usd_bevy_stage::asset::DocumentStageInputOwner::new(input.recipe);
+        let reader = owner.reader();
+        let handle = server
+            .load_builder()
+            .with_settings(
+                move |settings: &mut lunco_usd_bevy_stage::asset::UsdStageLoadSettings| {
+                    settings.document_input = Some(reader.clone());
+                },
+            )
+            .load::<UsdStageAsset>(path);
+        self.retain_source_stage(doc, handle, owner)
+    }
+    /// Retain the stage admitted with this document's explicit native inputs.
+    /// Scene roots and source reloads share the same typed asset handle.
+    pub fn retain_source_stage(
+        &mut self,
+        doc: DocumentId,
+        handle: Handle<UsdStageAsset>,
+        input: lunco_usd_bevy_stage::asset::DocumentStageInputOwner,
+    ) -> Result<(), String> {
+        let scene = self
+            .map
+            .get_mut(&doc)
+            .ok_or_else(|| format!("document {doc} has no projection lease"))?;
+        scene.stage_id = Some(handle.id());
+        scene.source_stage = Some(handle);
+        scene.source_input = Some(input);
+        Ok(())
+    }
+
+    /// Current native input owner for this document projection lease.
+    pub fn source_input(
+        &self,
+        doc: DocumentId,
+    ) -> Option<&lunco_usd_bevy_stage::asset::DocumentStageInputOwner> {
+        self.map.get(&doc)?.source_input.as_ref()
+    }
     /// Return the document backing `twin://<name>/<rel>`, if any.
     pub fn doc_for(&self, name: &str, rel: &str) -> Option<DocumentId> {
         self.map
@@ -246,6 +315,8 @@ impl DocBackedTwinScenes {
                 applied_view_generation: None,
                 synced_generation: None,
                 stage_id: None,
+                source_stage: None,
+                source_input: None,
                 overlay_synced_generation: None,
             },
         );
@@ -253,7 +324,18 @@ impl DocBackedTwinScenes {
 
     /// Track an editor preview without assigning a workspace Twin lifetime.
     pub fn track_preview(&mut self, doc: DocumentId, name: String, rel: String) {
-        if self.map.contains_key(&doc) {
+        if let Some(scene) = self.map.get_mut(&doc) {
+            if scene.name != name || scene.rel != rel {
+                scene.name = name;
+                scene.rel = rel;
+                scene.source_input = None;
+                scene.source_stage = None;
+                scene.stage_id = None;
+                scene.applied_generation = None;
+                scene.applied_view_generation = None;
+                scene.synced_generation = None;
+                scene.overlay_synced_generation = None;
+            }
             return;
         }
         self.map.insert(
@@ -267,6 +349,8 @@ impl DocBackedTwinScenes {
                 applied_view_generation: None,
                 synced_generation: None,
                 stage_id: None,
+                source_stage: None,
+                source_input: None,
                 overlay_synced_generation: None,
             },
         );
@@ -332,6 +416,13 @@ impl DocBackedTwinScenes {
         if let Some(scene) = self.map.get_mut(&doc) {
             if scene.preview_leases > 0 {
                 scene.owners.clear();
+                scene.source_input = None;
+                scene.source_stage = None;
+                scene.stage_id = None;
+                scene.applied_generation = None;
+                scene.applied_view_generation = None;
+                scene.synced_generation = None;
+                scene.overlay_synced_generation = None;
                 return;
             }
         }

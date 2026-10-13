@@ -10736,6 +10736,7 @@ dependencies = [
  "lunco-usd-data",
  "openusd",
  "openusd-schemas",
+ "serde",
 ]
 
 [[package]]
@@ -10746,6 +10747,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-doc",
  "lunco-usd-bevy-stage",
+ "lunco-usd-document",
  "lunco-workspace",
 ]
 
@@ -11141,7 +11143,6 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-compose",
  "lunco-usd-core",
- "lunco-usd-data",
  "lunco-usd-document",
  "openusd",
 ]

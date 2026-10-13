@@ -3228,15 +3228,38 @@ fn release_preview_projection(world: &mut World, doc: DocumentId) {
     }
 }
 
-/// The `twin://` coordinates (`name`, `rel`) to load `doc` through the async
-/// twin source. Reuses the coordinates the document is already doc-backed under
-/// (a default twin scene → shared overlay + asset), else registers a synthetic
-/// per-document twin root and serves the doc's **composed** (`base ⊕ runtime`)
-/// source as a byte-overlay so the async loader composes from the editable
-/// document via storage — references resolve relative to the doc's base dir
-/// through the twin source. `None` when the document is gone.
+/// Resolve the document's mounted source identity, publish its native authored
+/// stack including view opinions, and retain that input under the preview lease.
+/// Native composition resolves references at the document's source anchor.
 fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
-    // Already doc-backed (e.g. the default twin scene)? Reuse its overlay + asset.
+    let coords = resolve_viewport_twin_coords(world, doc)?;
+    let root_id = lunco_assets_core::twin_uri(&coords.0, &coords.1);
+    let input = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(doc)?
+        .document()
+        .capture_stage_input(&root_id, true);
+    let input = match input {
+        Ok(input) => input,
+        Err(error) => {
+            report_preview_error(world, "usd-source-preparation-failed", error.to_string());
+            return None;
+        }
+    };
+    let roots = world.resource::<TwinRoots>().clone();
+    let server = world.resource::<AssetServer>().clone();
+    let mut backed = world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+    backed.track_preview(doc, coords.0.clone(), coords.1.clone());
+    let result = backed.publish_stage_input(doc, &roots, &server, input);
+    if let Err(error) = result {
+        report_preview_error(world, "usd-source-preparation-failed", error);
+        return None;
+    }
+    Some(coords)
+}
+
+fn resolve_viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
+    // An admitted document shares its source identity and native input lease.
     if let Some(coords) = world
         .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .coords_of(doc)
@@ -3259,13 +3282,6 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     let host = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)?;
-    let composed = match host.document().composed_source() {
-        Ok(source) => source,
-        Err(error) => {
-            report_preview_error(world, "usd-source-serialization-failed", error.to_string());
-            return None;
-        }
-    };
     let (base, rel) = match host.document().origin() {
         DocumentOrigin::File { path, .. } => (
             path.parent()
@@ -3276,7 +3292,7 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
                 .unwrap_or_else(|| "scene.usda".to_string()),
         ),
         // Untitled / in-memory: no external refs to resolve; a placeholder root
-        // is enough for the overlay to serve the composed source.
+        // is the document-owned transport identity for native layer input.
         _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
     };
 
@@ -3355,33 +3371,6 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
             return None;
         }
     };
-    if let Err(error) = world.resource::<TwinRoots>().set_overlay(
-        &name,
-        &rel,
-        std::sync::Arc::new(composed.into_bytes()),
-    ) {
-        world.trigger(lunco_telemetry_core::TelemetryEvent {
-            name: "twin-asset-mount-failed".into(),
-            source: 0,
-            severity: lunco_telemetry_core::Severity::Error,
-            data: lunco_telemetry_core::TelemetryValue::String(error.to_string()),
-            timestamp: 0.0,
-            sim_secs: 0.0,
-            sim_tick: 0,
-        });
-        if let Err(cleanup_error) = world.resource::<TwinRoots>().unregister_name(&name) {
-            world.trigger(lunco_telemetry_core::TelemetryEvent {
-                name: "twin-asset-unmount-failed".into(),
-                source: 0,
-                severity: lunco_telemetry_core::Severity::Error,
-                data: lunco_telemetry_core::TelemetryValue::String(cleanup_error.to_string()),
-                timestamp: 0.0,
-                sim_secs: 0.0,
-                sim_tick: 0,
-            });
-        }
-        return None;
-    }
     world
         .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .track_private_mount(doc, name.clone());

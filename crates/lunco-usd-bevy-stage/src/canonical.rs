@@ -67,10 +67,8 @@ pub struct UsdWiringDirty(pub bool);
 /// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
 pub struct CanonicalStage {
     stage: Stage,
-    /// Root (persisted) layer identifier — the scene `.usda`.
+    /// Original authored root identity; its extension selects the native codec.
     pub scene_layer: String,
-    /// Ephemeral edit-target sublayer identifier (empty until S2 inserts it).
-    pub runtime_layer: String,
     /// Sink inbox drained by the projection system each tick.
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
     /// Layers changed since admission. Unedited binary layers retain their
@@ -96,6 +94,8 @@ pub struct CanonicalStage {
     reference_recipes: HashMap<String, ReferenceRecipe>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
+    /// A replacement's queued root notice belongs to its committed generation.
+    replacement_notice_pending: bool,
     /// Prepared snapshot known to describe this live stage at the recorded
     /// generation. Any later live edit makes the snapshot stale by advancing
     /// `generation`.
@@ -166,7 +166,6 @@ impl CanonicalStage {
         Self {
             stage,
             scene_layer: scene_layer.into(),
-            runtime_layer: String::new(),
             inbox,
             modified_layers,
             _sink_id: sink_id,
@@ -176,6 +175,7 @@ impl CanonicalStage {
             resolver_revision: std::cell::Cell::new(0),
             reference_recipes: HashMap::new(),
             generation: 0,
+            replacement_notice_pending: false,
             prepared_plan: None,
             native_paths: None,
             native_paths_generation: 0,
@@ -224,6 +224,11 @@ impl CanonicalStage {
     /// Whether native address preparation still holds this projection revision.
     pub fn native_asset_paths_ready(&self) -> bool {
         !self.native_paths_pending
+    }
+
+    /// A committed replacement still awaits its root projection notice.
+    pub fn root_projection_pending(&self) -> bool {
+        self.replacement_notice_pending
     }
 
     pub fn set_native_asset_paths(
@@ -388,7 +393,7 @@ impl CanonicalStage {
     ) -> anyhow::Result<()> {
         let property = path.append_property(name)?;
         self.patch_layer(
-            &self.scene_layer,
+            self.stage.edit_target().layer_identifier(),
             source,
             &[property],
             &[(path.clone(), "propertyChildren".to_owned())],
@@ -405,14 +410,17 @@ impl CanonicalStage {
         sibling_order: &[String],
     ) -> anyhow::Result<()> {
         let plan = lunco_usd_authoring::author::prepare_prim_subtree_restore(
-            self.stage.root_layer().data(),
+            self.stage
+                .layer(self.stage.edit_target().layer_identifier())
+                .ok_or_else(|| anyhow::anyhow!("native edit target layer is missing"))?
+                .data(),
             path,
             snapshot_usda,
             sibling_order,
         )
         .map_err(|error| anyhow::anyhow!("prepare prim restore at {path}: {error}"))?;
         self.stage
-            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+            .batch_edit(&[self.stage.edit_target().layer_identifier()], |edits| {
                 lunco_usd_authoring::author::apply_snapshot_restore(edits[0].data_mut(), plan);
                 Ok(())
             })
@@ -520,7 +528,7 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
+    /// Define a prim of `type_name` at `path` (current native edit target) — fires the sink
     /// so the projection bridge spawns it. For a referenced spawn, follow with
     /// [`author_reference`](Self::author_reference).
     pub(crate) fn author_prim(
@@ -540,7 +548,7 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Remove the prim at `path` from the root edit target — fires the sink so the
+    /// Remove the prim at `path` from the current native edit target — fires the sink so the
     /// projection bridge despawns its subtree.
     pub(crate) fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
         use anyhow::anyhow;
@@ -825,7 +833,7 @@ impl CanonicalStage {
         })
     }
 
-    /// Define a referenced runtime instance in one atomic root-layer edit.
+    /// Define a referenced runtime instance in one atomic native-target edit.
     ///
     /// The prim definition and reference must become visible to the live
     /// projection together. Separate authoring commits briefly expose a
@@ -839,7 +847,16 @@ impl CanonicalStage {
         reference_prim_path: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let mut reference = self.reference_for_loaded_asset(asset_path)?;
+        let mut reference = if asset_path.is_empty() {
+            if reference_prim_path.is_none() {
+                return Err(anyhow!(
+                    "an internal reference requires an explicit prim target"
+                ));
+            }
+            openusd::sdf::Reference::default()
+        } else {
+            self.reference_for_loaded_asset(asset_path)?
+        };
         let explicit_target = reference_prim_path.is_some();
         if let Some(reference_prim_path) = reference_prim_path {
             reference.prim_path = SdfPath::new(reference_prim_path).map_err(|e| {
@@ -852,7 +869,7 @@ impl CanonicalStage {
             openusd::sdf::ReferenceListOp::explicit([reference])
         };
         self.stage
-            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+            .batch_edit(&[self.stage.edit_target().layer_identifier()], |edits| {
                 let edit = &mut edits[0];
                 let mut prim = openusd::sdf::PrimSpec::new(
                     edit.data_mut(),
@@ -870,7 +887,7 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Author a reference to a source asset at `path` (root edit target),
+    /// Author a reference to a source asset at `path` (current native edit target),
     /// turning it into a **referenced spawn**. `reference_prim_path` selects an
     /// explicit source prim when supplied; otherwise the source asset's
     /// `defaultPrim` is used. The target path is authored explicitly from the
@@ -1024,7 +1041,7 @@ impl CanonicalStage {
             }
             None => self
                 .stage
-                .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                .batch_edit(&[self.stage.edit_target().layer_identifier()], |edits| {
                     edits[0]
                         .data_mut()
                         .erase_field(prim, openusd::sdf::FieldKey::PrimOrder.as_str());
@@ -1052,7 +1069,7 @@ impl CanonicalStage {
                 .map_err(|e| anyhow!("author kind `{kind}` at {prim}: {e}")),
             None => self
                 .stage
-                .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                .batch_edit(&[self.stage.edit_target().layer_identifier()], |edits| {
                     edits[0]
                         .data_mut()
                         .erase_field(prim, openusd::sdf::FieldKey::Kind.as_str());
@@ -1063,7 +1080,7 @@ impl CanonicalStage {
         }
     }
 
-    /// Author `active` onto the prim's spec on the root edit target. This is the
+    /// Author `active` onto the prim's spec on the current native edit target. This is the
     /// live-stage counterpart of the document's `SetActive` op. A hide or
     /// reactivation reaches the live world without a whole-scene reload: the
     /// projection bridge applies the sink's structural change to the affected
@@ -1099,7 +1116,7 @@ impl CanonicalStage {
     }
 
     /// Author attribute `name = value` (USD type `type_name`) onto the prim at
-    /// `prim` (root edit target), firing the sink so the projection refreshes the
+    /// `prim` (current native edit target), firing the sink so the projection refreshes the
     /// prim's visual. Creates the attribute if absent, overwrites it otherwise —
     /// the live-stage counterpart of the document's `SetAttribute` op, so a
     /// material / inspector edit reaches the live world without a whole-scene
@@ -1125,7 +1142,7 @@ impl CanonicalStage {
     }
 
     /// Author `name`'s `timeSamples[time] = value` (USD type `type_name`) onto the
-    /// prim at `prim` (root edit target), firing the sink — the live-stage
+    /// prim at `prim` (current native edit target), firing the sink — the live-stage
     /// counterpart of the document's `SetTimeSample` op. A keyframe edit reaches
     /// the live world without a whole-scene rebuild: the per-frame animation
     /// sampler reads this stage each frame, so a key on an already-animated prim
@@ -1160,7 +1177,10 @@ impl CanonicalStage {
             .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default();
         if !drained.is_empty() {
-            self.generation += 1;
+            if !self.replacement_notice_pending {
+                self.generation += 1;
+            }
+            self.replacement_notice_pending = false;
         }
         drained
     }
@@ -1363,6 +1383,26 @@ pub struct CanonicalStages {
 }
 
 impl CanonicalStages {
+    /// Capture the admitted source context for this stage lifetime. Before the
+    /// live stage opens, its prepared asset owns that context. Once open, the
+    /// canonical resolver owns every additional admitted dependency.
+    pub fn admitted_recipe_for(
+        &self,
+        id: bevy::asset::AssetId<UsdStageAsset>,
+        assets: &bevy::asset::Assets<UsdStageAsset>,
+    ) -> anyhow::Result<StageRecipe> {
+        if let Some(stage) = self.get(id) {
+            return stage.admitted_recipe();
+        }
+        let asset = assets
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("USD stage source asset is unavailable: {id:?}"))?;
+        let recipe = asset.recipe.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("USD stage source has no admitted resolver recipe: {id:?}")
+        })?;
+        Ok(recipe.clone())
+    }
+
     /// The live canonical stage built from `asset`, if any.
     pub fn get(
         &self,
@@ -1513,7 +1553,7 @@ impl CanonicalStages {
 
     /// Insert (or replace) the live stage for `asset` — the door the live-doc
     /// projection uses to publish a `CanonicalStage` it built from a document's
-    /// composed source, so the extractors read the live stage in-app and the
+    /// native authored stack, so the extractors read the live stage in-app and the
     /// change sink is installed. Replacing drops the previous stage (and its
     /// sink) for that asset.
     pub fn insert(
@@ -1578,6 +1618,18 @@ impl CanonicalStages {
         mut replacement: CanonicalStage,
     ) {
         replacement.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
+        replacement.native_paths_pending = true;
+        replacement.replacement_notice_pending = true;
+        replacement
+            .inbox
+            .lock()
+            .expect("canonical change inbox lock poisoned")
+            .push(RawStageChange {
+                resynced: vec![SdfPath::abs_root()],
+                connection_paths_changed: true,
+                layer: replacement.scene_layer.clone(),
+                ..Default::default()
+            });
         self.by_asset.insert(asset, replacement);
     }
 

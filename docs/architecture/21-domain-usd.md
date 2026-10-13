@@ -28,7 +28,10 @@ assembly-target resolution;
 `lunco-usd-bevy-runtime-core` owns scene admission, Twin-backed stage loading,
 live document projection, and generic projection boundaries;
 `lunco-usd-bevy-authored-runtime` owns the reusable authored control/program
-adapter; `lunco-usd-bevy-runtime-persistence` owns
+adapter. `lunco-usd-bevy-core::program::apply_program_resolution` records the admitted source selection and
+resolved asset address on its ECS owner. Reprojection of an unchanged source
+preserves executable state; source or address changes enter executor admission.
+`lunco-usd-bevy-runtime-persistence` owns
 the opt-in Twin-scoped runtime-overlay load/save observers and restore operation;
 `lunco-usd-bevy-scene-ports` owns the Bevy scene-property port backend;
 `lunco-usd-bevy-runtime`
@@ -54,7 +57,9 @@ it consumes the BasisCurves evaluator from `lunco-usd-geometry` rather than
 owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
-the event-driven wake signal and document-to-mounted-stage lookup;
+the event-driven wake signal, document-to-mounted-stage lookup, and native
+source-input publication lease with its strong stage asset handle. The stage
+loader owns decoding and composition; runtime core owns ECS projection;
 `lunco-usd-bevy-stage` owns canonical-stage storage and stage readers, while
 `lunco-usd-bevy-core` owns the generic live-edit owner registry and runtime
 projection mechanisms;
