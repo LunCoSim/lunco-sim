@@ -67,6 +67,12 @@ the final file. After each coherent change set:
 5. show the result to the user and take feedback before the next material
    change or final save.
 
+Typed attribute and connection preflight composes the current document layers
+against their admitted closure. Schema declarations beneath local overs still
+constrain the requested type; a rejected edit must leave the document generation
+unchanged. Follow the layer/recipe ownership contract in
+[`docs/architecture/16-document-identity-and-collaboration.md`](../../docs/architecture/16-document-identity-and-collaboration.md).
+
 The edited document must be the owner of the part being changed. A component
 edit is authored in that component's own USD document; the assembly receives
 only references, instance transforms, variants, and host wiring. Once the

@@ -687,8 +687,10 @@ data lives in `lunco-usd-data`, authoring and schema helpers in
 `lunco-usd-authoring`, and `StageRecipe` in `lunco-usd-compose`. It has no
 runtime projection, command observers, physics, rendering, or UI dependency.
 `StageRecipe::content_closure` freezes a complete fetched closure as sorted
-canonical layer identifiers with CIDv1 raw/SHA-256 content identities; missing
-root bytes and unresolved dependencies fail the snapshot.
+canonical layer identifiers with CIDv1 raw/SHA-256 content identities and an
+explicit session-layer identity. Missing root/session bytes and unresolved
+dependencies fail the snapshot. `lunco-usd-compose::open_recipe` consumes the
+captured bytes through the shared native stage factory.
 
 **`lunco-usd-data`**
 Reusable render-free authored USD data contracts: stage metadata, unit and
