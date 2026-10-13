@@ -1041,32 +1041,14 @@ enough to promise same-state continuation from an arbitrary capture tick.
 - This work is for local `main` integration only; no push is authorized. The
   unrelated untracked `scripts/perf/` work remains preserved.
 
-## Dynamic reference composition admission (2026-09-30)
+## Dynamic reference composition admission
 
-- `drain_ref_spawns` now sends any nonempty prepared-reference dependency
-  diagnostics through the same required `usd.scene_composition` evaluator as
-  the initial scene path, before consuming the instance plan, installing layer
-  bytes, or projecting entities. Rejection or hook failure uses the existing
-  terminal reference-admission path; primary-scene progress stays held and
-  later authored references remain blocked. The diagnostic includes the first
-  unresolved dependency. Preview and additive failures remain operation-local.
-- The focused owner test
-  `incomplete_dynamic_reference_policy_rejection_holds_primary_and_blocks_successors`
-  is present. It checks the mounted-scene facts and lifecycle context, the
-  authored order of two missing dependencies, the first-dependency diagnostic,
-  primary hold/fault, no instance plan, and ready-successor blocking. The
-  focused test passed (`1 passed`, 50 filtered).
-- The production `dynamic_reference_composition` Rhai gate passed both
-  `allow.usda` and `reject.usda`. The allow case projected the valid root of a
-  stage with a missing nested dependency and did not fabricate the unresolved
-  child. The reject case observed the expected terminal
-  `usd-reference-admission` fault for `/World/Partial`.
-- The first allow run failed before admission because the fixture treated an
-  absent `QueryUsdPrim.ok` field as false. It now accepts the direct prim-record
-  response and checks the required generation; the allow and reject production
-  runs then passed.
-- `python3 scripts/validate_skills.py` passed all 43 skills, and
-  `git diff --check` passed before the current documentation update.
+Reference batches consume native closure preparation through `ReferenceLayerInputs`
+and the required `usd.scene_composition` hook before ordered stage authoring.
+The native change sink owns ECS materialization; the document lease waits for
+active reference roots. Policy rejection retains its dependency diagnostic and
+faults the affected primary operation. The authored dynamic-reference allow and
+reject gates provide production coverage.
 
 ## Current cross-machine failure investigation (2026-09-30)
 

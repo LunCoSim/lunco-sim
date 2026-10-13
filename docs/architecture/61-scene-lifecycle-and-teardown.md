@@ -276,11 +276,9 @@ child keys, so a structural sink that creates a child while the continuation is
 waiting cannot produce a second projection. The same composed path can
 legitimately occur in separate mounts or runtime instances, where the parent
 hierarchy and instance identity scope it.
-For a referenced runtime instance, the root also carries the source asset's
-path-remapped prepared plan and the canonical generation at which the
-reference was admitted. Descendants reuse that plan through the same queue;
-when the canonical generation advances, `reader_for_entity` selects the live
-composed stage so local authored opinions cannot be hidden by the snapshot.
+A referenced runtime instance admits its native reference arc before sibling
+topology. The scene owner retains source bytes and addresses;
+descendant composed reads use the same stage owner as the containing scene.
 Mesh work sourced from that immutable instance plan is fenced by the plan and
 stage identity, not by later generations of the containing document; runtime
 placement and disposable presentation edits therefore cannot cancel an

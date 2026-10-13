@@ -58,7 +58,7 @@ use lunco_render::{
     LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
 };
 use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::Path as SdfPath;
 use openusd_schemas::lux::tokens as ltok;
 
 use crate::dome;
@@ -109,172 +109,85 @@ pub(crate) struct UsdDomeAmbient {
     pub(crate) exposure_scale: f32,
 }
 
-/// Sum of `inputs:intensity` × 2^`inputs:exposure` over every **untextured**
-/// `DomeLight` prim in `data`, skipping `exclude` — i.e. the ambient brightness
-/// the scene would compose if `exclude` did not exist.
-///
-/// This is the layer-data mirror of what [`on_usd_light_added`] computes from
-/// ECS: that observer sums the [`UsdDomeAmbient`] of every dome entity, and a
-/// dome contributes `intensity` × 2^`exposure` in `GlobalAmbientLight::brightness`
-/// units — the same [`read_intensity_with_exposure`] photometry the `DomeLight`
-/// arm of [`instantiate_light_prim`] applies, or the solve here would compose a
-/// different total than the instantiated light. A *textured* dome contributes
-/// nothing — its image becomes IBL instead — so it is excluded here too, or the
-/// two would disagree.
-///
-/// Exists so a command that wants to *set the composed total* can solve for the
-/// one dome it owns instead of blindly authoring the total and double-counting
-/// whatever the scene already authored.
-///
-/// This is an authoring/document query over the document's own layer data. It is
-/// intentionally distinct from the runtime composed-reader path above: a command
-/// editing a document asks which dome opinions that document owns, while runtime
-/// rendering reads the fully composed stage through `UsdRead`.
+/// Sum the native composed untextured DomeLight contributions, excluding the
+/// dedicated fill. USD owns traversal, activity, defaults and opinion strength.
+/// The authoring solve stays in f64; rendering performs its own GPU conversion.
 pub fn untextured_dome_intensity_sum(
-    data: &openusd::sdf::Data,
+    stage: &openusd::usd::Stage,
     exclude: Option<&SdfPath>,
-) -> Result<f32, LightReadError> {
-    use lunco_usd_data::usd_data::UsdDataExt;
-
-    // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
-    // which is fine, but iterating while calling them keeps two borrows alive
-    // across the closure — cloning the handful of dome paths is cheaper to read.
-    let dome_paths: Vec<SdfPath> = data
-        .iter()
-        .map(|(p, _)| p.clone())
-        .filter(|p| data.prim_type_name(p).as_deref() == Some(ltok::DOME_LIGHT))
-        .collect();
-
-    let mut total = 0.0;
-    for path in dome_paths
-        .iter()
-        .filter(|p| exclude != Some(*p))
-        .filter(|p| data.prim_is_active(p))
-    {
-        if dome_has_texture(data, path)? {
+) -> Result<f64, LightReadError> {
+    let mut paths = Vec::new();
+    stage
+        .traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
+            paths.push(path.clone())
+        })
+        .map_err(|_| LightReadError)?;
+    let mut total = 0.0_f64;
+    for path in paths {
+        if exclude == Some(&path) {
             continue;
         }
-        if let Some(intensity) = dome_intensity(data, path)? {
-            total += intensity;
+        let prim = stage.prim(path.clone()).map_err(|_| LightReadError)?;
+        if prim
+            .type_name()
+            .map_err(|_| LightReadError)?
+            .as_ref()
+            .map(|name| name.as_str())
+            != Some(ltok::DOME_LIGHT)
+        {
+            continue;
         }
-    }
-
-    if total.is_finite() && total >= 0.0 {
-        Ok(total)
-    } else {
-        error!("[usd-bevy] authored DomeLight ambient sum is non-finite or negative");
-        Err(LightReadError)
-    }
-}
-
-/// Whether `prim` authors a non-empty `inputs:texture:file` — the exact test
-/// `dome::read_dome_environment` uses to decide "HDRI environment" vs "scalar
-/// ambient". An empty asset is the explicit scalar spelling; a non-asset value,
-/// animation, or connection is rejected because this authoring-layer reader
-/// cannot resolve it safely.
-fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> Result<bool, LightReadError> {
-    let attr = prim
-        .append_property(ltok::INPUTS_TEXTURE_FILE)
-        .map_err(|_| LightReadError)?;
-    let Some(spec) = data.spec(&attr) else {
-        return Ok(false);
-    };
-    if spec.get("timeSamples").is_some() || spec.get("connectionPaths").is_some() {
-        error!(
-            "[usd-bevy] {} has an animated or connected DomeLight texture input, which \
-             cannot be resolved by the authoring-layer ambient solver",
-            prim.as_str()
-        );
-        return Err(LightReadError);
-    }
-    let Some(value) = spec.get("default") else {
-        return Ok(false);
-    };
-    match value {
-        Value::AssetPath(path) => Ok(!path.as_str().is_empty()),
-        _ => {
-            error!(
-                "[usd-bevy] {} has authored DomeLight {} with an unsupported type",
-                prim.as_str(),
-                ltok::INPUTS_TEXTURE_FILE
-            );
-            Err(LightReadError)
+        let texture = prim.attribute(ltok::INPUTS_TEXTURE_FILE);
+        require_static_dome_input(&texture)?;
+        // UsdLux declares texture:file without a default. An omitted texture
+        // is the standard untextured dome; a failed native read still rejects.
+        let texture = texture
+            .get::<openusd::sdf::AssetPath>()
+            .map_err(|_| LightReadError)?;
+        if texture.is_some_and(|asset| !asset.as_str().is_empty()) {
+            continue;
         }
-    }
-}
-
-/// `inputs:intensity` × 2^`inputs:exposure` on `prim` — the layer-data twin of
-/// [`read_intensity_with_exposure`], which needs a `UsdRead`. `None` when
-/// `inputs:intensity` is unauthored: this authoring-layer sum counts explicit
-/// opinions only and does not inject OpenUSD schema fallbacks.
-fn dome_intensity(
-    data: &openusd::sdf::Data,
-    prim: &SdfPath,
-) -> Result<Option<f32>, LightReadError> {
-    let Some(intensity) = field_f32(data, prim, ltok::INPUTS_INTENSITY)? else {
-        return Ok(None);
-    };
-    let exposure = field_f32(data, prim, ltok::INPUTS_EXPOSURE)?.unwrap_or(0.0);
-    let scaled = intensity * exposure.exp2();
-    if scaled.is_finite() && scaled >= 0.0 {
-        Ok(Some(scaled))
-    } else {
-        error!(
-            "[usd-bevy] {} has non-finite or negative authored DomeLight intensity after exposure",
-            prim.as_str()
+        let intensity = prim.attribute(ltok::INPUTS_INTENSITY);
+        let exposure = prim.attribute(ltok::INPUTS_EXPOSURE);
+        require_static_dome_input(&intensity)?;
+        require_static_dome_input(&exposure)?;
+        let intensity = f64::from(
+            intensity
+                .get::<f32>()
+                .map_err(|_| LightReadError)?
+                .ok_or(LightReadError)?,
         );
-        Err(LightReadError)
-    }
-}
-
-/// Scalar `default` field on `prim`'s attribute `attr`, tolerant of
-/// `float`/`double`/`int`/`int64` authoring — the layer-data twin of
-/// [`UsdRead::real_f32`].
-fn field_f32(
-    data: &openusd::sdf::Data,
-    prim: &SdfPath,
-    attr: &str,
-) -> Result<Option<f32>, LightReadError> {
-    let attr_path = prim.append_property(attr).map_err(|_| LightReadError)?;
-    let Some(spec) = data.spec(&attr_path) else {
-        return Ok(None);
-    };
-    if spec.get("timeSamples").is_some() || spec.get("connectionPaths").is_some() {
-        error!(
-            "[usd-bevy] {} has an animated or connected DomeLight {} input, which \
-             cannot be resolved by the authoring-layer ambient solver",
-            prim.as_str(),
-            attr
+        let exposure = f64::from(
+            exposure
+                .get::<f32>()
+                .map_err(|_| LightReadError)?
+                .ok_or(LightReadError)?,
         );
-        return Err(LightReadError);
-    }
-    let Some(value) = spec.get("default") else {
-        return Ok(None);
-    };
-    let value = match value {
-        Value::Float(f) => *f,
-        Value::Double(d) => *d as f32,
-        Value::Int(i) => *i as f32,
-        Value::Int64(i) => *i as f32,
-        _ => {
-            error!(
-                "[usd-bevy] {} has authored DomeLight {} with an unsupported type",
-                prim.as_str(),
-                attr
-            );
+        let contribution = intensity * exposure.exp2();
+        if !contribution.is_finite() || contribution < 0.0 {
             return Err(LightReadError);
         }
-    };
-    if value.is_finite() {
-        Ok(Some(value))
+        total += contribution;
+    }
+    if total.is_finite() {
+        Ok(total)
     } else {
-        error!(
-            "[usd-bevy] {} has non-finite authored DomeLight {}",
-            prim.as_str(),
-            attr
-        );
         Err(LightReadError)
     }
+}
+
+fn require_static_dome_input(attribute: &openusd::usd::Attribute) -> Result<(), LightReadError> {
+    if attribute
+        .value_might_be_time_varying()
+        .map_err(|_| LightReadError)?
+        || !attribute
+            .connections()
+            .map_err(|_| LightReadError)?
+            .is_empty()
+    {
+        return Err(LightReadError);
+    }
+    Ok(())
 }
 
 /// The intensity to author on a *dedicated* ambient-fill dome so that the
@@ -293,14 +206,14 @@ fn field_f32(
 /// what other domes already contribute is unsatisfiable. Callers should surface
 /// that rather than silently render the wrong brightness; see
 /// [`ambient_fill_saturates`].
-pub fn ambient_fill_intensity(requested_total: f32, other_domes_total: f32) -> f32 {
+pub fn ambient_fill_intensity(requested_total: f64, other_domes_total: f64) -> f64 {
     (requested_total - other_domes_total).max(0.0)
 }
 
 /// Whether [`ambient_fill_intensity`] had to clamp — i.e. the other authored
 /// domes alone already exceed `requested_total`, so the composed ambient will be
 /// brighter than asked no matter what the fill dome does.
-pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> bool {
+pub fn ambient_fill_saturates(requested_total: f64, other_domes_total: f64) -> bool {
     other_domes_total > requested_total
 }
 
@@ -1337,167 +1250,6 @@ pub(crate) fn on_usd_light_added(
 ) {
     if let Some(mut ambient) = ambient {
         ambient.brightness = domes.iter().map(|d| d.value).sum();
-    }
-}
-
-#[cfg(test)]
-mod ambient_fill_tests {
-    //! The solve behind the ambient slider: the inspector reads the COMPOSED
-    //! total but writes ONE dome, so that dome's intensity is the requested
-    //! total minus what every other untextured dome already contributes.
-
-    use super::*;
-
-    fn data(usda: &str) -> openusd::sdf::Data {
-        openusd::usda::parse(usda).expect("parse USDA")
-    }
-
-    fn path(s: &str) -> SdfPath {
-        SdfPath::new(s).expect("valid path")
-    }
-
-    const SCENE: &str = r#"#usda 1.0
-
-def Xform "World"
-{
-    def DomeLight "RegolithBounce"
-    {
-        float inputs:intensity = 30
-    }
-
-    def DomeLight "Starfield"
-    {
-        asset inputs:texture:file = @./stars.hdr@
-        float inputs:intensity = 500
-    }
-
-    def "Environment"
-    {
-        def DomeLight "AmbientFill"
-        {
-            float inputs:intensity = 70
-        }
-    }
-}
-"#;
-
-    #[test]
-    fn sum_excludes_the_fill_dome_itself() {
-        let d = data(SCENE);
-        let fill = path("/World/Environment/AmbientFill");
-        // Only `RegolithBounce` counts: the fill is excluded by request and the
-        // starfield by its texture.
-        assert_eq!(untextured_dome_intensity_sum(&d, Some(&fill)), Ok(30.0));
-    }
-
-    #[test]
-    fn textured_domes_never_contribute() {
-        let d = data(SCENE);
-        // Without excluding anything, the 500-intensity starfield must STILL be
-        // absent — its image becomes IBL, not a scalar ambient term.
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(30.0 + 70.0));
-    }
-
-    #[test]
-    fn requested_100_over_an_existing_30_authors_70() {
-        let d = data(SCENE);
-        let fill = path("/World/Environment/AmbientFill");
-        let others = untextured_dome_intensity_sum(&d, Some(&fill)).unwrap();
-        assert_eq!(others, 30.0);
-        assert_eq!(ambient_fill_intensity(100.0, others), 70.0);
-        assert!(!ambient_fill_saturates(100.0, others));
-        // The point of the subtraction: re-composing lands on the request, so
-        // the slider reads back exactly where the user left it.
-        assert_eq!(others + ambient_fill_intensity(100.0, others), 100.0);
-    }
-
-    #[test]
-    fn no_other_domes_means_author_the_total_verbatim() {
-        let d = data("#usda 1.0\n\ndef Xform \"World\"\n{\n}\n");
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(0.0));
-        assert_eq!(ambient_fill_intensity(42.0, 0.0), 42.0);
-    }
-
-    #[test]
-    fn clamps_at_zero_and_reports_saturation() {
-        // Other domes already out-shine the request: a dome cannot emit
-        // negatively, so the composed total will exceed what was asked.
-        assert_eq!(ambient_fill_intensity(10.0, 30.0), 0.0);
-        assert!(ambient_fill_saturates(10.0, 30.0));
-        // Exactly equal is satisfiable (author zero), not saturated.
-        assert_eq!(ambient_fill_intensity(30.0, 30.0), 0.0);
-        assert!(!ambient_fill_saturates(30.0, 30.0));
-    }
-
-    #[test]
-    fn inactive_domes_do_not_contribute() {
-        let d = data(
-            r#"#usda 1.0
-
-def Xform "World"
-{
-    def DomeLight "Off" (active = false)
-    {
-        float inputs:intensity = 999
-    }
-
-    def DomeLight "On"
-    {
-        float inputs:intensity = 5
-    }
-}
-"#,
-        );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(5.0));
-    }
-
-    #[test]
-    fn exposure_scales_the_ambient_sum() {
-        // The DomeLight arm of `instantiate_light_prim` reads
-        // `inputs:intensity` × 2^`inputs:exposure`, so the solve must compose
-        // the same total or the slider would read back wrong on any dome that
-        // authors an exposure.
-        let d = data(
-            r#"#usda 1.0
-
-def DomeLight "Fill"
-{
-    float inputs:intensity = 8
-    float inputs:exposure = 3
-}
-"#,
-        );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(64.0));
-    }
-
-    #[test]
-    fn malformed_dome_inputs_are_rejected_instead_of_treated_as_omitted() {
-        let d = data(
-            r#"#usda 1.0
-
-def DomeLight "Malformed"
-{
-    float inputs:intensity = 8
-    string inputs:exposure = "not-a-number"
-}
-"#,
-        );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Err(LightReadError));
-    }
-
-    #[test]
-    fn empty_texture_asset_is_scalar_ambient() {
-        let d = data(
-            r#"#usda 1.0
-
-def DomeLight "Scalar"
-{
-    asset inputs:texture:file = @@
-    float inputs:intensity = 5
-}
-"#,
-        );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(5.0));
     }
 }
 

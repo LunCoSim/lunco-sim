@@ -78,9 +78,8 @@ pub(crate) fn modelica_network_members_for_stage(
 }
 
 /// Return Modelica membership from the exact composed surface that owns one
-/// runtime entity. Referenced instances use their prepared remapped plan until
-/// promotion, then the live canonical stage; they never borrow membership from
-/// the scene's unrelated base plan.
+/// runtime entity. Native scene composition owns the facts; instance identity
+/// scopes the derived membership cache and its lifecycle.
 pub(crate) fn modelica_network_members_for_owner(
     world: &mut World,
     stage_id: AssetId<UsdStageAsset>,
@@ -108,7 +107,7 @@ pub(crate) fn modelica_network_members_for_owner(
         warn!("[usd] canonical stage reader is unavailable while resolving instance membership");
         return None;
     };
-    let (reader, generation) = stages.reader_for_entity(stage_id, stage_asset, Some(&instance));
+    let (reader, generation) = stages.reader_for(stage_id, stage_asset);
     let instance_key = root.to_bits();
     if let Some(members) = world
         .get_resource::<program::ModelicaNetworkMembershipCache>()
@@ -157,9 +156,8 @@ pub(crate) fn refresh_program_owner_with_network_members(
         warn!("[usd] canonical stage reader is unavailable for projected owner {owner_path}");
         return;
     };
-    let instance = world.get::<UsdInstanceProjection>(owner);
     let prepared = {
-        let (view, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
+        let (view, _) = stages.reader_for(stage_id, stage_asset);
         let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
         let owner_children = UsdRead::children(&view, &owner);
         resolve_program_owner(&view, &owner, &owner_children, network_members)

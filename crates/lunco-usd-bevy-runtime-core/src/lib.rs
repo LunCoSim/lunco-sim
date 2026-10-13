@@ -60,9 +60,8 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();
         app.add_observer(twin_projection::wake_twin_projection_on_document_changed);
         app.init_resource::<live_consume::LiveTransformEditHints>();
-        app.init_resource::<twin_projection::PendingRefSpawns>();
+        app.init_resource::<twin_projection::ReferenceLayerInputs>();
         app.init_resource::<twin_projection::PendingDocumentProjectionAdmissions>();
-        app.init_resource::<twin_projection::PendingInstanceProjections>();
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<live_consume::PendingStageProjections>();
         app.init_resource::<native_assets::PendingNativeAssetPaths>();
@@ -75,9 +74,9 @@ impl Plugin for UsdSceneRuntimePlugin {
                     .run_if(twin_projection::pending_twin_docs_ready),
                 twin_projection::wake_twin_projection_on_stage_event,
                 twin_projection::sync_twin_overlays.run_if(twin_projection::twin_projection_ready),
-                twin_projection::mark_pending_ref_spawns,
                 twin_projection::sync_stage_dependency_diagnostics,
-                twin_projection::drain_ref_spawns.run_if(twin_projection::pending_ref_spawns_ready),
+                twin_projection::mark_reference_layer_inputs,
+                native_references::advance.run_if(twin_projection::native_reference_inputs_ready),
                 live_consume::project_stage_changes,
             )
                 .chain()

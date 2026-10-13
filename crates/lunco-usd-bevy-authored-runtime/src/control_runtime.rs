@@ -16,9 +16,7 @@ use lunco_camera_core::{CameraFollow, CameraFollowHeight, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected};
-use lunco_usd_bevy_stage::{
-    UsdInstanceProjection, UsdRead, UsdStageAsset, canonical::CanonicalStages,
-};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 
 /// A control surface prepared from one composed USD owner.
@@ -138,8 +136,7 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
             let Ok(owner) = SdfPath::new(&owner_path) else {
                 continue;
             };
-            let instance = world.get::<UsdInstanceProjection>(entity);
-            let (reader, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
+            let (reader, _) = stages.reader_for(stage_id, stage_asset);
             let owner_children = reader.children(&owner);
             let surface = read_control_surface(&reader, &owner, &owner_children);
             let prepared_program = network_members.as_ref().map(|members| {

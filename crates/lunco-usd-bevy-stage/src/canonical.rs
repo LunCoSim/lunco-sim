@@ -122,7 +122,8 @@ impl CanonicalStageRecipeSnapshot {
         UsdStageProjectionPlan::from_recipe(&self.into_recipe()?)
     }
 
-    fn into_recipe(mut self) -> anyhow::Result<StageRecipe> {
+    /// Encode captured authored layers with their native codecs on a worker.
+    pub fn into_recipe(mut self) -> anyhow::Result<StageRecipe> {
         for (identifier, data) in self.authored_layers {
             let bytes = lunco_usd_authoring::author::layer_bytes(&identifier, &data)?;
             self.recipe.bytes.insert(identifier, bytes);
@@ -1391,8 +1392,17 @@ impl CanonicalStages {
         id: bevy::asset::AssetId<UsdStageAsset>,
         assets: &bevy::asset::Assets<UsdStageAsset>,
     ) -> anyhow::Result<StageRecipe> {
+        self.recipe_snapshot_for(id, assets)?.into_recipe()
+    }
+
+    /// Capture native inputs without encoding edited layers on the caller thread.
+    pub fn recipe_snapshot_for(
+        &self,
+        id: bevy::asset::AssetId<UsdStageAsset>,
+        assets: &bevy::asset::Assets<UsdStageAsset>,
+    ) -> anyhow::Result<CanonicalStageRecipeSnapshot> {
         if let Some(stage) = self.get(id) {
-            return stage.admitted_recipe();
+            return stage.recipe_snapshot();
         }
         let asset = assets
             .get(id)
@@ -1400,7 +1410,10 @@ impl CanonicalStages {
         let recipe = asset.recipe.as_deref().ok_or_else(|| {
             anyhow::anyhow!("USD stage source has no admitted resolver recipe: {id:?}")
         })?;
-        Ok(recipe.clone())
+        Ok(CanonicalStageRecipeSnapshot {
+            recipe: recipe.clone(),
+            authored_layers: Vec::new(),
+        })
     }
 
     /// The live canonical stage built from `asset`, if any.
@@ -1509,26 +1522,6 @@ impl CanonicalStages {
             UsdReadSource::Prepared(stage_asset.projection_plan.as_ref()),
             0,
         )
-    }
-
-    /// Select the composed reader for one projected entity.
-    ///
-    /// Referenced runtime instances start with an immutable plan remapped to
-    /// their authored scene path. The plan serves the instance subtree until
-    /// the first edit that changes composed instance facts; that edit composes
-    /// the reference into this live stage and switches every cloned instance
-    /// reader to the canonical view. Root pose and catalog identity are the
-    /// authored facts represented directly by the initial plan.
-    pub fn reader_for_entity<'a>(
-        &'a self,
-        asset: bevy::asset::AssetId<UsdStageAsset>,
-        stage_asset: &'a UsdStageAsset,
-        instance: Option<&'a crate::UsdInstanceProjection>,
-    ) -> (UsdReadSource<'a>, u64) {
-        if let Some(instance) = instance.filter(|instance| !instance.is_promoted()) {
-            return (UsdReadSource::Prepared(instance.plan.as_ref()), 0);
-        }
-        self.reader_for(asset, stage_asset)
     }
 
     /// Return the current projection generation without opening a live stage.
@@ -2054,60 +2047,6 @@ mod recipe_tests {
                 .reference_snapshot(&recipe.root_id, Some(&origin), &source_recipe, &source_plan)
                 .is_none(),
             "weak cache cannot retain historical preparation"
-        );
-    }
-
-    #[test]
-    fn instance_readers_switch_to_the_live_stage_when_promoted() {
-        let scene = StageRecipe::from_source(
-            "scene.usda",
-            "#usda 1.0\ndef Xform \"Root\" { def Cube \"Box\" { double size = 3 } }\n",
-        );
-        let referenced = StageRecipe::from_source(
-            "reference.usda",
-            "#usda 1.0\ndef Xform \"Root\" { def Cube \"Box\" { double size = 4 } }\n",
-        );
-        let handle = bevy::asset::Handle::<UsdStageAsset>::default();
-        let stage_asset = UsdStageAsset::from_recipe(scene.clone()).expect("prepare scene");
-        let mut canonical = CanonicalStage::from_recipe(&scene).expect("open live stage");
-        canonical
-            .author_translate(&SdfPath::new("/Root/Box").unwrap(), [1.0, 0.0, 0.0])
-            .expect("advance the live stage generation");
-        canonical.drain_changes();
-
-        let mut stages = CanonicalStages::default();
-        stages.insert(handle.id(), canonical);
-        let reference_plan =
-            Arc::new(UsdStageProjectionPlan::from_recipe(&referenced).expect("prepare reference"));
-        let projection = crate::UsdInstanceProjection::new(
-            bevy::asset::Handle::default(),
-            Arc::new(crate::UsdReferenceSnapshot {
-                recipe: Arc::new(referenced.clone()),
-                plan: Arc::clone(&reference_plan),
-                native_source: None,
-            }),
-            reference_plan,
-            "lunco://test/reference.usda",
-            None,
-            Some("Xform".into()),
-        );
-        let instance_clone = projection.clone();
-
-        let (reader, generation) =
-            stages.reader_for_entity(handle.id(), &stage_asset, Some(&projection));
-        assert_eq!(generation, 0);
-        assert_eq!(
-            reader.real(&SdfPath::new("/Root/Box").unwrap(), "size"),
-            Some(4.0)
-        );
-
-        instance_clone.mark_promoted();
-        let (reader, generation) =
-            stages.reader_for_entity(handle.id(), &stage_asset, Some(&projection));
-        assert_eq!(generation, 1);
-        assert_eq!(
-            reader.real(&SdfPath::new("/Root/Box").unwrap(), "size"),
-            Some(3.0)
         );
     }
 

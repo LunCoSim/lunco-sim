@@ -7602,7 +7602,7 @@ review found that initial terrain projection could synchronously call
 `CanonicalStages::get_or_build`, then read every newly mounted USD prim and
 enqueue a `DemBridged` marker even when it carried no terrain data.
 
-The bridge now uses `reader_for_entity`: generation-zero facts come from the
+The bridge now uses `reader_for`: generation-zero facts come from the
 worker-prepared projection plan, while later authored generations use the live
 canonical reader. A per-plan candidate index finds prims with
 `LunCoTerrainAPI` or authored `lunco:` properties; the bridge inspects changed

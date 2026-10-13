@@ -56,7 +56,6 @@ use lunco_usd_core::commands::{
 use lunco_usd_core::edit_session::{
     UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
 };
-use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::{LayerId, PreparedUsdSource, UsdOp};
 use lunco_workspace::{
     DocumentRuntimeOwner, FileDocumentAdmission, ResolvedFileDocument, StorageHandle,
@@ -2680,45 +2679,32 @@ pub(crate) fn apply_ops_as_change_set(
 /// touching the live document. Socket attaches additionally validate the selected
 /// socket, its schema, kind, joint/axis, asset plug, occupancy, and child
 /// identity here so a stale or incompatible request cannot author a bad mount.
-fn authored_text(
-    data: &openusd::sdf::Data,
+fn mount_token(
+    stage: &openusd::usd::Stage,
     prim: &openusd::sdf::Path,
     name: &str,
-) -> Option<String> {
-    data.field(
-        &prim.append_property(name).ok()?,
-        openusd::sdf::FieldKey::Default.as_str(),
-    )?
-    .as_str()
-    .map(str::to_owned)
+) -> Result<Option<String>, String> {
+    stage
+        .prim(prim.clone())
+        .map_err(|error| error.to_string())?
+        .attribute(name)
+        .get::<openusd::tf::Token>()
+        .map(|value| value.map(|token| token.to_string()))
+        .map_err(|error| error.to_string())
 }
 
 fn relationship_targets(
-    data: &openusd::sdf::Data,
+    stage: &openusd::usd::Stage,
     prim: &openusd::sdf::Path,
     name: &str,
 ) -> Result<Vec<String>, String> {
-    let property = prim
-        .append_property(name)
-        .map_err(|error| format!("invalid relationship {prim}.{name}: {error}"))?;
-    path_list_targets(data, &property, "targetPaths", "relationship")
-}
-
-fn path_list_targets(
-    data: &openusd::sdf::Data,
-    property: &openusd::sdf::Path,
-    field_name: &str,
-    property_kind: &str,
-) -> Result<Vec<String>, String> {
-    let Some(value) = data.field(property, field_name) else {
-        return Ok(Vec::new());
-    };
-    let openusd::sdf::Value::PathListOp(op) = value else {
-        return Err(format!(
-            "{property_kind} {property} has a non-path {field_name} list"
-        ));
-    };
-    Ok(op.iter().map(|path| path.as_str().to_string()).collect())
+    stage
+        .prim(prim.clone())
+        .map_err(|error| error.to_string())?
+        .relationship(name)
+        .targets()
+        .map(|paths| paths.into_iter().map(|path| path.to_string()).collect())
+        .map_err(|error| error.to_string())
 }
 
 fn target_layer_authors_prim(
@@ -2778,18 +2764,32 @@ fn validate_detach_component(
         ));
     }
 
-    let composed = host.document().composed();
-    if composed.spec(&component).is_none() {
+    let composed = host
+        .document()
+        .open_composed_stage()
+        .map_err(|error| error.to_string())?;
+    if !composed
+        .prim(component.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("component {} does not exist", spec.component_path));
     }
-    if composed.spec(&joint).is_none() {
+    if !composed
+        .prim(joint.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("joint {} does not exist", spec.joint_path));
     }
-    if !lunco_usd_data::usd_data::has_authored_api_schema(
-        &composed,
-        &component,
-        "LunCoMountAttachmentAPI",
-    ) {
+    if !composed
+        .prim(component.clone())
+        .map_err(|error| error.to_string())?
+        .has_api_schema("LunCoMountAttachmentAPI")
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "component {} does not apply LunCoMountAttachmentAPI",
             spec.component_path
@@ -2814,11 +2814,12 @@ fn validate_detach_component(
             host_path.as_str()
         ));
     }
-    if !lunco_usd_data::usd_data::has_authored_api_schema(
-        &composed,
-        &host_path,
-        "PhysicsRigidBodyAPI",
-    ) {
+    if !composed
+        .prim(host_path.clone())
+        .map_err(|error| error.to_string())?
+        .has_api_schema("PhysicsRigidBodyAPI")
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "host {} does not apply PhysicsRigidBodyAPI",
             host_path
@@ -2842,11 +2843,12 @@ fn validate_detach_component(
                 host_path, socket_target
             )
         })?;
-        if !lunco_usd_data::usd_data::has_authored_api_schema(
-            &composed,
-            &socket,
-            "LunCoMountSocketAPI",
-        ) {
+        if !composed
+            .prim(socket.clone())
+            .map_err(|error| error.to_string())?
+            .has_api_schema("LunCoMountSocketAPI")
+            .map_err(|error| error.to_string())?
+        {
             continue;
         }
         let parts = relationship_targets(&composed, &socket, "lunco:mount:part")?;
@@ -2890,39 +2892,67 @@ fn validate_detach_component(
     // Do not silently delete or rewrite external electrical/data/Modelica
     // relationships. Internal edges and the three known attachment edges are
     // safe; every other incoming edge is a caller-visible blocker.
-    for (property_path, property) in composed.iter() {
-        let (field_name, property_kind) = match property.ty {
-            openusd::sdf::SpecType::Relationship => ("targetPaths", "relationship"),
-            openusd::sdf::SpecType::Attribute => ("connectionPaths", "connection"),
-            _ => continue,
-        };
-        let Some((owner, property_name)) = property_path.split_property() else {
-            continue;
-        };
-        let targets = path_list_targets(&composed, property_path, field_name, property_kind)?;
-        for target_raw in targets {
-            let target = openusd::sdf::Path::new(&target_raw)
-                .map_err(|error| format!("invalid {property_kind} target {target_raw}: {error}"))?;
-            let target_prim = target.prim_path();
-            let targets_removed = target_prim == joint
-                || lunco_usd_bevy_stage::is_descendant_or_self(&target_prim, &spec.component_path);
-            if !targets_removed {
-                continue;
-            }
-            let internal =
-                lunco_usd_bevy_stage::is_descendant_or_self(&owner, &spec.component_path)
-                    || (owner == joint && property_name == "physics:body1" && target == component)
-                    || (owner == component
-                        && property_name == "lunco:mount:attachmentJoint"
-                        && target == joint)
-                    || (spec.socket_path.as_deref() == Some(owner.as_str())
-                        && property_name == "lunco:mount:part"
-                        && target == component);
-            if !internal {
-                return Err(format!(
-                    "{property_kind} {property_path} points into detached component {}; remove that link first",
-                    target_raw,
-                ));
+    let mut prim_paths = Vec::new();
+    composed
+        .traverse(openusd::usd::PrimPredicate::ALL, |path| {
+            prim_paths.push(path.clone())
+        })
+        .map_err(|error| error.to_string())?;
+    for owner in prim_paths {
+        let prim = composed
+            .prim(owner.clone())
+            .map_err(|error| error.to_string())?;
+        for property_name in prim.property_names().map_err(|error| error.to_string())? {
+            let (targets, property_kind) = match prim
+                .prim_index()
+                .property_type(property_name.clone())
+                .map_err(|error| error.to_string())?
+            {
+                Some(openusd::sdf::SpecType::Relationship) => (
+                    prim.relationship(property_name.clone())
+                        .targets()
+                        .map_err(|error| error.to_string())?,
+                    "relationship",
+                ),
+                Some(openusd::sdf::SpecType::Attribute) => (
+                    prim.attribute(property_name.clone())
+                        .connections()
+                        .map_err(|error| error.to_string())?,
+                    "connection",
+                ),
+                _ => continue,
+            };
+            let property_path = owner
+                .append_property(property_name.as_str())
+                .map_err(|error| error.to_string())?;
+            for target_raw in targets {
+                let target = target_raw;
+                let target_prim = target.prim_path();
+                let targets_removed = target_prim == joint
+                    || lunco_usd_bevy_stage::is_descendant_or_self(
+                        &target_prim,
+                        &spec.component_path,
+                    );
+                if !targets_removed {
+                    continue;
+                }
+                let internal =
+                    lunco_usd_bevy_stage::is_descendant_or_self(&owner, &spec.component_path)
+                        || (owner == joint
+                            && property_name.as_str() == "physics:body1"
+                            && target == component)
+                        || (owner == component
+                            && property_name.as_str() == "lunco:mount:attachmentJoint"
+                            && target == joint)
+                        || (spec.socket_path.as_deref() == Some(owner.as_str())
+                            && property_name.as_str() == "lunco:mount:part"
+                            && target == component);
+                if !internal {
+                    return Err(format!(
+                        "{property_kind} {property_path} points into detached component {}; remove that link first",
+                        target,
+                    ));
+                }
             }
         }
     }
@@ -2949,18 +2979,27 @@ fn validate_attach_component(
     if !spec.edit_target.is_root() && !spec.edit_target.is_runtime() {
         return Err(format!("unknown edit target {}", spec.edit_target.as_str()));
     }
-    let composed = host.document().composed();
+    let composed = host
+        .document()
+        .open_composed_stage()
+        .map_err(|error| error.to_string())?;
 
     let host_path = openusd::sdf::Path::new(host_root)
         .map_err(|error| format!("invalid host path {}: {error}", spec.host_path))?;
-    if composed.spec(&host_path).is_none() {
+    if !composed
+        .prim(host_path.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("host body {} does not exist", spec.host_path));
     }
-    if !lunco_usd_data::usd_data::has_authored_api_schema(
-        &composed,
-        &host_path,
-        "PhysicsRigidBodyAPI",
-    ) {
+    if !composed
+        .prim(host_path.clone())
+        .map_err(|error| error.to_string())?
+        .has_api_schema("PhysicsRigidBodyAPI")
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "host {} does not apply PhysicsRigidBodyAPI",
             spec.host_path
@@ -2979,24 +3018,35 @@ fn validate_attach_component(
     let child = format!("{host_root}/{}", spec.name);
     let child_path = openusd::sdf::Path::new(&child)
         .map_err(|error| format!("invalid attached child path {child}: {error}"))?;
-    if composed.spec(&child_path).is_some() {
+    if composed
+        .prim(child_path.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("attached child {child} already exists"));
     }
     let joint = format!("{host_root}/{}", spec.joint_name);
     let joint_path = openusd::sdf::Path::new(&joint)
         .map_err(|error| format!("invalid generated joint path {joint}: {error}"))?;
-    if composed.spec(&joint_path).is_some() {
+    if composed
+        .prim(joint_path.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("generated joint {joint} already exists"));
     }
 
     let Some(socket_path) = spec.socket_path.as_deref() else {
         return Ok(());
     };
-    if !lunco_usd_data::usd_data::has_authored_api_schema(
-        &composed,
-        &host_path,
-        "LunCoMountHostAPI",
-    ) {
+    if !composed
+        .prim(host_path.clone())
+        .map_err(|error| error.to_string())?
+        .has_api_schema("LunCoMountHostAPI")
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "host {} does not apply LunCoMountHostAPI",
             spec.host_path
@@ -3011,18 +3061,27 @@ fn validate_attach_component(
             spec.host_path
         ));
     }
-    if composed.spec(&socket).is_none() {
+    if !composed
+        .prim(socket.clone())
+        .map_err(|error| error.to_string())?
+        .is_valid()
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "socket {socket_path} does not exist in document {doc}"
         ));
     }
-    if !lunco_usd_data::usd_data::has_authored_api_schema(&composed, &socket, "LunCoMountSocketAPI")
+    if !composed
+        .prim(socket.clone())
+        .map_err(|error| error.to_string())?
+        .has_api_schema("LunCoMountSocketAPI")
+        .map_err(|error| error.to_string())?
     {
         return Err(format!(
             "socket {socket_path} does not apply LunCoMountSocketAPI"
         ));
     }
-    let accepts = authored_text(&composed, &socket, "lunco:mount:socket")
+    let accepts = mount_token(&composed, &socket, "lunco:mount:socket")?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("socket {socket_path} has no accepted plug kind"))?;
     let expected_joint = match &spec.joint {
@@ -3030,7 +3089,7 @@ fn validate_attach_component(
         lunco_usd_core::attach::AttachJoint::Revolute { .. } => "revolute",
         lunco_usd_core::attach::AttachJoint::Prismatic { .. } => "prismatic",
     };
-    let actual_joint = authored_text(&composed, &socket, "lunco:mount:joint")
+    let actual_joint = mount_token(&composed, &socket, "lunco:mount:joint")?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("socket {socket_path} has no lunco:mount:joint"))?;
     if actual_joint != expected_joint {
@@ -3048,7 +3107,7 @@ fn validate_attach_component(
         }),
     };
     let authored_axis =
-        authored_text(&composed, &socket, "lunco:mount:axis").filter(|value| !value.is_empty());
+        mount_token(&composed, &socket, "lunco:mount:axis")?.filter(|value| !value.is_empty());
     match (requested_axis, authored_axis.as_deref()) {
         (None, None) => {}
         (None, Some(axis)) => {
@@ -3118,7 +3177,8 @@ fn on_attach_component(
     let spec = trigger.event().spec.clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
     commands.queue(move |world: &mut World| {
-        let outcome = match validate_attach_component(world, doc, &spec) {
+        let outcome = match refresh_authoring_recipe(world, doc)
+            .and_then(|()| validate_attach_component(world, doc, &spec)) {
             Err(error) => Err(error),
             Ok(()) => {
                 let ops = lunco_usd_core::attach::attach_component_ops(&spec);
@@ -3165,7 +3225,9 @@ fn on_detach_component(
     let command = trigger.event().clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
     commands.queue(move |world: &mut World| {
-        let outcome = match validate_detach_component(world, command.doc_id, &command.spec) {
+        let outcome = match refresh_authoring_recipe(world, command.doc_id)
+            .and_then(|()| validate_detach_component(world, command.doc_id, &command.spec))
+        {
             Err(error) => Err(error),
             Ok(()) => {
                 let ops = lunco_usd_core::attach::detach_component_ops(&command.spec);

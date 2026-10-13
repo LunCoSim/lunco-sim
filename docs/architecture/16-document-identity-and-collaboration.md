@@ -141,6 +141,18 @@ reject at this owner. Document queries capture the mounted canonical stage's
 current admitted dependency closure, including newly loaded references; an
 unmounted stage uses its worker-prepared source recipe.
 
+Mount validation and deletion guards read native prim validity, applied schemas,
+tokens, relationships, and connections. Native namespace mapping and ListOp
+composition determine incoming edges; failed reads reject the operation.
+The document projection owner admits a batch's new reference closures before
+replaying any opinions, including sibling joint/relationship declarations.
+An incomplete closure holds that document generation; no intermediate topology
+is published to physics. This uses the same native preparation for incremental
+and coarse edits.
+The ambient authoring solve traverses the native document stage and consumes
+UsdLux defaults, exposure, references and activity. Connected or time-varying
+inputs reject the authored lighting update before any document edits are queued.
+
 `StageRecipe` captures root bytes and an optional explicit session layer.
 `lunco-usd-compose::open_recipe` is the shared native stage factory for document
 and runtime readers. Session content participates in the closure identity;
@@ -195,6 +207,14 @@ Replacement stages publish a root notice through native address admission
 before ECS reset and projection acknowledgment. Generic program projection
 retains its admitted source selection and resolved asset address on the owner;
 unrelated stage edits do not resubmit an unchanged executable source.
+
+Preview text captures the admitted native closure and authored layer snapshot.
+The worker exports authored source and a native `Stage::flatten` result for the
+read-only composed display. That display is never used as authored save or
+dependent-layer transport. Results must match the document generation and source
+projection plan; stale work is coalesced into the latest request.
+Text preparation starts after source asset admission and
+is refreshed when preview projection settles.
 
 Omniverse makes the active authoring layer visible in its Layers panel, while its
 Session Layer is temporary working state. LunCoSim's persisted `@runtime@` is a

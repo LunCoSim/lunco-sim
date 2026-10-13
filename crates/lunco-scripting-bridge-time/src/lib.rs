@@ -336,6 +336,46 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
 
         let running = virtual_snapshot.is_some_and(|(_, _, rate, paused)| !paused && rate > 0.0);
         let mut entries = vec![
+            (
+                "simulation_progress".to_owned(),
+                world
+                    .get_resource::<lunco_core_runtime::SimulationProgress>()
+                    .map_or_else(
+                        || b.unit(),
+                        |progress| {
+                            b.map(vec![
+                                ("held".to_owned(), b.bool(progress.is_held())),
+                                (
+                                    "blockers".to_owned(),
+                                    b.array(
+                                        progress
+                                            .blockers()
+                                            .map(|blocker| {
+                                                b.map(vec![
+                                                    (
+                                                        "owner".to_owned(),
+                                                        b.string(&format!(
+                                                            "{:?}",
+                                                            blocker.key.owner
+                                                        )),
+                                                    ),
+                                                    (
+                                                        "operation_id".to_owned(),
+                                                        b.uint(blocker.key.operation_id),
+                                                    ),
+                                                    (
+                                                        "reason".to_owned(),
+                                                        b.string(&blocker.reason),
+                                                    ),
+                                                ])
+                                            })
+                                            .collect(),
+                                    ),
+                                ),
+                            ])
+                        },
+                    ),
+            ),
             ("sim_tick".to_owned(), b.int(tick as i64)),
             (
                 "admitted_sim_elapsed_s".to_owned(),

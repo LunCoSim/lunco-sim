@@ -594,8 +594,7 @@ fn instantiate_usd_prim(
         );
         return;
     };
-    let (reader, stage_generation) =
-        canonical.reader_for_entity(id, stage_asset, instance_projection);
+    let (reader, stage_generation) = canonical.reader_for(id, stage_asset);
     instantiate_usd_prim_from_reader(
         &reader,
         entity,
@@ -2370,11 +2369,9 @@ fn admit_pending_usd_children(
             );
             continue;
         };
-        let (reader, _) = context.canonical.reader_for_entity(
-            parent_prim_path.stage_handle.id(),
-            stage_asset,
-            instance_projection,
-        );
+        let (reader, _) = context
+            .canonical
+            .reader_for(parent_prim_path.stage_handle.id(), stage_asset);
         let Ok(child_path) = SdfPath::new(&child_path_text) else {
             fail_usd_projection(
                 parent,
@@ -3314,12 +3311,7 @@ fn refresh_standard_surface_material_intents(
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
     twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
-    prims: Query<(
-        Entity,
-        &UsdPrimPath,
-        Option<&UsdInstanceProjection>,
-        Option<&UsdVisualMeshTarget>,
-    )>,
+    prims: Query<(Entity, &UsdPrimPath, Option<&UsdVisualMeshTarget>)>,
     looks: Query<&PbrLook>,
     mut commands: Commands,
 ) {
@@ -3360,14 +3352,14 @@ fn refresh_standard_surface_material_intents(
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
-        for (entity, prim_path, instance, visual_target) in &prims {
+        for (entity, prim_path, visual_target) in &prims {
             if prim_path.stage_handle.id() != stage_id {
                 continue;
             }
             let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
                 continue;
             };
-            let (reader, _) = canonical.reader_for_entity(stage_id, stage_asset, instance);
+            let (reader, _) = canonical.reader_for(stage_id, stage_asset);
             let Some(material_path) = UsdRead::bound_material(
                 &reader,
                 &sdf_path,

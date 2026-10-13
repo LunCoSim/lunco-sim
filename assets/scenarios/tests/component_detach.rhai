@@ -17,7 +17,7 @@ fn fail(me, message) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -26,17 +26,17 @@ fn on_start(me, ctx) {
     // again. Keep the state in the runtime USD document, not in transient
     // `this` fields that would issue duplicate commands after re-projection.
     this.phase = "discover";
-    this.doc = -1;
+    this.doc = ();
     this.done = false;
 }
 
 fn find_usd_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () { return -1; }
+    if docs == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" { return item.doc_id; }
     }
-    -1
+    ()
 }
 
 fn one_relationship(record, name) {
@@ -74,9 +74,9 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_usd_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "no open USD document was discoverable"); }
             return;
         }

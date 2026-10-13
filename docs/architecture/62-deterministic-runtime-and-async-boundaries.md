@@ -95,26 +95,21 @@ reached their live instance projection. The pending roots come from the edit's
 typed reference-add operations, so a root is tracked even before its async asset
 admission reaches the stage sink. Pending references elsewhere in the same
 stage do not delay this edit's completion or release of its document-projection
-hold. Each authoritative pending reference retains its own `SceneReferences`
-hold until its instance projection reaches ECS.
+hold. The document key covers native closure preparation and the active
+reference roots entering ECS.
 Authored policy filters that typed path set
 before it re-reads route topology, so unrelated edits in the same document do
 not cause a route scan in the fixed simulation cycle.
 
-Document-backed runtime reference spawns keep the document's authored
-reference as authority. Once the source asset is prepared, the live stage
-authors only the instance root while the per-instance `UsdStageProjectionPlan`
-projects its subtree. Every render, physics, and authored-runtime reader uses
-that remapped plan until an edit changes facts outside its typed root pose and
-catalog identity. The first such edit composes the reference into the canonical
-stage once, then a shared promotion state moves every entity reader to that
-stage. Deleting an unpromoted root removes the lightweight root and its ECS
-subtree without composing the reference. Simple `QueryUsdPrim` reads use the
-same prepared plan, selected from the nearest instance root even when the
-queried child already has a live entity. A promoted nested root stops an
-unpromoted ancestor from selecting its older plan. Explicit geometry and
-topology queries read the owning document's composed stage. Promotion errors fault the mounted scene and reject
-the live projection of the edit.
+Document-backed reference batches admit their complete native dependency closure
+before typed replay. Native reference arcs are authored before any sibling
+relationship or joint can be projected. Render, physics, authored-runtime and
+query readers use the same scene-stage owner. The native change sink and generic
+projection queue own bounded ECS materialization; retained source handles own
+closure lifetime. No instance read-mode transition is needed after an edit.
+The document key retains its scoped admission hold, while malformed or policy-rejected closures terminate with a
+structured stage-projection diagnostic before an intermediate topology is
+published.
 
 An edit to a document's root scene is already owned by that scene's canonical
 stage. Dependent-stage refresh applies only when the changed layer is composed
@@ -221,10 +216,11 @@ route or a second scene-ready signal. The identity owner collects assignments
 in query iteration order and commits the same-component IDs through Bevy's
 fallible batch command before `EntityIndex`. The production `route_lifecycle`
 Rhai gate exercises reference admission and verifies that first-tick observation.
-The owner-level `drain_ref_spawns` test makes a later reference ready before its
-authored predecessor, confirms neither prim is projected while the prefix is
-incomplete, and checks both live-stage commits follow authored order after the
-predecessor becomes ready.
+Reference batches wait for their entire admitted closure before ordered native
+replay. Their document projection lease waits for active reference roots to
+reach the generic live ECS projection; worker completion cannot publish an
+intermediate sibling joint topology. `clock_snapshot().simulation_progress`
+reports the held state and ordered owner/operation/reason facts.
 
 Scene, scene-time, terrain, Modelica initialization, and primary physics
 admission all hold the shared fixed clock until their owners publish readiness.
@@ -531,18 +527,11 @@ plugins control their cadence. GUI terrain cover selection runs at a 30 Hz
 queue and current results commit in `Update`. Tile-mesh bake completion and
 residency also commit in `Update`. Offline capture bypasses the cadence and
 prepares covers synchronously at each captured frame.
-An active reference spawn on the mounted primary `UsdSceneRoot` acquires a
-`SceneReferences` operation key when the typed structural change is admitted.
-Its hold follows the prepared closure through live-stage authoring and ECS root
-projection. Queue admission reads the current prepared-asset store and load
-state as well as lifecycle messages, so an asset event consumed before the
-typed edit arrives cannot strand that operation. A recorded load failure wins
-over a retained older asset value, and an in-progress reload keeps that older
-value from committing before the replacement is ready. If the failure event
-was already consumed, admission retains the asset server's load error for the
-reference diagnostic. Preview and additive document references keep their own
-projection lifecycle and diagnostics; they do not hold or fault the primary
-simulation.
+A reference batch on the primary scene shares its document-projection key from
+closure preparation through native authoring and active-root ECS projection.
+Preparation reads the current asset store and load state as well as lifecycle
+messages. Failures remain visible at the projection owner. Preview and additive
+documents retain their own projection lifecycle and cannot hold the primary.
 Persistent edits to the mounted primary document also acquire a coalesced
 `UsdDocumentProjection` key as soon as the document registry revision changes.
 Change detection admits edits from UI/command cycles in the shared
@@ -594,6 +583,7 @@ any causally required Modelica compile has settled. Live replacement keeps the
 installed interface active while preparing its replacement; it does not reopen
 initial-scene admission.
 The causal transaction follows explicit owner phases:
+
 
 1. Capture external commands and events as typed inputs with their authoritative
    tick and stable producer/order key.
@@ -1344,7 +1334,7 @@ The whole-simulation guarantee remains open because:
 2. Dynamic references on the mounted primary scene hold admission through
    closure preparation and live projection. Their incomplete closures use the
    same Rhai composition decision as initial scene closures before live-stage
-   mutation; rejection or policy failure keeps the exact reference hold and
+   mutation; rejection or policy failure keeps the affected document hold and
    faults the primary simulation. Preview and additive mounts remain
    independent. Initial USD composition dependencies are fetched and composed
    by the root asset loader before the stage asset reaches structural

@@ -75,7 +75,7 @@ use lunco_usd_bevy_scene::{
     UsdSceneGeometryPending, UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued,
     UsdStageRevision, UsdVisualMeshTarget, is_preview_entity,
 };
-use lunco_usd_bevy_stage::{UsdStageAsset, is_descendant_or_self};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages, is_descendant_or_self};
 #[cfg(test)]
 use lunco_usd_viewport_core::UsdPreviewTextLayer;
 use lunco_usd_viewport_core::{
@@ -196,6 +196,8 @@ struct PendingUsdPreviewTextReads {
 }
 
 struct PendingUsdPreviewTextRead {
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    stage_plan: std::sync::Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
     preview: UsdPreviewId,
     doc: DocumentId,
     generation: u64,
@@ -353,6 +355,25 @@ fn sync_usd_prim_display_mode_intents(
     }
 }
 
+fn prepare_native_preview_text(
+    document: UsdDocument,
+    snapshot: lunco_usd_bevy_stage::canonical::CanonicalStageRecipeSnapshot,
+) -> Result<(String, String), String> {
+    if let Some(error) = document.parse_error() {
+        return Err(error.to_owned());
+    }
+    let source = document.source().map_err(|error| error.to_string())?;
+    let recipe = snapshot.into_recipe().map_err(|error| error.to_string())?;
+    let stage = document
+        .open_composed_stage_with_recipe(&recipe)
+        .map_err(|error| error.to_string())?;
+    let flattened = stage.flatten().map_err(|error| error.to_string())?;
+    let composed = flattened
+        .export_to_string()
+        .map_err(|error| error.to_string())?;
+    Ok((source, composed))
+}
+
 /// Queue one authored/composed text snapshot for a preview session. The
 /// document is cloned at the generation boundary and serialized on the async
 /// worker, so egui never performs USDA serialization. A second request while
@@ -371,6 +392,33 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
         })
     else {
         return;
+    };
+
+    let stage_id = world
+        .resource::<UsdViewportState>()
+        .session(preview)
+        .expect("captured preview session exists")
+        .stage_handle
+        .id();
+    let assets = world.resource::<Assets<UsdStageAsset>>();
+    let Some(asset) = assets.get(stage_id) else {
+        return;
+    };
+    let stage_plan = std::sync::Arc::clone(&asset.projection_plan);
+    let snapshot = match world
+        .non_send::<CanonicalStages>()
+        .recipe_snapshot_for(stage_id, assets)
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            if let Some(session) = world
+                .resource_mut::<UsdViewportState>()
+                .session_mut(preview)
+            {
+                session.text.error = Some(error.to_string());
+            }
+            return;
+        }
     };
 
     let request = {
@@ -405,21 +453,15 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        document
-            .source()
-            .and_then(|source| {
-                document
-                    .composed_source()
-                    .map(|composed| (source, composed))
-            })
-            .map_err(|error| error.to_string())
-    });
+    let task = AsyncComputeTaskPool::get()
+        .spawn(async move { prepare_native_preview_text(document, snapshot) });
     #[cfg(not(target_arch = "wasm32"))]
     world
         .resource_mut::<PendingUsdPreviewTextReads>()
         .tasks
         .push(PendingUsdPreviewTextRead {
+            stage_id,
+            stage_plan,
             preview,
             doc,
             generation,
@@ -431,21 +473,14 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
     {
         let (tx, result) = crossbeam_channel::bounded(1);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = tx.send(
-                document
-                    .source()
-                    .and_then(|source| {
-                        document
-                            .composed_source()
-                            .map(|composed| (source, composed))
-                    })
-                    .map_err(|error| error.to_string()),
-            );
+            let _ = tx.send(prepare_native_preview_text(document, snapshot));
         });
         world
             .resource_mut::<PendingUsdPreviewTextReads>()
             .tasks
             .push(PendingUsdPreviewTextRead {
+                stage_id,
+                stage_plan,
                 preview,
                 doc,
                 generation,
@@ -503,6 +538,10 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(read.doc)
             .map(|host| host.generation());
+        let stage_current = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(read.stage_id)
+            .is_some_and(|asset| std::sync::Arc::ptr_eq(&asset.projection_plan, &read.stage_plan));
         let mut retry = false;
         {
             let mut state = world.resource_mut::<UsdViewportState>();
@@ -512,7 +551,8 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
             if session.doc != read.doc || session.text.request != read.request {
                 continue;
             }
-            let current = current_generation == Some(read.generation)
+            let current = stage_current
+                && current_generation == Some(read.generation)
                 && session.text.requested_generation == Some(read.generation);
             session.text.loading = false;
             if !current {
@@ -644,6 +684,7 @@ fn preview_projection_inputs_changed(
 /// have cleared the USD visual queue and CPU mesh phase.
 fn reconcile_preview_projection_state(
     mut state: ResMut<UsdViewportState>,
+    mut commands: Commands,
     registry: Res<DocumentRegistry<UsdDocument>>,
     roots: Query<
         (
@@ -713,6 +754,8 @@ fn reconcile_preview_projection_state(
                 if !session.projection_ready || session.projected_generation != generation {
                     session.projected_generation = generation;
                     session.projection_ready = true;
+                    commands
+                        .queue(move |world: &mut World| request_preview_text_read(world, preview));
                 }
             }
         } else {
@@ -4092,12 +4135,26 @@ mod tests {
         app.init_resource::<PendingUsdPreviewTextReads>();
         app.add_systems(Update, drain_pending_usd_preview_text_reads);
 
+        app.init_resource::<Assets<UsdStageAsset>>();
+        app.world_mut().insert_non_send(CanonicalStages::default());
         let source = "#usda 1.0\ndef Xform \"Initial\" {}\n";
         let doc = app
             .world_mut()
             .resource_mut::<DocumentRegistry<UsdDocument>>()
             .open_file("/tmp/usd_preview_text_generation.usda", source.to_string())
             .0;
+        let recipe = app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .unwrap()
+            .document()
+            .stage_recipe("file:///tmp/usd_preview_text_generation.usda", true)
+            .unwrap();
+        let stage = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(recipe).unwrap());
         let preview = UsdPreviewId(8);
         let view_id = UsdPreviewViewId(12);
         let session = create_preview_session(
@@ -4105,7 +4162,7 @@ mod tests {
             preview,
             doc,
             LayerId::root(),
-            Handle::default(),
+            stage,
             FIRST_PREVIEW_RENDER_LAYER,
             view_id,
         )

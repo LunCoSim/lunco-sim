@@ -1762,18 +1762,19 @@ fn is_mount_component(
     registry: &DocumentRegistry<UsdDocument>,
     doc: lunco_doc::DocumentId,
     path: &str,
-) -> bool {
-    let Ok(path) = openusd::sdf::Path::new(path) else {
-        return false;
-    };
-    registry.host(doc).is_some_and(|host| {
-        let composed = host.document().composed();
-        lunco_usd_data::usd_data::has_authored_api_schema(
-            &composed,
-            &path,
-            "LunCoMountAttachmentAPI",
-        )
-    })
+) -> Result<bool, String> {
+    let path = openusd::sdf::Path::new(path).map_err(|error| error.to_string())?;
+    let document = registry
+        .host(doc)
+        .ok_or_else(|| format!("unknown USD document {doc}"))?
+        .document();
+    document
+        .open_composed_stage()
+        .map_err(|error| error.to_string())?
+        .prim(path)
+        .map_err(|error| error.to_string())?
+        .has_api_schema("LunCoMountAttachmentAPI")
+        .map_err(|error| error.to_string())
 }
 
 /// Resolve an entity's scene-owned USD document from the stage it was
@@ -1862,7 +1863,7 @@ pub fn on_delete_entity(
                 warn!(target = ?cmd.target, path = %prim.path, "{message}");
                 return Err(message);
             };
-            if is_mount_component(registry, doc, &prim.path) {
+            if is_mount_component(registry, doc, &prim.path)? {
                 let message = format!(
                     "target {} is an attached component; use DetachComponent",
                     prim.path
@@ -1871,7 +1872,7 @@ pub fn on_delete_entity(
                 return Err(message);
             }
         } else if let (Some(registry), Some(doc)) = (usd_registry.as_deref(), owner)
-            && is_mount_component(registry, doc, &prim.path)
+            && is_mount_component(registry, doc, &prim.path)?
         {
             let message = format!(
                 "target {} is an attached component; use DetachComponent",
@@ -1938,7 +1939,14 @@ pub fn persist_delete_to_runtime_layer(
         warn!(target = ?cmd.target, path = %prim.path, "persistent delete target is not authorable in its owning USD document");
         return;
     };
-    if is_mount_component(&usd_registry, doc, &path) {
+    let mounted = match is_mount_component(&usd_registry, doc, &path) {
+        Ok(mounted) => mounted,
+        Err(error) => {
+            warn!("DELETE_ENTITY persistence cannot inspect document {doc}: {error}");
+            return;
+        }
+    };
+    if mounted {
         warn!(
             "DELETE_ENTITY persistence rejected for attached component {}; use DetachComponent",
             path
@@ -2108,13 +2116,19 @@ pub fn persist_environment_light_to_runtime_layer(
     // different ambient value.
     let ambient_plan = if let Some(requested) = cmd.ambient_brightness {
         let fill_path = format!("{env_path}/AmbientFill");
-        let composed = host.document().composed_arc();
+        let composed = match host.document().open_composed_stage() {
+            Ok(stage) => stage,
+            Err(error) => {
+                error!("[scene-commands] cannot compose lighting document {doc}: {error}");
+                return;
+            }
+        };
         let fill_sdf = openusd::sdf::Path::new(&fill_path).ok();
         match lunco_usd_bevy_light::light::untextured_dome_intensity_sum(
             &composed,
             fill_sdf.as_ref(),
         ) {
-            Ok(others) => Some((requested, others, fill_path)),
+            Ok(others) => Some((f64::from(requested), others, fill_path)),
             Err(_) => {
                 error!(
                     "[scene-commands] refusing environment update: authored DomeLight \
@@ -2303,10 +2317,8 @@ pub fn persist_environment_light_to_runtime_layer(
     // Authoring `requested - others` makes the composed total land exactly on the
     // request, so the knob is stable under its own feedback.
     if let Some((requested, others, fill_path)) = ambient_plan {
-        // Read the composed (base ⊕ runtime) layer data, so a fill dome authored
-        // by an earlier drag — which lives only in the runtime overlay — is seen
-        // and correctly EXCLUDED from "other domes" rather than subtracted from
-        // itself, which would ratchet the value down on every drag.
+        // The native sum excludes the current runtime fill, including opinions
+        // from earlier drags, so repeated writes preserve the requested total.
         let intensity = lunco_usd_bevy_light::light::ambient_fill_intensity(requested, others);
 
         if lunco_usd_bevy_light::light::ambient_fill_saturates(requested, others) {

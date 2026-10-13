@@ -830,14 +830,7 @@ fn build_terrain_mesh_colliders(
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdSceneProjected>,
-    query: Query<
-        (
-            &UsdPrimPath,
-            Option<&UsdInstanceProjection>,
-            Option<&UsdInstanceMember>,
-        ),
-        Without<UsdPhysicsProjected>,
-    >,
+    query: Query<(&UsdPrimPath, Option<&UsdInstanceMember>), Without<UsdPhysicsProjected>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -851,7 +844,7 @@ fn process_usd_avian_prims(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, instance_projection, instance_member)) = query.get(entity) else {
+    let Ok((prim_path, instance_member)) = query.get(entity) else {
         return;
     };
     // A USD Editor preview shares the normal visual projection pipeline with
@@ -897,7 +890,7 @@ fn process_usd_avian_prims(
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
-    let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, instance_projection);
+    let (reader, _generation) = canonical.reader_for(id, stage_asset);
     bevy::log::debug!(
         "[canonical] avian extract from composed reader: {}",
         prim_path.path
@@ -1533,7 +1526,7 @@ fn local_vector_to_world(
 /// UsdPhysics joint attributes through the shared reader boundary.
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
-    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>)>,
+    query: Query<&UsdPrimPath>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -1543,7 +1536,7 @@ fn on_add_usd_prim(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, instance_projection)) = query.get(entity) else {
+    let Ok(prim_path) = query.get(entity) else {
         return;
     };
     // Joint authoring is shared with the visual projection, but Editor
@@ -1561,7 +1554,7 @@ fn on_add_usd_prim(
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
         return;
     };
-    let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, instance_projection);
+    let (reader, _generation) = canonical.reader_for(id, stage_asset);
     if reader
         .real_f32(&sdf_path, "physxVehicleWheel:radius")
         .is_some()

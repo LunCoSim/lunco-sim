@@ -86,22 +86,12 @@ handles own asset lifetime; the index and weak recipe cache are derived state.
 Transform edits update every indexed entity sharing that stage/path, including
 preview copies. Scale is applied only beneath `UsdPreviewOnly`; a live body's
 scale remains unchanged. Structural reconciliation still excludes previews.
-For a document-backed runtime reference spawn, the authored document keeps the
-reference arc. The live canonical stage receives only the instance root while
-an instance-scoped view over the shared immutable prepared snapshot projects
-the source asset's `defaultPrim` subtree. The view maps paths into the instance
-namespace and stores root pose and `lunco:catalogId` overrides; creating the
-view is constant time with respect to the source prim count. The first other
-authored edit composes the reference once, then shared promotion state switches
-every entity clone to the canonical reader. Root deletion can remove an
-unpromoted instance without composing its source. Keep simple `QueryUsdPrim`
-reads on the same plan; explicit geometry/topology queries use the owning
-document's composed stage. A failed promotion faults the mounted scene and
-rejects that live edit.
-
-The stage ID committed by the document projection owner identifies the live
-stage; use `stage_asset_for_document` rather than an asset-server filename
-lookup. Source-text and stage assets may share a path but have different types.
+For a document-backed reference batch, admit the native closure before replay
+and author the native arc before sibling relationships or joints. Instance
+snapshots own bounded ECS materialization; composed reads use the scene-stage
+reader. Edits and deletion stay on that owner throughout the instance lifecycle.
+Resolve schema through the entity's stage/prim identity, because different
+stage assets may share a path but have different types.
 Changes to a document's root scene are projected by its canonical stage. Only
 different recipe roots that compose the changed layer are dependent refresh
 targets; the root scene never refreshes itself as a dependent stage.
@@ -409,12 +399,11 @@ patch commits; removing the last annotation clears it immediately.
 typed event data. A policy that caches composed facts should check this path set
 before issuing document queries; unrelated document edits are not a request to
 rescan the whole owned subtree. The event closes the live handoff only after
-referenced roots changed by that edit and their prepared instance projections
+active referenced roots changed by that edit and their native ECS projections
 have reached the ECS scene. Typed reference-add intents seed this required-root
 set before the asynchronous asset admission emits a stage notice; pending
 references elsewhere in the mounted stage do not delay this edit or retain its
-document-projection hold. An authoritative pending reference still owns its
-independent `SceneReferences` key until its instance projection is in ECS.
+document-projection hold. The document-projection key remains held until those active roots are in ECS.
 Partial ancestor sink notices are accumulated into that one completion event.
 Each live `UsdInstanceProjection`
 retains its source asset handle with its remapped immutable plan. Sibling

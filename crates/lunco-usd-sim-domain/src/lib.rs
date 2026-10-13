@@ -537,7 +537,6 @@ struct PendingDomainProjection {
     /// Prepared runtime instances are immutable read surfaces. Their scene
     /// stage generation may advance when the spawn layer is authored, so the
     /// canonical-generation fence only applies to ordinary scene plans.
-    instance_plan: bool,
     root_path: String,
     model_name: String,
     requested: String,
@@ -1082,7 +1081,6 @@ fn queue_domain_projection_work(
     model_name: String,
     requested: String,
     plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
-    instance_plan: bool,
     work: impl FnOnce() -> Result<SynthOutcome, Vec<DomainProjectionError>> + Send + 'static,
 ) -> Result<(), lunco_core_runtime::AsyncWorkRejection> {
     let operation = pending.allocate_operation();
@@ -1095,7 +1093,6 @@ fn queue_domain_projection_work(
             stage_id,
             stage_generation,
             scene_generation,
-            instance_plan,
             root_path: root_path.clone(),
             model_name,
             requested,
@@ -1143,7 +1140,6 @@ fn queue_domain_projection_work(
                 stage_id,
                 stage_generation,
                 scene_generation,
-                instance_plan,
                 root_path,
                 model_name,
                 requested,
@@ -1160,7 +1156,6 @@ fn queue_domain_projection_work(
                 stage_id,
                 stage_generation,
                 scene_generation,
-                instance_plan,
                 root_path: root_path.clone(),
                 model_name,
                 requested,
@@ -1191,7 +1186,6 @@ fn queue_domain_projection(
     requested: String,
     synthesizer: Arc<dyn DomainSynthesizer>,
     plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
-    instance_plan: bool,
     classes: &MemberClasses,
     class_assets: Option<&HashSet<String>>,
     telemetry_index: Option<Arc<OnceLock<Arc<AuthoredTelemetryIndex>>>>,
@@ -1229,7 +1223,6 @@ fn queue_domain_projection(
         model_name,
         requested,
         plan,
-        instance_plan,
         work,
     )
 }
@@ -1646,8 +1639,7 @@ pub fn project_domain_islands(
                 continue;
             }
         };
-        let (canonical_reader, stage_generation) =
-            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let (canonical_reader, stage_generation) = canonical.reader_for(id, stage_asset);
         let prepared_network = instance_projection.is_none()
             && class_users
                 .paths_by_root
@@ -1670,21 +1662,7 @@ pub fn project_domain_islands(
             if pending.tasks.iter().any(|task| task.entity == entity) {
                 continue;
             }
-            // A runtime reference owns a remapped prepared plan.  The scene's
-            // base plan contains only the stage as it was loaded and therefore
-            // cannot see the referenced component collection added by a later
-            // spawn.  Keep the task on the same immutable read surface that
-            // admitted the root so discovery and synthesis cannot disagree
-            // about the composed network.
-            let plan = instance_projection
-                .map(|projection| projection.plan.clone())
-                .unwrap_or_else(|| {
-                    stages
-                        .get(&prim.stage_handle)
-                        .expect("loaded USD asset always carries a prepared projection plan")
-                        .projection_plan
-                        .clone()
-                });
+            let plan = stage_asset.projection_plan.clone();
             if !is_runtime_domain_network_root(reader, &root_path) {
                 clear_pending_domain_projection(
                     entity,
@@ -1727,7 +1705,6 @@ pub fn project_domain_islands(
                 requested,
                 synthesizer,
                 plan,
-                instance_projection.is_some(),
                 &classes,
                 class_users.assets_by_root.get(&entity),
                 Some(telemetry_slot),
@@ -1788,7 +1765,6 @@ pub fn project_domain_islands(
                 requested,
                 synthesizer,
                 plan,
-                false,
                 &classes,
                 class_users.assets_by_root.get(&entity),
                 None,
@@ -1874,7 +1850,6 @@ pub fn project_domain_islands(
             model_name,
             requested,
             task_plan,
-            false,
             move || work.run(),
         ) {
             bevy::log::warn!(
@@ -1908,7 +1883,6 @@ pub fn poll_domain_projection_tasks(
         &UsdPrimPath,
         Option<&DomainProjectionState>,
         Option<&ModelicaModel>,
-        Option<&UsdInstanceProjection>,
     )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -1992,7 +1966,7 @@ pub fn poll_domain_projection_tasks(
             lunco_core_runtime::SimulationProgressKey::usd_domain_projection(front.entity),
         ) && prims
             .get(front.entity)
-            .is_ok_and(|(_, previous, _, _)| previous.is_none());
+            .is_ok_and(|(_, previous, _)| previous.is_none());
         if !initial_domain_publication_is_admitted(
             &settings,
             commits,
@@ -2004,8 +1978,7 @@ pub fn poll_domain_projection_tasks(
         }
         let mut task = pending.tasks.pop_front().expect("front task was checked");
         let synthesized = task.completed.take().expect("front result was checked");
-        let Ok((prim, previous, installed_model, instance_projection)) = prims.get(task.entity)
-        else {
+        let Ok((prim, previous, installed_model)) = prims.get(task.entity) else {
             continue;
         };
         if prim.stage_handle.id() != task.stage_id {
@@ -2014,14 +1987,7 @@ pub fn poll_domain_projection_tasks(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        if task.instance_plan {
-            let Some(instance_projection) = instance_projection else {
-                continue;
-            };
-            if !Arc::ptr_eq(&task.plan, &instance_projection.plan) {
-                continue;
-            }
-        } else if canonical.generation_for(task.stage_id) != task.stage_generation {
+        if canonical.generation_for(task.stage_id) != task.stage_generation {
             let still_matches_prepared_scene =
                 Arc::ptr_eq(&task.plan, &stage_asset.projection_plan)
                     && class_users
@@ -2037,8 +2003,8 @@ pub fn poll_domain_projection_tasks(
             continue;
         };
         let (canonical_reader, commit_generation) =
-            canonical.reader_for_entity(task.stage_id, stage_asset, instance_projection);
-        let prepared_plan = task.instance_plan || commit_generation == 0;
+            canonical.reader_for(task.stage_id, stage_asset);
+        let prepared_plan = commit_generation == 0;
         let view: &dyn ComposedReader = if prepared_plan {
             task.plan.as_ref()
         } else {
@@ -2915,8 +2881,7 @@ pub fn resolve_member_classes(
                 candidates.wait_for_stage(id, entity);
                 continue;
             };
-            let (reader, stage_generation) =
-                canonical.reader_for_entity(id, stage_asset, instance_projection);
+            let (reader, stage_generation) = canonical.reader_for(id, stage_asset);
             let view: &dyn ComposedReader = &reader;
             let Ok(root) = SdfPath::new(&prim.path) else {
                 if projection_pending {

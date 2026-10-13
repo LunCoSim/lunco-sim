@@ -269,7 +269,7 @@ pub(crate) fn reference(
     }
     let reference_key = (stage, reference.to_owned());
     let ready = world
-        .resource::<crate::twin_projection::PendingRefSpawns>()
+        .resource::<crate::twin_projection::ReferenceLayerInputs>()
         .native
         .entries
         .get(&reference_key)
@@ -306,7 +306,7 @@ pub(crate) fn reference(
             },
         };
         if let Some(phase) = next_phase {
-            let mut pending = world.resource_mut::<crate::twin_projection::PendingRefSpawns>();
+            let mut pending = world.resource_mut::<crate::twin_projection::ReferenceLayerInputs>();
             if let Some(entry) = pending.native.entries.get_mut(&reference_key) {
                 entry.phase = phase;
             }
@@ -314,11 +314,11 @@ pub(crate) fn reference(
         }
     }
     let result = world
-        .resource_mut::<crate::twin_projection::PendingRefSpawns>()
+        .resource_mut::<crate::twin_projection::ReferenceLayerInputs>()
         .native
         .request(reference_key, owner);
     if world
-        .resource::<crate::twin_projection::PendingRefSpawns>()
+        .resource::<crate::twin_projection::ReferenceLayerInputs>()
         .native
         .dirty
         && let Some(wake) = world.get_resource::<lunco_usd_bevy_twin::TwinProjectionWake>()
@@ -353,7 +353,7 @@ fn current_source(
 /// Out-of-date results never release a reference or document-projection hold.
 pub(crate) fn advance(world: &mut World) {
     let native = &world
-        .resource::<crate::twin_projection::PendingRefSpawns>()
+        .resource::<crate::twin_projection::ReferenceLayerInputs>()
         .native;
     if native.entries.is_empty()
         && !native.dirty
@@ -364,7 +364,7 @@ pub(crate) fn advance(world: &mut World) {
     }
     let mut pending = std::mem::take(
         &mut world
-            .resource_mut::<crate::twin_projection::PendingRefSpawns>()
+            .resource_mut::<crate::twin_projection::ReferenceLayerInputs>()
             .native,
     );
     pending.dirty = false;
@@ -645,7 +645,7 @@ pub(crate) fn advance(world: &mut World) {
         }
     }
     world
-        .resource_mut::<crate::twin_projection::PendingRefSpawns>()
+        .resource_mut::<crate::twin_projection::ReferenceLayerInputs>()
         .native = pending;
     if let Some(wake) = world.get_resource::<lunco_usd_bevy_twin::TwinProjectionWake>() {
         wake.wake();
@@ -679,7 +679,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>();
-        app.init_resource::<crate::twin_projection::PendingRefSpawns>();
+        app.init_resource::<crate::twin_projection::ReferenceLayerInputs>();
         app.init_resource::<AsyncWorkAdmission>();
         app.init_resource::<SimulationProgress>();
         let source = UsdStageAsset::from_recipe(recipe.as_ref().clone()).unwrap();
@@ -713,7 +713,7 @@ mod tests {
         {
             let mut pending = app
                 .world_mut()
-                .resource_mut::<crate::twin_projection::PendingRefSpawns>();
+                .resource_mut::<crate::twin_projection::ReferenceLayerInputs>();
             pending.native.entries.insert(
                 reference_key.clone(),
                 Entry {
@@ -741,7 +741,7 @@ mod tests {
         advance(app.world_mut());
         let pending = app
             .world()
-            .resource::<crate::twin_projection::PendingRefSpawns>();
+            .resource::<crate::twin_projection::ReferenceLayerInputs>();
         let entry = &pending.native.entries[&reference_key];
         assert_eq!(entry.work, Some((key, 2)));
         assert!(matches!(entry.phase, Phase::Preparing { .. }));
@@ -759,7 +759,7 @@ mod tests {
         assert!(!entry.accepts(2, Some(&changed_owner)));
         let mut pending = app
             .world_mut()
-            .resource_mut::<crate::twin_projection::PendingRefSpawns>();
+            .resource_mut::<crate::twin_projection::ReferenceLayerInputs>();
         let outgoing = Arc::clone(&pending.native.completions);
         let outgoing_ready = Arc::clone(&pending.native.completion_ready);
         pending.native.clear(None);
@@ -779,7 +779,7 @@ mod tests {
         advance(app.world_mut());
         assert!(
             !app.world()
-                .resource::<crate::twin_projection::PendingRefSpawns>()
+                .resource::<crate::twin_projection::ReferenceLayerInputs>()
                 .native
                 .needs_work(0)
         );

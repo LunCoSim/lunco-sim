@@ -100,6 +100,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "projected_generation": session.projected_generation(),
                     "projection_ready": session.projection_ready(),
                     "text_ready": session.text_ready(),
+                    "text_error": session.text.error.clone(),
                     "explode": session.explode.as_ref().map(|explode| {
                         api_value!({
                             "assembly": explode.assembly.clone(),

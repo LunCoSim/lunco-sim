@@ -288,25 +288,15 @@ table without native I/O or a whole-stage snapshot.
 Native USD layer references use the same confined address preparation. The
 closure loader prepares each native child on its existing I/O worker and keeps
 the canonical file URI as its recipe key. Incremental reference spawns and
-coarse document rebuilds share `PendingRefSpawns` preparation: bounded workers
+coarse document rebuilds share `ReferenceLayerInputs` preparation: bounded workers
 prepare the address, retain the real Twin-source asset handle, and compose a
 `StageRecipe::reanchor` snapshot under the authored canonical root. Reanchoring
 uses the shared USD dependency reader, changes relative layer anchors, preserves
 explicit absolute identifiers and layer bytes, and produces no alias keys.
-Each live instance retains the real source handle and a shared
-`UsdReferenceSnapshot`: the canonical recipe, unscoped prepared plan and actual
-loaded source recipe/plan revision. The canonical stage's existing reference
-cache holds only weak snapshot/recipe identities. A sibling obtains the actual
-loaded handle through the cached typed source address, then rechecks the exact
-scene origin, current source revisions and live native admission tables before
-sharing that snapshot. This path performs no filesystem work or composition;
-expired snapshots and changed sources require preparation on the reference lane.
-Completion checks the exact stage lifetime/generation, source origin, worker
-operation and live mount, plus the loaded source recipe/plan revision. Native
-tables merge into the same scene admission cache before instance publication.
-Reference and document-projection holds remain in force through their existing
-ordered commit; failure retains the terminal hold. Replacement or teardown
-cancels queued work and outgoing completion channels cannot reach a new request.
+`ReferenceLayerInputs` retains the actual source handles through scene lifetime.
+Its prepared snapshot carries the native recipe and typed address admission;
+ordered stage authoring consumes that closure before generic ECS projection.
+
 
 `load_asset_path` resolves the prepared table without filesystem I/O, rechecks
 the live mount, and rejects an absent current entry. The asynchronous Twin reader

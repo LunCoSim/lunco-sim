@@ -560,8 +560,7 @@ pub(crate) fn process_usd_cosim_prims(
             pending.0.queue(entity);
             continue;
         };
-        let (reader, generation) =
-            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let (reader, generation) = canonical.reader_for(id, stage_asset);
         // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
         // prim between this system's iterate and ApplyDeferred — the canonical
         // race is the moonbase autoload vs a first-run tutorial on web. `.insert`
@@ -876,8 +875,7 @@ fn project_usd_telemetry(
             continue;
         };
         let id = prim_path.stage_handle.id();
-        let (reader, generation) =
-            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let (reader, generation) = canonical.reader_for(id, stage_asset);
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             index.diagnostics.insert(
                 (id, prim_path.path.clone()),

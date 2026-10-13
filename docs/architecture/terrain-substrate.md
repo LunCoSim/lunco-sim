@@ -351,7 +351,7 @@ dataset that holds activation; it excludes `UsdPreviewOnly` ancestry even if a
 preview request was already present when the hierarchy was tagged.
 
 The initial DEM bridge reads generation-zero facts through
-`CanonicalStages::reader_for_entity`, which selects the worker-prepared
+`CanonicalStages::reader_for`, which selects the worker-prepared
 projection plan. It indexes candidate paths by terrain API schema and authored
 `lunco:` properties, then examines only changed or explicitly retrying prims.
 After a live stage generation advances, it classifies only each changed prim by

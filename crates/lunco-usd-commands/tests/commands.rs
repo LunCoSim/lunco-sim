@@ -124,6 +124,7 @@ fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
             .expect("document")
             .document()
             .source()
+            .expect("native source serialization")
             .contains("Chassis")
     );
 
@@ -159,7 +160,12 @@ fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
     let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
     let host = registry.host(doc).expect("committed document");
     assert_eq!(host.generation(), 1);
-    assert!(host.document().source().contains("Chassis"));
+    assert!(
+        host.document()
+            .source()
+            .expect("native source serialization")
+            .contains("Chassis")
+    );
     assert!(
         app.world()
             .resource::<UsdEditSessions>()
@@ -176,6 +182,7 @@ fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
             .expect("undo document")
             .document()
             .source()
+            .expect("native source serialization")
             .contains("Chassis")
     );
 }
@@ -221,7 +228,8 @@ fn proposal_commit_marks_a_stale_plan_as_conflict_without_overwriting_edits() {
         .host(doc)
         .expect("document")
         .document()
-        .source();
+        .source()
+        .expect("native source serialization");
     assert!(source.contains("ExistingEdit"));
     assert!(!source.contains("Chassis"));
 }
@@ -377,12 +385,18 @@ fn fork_and_discard_use_document_lifecycle_commands() {
     let fork = *ids.iter().find(|id| **id != source).expect("fork id");
     let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
     assert_eq!(
-        registry.host(fork).expect("fork host").document().source(),
+        registry
+            .host(fork)
+            .expect("fork host")
+            .document()
+            .source()
+            .expect("native source serialization"),
         registry
             .host(source)
             .expect("source host")
             .document()
             .source()
+            .expect("native source serialization")
     );
     assert!(
         registry
@@ -454,7 +468,10 @@ fn open_file_for_usd_path_creates_document() {
     let doc = reg.ids().next().unwrap();
     let document = reg.host(doc).unwrap().document();
     assert_eq!(document.parse_error(), None);
-    assert_eq!(document.source(), "#usda 1.0\ndef Xform \"X\" {}\n");
+    assert_eq!(
+        document.source().expect("native source serialization"),
+        "#usda 1.0\ndef Xform \"X\" {}\n"
+    );
 }
 
 #[test]
@@ -568,36 +585,31 @@ fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
     // One more tick to flush any final queued world commands.
     app.update();
 
-    use lunco_usd_data::usd_data::UsdDataExt;
-    use openusd::sdf::Path as SdfPath;
+    use openusd::sdf::{AbstractData, FieldKey, Path as SdfPath, Value};
     let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
     let host = reg.host(doc_id).expect("doc still alive");
-    // Assert on the canonical data (the document is data-canonical now;
-    // exact serialized-text formatting is openusd's business, not ours).
     let data = host.document().data();
-    // `UsdDataExt` on purpose: this asserts what the ops AUTHORED into the
-    // document layer, not what a stage composes out of it.
+    for (path, expected) in [
+        ("/Rover", "Xform"),
+        ("/Rover/Body", "Cube"),
+        ("/Rover/WheelFL", "Cube"),
+    ] {
+        assert_eq!(
+            data.try_field(&SdfPath::new(path).unwrap(), FieldKey::TypeName.as_str())
+                .unwrap()
+                .as_deref()
+                .and_then(Value::as_str),
+            Some(expected)
+        );
+    }
     assert_eq!(
-        data.prim_type_name(&SdfPath::new("/Rover").unwrap())
-            .as_deref(),
-        Some("Xform")
-    );
-    assert_eq!(
-        data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap())
-            .as_deref(),
-        Some("Cube")
-    );
-    assert_eq!(
-        data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap())
-            .as_deref(),
-        Some("Cube")
-    );
-    assert_eq!(
-        data.prim_attribute_value::<[f64; 3]>(
-            &SdfPath::new("/Rover/WheelFL").unwrap(),
-            "xformOp:translate"
-        ),
-        Some([1.0, 0.0, 1.0])
+        data.try_field(
+            &SdfPath::new("/Rover/WheelFL.xformOp:translate").unwrap(),
+            FieldKey::Default.as_str()
+        )
+        .unwrap()
+        .as_deref(),
+        Some(&Value::vec3d(1.0, 0.0, 1.0))
     );
     // Generation advanced once per op.
     assert_eq!(host.document().generation(), 4);
@@ -716,8 +728,16 @@ fn new_document_with_usd_kind_creates_untitled() {
     let id = reg.ids().next().unwrap();
     let doc = reg.host(id).unwrap().document();
     assert!(doc.origin().is_untitled());
-    assert!(doc.source().contains("upAxis = \"Y\""));
-    assert!(doc.source().contains("metersPerUnit = 1.0"));
+    assert!(
+        doc.source()
+            .expect("native source serialization")
+            .contains("upAxis = \"Y\"")
+    );
+    assert!(
+        doc.source()
+            .expect("native source serialization")
+            .contains("metersPerUnit = 1.0")
+    );
 }
 
 #[test]
@@ -749,7 +769,12 @@ fn save_as_untitled_usd_writes_source_and_rebinds_origin() {
     let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
     assert_eq!(
         lunco_storage::read_text_file_sync(&target).unwrap(),
-        registry.host(doc).unwrap().document().source()
+        registry
+            .host(doc)
+            .unwrap()
+            .document()
+            .source()
+            .expect("native source serialization")
     );
     assert_eq!(
         registry

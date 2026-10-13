@@ -623,8 +623,8 @@ has no asset-registration cadence. Project UI hints use the shared metadata
 decoder at build time; native USD owns declaration and fallback resolution.
 Compare loading and settled runtime separately before making performance claims.
 
-Read-only USD projectors use `CanonicalStages::reader_for` or
-`reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
+Read-only USD projectors use `CanonicalStages::reader_for`.
+Generation-zero reads consume the worker-prepared plan, and
 later authored generations consume the live canonical stage. Do not call
 `get_or_build` just to read startup facts. Use the prepared schema/path indexes to
 find initial candidates. Change batches should advance unrelated edits and
@@ -690,8 +690,6 @@ first spawn, a warm spawn, and deletion separately, while checking render-frame
 and fixed-step cadence during each. Use the production spans
 `scene_spawn_entity_command`, `usd_apply_ops_document`,
 `usd_document_apply_change_set`, `usd_reference_layer_closure_merge`,
-`usd_reference_instance_plan_remap`, `usd_reference_root_author`,
-`usd_reference_instance_promotion`,
 `usd_live_structural_reconcile`, `usd_visual_projection_batch`,
 `scene_runtime_spawn_commit`, `usd_live_subtree_despawn`,
 `scene_delete_entity_command`,
@@ -705,23 +703,15 @@ the lifecycle-maintained API identity registry and a hash set of queued roots,
 not a world scan or a walk of all pending inputs. Document projection waits only for
 references named by that edit's typed AddPrim operations; an unrelated
 reference must not extend its completion time or document-projection hold. An
-authoritative pending reference can retain its separate `SceneReferences`
-simulation hold until its own instance is committed. A long completion wait is
-not itself a frame stall, but an unready authoritative reference can hold
-simulation progress. A normal document-backed spawn projects from the prepared
-instance plan and authors only a lightweight live root; `usd_reference_root_author`
-must not include reference composition. Measure `usd_reference_instance_promotion`
-separately because the first later edit that needs full composed instance facts
-performs that one-time promotion. Deleting an unpromoted root must not promote it.
+authoritative reference batch retains its document-projection key until its
+active roots are projected. A completion wait is not itself a frame stall.
+Measure native composition and bounded ECS materialization separately; render,
+physics and query reads retain one scene-stage owner. Deletion removes the
+native root and its scoped ECS subtree.
 `scene_runtime_spawn_commit` measures each changed prim's live ECS structure
 insertion, including deferred reference descendants. `usd_visual_projection_batch`
 measures the bounded per-update component and visual projection pass; keep its
-frame cost separate from total time until the last descendant is admitted. The
-`usd_reference_instance_plan_remap` span must remain independent of asset prim
-count: an instance shares the immutable prepared snapshot and carries only its
-namespace and root overrides. The stage test verifies snapshot sharing with
-`Arc::ptr_eq` and verifies that an instance view exposes only the source asset's
-`defaultPrim` subtree.
+frame cost separate from total time until the last descendant is admitted.
 
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through

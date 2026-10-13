@@ -1709,8 +1709,7 @@ fn process_usd_sim_prims(
             pending.0.queue(entity);
             continue;
         };
-        let (reader, generation) =
-            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let (reader, generation) = canonical.reader_for(id, stage_asset);
         let Some(topology) = topology_index.get(id) else {
             pending.0.queue(entity);
             continue;

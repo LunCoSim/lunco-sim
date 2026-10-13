@@ -225,6 +225,39 @@ The focused input lifecycle test passes with those semantics. Evidence is in
 `/tmp/luncosim-native-input-idempotence-test.log` and
 `/tmp/luncosim-native-binary-source-isolation-final.log`.
 
+## Native document consumers and reference admission
+
+Mount attachment/detachment and deletion guards read native validity, schemas,
+relationships and connections. Ambient authoring traverses native composed
+DomeLights, consuming schema defaults, exposure and activity in f64; connected
+or time-varying inputs reject document authoring before edits. Omitted
+`texture:file` follows UsdLux's untextured semantic.
+
+Preview text exports authored source and native `Stage::flatten` on a worker for
+read-only display. Document generation and source-plan identity fence its
+result. `InspectUsdViewport.text_error` exposes failures. Rendering cadence does
+not invalidate an unchanged document text snapshot.
+
+Reference batches admit their complete native closure and the existing Rhai
+composition decision before ordered authoring. The native change sink owns ECS
+materialization. Queued reference replay, lightweight-root substitution,
+promotion state, per-instance reader selection and their tests are removed.
+`ReferenceLayerInputs` owns asynchronous native preparation and source residency;
+active reference roots complete the document's projection lease. Empty asset
+paths remain native internal references and cause no external fetch.
+`clock_snapshot().simulation_progress` reports ordered blockers as typed facts.
+
+The integrated production build and application all-target check pass. The
+native owner test targets compile without introduced warnings. Production
+`COMPONENT_DETACH` passes four checks, including incoming-connection rejection,
+on port 4206. `SOCKET_ATTACH_REJECTION` passes three checks on 4207. Dynamic
+reference allow/reject gates pass on 4208/4209, including partial composition and
+the terminal projection diagnostic. Native ambient authoring passes four checks
+on 4210. Binary source isolation passes eight checks on 4211. Owned sessions
+exit and release their ports. The preview generation/coalescing lifecycle test
+passes. Evidence is under `/tmp/luncosim-native-direct-*` and
+`/tmp/luncosim-native-direct-source-isolation-verdict.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -238,10 +271,11 @@ The focused input lifecycle test passes with those semantics. Evidence is in
    native writer defect is fixed; current generation instructions are in the
    runbooks. A fixed native library must replace the guard and its rejection
    assertion with successful interoperability coverage.
-2. `author::compose_layers`, the document's composed-data memo, and consumers
-   of its merged source remain in dependent-layer projection, composed-text
-   preview, persistence, and light readers. Those consumers must use their native
-   owner before that merge and its tests can be deleted. Loader metadata settings
+2. `author::compose_layers`, the document's composed-data memo, and its
+   dependent-layer projection consumer remain. Mount validation, deletion
+   guards, ambient authoring and read-only composed-text previews use native
+   stages. The dependent-layer consumer must use its native owner before that
+   merge and its tests can be deleted. Loader metadata settings
    are applied on first asset admission; document publication into an already
    admitted source asset must preserve its current native input ownership and
    reload graph. That lifecycle still requires production coverage.

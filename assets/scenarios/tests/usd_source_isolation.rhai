@@ -23,7 +23,7 @@ fn on_start(me, ctx) {
     this.done = false; this.elapsed = 0.0; this.checks = [];
     this.native_path = ctx.expected_native_path; this.selection_path = ctx.selection_path;
     this.waiting_for = "source projection";
-    this.source_ok = false; this.preview_ready = false; this.matches = 0;
+    this.source_ok = false; this.preview_ready = false; this.text_ready = false; this.matches = 0;
     this.document = (); this.document_count = 0;
     this.owner = query("GetToolLibrary", #{ name: "runtime_ui" }).active_twin;
     this.physics = query("PhysicsPerformance");
@@ -48,11 +48,15 @@ fn source_ready(me) {
     for preview in query("InspectUsdViewport").previews {
         if preview.doc_id == this.document {
             this.preview_ready = preview.projection_ready;
+            this.text_ready = preview.text_ready;
+            if preview.text_error != () {
+                throw("native source preview text failed: " + preview.text_error);
+            }
             this.preview = preview.preview; this.view = preview.views[0].view;
         }
     }
     this.document_count = documents.len();
-    this.preview_ready && physics.step_number > this.physics.step_number
+    this.preview_ready && this.text_ready && physics.step_number > this.physics.step_number
 }
 
 fn verify_source(me) {
@@ -60,7 +64,7 @@ fn verify_source(me) {
     let owner = query("GetToolLibrary", #{ name: "runtime_ui" }).active_twin;
     this.source_ok = this.open_status == "applied" && this.matches == 1 && this.preview_ready;
     this.checks.push(t_true(this.open_status == "applied", "exact USD source opens successfully"));
-    this.checks.push(t_true(this.matches == 1 && this.preview_ready, "one document owns the settled source preview"));
+    this.checks.push(t_true(this.matches == 1 && this.preview_ready && this.text_ready, "one document owns the settled source preview and native text"));
     this.checks.push(t_true(owner == this.owner, "source preview preserves the active Twin"));
     this.checks.push(t_true(same_physics_topology(this.physics, physics), "preview does not enter scene physics"));
     this.checks.push(t_true(physics.step_number > this.physics.step_number

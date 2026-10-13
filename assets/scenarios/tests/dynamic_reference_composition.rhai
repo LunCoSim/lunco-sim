@@ -46,7 +46,7 @@ fn on_start(me, ctx) {
     this.reject_case = parameters.scene.index_of("reject.usda") >= 0;
     if this.reject_case {
         this.scene_name = "reject.usda";
-        expect_runtime_fault("usd-reference-admission");
+        expect_runtime_fault("usd-stage-projection-reset");
     }
     this.doc = find_scene_document(this.scene_name);
     if this.doc == () {
@@ -74,14 +74,14 @@ fn on_tick(me, ctx) {
 
     if !this.started {
         let root = query("QueryUsdPrim", #{ doc_id: this.doc, path: "/World" });
-        if root == () || root.ok == false || root.generation == () {
+        if root == () || root.ok == false || root.document_generation == () {
             this.done = true;
             fail("the opened fixture document has no writable /World prim");
             return;
         }
         let admission = cmd("ApplyUsdOps", #{
             doc_id: this.doc,
-            parent_gen: root.generation,
+            parent_gen: root.document_generation,
             label: "Exercise dynamic USD composition admission",
             ops: [
                 #{ AddPrim: #{

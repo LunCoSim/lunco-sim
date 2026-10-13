@@ -32,8 +32,7 @@ use std::sync::{Arc, Weak};
 // document stack. Raw layer reads are reserved for local authored opinions.
 use lunco_usd_bevy_scene::{ShapeDims, UsdGeomAxis, read_shape_dims};
 use lunco_usd_bevy_stage::{
-    StageView, UsdInstanceProjection, UsdRead, UsdStageAsset, UsdStageProjectionPlan,
-    read_transform_from_usd,
+    StageView, UsdRead, UsdStageAsset, UsdStageProjectionPlan, read_transform_from_usd,
 };
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
@@ -1785,7 +1784,6 @@ fn bridge_usd_dem_terrain(
         (
             Entity,
             &lunco_usd_bevy_scene::UsdPrimPath,
-            Option<&UsdInstanceProjection>,
             Has<DemBridgeRetry>,
         ),
         (
@@ -1794,7 +1792,6 @@ fn bridge_usd_dem_terrain(
             Without<DemDatasetScanPending>,
             Or<(
                 Changed<lunco_usd_bevy_scene::UsdPrimPath>,
-                Changed<UsdInstanceProjection>,
                 With<DemBridgeRetry>,
             )>,
         ),
@@ -1828,7 +1825,7 @@ fn bridge_usd_dem_terrain(
     candidate_index
         .0
         .retain(|_, cached| cached.plan.strong_count() > 0);
-    for (entity, prim_path, instance_projection, has_retry) in &q {
+    for (entity, prim_path, has_retry) in &q {
         // A document preview can compose the same authored paths as the live
         // scene, but it is not a terrain realization. Keep it out of the DEM
         // request, collider-ring, height-query, and global physics-readiness
@@ -1850,8 +1847,7 @@ fn bridge_usd_dem_terrain(
         };
         // Initial projection reads the worker-prepared plan. Only a later live
         // authored generation selects the canonical OpenUSD stage reader.
-        let (reader, generation) =
-            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let (reader, generation) = canonical.reader_for(id, stage_asset);
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             commands.entity(entity).try_insert(DemBridged);
             if has_retry {
@@ -1860,8 +1856,7 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         let is_candidate = if generation == 0 {
-            let candidate_plan = instance_projection
-                .map_or(&stage_asset.projection_plan, |projection| &projection.plan);
+            let candidate_plan = &stage_asset.projection_plan;
             candidate_index
                 .paths_for(id, generation, candidate_plan, &reader)
                 .contains(&prim_path.path)

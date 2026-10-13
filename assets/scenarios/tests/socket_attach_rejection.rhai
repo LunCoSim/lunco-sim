@@ -9,7 +9,7 @@ fn simulation_dependencies(me, ctx) {
 
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
-    this.doc = -1;
+    this.doc = ();
     this.sent_occupied = false;
     this.sent_incompatible = false;
     this.sent_wrong_joint = false;
@@ -27,7 +27,7 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
-    if this.doc < 0 {
+    if this.doc == () {
         let docs = query("ListOpenDocuments");
         if docs == () { return; }
         for item in docs.open_documents {
@@ -36,7 +36,7 @@ fn on_tick(me, ctx) {
                 break;
             }
         }
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail("no open USD document was discoverable"); }
             return;
         }

@@ -58,6 +58,11 @@ When a task genuinely needs multiple dependent parts, make the dependency
 boundary explicit (for example, a wheel and its strut), run the local gate,
 then continue with the next separately named task.
 
+For source previews, require `InspectUsdViewport.text_ready` as well as
+`projection_ready` before accepting the composed-text checkpoint. The worker
+uses the native admitted closure; the flattened display is read-only and must
+not become the source for saves or dependency transport.
+
 Do not queue a bus, tanks, legs, engines, ramps and panels into one unobserved
 call. A component task may contain the minimum atomic operations needed for
 that component (for example a wheel plus its strut and mount), but it must

@@ -5,7 +5,6 @@
 //! boundary; visual, physics, and simulation projections can all consume them.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::asset::{AssetPath, Handle};
 use bevy::prelude::Component;
@@ -46,8 +45,8 @@ pub struct UsdInstanceMember {
 }
 
 /// Prepared composed read data and identity scope for a referenced instance.
-/// Spawn and deletion use this plan directly; the first later authored edit
-/// composes the reference into the live stage and switches every clone to it.
+/// The immutable plan owns bounded ECS materialization. Composed reads use
+/// the native scene stage, whose reference arc is admitted before projection.
 #[derive(Component, Debug, Clone)]
 pub struct UsdInstanceProjection {
     /// The runtime instance root whose identity scopes this projection.
@@ -59,16 +58,12 @@ pub struct UsdInstanceProjection {
     pub reference_snapshot: Arc<UsdReferenceSnapshot>,
     /// An instance-scoped view over the source asset's shared prepared plan.
     pub plan: Arc<UsdStageProjectionPlan>,
-    /// Exact authored asset identity, retained for promotion into the live
-    /// canonical stage when the instance first receives a live edit.
+    /// Exact authored asset identity of the native scene reference.
     pub asset_path: String,
     /// Explicit prim target from the authored reference arc, when present.
     pub reference_prim_path: Option<String>,
     /// The instance root's authored composed type name.
     pub type_name: Option<String>,
-    /// Shared state keeps every descendant on the same prepared/live read
-    /// boundary without walking the instance subtree during promotion.
-    promoted: Arc<AtomicBool>,
 }
 
 impl UsdInstanceProjection {
@@ -89,17 +84,6 @@ impl UsdInstanceProjection {
             asset_path: asset_path.into(),
             reference_prim_path,
             type_name,
-            promoted: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Whether the instance has been authored into its scene's live stage.
-    pub fn is_promoted(&self) -> bool {
-        self.promoted.load(Ordering::Acquire)
-    }
-
-    /// Mark this reference instance as owned by the live canonical stage.
-    pub fn mark_promoted(&self) {
-        self.promoted.store(true, Ordering::Release);
     }
 }

@@ -29,6 +29,12 @@ through `SceneCameraAudit` before comparing screenshots or FPS. Read the settled
 active camera pose through `QueryEntity` before and after an FPS window; startup
 view restoration can replace an early camera command.
 
+Ambient authoring reads native composed DomeLights, including references,
+schema defaults, exposure and activity. The dedicated runtime fill is excluded
+from the sum; connected or time-varying inputs reject document authoring before
+any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
+`RunScenarioAsset` on the settled replacement fixture to verify that contract.
+
 ## Diagnose in order
 
 1. Confirm the terrain prim, `material:binding`, Material surface connection,

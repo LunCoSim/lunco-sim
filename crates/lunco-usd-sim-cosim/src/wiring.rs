@@ -682,7 +682,7 @@ pub(super) fn rewire_usd_connections(
                 continue;
             };
             let sink_instance = instance_of(entity, projection);
-            let (reader, generation) = canonical.reader_for_entity(id, stage_asset, projection);
+            let (reader, generation) = canonical.reader_for(id, stage_asset);
             let view: &dyn UsdReadObject = &reader;
             let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
                 continue;
