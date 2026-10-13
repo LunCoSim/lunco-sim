@@ -91,10 +91,8 @@ pub fn set_parameter(
         "" => {
             comp.binding = Some(expr.clone());
             comp.has_explicit_binding = true;
-            // rumoca mirrors the binding into `start` only when the source
-            // didn't give `start` its own modifier. Writing a binding must not
-            // clobber an existing `start = …` — that conflation is the bug the
-            // splice engine exists to stop reproducing in the AST too.
+            // Mirror Rumoca's binding-derived start only when no separate
+            // start modifier is authored. An explicit start stays independent.
             if !comp.start_is_modification {
                 comp.start = expr;
             }

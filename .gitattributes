@@ -1,2 +1,4 @@
-# Preserve the pinned upstream fixture bytes, including their authored whitespace.
-third_party/openusd/fixtures/*.usda -whitespace
+# Preserve unmodified upstream schema build inputs and their license notices.
+crates/lunco-usd-authoring/schema/bases/*/schema.usda -whitespace
+crates/lunco-usd-authoring/schema/bases/LICENSE -whitespace
+crates/lunco-usd-authoring/schema/bases/NOTICE.txt -whitespace

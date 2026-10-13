@@ -613,7 +613,8 @@ fn refresh_route_view(me, state, snapshot) {
                 emit("route_presentation_unavailable", presentation_error);
             }
         }
-        state.ribbon_sync_pending = !presentation_ready || result.pending == true;
+        state.ribbon_sync_pending = result != ()
+            && (result.pending == true || result.retryable == true);
     }
     if state.marker_sync_pending {
         let marker = waypoint_editor::sync_marker_states(

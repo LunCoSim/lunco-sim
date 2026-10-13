@@ -7,6 +7,7 @@ fn simulation_dependencies(me, ctx) {
 }
 fn source(unit) {
     `model MetadataProbe
+  constant Real constant_rate=3.0;
   type Distance = Real(unit="m");
   model Hot
     Real sample(unit="K") "hot reading";
@@ -22,7 +23,7 @@ fn source(unit) {
   input Real drive(min=0,max=100)=5;
   Real untyped;
 equation
-  der(vector)={1,2}; untyped=3;
+  der(vector)={1,2}; untyped=constant_rate;
 end MetadataProbe;`
 }
 fn channel(name) {
@@ -38,11 +39,14 @@ fn channel(name) {
     channels[0]
 }
 fn checks(doc, cold_unit) {
-    let metadata = query("SnapshotVariables", #{doc_id: doc}).metadata;
+    let snapshot = query("SnapshotVariables", #{doc_id: doc});
+    let metadata = snapshot.metadata;
     let hot = channel("hot.sample"); let cold = channel("cold.sample");
     let a = channel("vector[1]"); let b = channel("vector[2]");
     let pin = channel("p.v"); let plain = channel("untyped");
     [
+      t_true(snapshot.variables.untyped == 3.0,
+        "Authored constant values survive checked initialization"),
       t_true(hot != () && hot.unit == "K" && hot.description == "hot reading",
         "qualified hot declaration retains its compiled unit and description"),
       t_true(cold != () && cold.unit == cold_unit && cold.description == "cold reading",

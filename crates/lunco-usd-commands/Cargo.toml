@@ -13,6 +13,7 @@ lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }

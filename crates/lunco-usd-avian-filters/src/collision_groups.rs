@@ -51,8 +51,8 @@ use std::collections::{HashMap, HashSet};
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::physics::tokens as ptok;
 
 /// Collection instance name `PhysicsCollisionGroup` applies (from the schema:
 /// `apiSchemas = ["CollectionAPI:colliders"]`).
@@ -113,7 +113,7 @@ impl CollisionGroupTable {
         let mut order: Vec<String> = Vec::new();
 
         let mut paths: Vec<String> = reader
-            .prim_paths_matching(&[ptok::T_PHYSICS_COLLISION_GROUP], &[])
+            .prim_paths_matching(&[ptok::PHYSICS_COLLISION_GROUP], &[])
             .into_iter()
             .map(|p| p.to_string())
             .collect();
@@ -126,7 +126,7 @@ impl CollisionGroupTable {
                 continue;
             };
             let merge = reader
-                .text(&prim, ptok::A_MERGE_GROUP)
+                .text(&prim, ptok::PHYSICS_MERGE_GROUP)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -146,9 +146,9 @@ impl CollisionGroupTable {
                 &prim,
                 &format!("collection:{COLLIDERS_COLLECTION}:excludes"),
             );
-            let filtered = rel_paths(reader, &prim, ptok::A_FILTERED_GROUPS);
+            let filtered = rel_paths(reader, &prim, ptok::PHYSICS_FILTERED_GROUPS);
             let invert = reader
-                .boolean(&prim, ptok::A_INVERT_FILTERED_GROUPS)
+                .boolean(&prim, ptok::PHYSICS_INVERT_FILTERED_GROUPS)
                 .unwrap_or(false);
 
             let entry = by_key.entry(key.clone()).or_insert_with(|| {
@@ -177,7 +177,7 @@ impl CollisionGroupTable {
                      about {} — taking the inverted reading, which is the stricter one.",
                     entry.prims,
                     key,
-                    ptok::A_INVERT_FILTERED_GROUPS,
+                    ptok::PHYSICS_INVERT_FILTERED_GROUPS,
                 );
             }
             entry.invert |= invert;
@@ -229,7 +229,7 @@ impl CollisionGroupTable {
                             "[usd-avian] collision group {:?}: {} names <{t}>, which is not a \
                              PhysicsCollisionGroup on this stage — that filter does nothing.",
                             g.prims,
-                            ptok::A_FILTERED_GROUPS,
+                            ptok::PHYSICS_FILTERED_GROUPS,
                         );
                     }
                     bit

@@ -118,16 +118,16 @@ fn is_joint(type_name: &str) -> bool {
     JOINT_TYPES.contains(&type_name)
 }
 
-fn schema_type(name: &str, fallback: &str) -> String {
-    lunco_usd_authoring::schema::SchemaRegistry::global()
-        .read()
-        .ok()
-        .and_then(|registry| {
-            registry
-                .property(name)
-                .map(|property| property.type_name.clone())
-        })
-        .unwrap_or_else(|| fallback.to_owned())
+fn joint_frame_type(name: &str) -> String {
+    let registry = lunco_usd_authoring::schema::native_registry();
+    let definition = registry
+        .concrete_prim_definition(&openusd::tf::Token::new("PhysicsJoint"))
+        .expect("the standard Joint schema is registered");
+    definition
+        .property(&openusd::tf::Token::from(name))
+        .and_then(|property| property.type_name())
+        .expect("the standard joint frame property is declared")
+        .to_string()
 }
 
 fn canonical_position<R: UsdRead>(
@@ -345,7 +345,9 @@ pub fn produce_usd_joint_view(
             if !value.is_finite() {
                 continue;
             }
-            let type_name_for_attr = schema_type(&name, "float");
+            let Some(type_name_for_attr) = stage.attr_type_name(&path, &name) else {
+                continue;
+            };
             scalars.push(JointScalar {
                 type_name: type_name_for_attr.clone(),
                 label: scalar_label(&name),
@@ -737,7 +739,7 @@ pub fn authored_joint_section(
             ui.weak("Amber anchors and XYZ arrows in the preview show the edited joint frames.");
             if let Some(current) = view.local_pos0 {
                 if let Some(value) = position_control(ui, "Local position 0", current) {
-                    let type_name = schema_type("physics:localPos0", "point3f");
+                    let type_name = joint_frame_type("physics:localPos0");
                     match usd_point_literal(&type_name, value) {
                         Ok(literal) => {
                             apply_attribute(ctx, &view, "physics:localPos0", &type_name, literal)
@@ -750,7 +752,7 @@ pub fn authored_joint_section(
             }
             if let Some(current) = view.local_pos1 {
                 if let Some(value) = position_control(ui, "Local position 1", current) {
-                    let type_name = schema_type("physics:localPos1", "point3f");
+                    let type_name = joint_frame_type("physics:localPos1");
                     match usd_point_literal(&type_name, value) {
                         Ok(literal) => {
                             apply_attribute(ctx, &view, "physics:localPos1", &type_name, literal)
@@ -763,7 +765,7 @@ pub fn authored_joint_section(
             }
             if let Some(current) = view.local_rot0 {
                 if let Some(value) = rotation_control(ui, "Local rotation 0", current) {
-                    let type_name = schema_type("physics:localRot0", "quatf");
+                    let type_name = joint_frame_type("physics:localRot0");
                     if let Some(literal) = usd_quat_literal(&type_name, value) {
                         apply_attribute(ctx, &view, "physics:localRot0", &type_name, literal);
                     }
@@ -771,7 +773,7 @@ pub fn authored_joint_section(
             }
             if let Some(current) = view.local_rot1 {
                 if let Some(value) = rotation_control(ui, "Local rotation 1", current) {
-                    let type_name = schema_type("physics:localRot1", "quatf");
+                    let type_name = joint_frame_type("physics:localRot1");
                     if let Some(literal) = usd_quat_literal(&type_name, value) {
                         apply_attribute(ctx, &view, "physics:localRot1", &type_name, literal);
                     }

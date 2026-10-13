@@ -343,10 +343,10 @@ the integrator state.
    Native optional disk reuse follows the cache-owned budgets and rejection
    contract in [the Modelica architecture](20-domain-modelica.md).
    The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
-   structural artifact cache that shares immutable DAE compilation across
-   scene instances. Both RAM caches follow the bounded FIFO entry contract in
-   [the Modelica architecture](20-domain-modelica.md). The prepared live solve IR is reused by structural source
-   identity in RAM and persisted by structural source key plus the compiler-owned library
+   exact source-unit artifact cache that shares immutable DAE compilation
+   across identical admissions. Both RAM caches follow the bounded FIFO entry contract in
+   [the Modelica architecture](20-domain-modelica.md). The prepared live solve IR is reused by exact participating-source
+   identity in RAM and persisted by exact participating-source key plus the compiler-owned library
    admission revision, solver, and parameter overrides. The persistent key
    includes solver identity because Rumoca's lowering mode can change the solve
    model. Root admission clears only the worker-local cache; its deterministic,
@@ -355,16 +355,15 @@ the integrator state.
    computes file-root revisions while reading each root into its Rumoca
    session, and the source-library owner hashes parsed bundle content only when
    that bundle is admitted. The cache never rescans the full Modelica tree
-   during the first live stepper build. Generated USD wrapper names,
-   runtime-root identity, sibling document IDs, and sibling-document iteration
-   order are excluded from source identity; primary and sibling source text
-   remain part of it. The admitted-library content revision is a separate key
+   during the first live stepper build. The exact selected target and participating
+   primary and sibling source bytes determine identity; transient source URIs
+   and sibling-document iteration order do not. The admitted-library content revision is a separate key
    field, so a worker-local generation counter does not prevent reuse across
    launches.
 
    Generated-network compile requests use only their synthesized document and
-   admitted roots. Their bundled `generated/` filenames use the runtime owner's
-   provenance classifier for structural reuse. Unrelated open documents and
+   admitted roots. Source identity preserves synthesized declarations exactly.
+   Unrelated open documents and
    other generated-network completions do not enter their source identity;
    authored multi-document compilation still includes its sibling sources.
 

@@ -11,20 +11,38 @@ fn native_reference(reference: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
 }
 
-fn collect_asset(path: &AssetPath, references: &mut BTreeSet<AssetReference>) {
-    if let Some(identifier) = path.canonical_identifier()
-        && let Some(reference) = AssetReference::for_asset_value(identifier, path.asset_path())
-    {
-        references.insert(reference);
+fn collect_asset(
+    path: &AssetPath,
+    source_layer: Option<&str>,
+    references: &mut BTreeSet<AssetReference>,
+) {
+    let Some(source_layer) = source_layer else {
+        return;
+    };
+    match lunco_usd_compose::canonicalize_at(
+        path.asset_path(),
+        Some(&openusd::ar::ResolvedPath::new(source_layer)),
+    ) {
+        Ok(identifier) => {
+            if let Some(reference) = AssetReference::for_asset_value(&identifier, path.asset_path())
+            {
+                references.insert(reference);
+            }
+        }
+        Err(error) => bevy::log::error!(%error, "invalid composed USD asset identity"),
     }
 }
 
-fn collect_value(value: Option<Value>, references: &mut BTreeSet<AssetReference>) {
+fn collect_value(
+    value: Option<Value>,
+    source_layer: Option<&str>,
+    references: &mut BTreeSet<AssetReference>,
+) {
     match value {
-        Some(Value::AssetPath(path)) => collect_asset(&path, references),
+        Some(Value::AssetPath(path)) => collect_asset(&path, source_layer, references),
         Some(Value::AssetPathVec(paths)) => {
             for path in &paths {
-                collect_asset(path, references);
+                collect_asset(path, source_layer, references);
             }
         }
         _ => {}
@@ -43,9 +61,19 @@ pub fn native_references_for_prims(
     let mut references = BTreeSet::new();
     for prim in prims {
         for name in reader.attr_names(&prim) {
-            collect_value(reader.attr_value(&prim, &name), &mut references);
+            collect_value(
+                reader.attr_value(&prim, &name),
+                reader.asset_source_layer(&prim, &name, None).as_deref(),
+                &mut references,
+            );
             for time in reader.time_sample_times(&prim, &name) {
-                collect_value(reader.attr_value_at(&prim, &name, time), &mut references);
+                collect_value(
+                    reader.attr_value_at(&prim, &name, time),
+                    reader
+                        .asset_source_layer(&prim, &name, Some(time))
+                        .as_deref(),
+                    &mut references,
+                );
             }
         }
         if let Some(reference) = reader.binary_asset_uri(&prim)
@@ -73,9 +101,19 @@ pub fn changed_native_references(
             let Ok(prim) = SdfPath::new(prim) else {
                 continue;
             };
-            collect_value(reader.attr_value(&prim, name), &mut references);
+            collect_value(
+                reader.attr_value(&prim, name),
+                reader.asset_source_layer(&prim, name, None).as_deref(),
+                &mut references,
+            );
             for time in reader.time_sample_times(&prim, name) {
-                collect_value(reader.attr_value_at(&prim, name, time), &mut references);
+                collect_value(
+                    reader.attr_value_at(&prim, name, time),
+                    reader
+                        .asset_source_layer(&prim, name, Some(time))
+                        .as_deref(),
+                    &mut references,
+                );
             }
         }
         for prim in &change.resynced {

@@ -303,18 +303,30 @@ impl ModelicaEngine {
             .inherited_members_typed(qualified)?
             .into_iter()
             .filter(|member| matches!(member.variability, InheritedVariability::Parameter))
+            .filter(|member| {
+                member.metadata.scalar_type
+                    == Some(lunco_modelica_ast::PredefinedComponentType::Boolean)
+                    && !member.metadata.has_array_dimensions
+            })
             .filter(|member| member.default_value.as_deref() == Some("false"))
             .map(|member| member.name)
             .collect();
         drop(_members_span);
         let _merge_span = bevy::log::info_span!("modelica_icon_merge").entered();
         let top = self.class_def(qualified)?;
-        let mut resolver =
-            |name: &str| -> Option<std::sync::Arc<rumoca_compile::parsing::ast::ClassDef>> {
-                self.class_def(name).map(std::sync::Arc::new)
-            };
+        let mut resolver = |scope: &str, reference: &str| {
+            self.session
+                .class_type_resolution_candidates_in_class_query(scope, reference)
+                .into_iter()
+                .find_map(|candidate| {
+                    let resolved = self.session.class_lookup_query(&candidate)?;
+                    (resolved == candidate).then_some(())?;
+                    self.class_def(&resolved)
+                        .map(|class| (resolved, std::sync::Arc::new(class)))
+                })
+        };
         let mut visited = HashSet::new();
-        let icon = lunco_modelica_ast::annotations::extract_icon_inherited_with_falsy_params(
+        let icon = lunco_modelica_ast::annotations::project_inherited_icon(
             qualified,
             &top,
             &mut resolver,
@@ -866,6 +878,29 @@ mod tests {
                 .is_some_and(|message| message.contains("Broken.mo"))
         );
         assert!(!engine.begin_source_root_load("BrokenRoot"));
+    }
+
+    #[test]
+    fn inherited_icon_uses_the_declaring_scope() {
+        let mut engine = ModelicaEngine::new();
+        upsert_test(
+            &mut engine,
+            DocumentId::new(1),
+            r#"
+model Base annotation(Icon(graphics={Rectangle(extent={{-10,-10},{10,10}})})); end Base;
+model Imported annotation(Icon(graphics={Ellipse(extent={{-20,-20},{20,20}})})); end Imported;
+package Local
+  import Base = Imported;
+  model Derived extends Base; end Derived;
+end Local;
+"#,
+        );
+        let icon = engine.icon_for("Local.Derived").expect("inherited icon");
+        assert_eq!(icon.graphics.len(), 1);
+        assert!(matches!(
+            icon.graphics[0],
+            lunco_modelica_ast::annotations::GraphicItem::Ellipse(_)
+        ));
     }
 
     #[test]

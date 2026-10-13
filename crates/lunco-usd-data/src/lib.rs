@@ -10,5 +10,6 @@
 #![warn(missing_docs)]
 
 pub mod metadata;
+#[cfg(feature = "bevy")]
 pub mod units;
 pub mod usd_data;

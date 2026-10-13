@@ -8,8 +8,12 @@ It has no Modelica, Rhai, behavior-tree, physics, Bevy entity, or rendering
 responsibility.
 
 For file listings and scenario manifests, it exposes `is_usd_layer` and
-`layer_dependency_arcs`. `lunco-assets-core::transitive_file_closure*` consumes those
-format facts and owns the actual filesystem traversal; this crate does not own a
+`layer_dependency_arcs` on bounded raw USDA/USDC bytes, with native format
+diagnostics. `layer_dependency_paths` inspects parsed authored layer
+opinions without requesting text serialization, using the same native asset
+visitor and private analysis-copy normalization. It rejects a missing layer
+pseudo-root. `lunco-assets-core::transitive_file_closure*` consumes the format
+facts and owns the actual filesystem traversal; this crate does not own a
 second closure walker.
 
 Native file entrypoints canonicalize the native root through `lunco-storage`

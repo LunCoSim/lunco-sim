@@ -150,7 +150,8 @@ pub fn produce_usd_variant_view(
 
         let stage = cs.stage();
         let selections = match stage
-            .prim(sdf.as_str())
+            .prim(&sdf)
+            .expect("validated USD path")
             .variant_sets()
             .get_all_variant_selections()
         {

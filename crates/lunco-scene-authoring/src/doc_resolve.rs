@@ -194,6 +194,7 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
     };
     view.stage()
         .prim(sdf)
+        .expect("validated USD path")
         .api_schemas()
         .map(|v| v.iter().map(|s| s.as_str().to_string()).collect())
         .unwrap_or_default()

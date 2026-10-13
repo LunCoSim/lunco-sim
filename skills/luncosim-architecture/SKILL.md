@@ -305,6 +305,13 @@ values: a helper that assigns a state field must return the updated map, and
 the lifecycle callback must assign it back to `this`. Do not rely on helper
 side effects to persist task state.
 
+Native USD dependencies are pinned at Rust `openusd` 0.8.0 with
+`openusd-schemas` and `openusd-build`. Use `schema::native_registry` for stage
+construction and native `ResolveInfo` for asset provenance. Standard schema
+fallbacks and metadata are read through the composed stage; inspector/unit
+metadata is derived by `SchemaMetadata`. Project schema declarations are
+generated at build time from `schema/schema.usda`.
+
 ## Plugin and crate layering
 
 Use a domain `CorePlugin` for headless-safe state, lifecycle, commands, and
@@ -713,7 +720,11 @@ Keep the ownership split explicit:
 Use exact `DocumentId`, `UsdPreviewId`, `UsdPreviewViewId`, edit target, and
 projection generation at every boundary. A document-local Editor fork may be
 queried through its composed document stage even when it has no mounted Twin
-projection; a stale mapped Twin document must still fail visibly. Missing
+projection; a stale mapped Twin document must still fail visibly.
+`InspectUsdDocument` reads one current native document composition for types,
+schema defaults, children, metadata, and reference lists/spec sites. Composed
+facts use `document_composition`; root/runtime/view authored opinions stay
+separate. Native read failures reject the query. Missing
 collision or provenance is an explicit diagnostic record, not a fabricated
 default. Keep positive and negative contracts in the production Rhai scene
 gate; do not duplicate these observable assertions in Rust unit tests.
@@ -909,7 +920,7 @@ their own deferred-path handling or permanently mark an unresolved root.
 
 Before creating `LunCo*API` or a `lunco:*` property:
 
-1. Inspect the vendored OpenUSD schemas in `crates/lunco-usd-document/schema/core/` and
+1. Inspect the maintained `openusd-schemas` declarations selected in Cargo and
    the maintained USD/PhysX schema that actually owns the concept.
 2. Use the standard field when it exists: `UsdGeom` for transforms, geometry,
    cameras, visibility and purpose; `UsdShade` for connectable graphs and
@@ -1178,12 +1189,11 @@ compatibility fallback and must be named as a numerical guard.
 Run the smallest relevant checks first, then the production binary:
 
 ```bash
-python3 scripts/gen_schema.py
-RUSTC_WRAPPER= cargo fmt --all -- --check
-python3 scripts/gen_schema.py
+cargo run -p lunco-usd-authoring --example gen_schema -j 4 --
+cargo run -p lunco-usd-authoring --example gen_schema -j 4 -- --check
 "$LUNCOSIM_BIN" test --scene scenes/tests/sensor.usda
-RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
-CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
+cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
+cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
 For a live feature, launch only `$LUNCOSIM_BIN` with an explicit free

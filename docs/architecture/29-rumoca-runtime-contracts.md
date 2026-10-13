@@ -47,7 +47,8 @@ aggregate, array, and String values reject scalar admission. The compiler and
 solver retain final tunability ownership. Fast Run retains its setup dialog
 and entered text when validation rejects a value; the existing draft stays
 unchanged. Session revision invalidates the bounded declaration cache;
-repeated UI reads reuse its immutable result.
+repeated UI reads reuse its immutable result. Adopting another session's cache requires full
+source-signature validation, even when their revision numbers match.
 
 The session package-definition map records its validated session revision.
 Unchanged declaration queries reuse it without rebuilding the whole-library
@@ -97,13 +98,33 @@ requests a new projection. Admission selects the bundled-package inventory or
 the installed source-library bundle; an absent root stays a visible failure.
 A complete current snapshot does not request unrelated library roots. Document generations still reject superseded work.
 
+The add-component palette filters Modelica's typed `partial` prefix. Namespace
+spelling does not classify a component as decorative. Drill-in tabs start in
+diagram view and retain the user's selected view when their document loads.
+Document installation does not run semantic queries on the UI thread.
+
+Inherited icon projection receives each base identity from Rumoca's scoped type
+candidates and exact class lookup. The annotation layer merges graphics and
+coordinate systems only; it does not expand imports or construct scope paths.
+Boolean visibility defaults are restricted to scalar Boolean parameters.
+The background diagram snapshot projects and caches icons from those resolved
+declarations; document opening does not schedule a separate type-name warm walk.
+
 Block and expanded connection graphs consume the same declaration ports. Wires
 come only from the selected class's equations; authored route annotations decorate
 those edges. Connector icon lookup uses the exact resolved identity. Parameter label units
 come from declaration metadata; type-name unit tables do not participate. A class
 without authored placement uses the configured deterministic grid; a class
 without an icon uses the renderer's named component presentation. These are
-presentation defaults and do not supply missing semantic facts.
+presentation defaults and do not supply missing semantic facts. A conditional
+source declaration is marked as conditional, including a literal `if true`;
+Rumoca owns condition evaluation and compiled instance presence. The diagram
+performs no Boolean-expression interpretation or active-instance inference.
+
+Dynamic icon references read only the component's qualified runtime path. The
+Modelica built-in `time` reads the participant clock or selected experiment
+sample time. A missing component value cannot read a similarly named root value;
+live values replace the experiment snapshot when a participant is present.
 
 Canvas wires consume the projected `PortKind`. Rumoca's short-form class
 causality supplies signal connector direction, and resolved flow members supply
@@ -112,11 +133,26 @@ check public declaration facts. Inline snapshot/projection tests cover exact
 port names, inherited flow metadata, aliased direction, source scope, negative
 capture, and session-revision invalidation.
 
+The source-root owner loads the native declaration index off-thread and registers
+its exact declared namespaces for the installed library. Browser index readiness
+publishes the same registration. Library admission installs paired parsed records
+through the ordered worker channel without reparsing. Provisioning and index
+generation remain at the native workbench adapter.
+
+Experiment admission uses the same source-root registry and ordered load channel as interactive compilation. Required roots are queued before the immutable batch job; unknown or failed roots reject admission before registering a run.
+
 ## Prepared execution and persistence
+
+Compiled DAE reuse is keyed by the exact selected target, document URI,
+primary and sibling source bytes, and source-root revision. Prepared solver
+reuse uses the compiler's exact participating-source CID, excluding unrelated
+siblings and transient document paths. Generated and authored declarations use
+this same content contract. Identifiers, strings, annotations, and numeric
+literals remain unchanged throughout source admission and cache identity.
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same
-correlated lowering. Prepared cache version 11 stores the canonical typed FMI
+correlated lowering. Prepared cache version 12 stores the canonical typed FMI
 construction wire through a bounded JSON persistence adapter and zstd. Loading
 replays Rumoca's checked construction; unsupported versions, malformed metadata,
 identity mismatches, and oversized records are rejected before use.
@@ -135,10 +171,14 @@ observations are checked before compile, reset, or parameter-update success.
 The source-library bundle stores `ParsedSourceDocument` with expanded source
 text and syntax together. Admission uses `replace_in_memory_source_set`;
 source spans and portable content identities address those retained bytes.
-The native indexer writes the same paired-source record shape and returns terminal
-admission errors to its CLI and UI consumers before publishing artifacts.
+The native indexer writes the same paired-source record shape. Empty source sets
+and read or parse failures reject admission before publishing artifacts. The CLI and native workbench provisioning adapter invoke the same indexer;
+compiler and UI hosts consume its generated artifacts.
 The artifact tag is `rumoca-0.10.2+bincode2-ast3`. Native and browser decoders require
 complete records and full byte consumption; a partial bundle is never installed.
+Class documentation reads each exact parsed declaration and consumes Rumoca's
+decoded strings once. Equal short names in different packages retain their own
+text; indexing does not reparse sources or decode escapes again.
 Declaration locations include qualifiers and terminating semicolons. Artifact
 consumers require this span contract before using source ranges.
 The packager admits every source before publishing either artifact; read or parse
@@ -187,6 +227,11 @@ The reviewed release is upstream `v0.10.2` (`276e82bd`); upstream main was
 `0b249f0f` on 2026-10-11. The pinned fork also includes upstream's
 [external-function binary cache fix](https://github.com/CogniPilot/rumoca/commit/4afaf0af02dc1fbce0a189771434de49b27bab20).
 Parsed AST fields must be serialized completely for positional readers.
+The Diffsol backend directly depends on the corrected source retained in the
+pinned Rumoca repository. Downstream Git consumers receive its accepted-state,
+minimum-step, Newton-convergence, and failure-budget corrections through that
+dependency edge. The application carries no separate solver patch or sampler
+endpoint substitution.
 
 | Mechanism | Authoritative owner | LunCoSim responsibility |
 |---|---|---|

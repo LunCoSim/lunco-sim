@@ -420,7 +420,10 @@ most of the win, and both already exist — do not rebuild them.
 **Compile once, sweep many.** Native `lunco-modelica-runner` submits typed
 `CompileBatch` requests to the Modelica worker's single Rumoca actor. Batch and
 live compilation share admitted source roots and the bounded compiled-artifact
-cache, keyed by source and library generation. The artifact carries the exact
+cache, keyed by exact target, document URI, source bytes, and library generation.
+Before registering an experiment, the UI adapter queues its strict AST
+dependencies through `admit_compile_roots`. The worker waits for ordered source-root
+commits before dispatching the immutable batch compile. The artifact carries the exact
 participating-source CID captured before user overlays are cleared. The runner
 applies `SimOptions::param_overrides` and `initial_inputs` (`apply_run_values`)
 without mutating the DAE or reflattening per run. Browser batches compile in the

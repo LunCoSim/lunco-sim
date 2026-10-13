@@ -25,12 +25,12 @@ pub struct CanvasThemeSnapshot {
     pub port_stroke: egui::Color32,
     pub select_stroke: egui::Color32,
     pub inactive_stroke: egui::Color32,
-    pub icon_only_stroke: egui::Color32,
+    pub partial_stroke: egui::Color32,
     pub warning_stroke: egui::Color32,
     pub error_stroke: egui::Color32,
     /// When false (default), authored source library icons render without a
     /// workbench-drawn hairline frame around them. The icon's own
-    /// primitives are the bounds. Selection / icon-only / expandable
+    /// primitives are the bounds. Selection / partial / expandable
     /// rings still draw — they carry semantic info, not just bounds.
     pub show_authored_icon_border: bool,
 }
@@ -52,7 +52,7 @@ impl CanvasThemeSnapshot {
             port_stroke: c.surface2,
             select_stroke: t.accent,
             inactive_stroke: c.overlay0,
-            icon_only_stroke: t.warning,
+            partial_stroke: t.warning,
             warning_stroke: t.warning,
             error_stroke: t.error,
             show_authored_icon_border: false,
@@ -72,4 +72,15 @@ pub(super) fn modelica_icon_palette_from_ctx(
     ctx: &egui::Context,
 ) -> lunco_theme::ModelicaIconPalette {
     lunco_theme::active(ctx).modelica_icons.clone()
+}
+
+/// Render an authored connection color, or the theme's neutral wire token.
+pub(super) fn connection_color_from_ctx(
+    ctx: &egui::Context,
+    authored: Option<egui::Color32>,
+) -> egui::Color32 {
+    let theme = lunco_theme::active(ctx);
+    authored
+        .map(|color| theme.modelica_icons.remap(color))
+        .unwrap_or(theme.schematic.wire_unknown)
 }

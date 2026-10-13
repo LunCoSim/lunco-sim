@@ -89,7 +89,6 @@ pub mod model_share;
 pub mod rename_chain;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
-pub mod class_display;
 pub mod context;
 pub(crate) mod document_context;
 pub mod panels;
@@ -577,13 +576,6 @@ impl Plugin for ModelicaUiPlugin {
         use lunco_workbench_state::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
-        // Off-thread icon pre-warmer: on every DocumentOpened, walk
-        // the doc's AST for cross-package type references and prime
-        // rumoca's caches in the background. Drill-in projection
-        // sees a populated cache instead of paying the cold-walk
-        // seconds per first-time source library chain.
-        app.add_plugins(crate::icon_warmer::IconWarmerPlugin);
-
         // Intent layer: key chords → EditorIntent. Domain resolvers
         // (installed by ModelicaCommandsPlugin below) translate intents
         // into concrete commands for the docs they own.
@@ -910,14 +902,12 @@ fn register_settings_submenu(world: &mut World) {
         };
         let original_palette = palette.clone();
         ui.checkbox(
-            &mut palette.show_icon_only_classes,
-            "Show icon-only classes",
+            &mut palette.show_partial_classes,
+            "Show partial classes",
         )
         .on_hover_text(
-            "Include decorative classes from `Modelica.*.Icons.*` \
-             subpackages in the add-component menu. Off by default \
-             because they have no connectors and typically aren't \
-             what a user wants to drop on a diagram.",
+            "Include Modelica partial classes in the add-component menu. \
+             Partial classes require a concrete implementation before instantiation.",
         );
         if palette != original_palette {
             ctx.set_resource(palette);

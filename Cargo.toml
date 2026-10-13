@@ -2,7 +2,6 @@
 members = [
     "third_party/rumoca-compile",
     "third_party/bevy_render",
-    "third_party/openusd",
     "third_party/glam",
     "crates/lunco-core",
     "crates/lunco-runtime-context",
@@ -260,17 +259,11 @@ avian3d = { path = "third_party/avian3d" }
 parry3d-f64 = { path = "third_party/parry3d-f64" }
 # Scalar aligned-mask serialization for Bevy reflection; see vendor provenance.
 glam = { path = "third_party/glam" }
-# Pinned maintained OpenUSD source with the canonical scalar-asset identifier
-# annotation documented in third_party/openusd/LUNCOSIM-PROVENANCE.md.
-openusd = { path = "third_party/openusd" }
 
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
-
-[patch."https://github.com/LunCoSim/openusd"]
-openusd = { path = "third_party/openusd" }
 
 [patch."https://github.com/LunCoSim/rumoca"]
 rumoca-compile = { path = "third_party/rumoca-compile" }
@@ -389,18 +382,10 @@ draco-gltf = { version = "=0.4.0", default-features = false, features = ["write"
 # format used by the terrain baker and geotiff tag layer.
 tiff = "0.11"
 smallvec = "1.13"
-# openusd 0.5.0: real PCP composition engine (variantSets + relationship target
-# translation) + typed usd::Stage API used by the USD integration crates.
-# Pinned exact — pre-1.0, API moves fast. See crates/lunco-usd-bevy/OPENUSD_0_5_MIGRATION.md.
-#
-# Feature flags gate the TYPED SCHEMAS. We used to enable only `physics`, so the
-# `geom` / `shade` / `lux` schema wrappers — and their token constants — were
-# compiled out, and we hand-rolled attribute-name string literals against them
-# (`"physics:dynamicFriction"`, `"inputs:intensity"`, `"material:binding"`, …).
-# That is how we ended up inventing `physics:friction`, an attribute UsdPhysics
-# does not define: nothing could catch the typo, because it was a `&str`.
-# Enabling them makes those names compile-checked constants.
-openusd = { version = "=0.5.0", features = ["physics", "geom", "shade", "lux"] }
+# Native Rust USD composition and generated standard-schema views.
+# Exact versions keep the pre-1.0 core and schema APIs aligned.
+openusd = "=0.8.0"
+openusd-schemas = { version = "=0.8.0", features = ["physics", "geom", "shade", "lux"] }
 # The version and the feature set SHARED by both wire targets. `lunco-networking`
 # builds lightyear twice — a native client+server block and a wasm client-only one
 # — and holding the version in two places meant a bump could land on one target

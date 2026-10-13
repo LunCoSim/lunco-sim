@@ -149,7 +149,10 @@ arithmetic, including integer powers; dimensional unit composition supports
 multiplication, division, and integer powers. Keep `unit_symbol` for source
 display only. The standard conversion `isExact` flag is projected onto native
 units as `scale_is_exact` and accumulated by native quantities as
-`conversion_is_exact`. These flags describe conversion exactness only, not
+`conversion_is_exact`. Exact scale evidence takes precedence over compatible
+approximate conversion paths. Contradictory scales still reject the unit,
+and source graph traversal
+uses stable element order. These flags describe conversion exactness only, not
 measurement uncertainty.
 The bounded Modelica position adapter requires an exact SI scale before
 lowering to an unqualified vector.

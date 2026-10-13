@@ -572,8 +572,8 @@ mission after reassociation, then compare preparation and settled-step profiles.
 
 Confirm generated-network source-set stability across launches: identical
 generated text must not acquire unrelated open documents as compile siblings.
-Use the runtime-owned bundled `generated/` provenance classifier for structural
-identity, and retain authored multi-document compilation. Inspect typed
+Preserve exact generated target and source bytes in cache identity, and retain
+authored multi-document compilation. Inspect typed
 persistent-cache rejection warnings and the native preparation owner logs.
 `cache=memory-hit`, `cache=disk-hit`, and `cache=miss` identify the actual lookup;
 compare lookup, lowering, and total preparation durations for the same admitted
@@ -616,16 +616,12 @@ identities only. Compare the activation children before moving additional
 registry work across the lifecycle boundary; preserve authored install order
 and visible failure reporting.
 
-For startup schema registration, attribute the gated
-`register_ready_schema_assets` system over the whole capture: it sleeps after
-all sources settle. The schema owner parses each source once before the registry
-write lock and folds borrowed specs in standard path order. The asset owner
-admits the requested module prefix, waiting at unresolved sources and reporting
-terminal failures before proceeding. Preserve project-over-core precedence,
-schema-qualified declarations and core unit validation. Check the inline parser
-and pending-asset seams for invalid sources and reversed I/O readiness, then
-replay the unchanged production determinism reference. A registrar span gain
-does not establish clean loading or FPS improvement.
+Schema declarations are compiled by `openusd-build` and installed through
+`schema::native_registry`. Attribute native registry construction and the
+one-time `SchemaMetadata` projection when profiling startup. Schema availability
+has no asset-registration cadence. Project UI hints use the shared metadata
+decoder at build time; native USD owns declaration and fallback resolution.
+Compare loading and settled runtime separately before making performance claims.
 
 Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
@@ -660,7 +656,11 @@ separately from app-thread admission and render uploads. Fragment lookup uses
 bounded spatial bins;
 verify idle camera/terrain changes do not rebuild the stroke index.
 Visited-marker recoloring uses the existing route-view key and must not resubmit
-unchanged ribbon geometry.
+unchanged ribbon geometry. A ribbon seed authors only its reference root and
+anchor; wait for the reference owner's projection before `UpdateUsdCurveView`.
+The marker asset owns its geometry and pointer-interaction defaults. A rejected
+view command is terminal; it must not keep the route's admission flag pending
+and submit the same rejected edit every tick.
 Ribbon presentation preparation is presentation-only and must not issue another
 `ApplyUsdTransientOps`, change document generation, or run inside the fixed
 scenario event that observes a projected route. Compare the UI hook and fixed

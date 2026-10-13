@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
 use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState, LibrarySource};
 use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
+use lunco_modelica_source_roots::NativeLibraryIndexLoad;
 
 const NATIVE_LIBRARY_DATASET_ID: &str = "engine/modelica/library";
 
@@ -25,23 +26,6 @@ struct NativeInstallSlotInner {
 struct NativeLibraryInstallSlot {
     state: NativeInstallSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[derive(Resource, Default)]
-struct NativeLibraryIndexLoad {
-    task: Option<
-        bevy::tasks::Task<Result<lunco_modelica_index::visual_diagram::LibraryIndex, String>>,
-    >,
-    failed: bool,
-}
-
-impl NativeLibraryIndexLoad {
-    fn new() -> Self {
-        Self {
-            task: None,
-            failed: false,
-        }
-    }
 }
 
 /// User intent to rebuild the native editor index after a failed indexing or
@@ -60,12 +44,7 @@ impl Plugin for NativeLibraryIndexerPlugin {
         app.add_observer(on_native_library_index_action);
         app.add_systems(
             Update,
-            (
-                drain_native_library_install,
-                drive_native_library_dataset,
-                drive_native_library_index,
-            )
-                .chain(),
+            (drain_native_library_install, drive_native_library_dataset).chain(),
         );
 
         let settings = app
@@ -296,62 +275,4 @@ fn drive_native_library_dataset(
             commands.insert_resource(start_native_index(root));
         }
     }
-}
-
-fn drive_native_library_index(
-    index_load: Option<ResMut<NativeLibraryIndexLoad>>,
-    state: Option<ResMut<LibraryLoadState>>,
-    mut commands: Commands,
-) {
-    use bevy::tasks::futures_lite::future;
-
-    let Some(mut index_load) = index_load else {
-        return;
-    };
-
-    if index_load.failed || lunco_modelica_index::visual_diagram::library_index_available() {
-        return;
-    }
-
-    if index_load.task.is_some() {
-        let result = {
-            let task = index_load
-                .task
-                .as_mut()
-                .expect("source library index task disappeared while being polled");
-            future::block_on(future::poll_once(task))
-        };
-        let Some(result) = result else {
-            return;
-        };
-        index_load.task = None;
-        match result {
-            Ok(index) => {
-                if lunco_modelica_index::visual_diagram::install_library_index(index) {
-                    info!("[source library] editor index loaded off-thread");
-                    commands.trigger(
-                        lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady,
-                    );
-                }
-            }
-            Err(error) => {
-                index_load.failed = true;
-                error!("[source library] editor index load failed: {error}");
-                if let Some(mut state) = state {
-                    *state = LibraryLoadState::Failed(error);
-                }
-            }
-        }
-        return;
-    }
-
-    if !state.is_some_and(|state| state.is_ready()) {
-        return;
-    }
-
-    info!("[source library] loading editor index off-thread");
-    index_load.task =
-        Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async {
-            lunco_modelica_index::visual_diagram::load_library_index_from_assets()
-        }));
 }

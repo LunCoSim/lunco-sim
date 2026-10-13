@@ -219,8 +219,8 @@ impl StageMetrics {
     /// owning document must pass its composed authoring stage here. An isolated
     /// runtime or view layer does not own the stage's pseudo-root metadata and
     /// can therefore report USD's centimetre default instead of the scene's
-    /// authored metrics. Document-layer edits can read the same composed
-    /// metadata through [`from_reader`](Self::from_reader).
+    /// authored metrics. Native metadata query errors remain terminal rather
+    /// than being interpreted as omitted declarations.
     ///
     /// That symmetry is the point: read and write must agree on the stage's frame
     /// or a round-trip is not the identity. Going through the composed stage on
@@ -232,8 +232,7 @@ impl StageMetrics {
     pub fn from_stage(stage: &openusd::usd::Stage) -> Result<Self, StageMetricsError> {
         let up_axis = match stage
             .stage_metadata("upAxis")
-            .ok()
-            .flatten()
+            .map_err(|error| StageMetricsError::InvalidUpAxis(error.to_string()))?
             .map(|v| v.as_str().map(str::to_string))
         {
             None => UpAxis::Y,
@@ -246,7 +245,10 @@ impl StageMetrics {
                 ));
             }
         };
-        let meters_per_unit = match stage.stage_metadata("metersPerUnit").ok().flatten() {
+        let meters_per_unit = match stage
+            .stage_metadata("metersPerUnit")
+            .map_err(|error| StageMetricsError::InvalidMetersPerUnit(error.to_string()))?
+        {
             None => 0.01,
             Some(value) => {
                 let value = value

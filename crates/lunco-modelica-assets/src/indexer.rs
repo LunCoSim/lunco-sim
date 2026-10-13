@@ -9,10 +9,7 @@ use std::path::Path;
 // inspected from a cross-target build; the module itself is native-only.
 use web_time::Instant;
 
-/// Indexer options. Used by both the CLI binary and the in-process
-/// startup task in `NativeLibraryIndexerPlugin`. Kept tiny on purpose — adding
-/// `clap` would pull megabytes of build into a tool whose whole point
-/// is to make the workbench start faster.
+/// Native source-indexing options shared by command-line and library callers.
 #[derive(Default, Clone, Debug)]
 pub struct Options {
     /// Print per-file scan progress.
@@ -191,38 +188,18 @@ struct SourceLibraryIndexer {
 
 /// HTML-tag and whitespace-collapse patterns for [`clean_info_text`].
 /// Compiled once (not per class) — `clean_info_text` runs once for each
-/// of the ~2700 source library classes during an index build, and recompiling these
+/// of the source library declarations during an index build, and recompiling these
 /// every call dominated that pass.
 static TAG_RE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]*>").expect("tag regex"));
 static WS_RE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"\s+").expect("ws regex"));
 
-/// Turn a raw Modelica `info="…"` string into UI-ready plain text.
-/// Unescapes Modelica string escapes, strips HTML tags and common
-/// entities, collapses whitespace, and keeps only the first
+/// Turn Rumoca's decoded documentation into UI-ready plain text.
+/// Strips HTML tags and common entities, collapses whitespace, and keeps the first
 /// paragraph (so a multi-screen source library doc fits in a card tagline).
 fn clean_info_text(raw: &str) -> String {
-    // Modelica string escapes we actually see in source library.
-    let mut s = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => s.push('\n'),
-                Some('t') => s.push('\t'),
-                Some('"') => s.push('"'),
-                Some('\\') => s.push('\\'),
-                Some(other) => {
-                    s.push('\\');
-                    s.push(other);
-                }
-                None => s.push('\\'),
-            }
-        } else {
-            s.push(c);
-        }
-    }
+    let mut s = raw.to_owned();
 
     // First-paragraph boundary: `</p>` is the source library convention; fall
     // back to a blank line so prose-only info strings still split.
@@ -258,6 +235,22 @@ impl SourceLibraryIndexer {
             parsed_bundle: Vec::with_capacity(2700),
             source_errors: Vec::new(),
         }
+    }
+
+    /// Validate the complete parsed source set before publishing artifacts.
+    fn validate_source_admission(&self) -> Result<(), String> {
+        if !self.source_errors.is_empty() {
+            return Err(format!(
+                "source admission failed; no artifacts published: {}",
+                self.source_errors.join("; ")
+            ));
+        }
+        if self.parsed_bundle.is_empty() {
+            return Err(
+                "source admission failed; no Modelica sources found; no artifacts published".into(),
+            );
+        }
+        Ok(())
     }
 
     /// Install the admitted source text in the engine's within-aware lookup index.
@@ -418,7 +411,15 @@ impl SourceLibraryIndexer {
         // stay borrowed read-only via per-iteration `self.classes.get`.
         let mut names: Vec<String> = self.classes.keys().cloned().collect();
         names.sort();
-        for full_name in &names {
+        for (index, full_name) in names.iter().enumerate() {
+            if self.verbose {
+                println!(
+                    "[indexer] interface {}/{}: {}",
+                    index + 1,
+                    names.len(),
+                    full_name
+                );
+            }
             let full_name = full_name.as_str();
             let Some(class) = self.classes.get(full_name) else {
                 continue;
@@ -484,7 +485,7 @@ impl SourceLibraryIndexer {
                     lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
                 let (documentation_info, _) =
                     lunco_modelica_index::doc_extract::extract_documentation(&class.annotation);
-                let documentation_info = documentation_info.map(|info| clean_info_text(&info));
+                let documentation_info = documentation_info.as_deref().map(clean_info_text);
                 // `expandable connector` (MLS §9.1.3) is a connector
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
@@ -536,8 +537,8 @@ impl SourceLibraryIndexer {
 /// The explicitly selected native source set as `(directory, package_prefix)`
 /// package roots plus standalone `.mo` files.
 ///
-/// This is the single source of truth for the CLI indexer and the workbench's
-/// cold-cache bundle builder. It derives the package inventory from the
+/// This is the source-root discovery used by the native indexer.
+/// It derives the package inventory from the
 /// selected directory itself; no package name or cache sibling is special.
 pub(crate) fn native_library_roots(
     library_root: &std::path::Path,
@@ -574,105 +575,6 @@ pub(crate) fn native_library_roots(
     dirs.sort_by(|left, right| left.1.cmp(&right.1));
     files.sort();
     (dirs, files)
-}
-
-/// Recursively collect every `.mo` file under `dir` into `out`.
-#[cfg(not(target_arch = "wasm32"))]
-fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_mo_files(&path, out);
-            } else if path.extension().is_some_and(|e| e == "mo") {
-                out.push(path);
-            }
-        }
-    }
-}
-
-/// Parse every native source library `.mo` file into `(uri, StoredDefinition)` pairs,
-/// **one file at a time**. The workbench's cold-cache bundle builder and
-/// the in-app source library bundle builder.
-///
-/// **Why not `rumoca_compile::parsing::parse_files_parallel`?** That routes
-/// every file through rumoca_compile's *global* in-memory artifact-cache
-/// mutex (+ per-file disk-cache writes) on the *shared global* rayon pool.
-/// Run on the workbench worker thread *alongside the Bevy main thread*
-/// (which drives that same pool + locks every frame: drill-in, engine
-/// async parse, icon/§5 lookups), it self-destructs: per-file dispatch →
-/// futex convoy (~282% CPU, 99 threads in `futex_do_wait`); one batch
-/// dispatch → mutex spin-storm (~2600% CPU, no progress). Either way an
-/// 8 s standalone parse becomes *minutes* in-app. The cost is contention,
-/// not parse work.
-///
-/// So we bypass the cache layer entirely: parse each file with the **raw,
-/// lock-free** `rumoca_phase_parse::parse_to_ast` (exactly what
-/// `parse_files_parallel` calls internally — identical AST) on a
-/// **dedicated, bounded** rayon pool. No shared global pool, no global
-/// mutex → no contention with the render loop; capped threads leave cores
-/// for rendering and bound the memory peak; and we skip rumoca's in-memory
-/// cache duplicate (we persist our own `parsed-library.bin`, the real cache).
-/// Uses [`native_library_roots`] (same root set as the CLI) → identical bundle.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn parse_native_library_bundle() -> Vec<(String, StoredDefinition)> {
-    use rayon::prelude::*;
-    let library_root = lunco_modelica_library::source_library::source_library_cache_dir();
-    let (root_dirs, companion_files) = native_library_roots(&library_root);
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
-    for (dir, _prefix) in &root_dirs {
-        collect_mo_files(dir, &mut paths);
-    }
-    paths.extend(companion_files);
-
-    // Leave a couple of cores for the render loop; 16 MB stacks for deep
-    // nested-class recursion (matches rumoca's own pool sizing).
-    // `LUNCO_LIBRARY_PARSE_THREADS` overrides the count (tuning / weak machines).
-    let threads = std::env::var("LUNCO_LIBRARY_PARSE_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get().saturating_sub(2).max(1))
-                .unwrap_or(2)
-        });
-    let started = Instant::now();
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .stack_size(16 * 1024 * 1024)
-        .build();
-    let bundle: Vec<(String, StoredDefinition)> = match pool {
-        Ok(pool) => pool.install(|| paths.par_iter().filter_map(|p| parse_one_mo(p)).collect()),
-        Err(e) => {
-            log::warn!("[library-bundle] dedicated pool build failed ({e}); parsing sequentially");
-            paths.iter().filter_map(|p| parse_one_mo(p)).collect()
-        }
-    };
-    log::info!(
-        "[library-bundle] parsed {} source library files (raw parser, {} threads) in {:.1}s",
-        bundle.len(),
-        threads,
-        started.elapsed().as_secs_f64()
-    );
-    bundle
-}
-
-/// Read + parse one `.mo` with the raw, lock-free parser. `None` on read or
-/// parse error (logged). The bundle uri is the file path (matches the CLI).
-#[cfg(not(target_arch = "wasm32"))]
-fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
-    let src = std::fs::read_to_string(path).ok()?;
-    match rumoca_phase_parse::parse_to_ast(&src, &path.to_string_lossy()) {
-        Ok(ast) => Some((path.to_string_lossy().to_string(), ast)),
-        Err(e) => {
-            log::warn!(
-                "[library-bundle] parse failed for `{}`: {e}",
-                path.display()
-            );
-            None
-        }
-    }
 }
 
 pub fn run(opts: Options) -> Result<(), String> {
@@ -725,8 +627,7 @@ pub fn run_with_cancel(
 
     // Single source of truth for the native source set (source tree +
     // companions + discovered third-party libs), shared with the
-    // workbench's cold-cache bundle builder (`parse_native_library_bundle`) so
-    // both scan exactly the same files. `native_library_roots` returns folder
+    // source-root discovery. `native_library_roots` returns folder
     // packages as `(dir, prefix)` and standalone companion files (e.g.
     // `Complex.mo`, referenced by Modelica.Fluid / ComplexBlocks)
     // separately, since the indexer keys flat files by declared class name
@@ -750,12 +651,7 @@ pub fn run_with_cancel(
         }
     }
 
-    if !indexer.source_errors.is_empty() {
-        return Err(format!(
-            "source admission failed; no artifacts published: {}",
-            indexer.source_errors.join("; ")
-        ));
-    }
+    indexer.validate_source_admission()?;
 
     let scan_secs = indexer
         .scan_started
@@ -1144,6 +1040,61 @@ enum WarmKind {
 mod parsed_bundle_tests {
     use super::{SourceLibraryIndexer, encode_parsed_bundle};
     use std::io::Read;
+
+    #[test]
+    fn indexed_documentation_keeps_qualified_ownership_and_decoded_strings() {
+        let mut indexer = SourceLibraryIndexer::new();
+        indexer.ingest_file(std::path::Path::new("Docs.mo"), r#"package Docs package A model Part output Real y=1; annotation(Documentation(info="<p>first C:\\new</p>")); end Part; end A; package B model Part output Real y=2; annotation(Documentation(info="<p>second</p>")); end Part; end B; end Docs;"#, "Docs.mo", "");
+        indexer.install_into_engine();
+        let entries = indexer.index_all();
+        let a = entries
+            .iter()
+            .find(|entry| entry.name == "Docs.A.Part")
+            .unwrap();
+        let b = entries
+            .iter()
+            .find(|entry| entry.name == "Docs.B.Part")
+            .unwrap();
+        assert_eq!(a.documentation.0.as_deref(), Some(r"first C:\new"));
+        assert_eq!(b.documentation.0.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn class_index_reads_interfaces_without_instantiating_internal_models() {
+        let mut indexer = SourceLibraryIndexer::new();
+        indexer.ingest_file(std::path::Path::new("Bounded.mo"), "package Bounded model Device Missing internal; end Device; model Root input Real demand; Device device; output Real delivered; end Root; end Bounded;", "Bounded.mo", "");
+        indexer.install_into_engine();
+        let entries = indexer.index_all();
+        let root = entries
+            .iter()
+            .find(|entry| entry.name == "Bounded.Root")
+            .unwrap();
+        assert_eq!(
+            root.resolution,
+            lunco_modelica_index::index::ClassResolutionState::Resolved
+        );
+        assert_eq!(
+            root.ports
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["demand", "delivered"]
+        );
+        let device = entries
+            .iter()
+            .find(|entry| entry.name == "Bounded.Device")
+            .unwrap();
+        assert_eq!(
+            device.resolution,
+            lunco_modelica_index::index::ClassResolutionState::Missing
+        );
+    }
+
+    #[test]
+    fn empty_source_set_is_rejected_before_publication() {
+        let indexer = SourceLibraryIndexer::new();
+        assert!(indexer.validate_source_admission().is_err());
+    }
 
     #[test]
     fn index_uses_resolved_ports_and_reports_invalid_declarations() {

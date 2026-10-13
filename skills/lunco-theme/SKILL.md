@@ -105,15 +105,7 @@ Colours that any schematic editor uses — Modelica, SysML, electrical
 CAD, flow charts. Shared vocabulary, one palette→intent mapping.
 
 ```rust
-// Wire colours by connector domain
-theme.schematic.wire_electrical   // Pin, Plug
-theme.schematic.wire_mechanical   // Flange
-theme.schematic.wire_thermal      // HeatPort
-theme.schematic.wire_fluid
-theme.schematic.wire_signal       // RealInput/Output
-theme.schematic.wire_boolean
-theme.schematic.wire_integer
-theme.schematic.wire_multibody    // Frame
+// Connections without an authored color
 theme.schematic.wire_unknown
 
 // Class/component-kind badges
@@ -138,38 +130,16 @@ Add a field here when you need a new schematic concept (e.g. a
 
 ### Tier 3 — Domain translation (extension trait)
 
-A trait on `Theme` inside the domain crate. Maps domain-specific
-names (Modelica `Pin`, parsed `ClassType::Model`, SysML stereotype)
-to **tier 2 fields**. **Zero palette reads** in the trait body —
-if the intent isn't in tier 2 yet, go add it there first.
+Typed domain facts select **tier 2 fields** through an extension trait on
+`Theme` inside the domain crate. For example, parsed `ClassType` selects
+`class_model_badge` or `class_package_badge`. The trait does not read palette
+entries or infer physical semantics from declaration names.
 
-```rust
-// crates/lunco-modelica-ui/src/ui/theme.rs
-pub trait ModelicaThemeExt {
-    fn wire_color(&self, connector_type: &str) -> Color32;
-    fn class_badge_bg(&self, kind: &ClassType) -> Color32;
-}
-
-impl ModelicaThemeExt for Theme {
-    fn wire_color(&self, connector_type: &str) -> Color32 {
-        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
-        let s = &self.schematic;
-        match leaf {
-            "Pin" | "Plug" => s.wire_electrical,
-            "Flange_a" | "Flange_b" => s.wire_mechanical,
-            "RealInput" | "RealOutput" => s.wire_signal,
-            _ => s.wire_unknown,
-        }
-    }
-    fn class_badge_bg(&self, kind: &ClassType) -> Color32 {
-        match kind {
-            ClassType::Model => self.schematic.class_model_badge,
-            ClassType::Package => self.schematic.class_package_badge,
-            // ...
-        }
-    }
-}
-```
+Modelica connection presentation preserves authored `Line.color`, then the
+resolved connector `Icon` color. Render those colors through
+`theme.modelica_icons.remap(color)`. When no color is authored, use
+`theme.schematic.wire_unknown`. Connector identity and causality come from
+Rumoca's resolved facts; spelling does not select a domain or color.
 
 ### Tier 4 — User override (pin a value)
 
@@ -178,7 +148,7 @@ impl ModelicaThemeExt for Theme {
 - A theme author or end-user needs to pin a specific colour that
   should *not* track the palette on dark/light toggle, or
 - You're resolving a token whose default is itself a tier 2
-  field (e.g. `theme.get_token("modelica", "port_input", theme.schematic.wire_signal)`).
+  field (e.g. `theme.get_token("modelica", "class.model", theme.schematic.class_model_badge)`).
 
 `get_token` is **not** the pattern for introducing new defaults.
 If you're writing `self.colors.blue` as the fallback, stop — the
@@ -209,7 +179,7 @@ can't hold `Res<Theme>` and `&mut World` at the same time:
 ```rust
 let theme = world.resource::<lunco_theme::Theme>().clone();
 // now render freely with `theme.tokens.*`, `theme.schematic.*`,
-// or (for Modelica) `theme.wire_color("Pin")` via the extension trait.
+// or typed class badge accessors through `ModelicaThemeExt`.
 ```
 
 ### Imports
@@ -234,12 +204,10 @@ use crate::ui::theme::ModelicaThemeExt;
 | Secondary / muted text         | `theme.tokens.text_subdued`                       |
 | Panel background               | `theme.colors.mantle`                             |
 | Widget surface                 | `theme.colors.surface0..surface2`                 |
-| Electrical wire                | `theme.schematic.wire_electrical`                 |
-| Mechanical flange              | `theme.schematic.wire_mechanical`                 |
-| Signal (Real)                  | `theme.schematic.wire_signal`                     |
+| Uncolored Modelica connection  | `theme.schematic.wire_unknown`                    |
 | Class-kind badge               | `theme.schematic.class_<kind>_badge`              |
 | Schematic diagram muted text   | `theme.schematic.text_muted`                      |
-| Domain type → schematic colour | extension trait (`theme.wire_color(…)`)           |
+| Authored Modelica color        | `theme.modelica_icons.remap(color)`               |
 | User-pinned override           | `theme.get_token(...)` with prior `register_override` |
 
 If the answer is "none of these fit" — **add a field in the right
@@ -280,7 +248,7 @@ world.resource_mut::<lunco_theme::Theme>().toggle_mode();
 | `self.colors.blue` as a default in an extension trait | `self.schematic.wire_electrical` field (add if missing) |
 | `ui.visuals_mut().override_text_color = Some(...)`    | Let `lunco-workbench` apply `theme.to_visuals()`        |
 | `if mode == Dark { red } else { dark_red }`           | One token; palette handles the swap                     |
-| `wire_color_for(connector)` local function per crate  | Domain extension trait returning `theme.schematic.wire_*` |
+| Infer wire domain from a connector name               | Render authored colors; use the neutral token when omitted |
 | `Margin::same(8.0)`                                   | `theme.spacing.window_padding`                          |
 | Add a new `catppuccin-egui` dep in a domain crate     | Consume colors via `Theme`; bridging lives in `lunco-theme` only |
 

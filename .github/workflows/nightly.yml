@@ -168,13 +168,11 @@ jobs:
           dotnet tool install --global vpk --version "$VELOPACK_CLI_VERSION"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
-      # rust-toolchain.toml pins nightly-2026-02-27; the dtolnay action
-      # honours it but we set the toolchain explicitly to be safe on
-      # fresh runners where the file hasn't been read yet.
+      # Match rust-toolchain.toml and OpenUSD's minimum compiler version.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-02-27
+          toolchain: nightly-2026-03-29
           components: rust-src
 
       - name: Install Linux system dependencies

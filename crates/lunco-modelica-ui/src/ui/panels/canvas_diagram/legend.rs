@@ -13,19 +13,17 @@ use bevy_egui::egui;
 use lunco_canvas::Scene;
 
 use super::edge::ConnectionEdgeData;
-use super::paint::wire_style_for;
-use super::theme::modelica_icon_palette_from_ctx;
+use super::theme::connection_color_from_ctx;
 
 #[derive(Clone, Copy)]
 struct LegendEntry {
-    color: egui::Color32,
+    color: Option<egui::Color32>,
     kind: lunco_modelica_index::visual_diagram::PortKind,
-    domain: &'static str,
 }
 
 /// Paint a legend for the connection styles used by `scene`.
 pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges: &mut bool) {
-    let mut entries = BTreeMap::<String, LegendEntry>::new();
+    let mut entries = BTreeMap::<(String, &'static str, Option<[u8; 4]>), LegendEntry>::new();
     for (_, edge) in scene.edges() {
         if edge.kind != "modelica.connection" {
             continue;
@@ -34,17 +32,20 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
             continue;
         };
         let connector = data.connector_type.clone();
-        let style = wire_style_for(&connector);
-        entries.entry(connector).or_insert_with(|| LegendEntry {
-            color: data.icon_color.unwrap_or(style.color),
-            kind: data.kind,
-            domain: style.domain,
-        });
+        entries
+            .entry((
+                connector,
+                kind_label(data.kind),
+                data.icon_color.map(|color| color.to_array()),
+            ))
+            .or_insert_with(|| LegendEntry {
+                color: data.icon_color,
+                kind: data.kind,
+            });
     }
 
     let ctx = ui.ctx().clone();
     let theme = lunco_theme::active(&ctx);
-    let palette = modelica_icon_palette_from_ctx(&ctx);
     let width = 300.0;
     let left = (rect.right() - width - 12.0).max(rect.left() + 12.0);
     egui::Area::new(egui::Id::new("lunco_modelica_connection_legend"))
@@ -70,7 +71,7 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                         );
                     });
                     ui.label(
-                        egui::RichText::new("Colors follow authored connector Icons")
+                        egui::RichText::new("Colors follow authored Modelica annotations")
                             .color(theme.tokens.text_subdued),
                     );
                     ui.label(
@@ -85,20 +86,22 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                                 .color(theme.tokens.text_subdued),
                         );
                     } else {
-                        for (connector, entry) in entries {
-                            let leaf = connector
-                                .rsplit('.')
-                                .next()
-                                .filter(|leaf| !leaf.is_empty())
-                                .unwrap_or("Unresolved connector");
-                            let label =
-                                format!("{leaf} · {} · {}", entry.domain, kind_label(entry.kind));
+                        for ((connector, _, _), entry) in entries {
+                            let label = format!(
+                                "{} · {}",
+                                if connector.is_empty() {
+                                    "Unresolved connector"
+                                } else {
+                                    &connector
+                                },
+                                kind_label(entry.kind)
+                            );
                             ui.horizontal(|ui| {
                                 let (swatch, _) = ui.allocate_exact_size(
                                     egui::vec2(28.0, 14.0),
                                     egui::Sense::hover(),
                                 );
-                                let color = palette.remap(entry.color);
+                                let color = connection_color_from_ctx(&ctx, entry.color);
                                 ui.painter().line_segment(
                                     [
                                         egui::pos2(swatch.left(), swatch.center().y),
@@ -106,7 +109,7 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
                                     ],
                                     egui::Stroke::new(2.0, color),
                                 );
-                                ui.label(label);
+                                ui.add(egui::Label::new(label).wrap());
                             });
                         }
                     }

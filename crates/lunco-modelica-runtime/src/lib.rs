@@ -231,6 +231,8 @@ pub enum ModelicaCommand {
 /// Source-root payload carried to the compiler worker.
 #[derive(Serialize, Deserialize)]
 pub enum LoadSourceRootPayload {
+    /// The complete paired source artifact owned by the installed library.
+    SourceLibrary,
     Disk {
         root_dir: PathBuf,
     },

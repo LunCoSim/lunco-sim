@@ -12,8 +12,8 @@ use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_stage::{
     Purpose, StageView, UsdReadObject, effective_purpose, stage_convention,
 };
-use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::physics::CollisionApprox;
 
 use crate::{
     ShapeDims, UsdGeomAxis, read_mesh_collision_approximation, read_shape_dims,
@@ -160,7 +160,7 @@ pub fn collision_aabb(
         if !UsdReadObject::has_api_schema(
             reader,
             &path,
-            openusd::schemas::physics::tokens::API_COLLISION,
+            openusd_schemas::physics::tokens::PHYSICS_COLLISION_API,
         ) {
             continue;
         }

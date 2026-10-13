@@ -52,20 +52,15 @@ pub enum FileClosureError {
         #[source]
         error: lunco_storage::StorageError,
     },
-    #[error("asset document `{path}` is not UTF-8: {error}")]
-    Utf8 {
-        path: PathBuf,
-        #[source]
-        error: std::string::FromUtf8Error,
-    },
-    #[error("asset document `{path}` could not be parsed")]
-    Parse { path: PathBuf },
+    #[error("asset document `{path}` could not be parsed: {error}")]
+    Parse { path: PathBuf, error: String },
 }
 
 /// Walk every file transitively named by `roots`.
 ///
 /// `is_document` decides whether a file may contain further dependencies;
-/// `dependencies` receives its UTF-8 source and returns those raw references.
+/// `dependencies` receives bounded source bytes and returns raw references or
+/// the format owner's diagnostic. Decoding belongs to the format owner.
 /// Anchored references are intentionally skipped because this form has no
 /// mapping for a scheme or an assets-root-relative path.
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,7 +68,7 @@ pub fn transitive_file_closure(
     roots: &[PathBuf],
     limits: &FileClosureLimits,
     is_document: impl Fn(&Path) -> bool,
-    dependencies: impl Fn(&str) -> Option<Vec<String>>,
+    dependencies: impl Fn(&[u8]) -> Result<Vec<String>, String>,
 ) -> Result<BTreeSet<PathBuf>, FileClosureError> {
     transitive_file_closure_with(roots, limits, |_| None, is_document, dependencies)
 }
@@ -88,7 +83,7 @@ pub fn transitive_file_closure_with(
     limits: &FileClosureLimits,
     resolve_anchored: impl Fn(&str) -> Option<PathBuf>,
     is_document: impl Fn(&Path) -> bool,
-    dependencies: impl Fn(&str) -> Option<Vec<String>>,
+    dependencies: impl Fn(&[u8]) -> Result<Vec<String>, String>,
 ) -> Result<BTreeSet<PathBuf>, FileClosureError> {
     limits.validate()?;
     let mut admitted = BTreeSet::new();
@@ -125,12 +120,10 @@ pub fn transitive_file_closure_with(
             error,
         })?;
         remaining -= bytes.len();
-        let text = String::from_utf8(bytes).map_err(|error| FileClosureError::Utf8 {
+        let arcs = dependencies(&bytes).map_err(|error| FileClosureError::Parse {
             path: path.clone(),
             error,
         })?;
-        let arcs =
-            dependencies(&text).ok_or_else(|| FileClosureError::Parse { path: path.clone() })?;
         let base = path.parent().unwrap_or_else(|| Path::new(""));
         for arc in arcs {
             if asset_path::is_anchored(&arc) {
@@ -163,7 +156,11 @@ mod tests {
             path.extension()
                 .is_some_and(|extension| extension == "node")
         };
-        let dependencies = |text: &str| Some(vec![text.to_owned()]);
+        let dependencies = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .map(|text| vec![text.to_owned()])
+                .map_err(|error| error.to_string())
+        };
         let limits = FileClosureLimits {
             max_files: 2,
             max_document_bytes: 16,
@@ -203,14 +200,24 @@ mod tests {
             })
         ));
         assert!(matches!(
-            transitive_file_closure(&[document.clone()], &limits, is_document, |_| None),
+            transitive_file_closure(&[document.clone()], &limits, is_document, |_| Err(
+                "invalid document".to_owned()
+            )),
             Err(FileClosureError::Parse { .. })
         ));
         write(&[0xff]);
         assert!(matches!(
             transitive_file_closure(&[document.clone()], &limits, is_document, dependencies),
-            Err(FileClosureError::Utf8 { .. })
+            Err(FileClosureError::Parse { .. })
         ));
+        assert!(
+            transitive_file_closure(&[document.clone()], &limits, is_document, |bytes| {
+                assert_eq!(bytes, &[0xff]);
+                Ok(Vec::new())
+            })
+            .unwrap()
+            .contains(&document)
+        );
         assert!(matches!(
             transitive_file_closure(
                 &[root.path().join("absent.node")],

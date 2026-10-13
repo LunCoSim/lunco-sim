@@ -5,7 +5,7 @@ use super::layers::*;
 use super::placement::*;
 use super::types::*;
 use rumoca_core::{OpBinary, OpUnary};
-use rumoca_ir_ast::{ClassDef, Expression, Import, TerminalType};
+use rumoca_ir_ast::{ClassDef, Expression, TerminalType};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -127,8 +127,9 @@ pub fn extract_experiment(annotations: &[Expression]) -> Option<Experiment> {
 /// bases first, append local graphics last, inherit the coordinate
 /// system from the first source that declares one) is shared by index and
 /// runtime callers. The resolver and the source of `falsy_params` remain
-/// owned by those callers.
-fn merge_inherited_icon<F>(
+/// owned by those callers. The resolver receives the declaring scope and the
+/// authored base reference, and returns the exact native-resolved identity.
+pub fn project_inherited_icon<F>(
     class_name: &str,
     class: &ClassDef,
     resolver: &mut F,
@@ -136,7 +137,7 @@ fn merge_inherited_icon<F>(
     visited: &mut HashSet<String>,
 ) -> Option<Icon>
 where
-    F: FnMut(&str) -> Option<Arc<ClassDef>>,
+    F: FnMut(&str, &str) -> Option<(String, Arc<ClassDef>)>,
 {
     if !visited.insert(class_name.to_string()) {
         return None; // cycle
@@ -145,26 +146,12 @@ where
     let mut merged_graphics: Vec<GraphicItem> = Vec::new();
     let mut inherited_cs: Option<CoordinateSystem> = None;
     for ext in &class.extends {
-        let base_name: String = ext
-            .base_name
-            .name
-            .iter()
-            .map(|t| t.text.as_ref())
-            .collect::<Vec<&str>>()
-            .join(".");
+        let base_name = ext.base_name.to_string();
 
-        let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
-        let mut hit: Option<(String, Arc<ClassDef>)> = None;
-        for candidate in candidates {
-            if let Some(base_class) = resolver(&candidate) {
-                hit = Some((candidate, base_class));
-                break;
-            }
-        }
-        let Some((resolved_name, base_class)) = hit else {
+        let Some((resolved_name, base_class)) = resolver(class_name, &base_name) else {
             continue;
         };
-        if let Some(base_icon) = merge_inherited_icon(
+        if let Some(base_icon) = project_inherited_icon(
             &resolved_name,
             base_class.as_ref(),
             resolver,
@@ -192,185 +179,9 @@ where
     })
 }
 
-/// Indexer entry point: merge a scanned class's inherited icon using a
-/// closure that maps `class-name → ClassDef`. The falsy-parameter set
-/// (bool params explicitly bound to `false`, used to drop conditionally
-/// hidden graphics) is collected once over the *whole* chain — a
-/// superset of any single level — so it matches the flattened semantics
-/// of the runtime engine adapter.
-pub fn extract_icon_inherited<F>(
-    class_name: &str,
-    class: &ClassDef,
-    resolver: &mut F,
-    visited: &mut HashSet<String>,
-) -> Option<Icon>
-where
-    F: FnMut(&str) -> Option<Arc<ClassDef>>,
-{
-    let mut falsy_params: HashSet<String> = HashSet::new();
-    let mut falsy_visited: HashSet<String> = HashSet::new();
-    collect_falsy_bool_params_recursive(
-        class_name,
-        class,
-        resolver,
-        &mut falsy_params,
-        &mut falsy_visited,
-    );
-    merge_inherited_icon(class_name, class, resolver, &falsy_params, visited)
-}
-
-/// Merge a class's inherited icon with a caller-owned falsy-parameter set.
-///
-/// Engine and index adapters use this same AST operation while retaining
-/// ownership of class lookup and parameter semantics at their respective
-/// boundaries.
-pub fn extract_icon_inherited_with_falsy_params<F>(
-    class_name: &str,
-    class: &ClassDef,
-    resolver: &mut F,
-    falsy_params: &HashSet<String>,
-    visited: &mut HashSet<String>,
-) -> Option<Icon>
-where
-    F: FnMut(&str) -> Option<Arc<ClassDef>>,
-{
-    merge_inherited_icon(class_name, class, resolver, falsy_params, visited)
-}
-
 // ---------------------------------------------------------------------------
 // Inner helpers
 // ---------------------------------------------------------------------------
-
-fn build_extends_candidates(class_name: &str, base_name: &str, imports: &[Import]) -> Vec<String> {
-    let mut out = Vec::new();
-    out.push(base_name.to_string());
-
-    let (head, tail) = match base_name.split_once('.') {
-        Some((h, t)) => (h, Some(t)),
-        None => (base_name, None),
-    };
-    for imp in imports {
-        let import_path_name = |path: &rumoca_ir_ast::Name| -> String {
-            path.name
-                .iter()
-                .map(|t| t.text.as_ref())
-                .collect::<Vec<_>>()
-                .join(".")
-        };
-        match imp {
-            Import::Renamed { alias, path, .. } => {
-                if alias.text.as_ref() == head {
-                    let resolved = import_path_name(path);
-                    let full = match tail {
-                        Some(t) => format!("{resolved}.{t}"),
-                        None => resolved,
-                    };
-                    if full != base_name {
-                        out.push(full);
-                    }
-                }
-            }
-            Import::Qualified { path, .. } => {
-                let last = path.name.last().map(|t| t.text.as_ref()).unwrap_or("");
-                if last == head {
-                    let resolved = import_path_name(path);
-                    let full = match tail {
-                        Some(t) => format!("{resolved}.{t}"),
-                        None => resolved,
-                    };
-                    if full != base_name {
-                        out.push(full);
-                    }
-                }
-            }
-            Import::Unqualified { path, .. } => {
-                if tail.is_none() {
-                    let resolved = import_path_name(path);
-                    let full = format!("{resolved}.{head}");
-                    if full != base_name {
-                        out.push(full);
-                    }
-                }
-            }
-            Import::Selective { path, names, .. } => {
-                if names.iter().any(|n| n.text.as_ref() == head) {
-                    let resolved = import_path_name(path);
-                    let full = match tail {
-                        Some(t) => format!("{resolved}.{head}.{t}"),
-                        None => format!("{resolved}.{head}"),
-                    };
-                    if full != base_name {
-                        out.push(full);
-                    }
-                }
-            }
-        }
-    }
-
-    // Scope-chain candidates (sibling → parent → root) come from the single
-    // canonical §5.3 resolver `crate::scope_chain_candidates`, so the walk
-    // can't drift from the rest of the crate. Its trailing bare `base_name` is
-    // the one we already pushed first, so skip it. The import candidates above
-    // are layered on top — they are not part of the scope walk.
-    for cand in crate::scope_chain_candidates(base_name, Some(class_name)) {
-        if cand != base_name {
-            out.push(cand);
-        }
-    }
-    out
-}
-
-fn collect_falsy_bool_params_recursive<F>(
-    class_name: &str,
-    class: &ClassDef,
-    resolver: &mut F,
-    out: &mut HashSet<String>,
-    visited: &mut HashSet<String>,
-) where
-    F: FnMut(&str) -> Option<Arc<ClassDef>>,
-{
-    if !visited.insert(class_name.to_string()) {
-        return;
-    }
-    collect_falsy_bool_params(class, out);
-    for ext in &class.extends {
-        let base_name: String = ext
-            .base_name
-            .name
-            .iter()
-            .map(|t| t.text.as_ref())
-            .collect::<Vec<&str>>()
-            .join(".");
-        let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
-        for cand in candidates {
-            if let Some(base) = resolver(&cand) {
-                collect_falsy_bool_params_recursive(&cand, base.as_ref(), resolver, out, visited);
-                break;
-            }
-        }
-    }
-}
-
-fn collect_falsy_bool_params(class: &ClassDef, out: &mut HashSet<String>) {
-    for (name, comp) in class.components.iter() {
-        if !comp.has_explicit_binding {
-            continue;
-        }
-        let Some(binding) = comp.binding.as_ref() else {
-            continue;
-        };
-        if let Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } = binding
-        {
-            if matches!(terminal_type, TerminalType::Bool) && token.text.as_ref() == "false" {
-                out.insert(name.clone());
-            }
-        }
-    }
-}
 
 fn extract_transformation(call: &Expression) -> Option<Transformation> {
     let args = call_args(call)?;

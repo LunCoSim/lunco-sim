@@ -1069,7 +1069,7 @@ fn dispatch_experiment(
         // > sole non-package class. Without this, package-wrapped
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
-        let (source, filename, candidates, within) = {
+        let (source, filename, candidates, within, dependency_roots) = {
             let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = match registry.host(doc) {
                 Some(h) => h,
@@ -1102,7 +1102,18 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            (source, filename, candidates, index.within_path.clone())
+            let ast = document.strict_ast().ok_or_else(|| {
+                "experiment requires a current strict Modelica source snapshot".to_owned()
+            })?;
+            let dependency_roots =
+                lunco_modelica_ast::ast_extract::required_source_roots_from_ast(&ast);
+            (
+                source,
+                filename,
+                candidates,
+                index.within_path.clone(),
+                dependency_roots,
+            )
         };
         // Class resolution precedence:
         //   1. explicit_class on the command — API/agent caller knows exactly.
@@ -1244,6 +1255,22 @@ fn dispatch_experiment(
 
         lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
             .map_err(|error| error.to_string())?;
+
+        if !dependency_roots.is_empty() {
+            if !world.contains_resource::<lunco_modelica_source_roots::SourceRootRegistry>() {
+                return Err("Modelica source-root registry is not installed".to_owned());
+            }
+            world.resource_scope(|world, mut roots| {
+                let channels = world
+                    .get_resource::<lunco_modelica_runtime::ModelicaChannels>()
+                    .ok_or_else(|| "Modelica worker channel is not available".to_owned())?;
+                lunco_modelica_source_roots::admit_compile_roots(
+                    &mut roots,
+                    dependency_roots,
+                    channels,
+                )
+            })?;
+        }
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate

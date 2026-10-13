@@ -10,6 +10,7 @@ avian3d = { workspace = true }
 bevy = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }
 openusd = { workspace = true }
+openusd-schemas = { workspace = true }
 
 [lints]
 workspace = true

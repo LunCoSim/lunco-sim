@@ -120,7 +120,7 @@ pub(super) fn project_scene(
             kind: "modelica.icon".into(),
             data: std::sync::Arc::new(IconNodeData {
                 qualified_type: node.component_def.name.clone(),
-                icon_only: crate::ui::class_display::is_icon_only_class(&node.component_def.name),
+                partial: node.component_def.partial,
                 expandable_connector: node.component_def.is_expandable_connector(),
                 icon_graphics: node.component_def.icon.clone(),
                 resolution: node.component_def.resolution,
@@ -238,8 +238,8 @@ pub(super) fn project_scene(
             .unwrap_or_default();
         // Wire color sourced from the connector class's Icon
         // (populated by the projector for both local & source library types).
-        // Falls back to `null` so the edge factory uses the leaf-name
-        // palette in `wire_color_for`. The source-level
+        // Omitted color stays absent until painting uses the neutral theme wire.
+        // The source-level
         // `Line(color={r,g,b})` annotation wins over the
         // connector-derived colour so the wire properties dialog's
         // colour pick lands immediately in the visual.

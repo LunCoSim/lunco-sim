@@ -148,8 +148,8 @@ by-slot hot loop are untouched; two peers converge on identical wiring from repl
 - **P2.1 🔴 — Promote `LunCo*API` to real codeless applied schemas.** Collapse the four dead role-APIs
   (`LunCoPowerComponentAPI`/`PowerDistributionAPI`/`ActuatorAPI`/`MobilityComponentAPI`) into **domain**
   schemas `LunCoElectricalAPI`/`ThermalAPI`/`CommsAPI` (**multi-apply**), with component **role** as an
-  attribute/`kind`, not a schema-per-role (doc 38 §14.7). *Risk:* `openusd`'s schema registry is a stub
-  (`schemas/registry.rs`) — needs either typed views or a light codeless-schema registry contribution.
+  attribute/`kind`, not a schema-per-role (doc 38 §14.7). The native schema
+  registry registers standard and generated project declarations.
   *Verify:* `has_api_schema` gates dispatch.
 - **P2.2 🟡 — Gate on applied schema, never a heuristic** (`cosim.rs`). Identity = "this prim binds a program
   and declares ports" — read off `LunCoProgramAPI`/the prim's `info:*` properties and the domain schema, not off the shape of
@@ -261,12 +261,12 @@ The right home for standard-shaped library gaps (doc 38 §12.4). In dependency o
 1. **`connectionPaths` through flatten** — **in place**; no longer a required contribution.
 2. **`UsdOp::SetConnection`** (P1.0) — **in place, in our repo** (`lunco-usd-core`), not `openusd`: a typed
    journal op so connection edits replicate finely instead of via `ReplaceSource`.
-3. **Codeless applied-schema registry** (P2.1) — nice-to-have; typed views suffice interim.
+3. **Codeless applied-schema registry** (P2.1) — **in place** through `openusd-build` and the native registry.
 4. **`ConnectableAPIBehavior` mechanism** (P4.3) — optional; rhai rules suffice interim.
 
 Everything else our adopt-plan needs (attr connections + `ConnectionGraph`, UsdShade `Connectable`,
 `kind`, `NodeGraphNodeAPI`, collections, apiSchemas author/read/multi-apply, `UsdPhysics`) **already works
-in `openusd` v0.5** (doc 38 §12.2) — adoption is deletion on our side, not implementation.
+in `openusd` 0.8** (doc 38 §12.2) — adoption is deletion on our side, not implementation.
 
 ---
 

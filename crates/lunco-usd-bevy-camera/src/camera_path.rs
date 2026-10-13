@@ -45,8 +45,8 @@ use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, Tra
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_geometry::curve::{CurveBasis, eval_curve, eval_curve_tangent};
-use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::geom::tokens;
 use std::collections::{HashMap, HashSet};
 
 /// Ordering boundary for the analytic path sample and BigSpace write.
@@ -532,9 +532,7 @@ pub(super) fn resolve_camera_paths(
         let Ok(path) = SdfPath::new(prim.path.as_str()) else {
             continue;
         };
-        if reader.type_name(&path).as_deref()
-            != Some(openusd::schemas::geom::tokens::T_BASIS_CURVES)
-        {
+        if reader.type_name(&path).as_deref() != Some(openusd_schemas::geom::tokens::BASIS_CURVES) {
             // Permanent verdict — retire this prim from the scan. See
             // `NotACameraPath` for why `typeName` is the only safe key.
             commands.entity(entity).try_insert(NotACameraPath);
@@ -747,7 +745,7 @@ pub(super) fn resolve_camera_paths(
         // double precision is still a curve, and a strict `point3f[]` read reported
         // it as "no points", which is a misleading diagnostic for a type mismatch.
         let mut points: Vec<Vec3> = reader
-            .points3(&path, tokens::A_POINTS)
+            .points3(&path, tokens::POINTS)
             .into_iter()
             .map(Vec3::from)
             .collect();
@@ -755,13 +753,13 @@ pub(super) fn resolve_camera_paths(
         // A camera rides ONE curve — the first — so slice it out rather than
         // interpolating across curve boundaries as if the batch were one polyline.
         if reader
-            .attr_value(&path, openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS)
+            .attr_value(&path, openusd_schemas::geom::tokens::CURVE_VERTEX_COUNTS)
             .is_some()
         {
             let counts = match lunco_usd_bevy_stage::read::read_curve_int_array(
                 reader,
                 &path,
-                openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
+                openusd_schemas::geom::tokens::CURVE_VERTEX_COUNTS,
             ) {
                 Ok(Some(counts)) if !counts.is_empty() => counts,
                 Ok(Some(_)) | Ok(None) | Err(_) => {
@@ -824,7 +822,7 @@ pub(super) fn resolve_camera_paths(
         let curve_type = match lunco_usd_bevy_stage::read::read_curve_token(
             reader,
             &path,
-            openusd::schemas::geom::tokens::A_TYPE,
+            openusd_schemas::geom::tokens::TYPE,
             "cubic",
             &["linear", "cubic"],
         ) {
@@ -837,7 +835,7 @@ pub(super) fn resolve_camera_paths(
             match lunco_usd_bevy_stage::read::read_curve_token(
                 reader,
                 &path,
-                openusd::schemas::geom::tokens::A_BASIS,
+                openusd_schemas::geom::tokens::BASIS,
                 "bezier",
                 &["bezier", "catmullRom"],
             ) {
@@ -849,7 +847,7 @@ pub(super) fn resolve_camera_paths(
         let wrap = match lunco_usd_bevy_stage::read::read_curve_token(
             reader,
             &path,
-            openusd::schemas::geom::tokens::A_WRAP,
+            openusd_schemas::geom::tokens::WRAP,
             "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {

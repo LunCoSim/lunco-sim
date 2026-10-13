@@ -110,8 +110,10 @@ catalog identity. The first such edit composes the reference into the canonical
 stage once, then a shared promotion state moves every entity reader to that
 stage. Deleting an unpromoted root removes the lightweight root and its ECS
 subtree without composing the reference. Simple `QueryUsdPrim` reads use the
-same prepared plan; explicit geometry and topology queries read the owning
-document's composed stage. Promotion errors fault the mounted scene and reject
+same prepared plan, selected from the nearest instance root even when the
+queried child already has a live entity. A promoted nested root stops an
+unpromoted ancestor from selecting its older plan. Explicit geometry and
+topology queries read the owning document's composed stage. Promotion errors fault the mounted scene and reject
 the live projection of the edit.
 
 An edit to a document's root scene is already owned by that scene's canonical
@@ -676,10 +678,15 @@ The receiver rejects stale or out-of-order results at the owner. It does not
 retry by polling, substitute a default, or infer a new identity from completion
 time.
 
-The USD simulation projector serializes the exact live canonical root layer and
-its loaded dependency closure on the owner thread because OpenUSD stages are
-thread-affine. It then prepares composed joint, wheel-attachment, vehicle, and
-simulation-candidate facts through shared bounded worker admission. The mounted
+The USD simulation projector captures the native root/session identities and
+admitted dependency buffers, plus separate `Sdf Data` copies of layers changed
+since admission. The canonical stage's change sink owns that changed-layer set;
+unedited binary layers are not decoded for capture. OpenUSD stages remain
+thread-affine. Native encoding runs on the admitted worker with the codec
+selected by each original layer identifier, followed by composed joint,
+wheel-attachment, vehicle, and simulation-candidate preparation. No layer merge
+or text-under-binary substitution crosses this boundary. A canonical stage
+without an admitted resolver closure rejects capture explicitly. The mounted
 root holds one `UsdSimulationTopology` progress key only until its first
 topology index is committed, so startup cannot begin simulation with missing
 facts. Later generations retain the last committed index while replacement

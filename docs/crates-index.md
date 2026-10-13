@@ -101,10 +101,10 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 ## 4. USD Integration Layer
 Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation metadata, and materials.
 
-OpenUSD is the pinned maintained owner in `third_party/openusd`, selected by the
-workspace registry/Git patches. Its provenance file records revision/license and
-the derived strongest-default asset identifier. Composed I/O consumers use that
-identifier; authored bytes and serialization retain their original values.
+The workspace pins `openusd`, `openusd-schemas`, and `openusd-build` 0.8.0.
+Core composition and standard schemas come directly from the maintained Rust
+crates. Project declarations are generated from the schema source by
+`openusd-build`; asset provenance comes from native `ResolveInfo`.
 
 | Crate | Responsibility |
 | :--- | :--- |
@@ -231,9 +231,8 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
 | **`lunco-modelica-source-roots`** | Twin/workspace Modelica source-root admission: root inventory, manifest-aware Twin path resolution, demand-driven worker loading, and source-root readiness state. `ModelicaCorePlugin` installs this capability for interactive and headless Modelica hosts; the document/runtime core consumes no Twin-specific admission policy. |
-| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, paired parsed-source batches, URI/CID ownership admission, per-root CID source closures, strict reachable-DAE compilation, actual participating-source CIDs, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
-| **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, immutable Rumoca-resolved diagram snapshots, compiler-engine resource synchronization, the opt-in `ModelicaLintPlugin` for shared asynchronous Rumoca lint snapshots, and UI-agnostic runtime contracts. The workbench and Modelica API install the plugin and read the same generation-scoped results. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
-The maintained Rumoca compiler is consumed through the pinned `third_party/rumoca-compile` patch: unchanged package-definition queries reuse a validated session revision, with dependency-signature checks after mutations. Its shared declaration lookup separates base-class names before current-class inheritance from member types after inheritance. `DiagramScope` selects the facts consumed: the library indexer requests class interfaces, while canvas projection requests component graphs; both retain Rumoca's scoped resolution and diagnostics. The native indexer parses each file once, flattens one AST copy without descendant cloning and reads each qualified class's own documentation.
+| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, paired parsed-source batches, URI/CID ownership admission, per-root CID source closures, strict reachable-DAE compilation, actual participating-source CIDs, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. The pinned `third_party/rumoca-compile` patch retains maintained revision-cache validation, resolves base names before current-class inheritance, and shares immutable cached interfaces; see its provenance file. |
+| **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, immutable Rumoca-resolved diagram snapshots, compiler-engine resource synchronization, the opt-in `ModelicaLintPlugin` for shared asynchronous Rumoca lint snapshots, and UI-agnostic runtime contracts. The workbench and Modelica API install the plugin and read the same generation-scoped results. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. `DiagramScope` selects class-interface facts for indexing or component-graph facts for canvas projection from the same declaration owner. |
 | **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, scoped declaration rows and typed scalar run-value parsing, shared worker compile admission, native scheduling, shared checked Rumoca batch execution and per-run output metadata, run-bound resolution, and experiment-side Bevy resources. It consumes typed runtime compilation and solver contracts; the execution host installs its transport. |
 | **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, thread-affine live sessions on persistent solver workers, a single-owner native Rumoca actor with ordered async compile/source-root commits, worker-local prepared-solve cache, startup-captured `worker::ModelicaWorkerLimits` for independent bounded preparation, scene-owner and document-owner budgets, native worker loop, and the Bevy co-simulation bridge. Compile results are fenced by exact runtime owner, per-entity session epoch, and captured document generation. User overlays retire after captured outcomes and diagnostics. It is a production runtime package, not a test harness. |
 | **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, required variable-state validation and serial worker completion admission in `First` before clock projection, lifecycle compile-intent consumption in `Update`, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
@@ -298,7 +297,7 @@ Primary entry points and simulation assembly targets.
 | **`rumoca-compile`**, **`rumoca-phase-dae`**, **`rumoca-phase-structural`**, **`rumoca-solver`**, **`rumoca-eval-solve`** | — | Rumoca 0.10.2 compiler, checked DAE/FMI lowering, evaluator, and ME solver host. The LunCoSim fork adds exact compile source provenance, prepared FMI sessions, scoped cancellation, and output admission. All packages use one Git revision. |
 | **`lunco-modelica-worker`** | — | Headless Modelica worker engine and Bevy co-simulation bridge. It owns worker lifecycle internals, command dispatch, live stepping, and execution caches. |
 | **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Modelica execution host. It assembles the worker engine, owns native/wasm host transport, and keeps the shared command/result protocol in `lunco-modelica-runtime`; `lunco-modelica-runner` owns experiment scheduling and run orchestration. |
-| **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer`, `modelica_library_parse_bench` | Native Modelica source-library packaging and indexing tools. The indexer is shared by the CLI and the Modelica UI's background lifecycle adapter; the package remains independent of Bevy. |
+| **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer` | Native Modelica source-library packaging and indexing tools. The CLI indexer publishes checked paired-source and class-index artifacts consumed by the compiler and UI. |
 | **`lunco-modelica-api`** | — | Transport-free Modelica API capability: query providers plus document edit and explicit-snapshot solve commands, installed by API-enabled Modelica and LunCoSim hosts. |
 
 > Other binaries: `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-luncosim`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
@@ -688,8 +687,10 @@ data lives in `lunco-usd-data`, authoring and schema helpers in
 `lunco-usd-authoring`, and `StageRecipe` in `lunco-usd-compose`. It has no
 runtime projection, command observers, physics, rendering, or UI dependency.
 `StageRecipe::content_closure` freezes a complete fetched closure as sorted
-canonical layer identifiers with CIDv1 raw/SHA-256 content identities; missing
-root bytes and unresolved dependencies fail the snapshot.
+canonical layer identifiers with CIDv1 raw/SHA-256 content identities and an
+explicit session-layer identity. Missing root/session bytes and unresolved
+dependencies fail the snapshot. `lunco-usd-compose::open_recipe` consumes the
+captured bytes through the shared native stage factory.
 
 **`lunco-usd-data`**
 Reusable render-free authored USD data contracts: stage metadata, unit and
@@ -699,8 +700,8 @@ registry.
 
 **`lunco-usd-authoring`**
 OpenUSD authored-layer operations and schema registry. It owns path-addressed
-authoring, USDA conversion, reference/list-op helpers, and registered schema
-metadata without owning document identity, journaling, runtime composition, or
+authoring, USDA conversion, reference/list-op helpers, native schema registration,
+and derived inspector/unit metadata without owning document identity, journaling, runtime composition, or
 UI.
 
 **`lunco-usd-core`**
@@ -782,6 +783,10 @@ instance retains its prepared source asset and an instance-scoped view over the
 shared immutable plan, so sibling instances reuse the cached composition
 without copying its prim tree. It deliberately contains no runtime projection
 systems.
+`admitted_recipe` captures its owned resolver closure with native root/session
+identities. `recipe_snapshot` adds separate changed-layer `Sdf Data` snapshots;
+the worker encodes those layers through the authoring owner's native codec
+selection before preparing a generation-fenced projection plan.
 
 **`lunco-usd-bevy-core`**
 Focused runtime projection mechanisms built on `lunco-usd-bevy-stage`. It owns

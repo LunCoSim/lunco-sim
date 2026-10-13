@@ -695,6 +695,7 @@ mod tests {
         assert!(
             reopened
                 .composed_source()
+                .unwrap()
                 .contains("@vessels/rovers/skid_rover.usda@"),
             "restored spawn rides the composed view"
         );

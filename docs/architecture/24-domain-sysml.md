@@ -248,8 +248,11 @@ integer powers; addition of dimensioned units is rejected. Conversion exactness
 from standard [`UnitConversion::isExact`](https://raw.githubusercontent.com/Systems-Modeling/SysML-v2-Release/master/sysml.library/Domain%20Libraries/Quantities%20and%20Units/MeasurementReferences.sysml)
 relationships is preserved on native
 `EngineeringUnit` and `Quantity` values and combined through quantity arithmetic.
-This records scale exactness only; source measurement uncertainty remains a
-separate value contract. Rhai exposes the unit flag as `scale_is_exact` and the
+Exact scale evidence takes precedence over compatible approximate conversion
+paths. Contradictory scales still reject the unit, and source graph traversal
+uses stable element order. This records scale exactness only; source measurement
+uncertainty remains a separate value contract. Rhai exposes the unit flag as
+`scale_is_exact` and the
 quantity's accumulated conversion flag as `conversion_is_exact`.
 The Rhai adapter constructs a native `EngineeringUnit` from that typed
 definition, and a source-literal quantity enters the neutral evaluator as a

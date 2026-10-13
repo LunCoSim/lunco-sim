@@ -405,8 +405,16 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    let task = AsyncComputeTaskPool::get()
-        .spawn(async move { Ok((document.source(), document.composed_source())) });
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        document
+            .source()
+            .and_then(|source| {
+                document
+                    .composed_source()
+                    .map(|composed| (source, composed))
+            })
+            .map_err(|error| error.to_string())
+    });
     #[cfg(not(target_arch = "wasm32"))]
     world
         .resource_mut::<PendingUsdPreviewTextReads>()
@@ -423,7 +431,16 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
     {
         let (tx, result) = crossbeam_channel::bounded(1);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = tx.send(Ok((document.source(), document.composed_source())));
+            let _ = tx.send(
+                document
+                    .source()
+                    .and_then(|source| {
+                        document
+                            .composed_source()
+                            .map(|composed| (source, composed))
+                    })
+                    .map_err(|error| error.to_string()),
+            );
         });
         world
             .resource_mut::<PendingUsdPreviewTextReads>()
@@ -3242,7 +3259,13 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     let host = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)?;
-    let composed = host.document().composed_source();
+    let composed = match host.document().composed_source() {
+        Ok(source) => source,
+        Err(error) => {
+            report_preview_error(world, "usd-source-serialization-failed", error.to_string());
+            return None;
+        }
+    };
     let (base, rel) = match host.document().origin() {
         DocumentOrigin::File { path, .. } => (
             path.parent()

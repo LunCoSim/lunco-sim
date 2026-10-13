@@ -214,10 +214,7 @@ pub fn produce_usd_param_view(
         for attr in stage_view.attr_names(&sdf) {
             // Per-asset authored customData wins; the schema's declared hint is
             // the shared fallback for standard LunCo properties.
-            let Some(hint) = stage_view
-                .attr_ui_hint(&sdf, &attr)
-                .or_else(|| lunco_usd_authoring::schema::ui_hint_of(&attr))
-            else {
+            let Some(hint) = stage_view.attr_ui_hint(&sdf, &attr) else {
                 continue;
             };
             let (Some(min), Some(max)) = (hint.min, hint.max) else {
@@ -229,15 +226,9 @@ pub fn produce_usd_param_view(
             let (value, valid, numeric, diagnostic) =
                 classify_real(stage_view.real(&sdf, &attr), min, max);
             let unit = hint.unit.unwrap_or_default();
-            let type_name = hint
-                .type_name
-                .or_else(|| {
-                    lunco_usd_authoring::schema::SchemaRegistry::global()
-                        .read()
-                        .ok()
-                        .and_then(|r| r.property(&attr).map(|p| p.type_name.clone()))
-                })
-                .unwrap_or_else(|| "float".to_string());
+            let Some(type_name) = stage_view.attr_type_name(&sdf, &attr) else {
+                continue;
+            };
             let label = attr.rsplit(':').next().unwrap_or(&attr).to_string();
             session_view.params.push(UsdParam {
                 name: attr.clone(),

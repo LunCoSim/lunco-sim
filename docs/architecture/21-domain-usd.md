@@ -173,10 +173,10 @@ producer registers the document's stored runtime owner before lifecycle events;
 file opens, private restore, new documents, forks and retirement follow the
 [document source contract](55-scene-addressing-and-roots.md#document-source-admission-and-lifetime).
 It uses `AsyncWorkAdmission` to parse the exact
-`UsdSourceText` revision and serialize the restored persistent document
+`UsdSourceBytes` revision and serialize the restored persistent document
 snapshot off the main schedule. The file-backed registry still owns path
 identity, clean reload, dirty preservation, and lifecycle events through
-`PreparedFileBacked`. Parse results are checked against the current source text;
+`PreparedFileBacked`. Parse results are checked against the current source bytes;
 serialized results are committed only for their captured document generation.
 The live `Stage` remains in its thread-affine owner. Runtime sidecar read/parse
 and editor-preview initial serialization are still synchronous, and the native
@@ -196,19 +196,28 @@ revision-fenced preparation gate before the sink consumes them; its
 `UsdNativeAssetPreparation` hold keeps the authoritative physics clock closed
 through that projection. See the [asset admission owner](55-scene-addressing-and-roots.md#native-payload-and-source-admission).
 
-Core USD schema assets register incrementally through
-`lunco-usd-bevy-runtime-core`, in requested module order. An unresolved source
-holds later admission; a reported terminal failure permits later sources to
-proceed. `lunco-usd-authoring` parses each source once before taking the global
-registry write lock, then folds declarations in standard spec-path order.
-Bare-name lookup retains project-over-core priority and the last admitted
-declaration within each tier; neither hash traversal nor I/O completion chooses
-that precedence. Schema-qualified lookup retains every declaration. The owner
-applies matching linear-unit facts as declarations arrive and validates missing
-entries only after all vendored core schema sources load successfully. The
-registration pass sleeps after every source reaches a terminal load state and
-that validation completes; it does not clone or rescan the manifest entries on
-settled frames.
+Standard schema declarations come from `openusd-schemas` 0.8.0. The project
+schema source is compiled by `openusd-build`, and
+`lunco-usd-authoring::schema::native_registry` registers both families on each
+runtime and authoring stage. OpenUSD owns inheritance, type, variability,
+custom flags, and schema defaults. `SchemaMetadata` is an immutable projection
+of the native definitions for inspector hints and scalar linear-unit facts.
+Schema availability does not depend on runtime asset I/O or frame polling.
+
+`ResolveUsdTarget` reads one native stage made from the current document's
+base, runtime, and view layers plus its admitted dependency recipe. Its source
+is `document_composition`. Native prim validity, composition arcs, and spec
+sites determine existence and edit scope; a derived live projection does not
+decide whether a committed document target exists. The authored base retains its
+admitted root identity and receives native Sdf spec copies; session layer inputs
+use the native binary writer. The native session sublayer stack includes the
+session parent before the view and runtime layers; edit-target selection accounts
+for that ordering so successive overlay edits preserve the same authored layer.
+Structural notices address their owning prim through native `SdfPath::prim_path`;
+property resyncs update that prim and cannot create separate property entities.
+Binary source preparation retains parsed data without requiring text export.
+Source display, text snapshots, and USDA export report native writer failures
+at their respective consumer boundaries.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
@@ -547,9 +556,9 @@ scenarios or runs. The file is still opened through `DocumentOrigin::File` and
 saveable with `SaveDocument`. **`SaveAsTwin`** adds the manifest-backed Twin
 metadata when the user wants it.
 
-Documentation updates to existing metadata strings and a `RemovePrim` with one
-unambiguous authored spec patch the original USDA source, retaining unrelated
-comments and layout. Other base-layer edits serialize from canonical SDF data.
+Structural base-layer edits, including documentation updates and `RemovePrim`,
+operate on canonical SDF data. Source text is serialized by the native writer;
+original USDA formatting and comments remain available only before an edit.
 
 ## Which stage opens — scene resolution
 
@@ -1009,11 +1018,10 @@ For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco://` 
 
 A `.glb`/`.gltf` is **not a USD layer** — USD composition only composes formats
 a registered `SdfFileFormat` plugin can parse (`.usda`/`.usdc`/`.usd`/`.usdz`).
-Core USD ships no glTF plugin, so a `payload = @terrain.glb@` resolves to an
-empty layer in stock USD. Our engine detects the binary extension and composes
-the arc through an empty stub, then the render projection reads the authored
-payload/reference directly from the live composed prim stack and routes its
-canonical URI to Bevy's glTF loader (native + web).
+The Rust reader reports foreign binary composition arcs as unresolved.
+The render adapter reads their authored payload/reference from the native prim
+stack and imports the canonical URI through Bevy's glTF loader (native + web).
+No synthetic layer stands in for the missing file format.
 
 **Composition-stack anchoring.** The binary arc is read from each authored spec
 in the composed prim's `prim_stack`, with the URI anchored to that spec's layer.
@@ -1030,10 +1038,6 @@ Adobe's open-source [`USD-Fileformat-plugins`](https://github.com/adobe/USD-File
 at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry —
 config only, no conversion, no engine code. This is the proper interop path.
 
-*Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter
-in `lunco-usd-bevy-stage/compose.rs` can emit `Mesh` specs instead of stubbing. That is
-an interop improvement; it must continue to use the authored USD payload as the
-asset identity.
 
 ### Reference Resolution
 USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative to the **USD asset root** (`assets/`). The `UsdComposer` resolves:

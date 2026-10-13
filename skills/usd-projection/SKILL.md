@@ -25,6 +25,13 @@ world; it is in the world because it is in the document.
 
 That single sentence generates every rule below.
 
+Native USD dependencies are pinned at Rust `openusd` 0.8.0 with
+`openusd-schemas` and `openusd-build`. Use `schema::native_registry` for stage
+construction and native `ResolveInfo` for asset provenance. Standard schema
+fallbacks and metadata are read through the composed stage; inspector/unit
+metadata is derived by `SchemaMetadata`. Project schema declarations are
+generated at build time from `schema/schema.usda`.
+
 ## The pipeline, end to end
 
 ```
@@ -111,7 +118,7 @@ layers use the full-stage reset owner.
 
 Native asset inputs follow the [shared preparation gate](../../docs/architecture/55-scene-addressing-and-roots.md#native-payload-and-source-admission): preserve the reader's current prepared table, retain edits/hints across superseded jobs, and release `UsdNativeAssetPreparation` only after that exact stage revision reaches live consumption or teardown. A queued visual or installed policy must remain deferred while native preparation holds its generation.
 
-Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
+Doc-backed Twin admission is also asset-event driven. `UsdSourceBytes` is loaded
 through the shared typed `load_asset_path` address and registered source scheme;
 scene, preview, schema, reference and transitive layer readers preserve literal
 filename characters and attach Bevy labels separately. `AssetEvent` and
@@ -119,11 +126,19 @@ filename characters and attach Bevy labels separately. `AssetEvent` and
 default Twin path parses the exact source revision through native
 `AsyncWorkAdmission`, commits it through `DocumentRegistry::open_prepared_file`,
 restores the runtime overlay, and serializes a cloned persistent document on
-the worker pool. Source text and document generation are checked again before
+the worker pool. Exact source bytes and document generation are checked again before
 the Twin overlay is published and `LoadScene` is submitted. Runtime sidecar
 read/parse and editor-preview initial serialization remain synchronous; wasm
 worker transport for this path is not installed, so the owner reports that
 boundary visibly. The live USD stage stays with its thread-affine owner.
+Document composition copies authored base specs into the identified root through
+native Sdf operations; separate runtime and view layers use native USDC buffers.
+Binary document
+preparation does not serialize text; a source-display or USDA-export failure is
+reported by the consumer requesting that representation.
+Scene Files dependency traversal passes bounded raw bytes to the native USD
+format owner, so USDC is decoded by OpenUSD rather than a UTF-8 gate. Native
+format diagnostics remain terminal at the traversal owner.
 Referenced stage closures follow the same event boundary before a reference is
 authored onto the live stage. Each instance retains the real source handle and
 one shared `UsdReferenceSnapshot` containing the canonical recipe, unscoped plan
@@ -273,9 +288,14 @@ generation without adding a fabricated authored operation. Reject future cursors
 To edit a composed path, call
 `ResolveUsdTarget` with the explicit document id, prim path, and `@root@` or
 `@runtime@` target. A referenced or payloaded path that has a local authored
-opinion in the current document is valid from that document layer while the
-existing `CanonicalStage` projection catches up; a composed-only path still
-requires the mounted canonical stage. Use the returned `edit_scope` and
+opinion in the current document is valid from that document layer. Resolution
+uses the current native document layer stack and its admitted dependency recipe;
+`InspectUsdDocument` uses the same composition for types, schema defaults,
+metadata, and reference lists/spec sites. Both report `document_composition`
+and observe committed edits before the preview projection settles. Document
+inspection reads parsed authored dependencies and native authored spec counts;
+it does not require USDA text serialization, including for binary inheritance.
+Use the returned `edit_scope` and
 typed-operation validation rather than treating a composed read as permission
 to move or remove a referenced/variant prim. Do not inspect flat layer data as
 a replacement for OpenUSD PCP resolution or use it to invent a composed-only
@@ -554,3 +574,7 @@ loading and handle lookup, including literal `#` filenames. Windows drive and
 UNC USD references normalize to `file:` at composition; they are rejected
 explicitly on a foreign host. Dataset output ownership uses worker-prepared
 `lunco-storage::FilePathIdentity` snapshots rather than lexical path prefixes.
+
+`ResolveUsdTarget` reports `document_composition` from the current native
+document layer stack and its loaded dependency recipe. Verify prim validity,
+edit scope, and native spec sites; do not wait for a lazy derived stage to open.

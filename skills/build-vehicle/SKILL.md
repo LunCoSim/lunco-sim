@@ -200,7 +200,7 @@ the complete set. If your wheel refuses to spawn, you dropped one of those
 three arcs.
 
 **Tuning:** all wheel params carry schema-level slider hints, so every wheel gets
-Inspector sliders with zero per-asset authoring (`SchemaRegistry::ui_hint` →
+Inspector sliders with zero per-asset authoring (`SchemaMetadata::property` →
 `produce_usd_param_view`; a per-asset authored `customData` still overrides —
 see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco-property--source--regenerate)).
 

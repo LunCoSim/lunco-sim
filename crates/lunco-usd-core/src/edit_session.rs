@@ -363,10 +363,12 @@ pub fn validate_proposal(
                 break;
             }
         }
-        if diagnostics.is_empty()
-            && lunco_usd_compose::layer_dependency_arcs(&candidate.source()).is_none()
-        {
-            diagnostics.push("candidate authored layer is not valid USDA composition".to_owned());
+        if diagnostics.is_empty() {
+            if let Err(error) = lunco_usd_compose::layer_dependency_paths(candidate.data()) {
+                diagnostics.push(format!(
+                    "candidate authored dependency analysis failed: {error}"
+                ));
+            }
         }
     }
 

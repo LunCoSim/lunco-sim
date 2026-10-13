@@ -51,7 +51,7 @@ schema exists. They must be narrow and must not repeat a standard property.
 
 The source of the LunCo schema registry is
 `crates/lunco-usd-authoring/schema/schema.usda`. `generatedSchema.usda` and `plugInfo.json`
-are generated artifacts. Edit the source, run `scripts/gen_schema.py`, and test
+are generated artifacts. Edit the source, run `cargo run -p lunco-usd-authoring --example gen_schema -j 4 --`, and test
 the generated result. Never hand-edit generated schema files.
 
 ### 2.1 Migration rule

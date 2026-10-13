@@ -164,9 +164,10 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
                         }
                     };
                     let collider = if *physical {
-                        if !view
-                            .has_api_schema(&sp, openusd::schemas::physics::tokens::API_RIGID_BODY)
-                        {
+                        if !view.has_api_schema(
+                            &sp,
+                            openusd_schemas::physics::tokens::PHYSICS_RIGID_BODY_API,
+                        ) {
                             failures.push((
                                 Some(*entity),
                                 path.clone(),

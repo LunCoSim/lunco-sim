@@ -349,7 +349,7 @@ fn prepare_scene_file_view(
             resolved
         },
         lunco_usd_compose::is_usd_layer,
-        lunco_usd_compose::layer_dependency_arcs,
+        |bytes| lunco_usd_compose::layer_dependency_arcs(bytes).map_err(|error| error.to_string()),
     )
     .map_err(|error| error.to_string())?;
 

@@ -128,45 +128,23 @@ compliance suite (shipped Dec 2025).
 **Why:** Tier-1 authority — the document of record — rides a **non-reference
 USD implementation** (our fork). A conformance suite is the only systematic
 answer to "does our composition match Pixar's"; everything today is
-spot-checked. Findings are fixed in the fork
-(the pinned source in `third_party/openusd`, with revision/license in
-`LUNCOSIM-PROVENANCE.md`), never worked around in LunCo.
+spot-checked. Findings belong in the maintained `mxpv/openusd` owner,
+consumed through the workspace's pinned published Rust dependency.
 
 **Scope:** medium; mostly harness work, then a burn-down of findings.
 
 ## 6. Architecture debt
 
-### `UsdDocument` stores `sdf::Data`, so every edit round-trips through text
+### Native layered document edits
 
-**What:** Stop serializing the whole document to USDA and reparsing it on every
-edit.
-
-**Why:** `UsdDocument` holds `sdf::Data` layers, and `apply()` authors by calling
-`open_doc_stage`, which does `data_to_usda(data)` → parse → `Stage` → author →
-`extract_root_layer_data`. That is a full serialize-and-reparse of the ENTIRE
-document per edit — a direct document edit pays it once per command. Interactive
-gizmo dragging now commits one compound command at release rather than
-authoring once per frame. It is also the last
-place `sdf::Data` is load-bearing: the read path already retired its flattened
-reader in favour of the composed `StageView`, because a flattened layer sees no
-PCP composition.
-
-**Scope:** two very different options, and the difference matters.
-
-*(a) Wrap the existing data, no text.* `sdf::Layer::new(identifier, Box<dyn
-AbstractData>)` already exists in the fork — it is what `new_in_memory` calls —
-but is `pub(crate)`. Exposing it, plus a `StageBuilder` entry that accepts a
-prepared root layer, lets `open_doc_stage` wrap the document's `sdf::Data`
-directly. Two small fork additions, no concurrency change, no API churn here,
-and it removes the dominant per-edit cost. **This is the recommended step.**
-
-*(b) Hold a live `Stage` in the document.* Blocked, and not by us: `Stage` is
-`!Send + !Sync` — `pcp/layer_graph.rs` holds an `Rc` and `StageInner` is
-`RefCell`-based throughout — so it cannot live in a Bevy resource. Unblocking it
-means converting the fork to `Arc`/`RwLock` across `StageInner` and `pcp`: a
-permanent divergence from the tracked `mxpv/openusd` upstream, and atomics on
-every composition operation. That is a product decision about the fork, not a
-refactor, and should be taken explicitly rather than arrived at.
+Document operations open the full base/runtime/view layer stack and select an
+explicit native edit target. Declarations and schema defaults come from that
+composed stage; `extract_edit_layer_data` returns only the edited authored layer.
+Standalone single-layer authoring uses `sdf::copy_spec`. Layered authoring still
+serializes data into its in-memory resolver before opening a stage. Removing
+that cost requires a native layer-admission API or reuse of the document's live
+thread-affine stage, with document revision and edit-target ownership preserved.
+The immutable prepared plan continues to carry facts across worker admission.
 
 ### Modelica compile-core split — completed
 

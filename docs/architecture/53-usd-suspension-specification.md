@@ -159,7 +159,7 @@ def Xform "WheelAttachment_FL" (
     
     # Attachment geometry relative to the chassis. `point3f` — NOT `double3`: the
     # frame attrs are the ones assets most often author at the wrong precision, so
-    # `physx_vehicle_schemas_register_canonical_properties` pins them.
+    # `native_definitions_supply_units_and_project_inspector_hints` pins them.
     point3f physxVehicleWheelAttachment:suspensionFramePosition = (-1.0, -0.15, -1.225)
 }
 ```
@@ -243,7 +243,7 @@ reported as `usd-physics-joint-invalid` and raises the shared physics safety
 hold. It is not silently omitted and therefore cannot become an unconstrained
 mechanism.
 
-**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd-authoring/schema/core/physxSchema.usda` and pinned by the `physx_vehicle_schemas_register_canonical_properties` drift test.
+**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd-authoring/schema/core/physxSchema.usda` and pinned by the `native_definitions_supply_units_and_project_inspector_hints` drift test.
 
 ### 3.2.1. Generic support and activation transaction
 

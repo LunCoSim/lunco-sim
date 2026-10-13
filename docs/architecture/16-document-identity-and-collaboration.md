@@ -4,8 +4,8 @@
 >
 > ⚠️ **PART DESIGN SPEC.** §1–§4 and §5–§5a describe the current identity,
 > authoring-layer, and simulation-state contracts. §6 onward remains the
-> collaboration target: the `ar::Resolver` seam is unused, `find_or_open` does
-> not exist in our `openusd` fork, and there is no replicated live layer.
+> collaboration target. Native OpenUSD composition uses the asset-backed
+> `ar::Resolver`; replicated live layers remain a separate collaboration design.
 
 Complements [`10-document-system.md`](10-document-system.md), which defines what a
 Document *is*. This one answers: **who owns a file, what happens when two writers
@@ -131,6 +131,22 @@ Shipping collaboration before fixing rhai's addressing would destroy work quietl
 USD authoring follows the non-destructive layer pattern: keep the shipped or
 Twin-authored source intact and write local edits into an explicit stronger
 layer. Each edit names its target; the composed stage resolves the result.
+
+Typed attribute preflight reads the current document's native stage over its
+admitted dependency closure. The projected stage supplies only the live
+identity needed to validate dynamic ports. Scalar length declarations use the
+native composed prim type, and transform inverses retain the native composed
+operation order. Missing connection-source declarations and native failures
+reject at this owner. Document queries capture the mounted canonical stage's
+current admitted dependency closure, including newly loaded references; an
+unmounted stage uses its worker-prepared source recipe.
+
+`StageRecipe` captures root bytes and an optional explicit session layer.
+`lunco-usd-compose::open_recipe` is the shared native stage factory for document
+and runtime readers. Session content participates in the closure identity;
+a declared session without captured bytes is rejected. Captured root codecs
+match the root extension, while runtime/view session layers use USDC. Closure
+preparation fetches dependencies from all captured layers within one budget.
 
 ```
 DOCUMENT — authored USD opinions and derived view, composed in strength order.
@@ -340,11 +356,13 @@ persistently-stale file nags once, and re-arms when the file re-syncs.
 A document's dependencies are found by walking `subLayers`, `references`,
 `payload`, and asset-valued attributes. There must be one filesystem traversal:
 `lunco_assets_core::transitive_file_closure*` owns its queue, normalized paths,
-bounded native storage reads, and fallible result. `lunco-usd-compose` supplies the format facts:
+bounded native storage reads, and fallible result. It passes raw bytes to the
+format owner; native USD decoding admits USDA and USDC and preserves format
+diagnostics. `lunco-usd-compose` supplies the format facts:
 
 ```rust
 is_usd_layer(path)
-layer_dependency_arcs(text)
+layer_dependency_arcs(bytes)
 ```
 
 The scenario manifest and live scene browser call those APIs directly. Thus
@@ -356,7 +374,7 @@ operation; it reuses `child_layer_ids` because it needs only parseable layers.
 Every native closure call supplies the owner resource `FileClosureLimits`:
 4096 unique paths, 16 MiB per document and 64 MiB aggregate document source by
 default. Limits must be positive. Reads enforce the byte budget before parsing;
-missing/unreadable documents, invalid UTF-8, failed parsing and budget overflow
+missing/unreadable documents, native decoding/parse failures and budget overflow
 reject the operation. Missing non-document leaves remain explicit paths. These
 limits bound path count and source bytes, not parser-internal allocation or
 binary payload sizes. The host also caps its indexed-file/dependency union at

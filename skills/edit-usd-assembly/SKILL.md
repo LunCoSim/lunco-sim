@@ -67,6 +67,12 @@ the final file. After each coherent change set:
 5. show the result to the user and take feedback before the next material
    change or final save.
 
+Typed attribute and connection preflight composes the current document layers
+against their admitted closure. Schema declarations beneath local overs still
+constrain the requested type; a rejected edit must leave the document generation
+unchanged. Follow the layer/recipe ownership contract in
+[`docs/architecture/16-document-identity-and-collaboration.md`](../../docs/architecture/16-document-identity-and-collaboration.md).
+
 The edited document must be the owner of the part being changed. A component
 edit is authored in that component's own USD document; the assembly receives
 only references, instance transforms, variants, and host wiring. Once the
@@ -432,6 +438,8 @@ Pass the exact document id as the first argument to every stage-reading helper,
 then the explicit manifest. Use `()` only for a mounted live-scene audit, never
 to select the focused preview. `QueryUsdPrim` rejects closed, unmapped, and stale
 document projections; wait for the document projection before auditing it.
+Referenced child facts use the nearest instance owner's prepared plan until
+promotion; a live child entity alone does not change that reader ownership.
 Standalone previews own their canonical stage through the explicit document's
 preview lease; they do not need a simulation scene root. Geometry bounds and
 material reads must follow the ready document generation after an edit.
@@ -688,8 +696,9 @@ Use the smallest existing typed intent that expresses the change:
   Each entry carries an asset identity and optional absolute target prim path.
   `Prepend`, `Append`, `Add`, and `Delete` preserve weaker-layer opinions;
   `Explicit` replaces the selected layer's list and an empty explicit list
-  clears it. Inspect `references.authored` and `references.composed` before
-  editing, and resolve the target first so a composed-only prim is reported as
+  clears it. Inspect `references.authored` and native `references.composed`
+  (list result and spec sites, source `document_composition`) before editing,
+  and resolve the target first so a composed-only prim is reported as
   read-only rather than flattened or guessed.
 - `assembly_edit::default_prim(doc, edit_target, path, parent_gen)` authors the
   stage root `defaultPrim` in `@root@` or `@runtime@`; use an absolute or
@@ -697,8 +706,8 @@ Use the smallest existing typed intent that expresses the change:
   `assembly_edit::prim_kind(doc, edit_target, path, kind, parent_gen)` authors
   a USD identifier such as `component`, `assembly`, or `group` on an existing
   prim; pass `()` to clear that layer's opinion. Inspect
-  `metadata.defaultPrim` and `prim.metadata.kind` for root/runtime,
-  document-composed, and canonical-stage values with their source labels.
+  `metadata.defaultPrim` and `prim.metadata.kind` for root/runtime/view
+  authored opinions and native composed values, source `document_composition`.
 - `assembly_edit::stage_metrics(doc, edit_target, meters_per_unit, up_axis,
   parent_gen)` authors the shared typed `StageMetrics`/`UpAxis` values at the
   stage root. Use the exact source convention from inspection or its owning

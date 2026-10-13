@@ -602,29 +602,25 @@ rendering, no domain physics semantics, no ephemeris. "Reuse USD" means *stop ha
 plane and adopt the standard one* — it does **not** hand us an engine. The engine (project USD→ECS, step
 solvers, exchange values) is irreducibly LunCo, and that's where the real value is, not plumbing.
 
-### 12.2 Coverage — verified against the pinned Rust `openusd` v0.5 crate
+### 12.2 Native Rust OpenUSD ownership
 
-The maintained source lives in `third_party/openusd`; its provenance file records
-the exact `LunCoSim/openusd` revision, license and local derived asset annotation.
+The workspace pins published `openusd` 0.8.0, `openusd-schemas` 0.8.0,
+and `openusd-build` 0.8.0. Core composition uses `sdf`, `pcp`, and `usd`;
+the maintained schema crate supplies generated domain views and definitions.
 
-The crate is **schema-aware** with the full `sdf`/`pcp`/`usd`/`usda`/`usdc`/`usdz` stack. Crucially, the
-mechanisms our §9 adopt-plan depends on **already ship in it**:
-
-| adopt-plan item | `openusd` (Rust) status | consequence |
+| Concern | Native owner | Application boundary |
 |---|---|---|
-| **A1 wiring = attr→attr connections** | **WORKS, first-class** — `usd/attribute.rs` (`connect_to`/`add_connection`/`compute_connections`) **+ `usd/connections.rs::ConnectionGraph`** (stage-wide directed index, `sources`/`sinks`/`edges`/`resolve_chain`, cycle-safe) | the wiring layer *already exists* — adopting it is mostly **deleting** `simWires`/wire-prims/`epsBus`, then reading `ConnectionGraph`. Not new code. |
-| **A2 ports = `inputs:`/`outputs:`** | **WORKS** — `schemas/shade/` `Connectable` trait, `NodeGraph`, `create_input`/`output`, connectability | free |
-| **A6 `kind`/model hierarchy** | **WORKS** — `usd/prim.rs` `kind`/`is_model`/`is_group` | free |
-| **A7 editor layout** | **WORKS** — `schemas/ui/` `NodeGraphNodeAPI` incl. `ui:nodegraph:node:pos` (typed) | free |
-| **A5 domain tags (`apiSchemas`)** | **PARTIAL** — author/read/compose incl. **multiple-apply** WORKS; **codeless schema *registry* is an empty stub** (`schemas/registry.rs`) | tags work now as tokens + hand-written typed views; automatic fallback/allowed-token *validation* would be a light add |
-| **A4 connection legality (`ConnectableAPIBehavior`)** | **ABSENT** (no plugin/Sdr registry) | author legality as **Rhai/descriptor rules** until a maintained registry is available |
-| **runtime value plane (OpenExec)** | **ABSENT** — `ConnectionGraph` gives *topology only*, no computed-value engine | **we don't need it**: PortRegistry + cosim master + `SimulationSession` *are* our execution/value plane. Use `ConnectionGraph` for topology, keep our runtime. |
+| Layer parsing and serialization | `sdf::Layer`, `usda::TextWriter`, native binary/package formats | Asset storage supplies bytes and persists authored layers. |
+| Composition and value resolution | `usd::Stage`, `Attribute`, `ResolveInfo` | Async asset preparation retains source identity across worker admission. |
+| Schema inheritance and declarations | `usd::SchemaRegistry`, `openusd-schemas` | `schema::native_registry` registers standard and generated project families. |
+| Project schema generation | `openusd-build` | Build-time generation consumes the project `schema.usda`. |
+| Namespace copying and editing | `sdf::copy_spec`, `usd::NamespaceEditor` | Document operations journal typed edits and inverses. |
+| Collections and material binding | `usd::CollectionAPI`, `shade::MaterialBindingAPI` | Readers expose the native answers to projections. |
+| Wiring topology | Attribute connections and `usd::ConnectionGraph` | Runtime port slots and numerical exchange remain in cosimulation. |
 
-**The pattern in that table is the whole answer:** everything USD-*structural* we want is already in the
-crate; everything *absent* (OpenExec, a schema registry, `ConnectableAPIBehavior`) is either something we
-**already have our own version of** (our runtime value plane; our rhai rules) or an **optional
-convenience** (schema-registry validation). So adoption doesn't push a pile of work into `openusd` — the
-one load-bearing piece, attr→attr connections with a traversable `ConnectionGraph`, is done.
+Inspector hints and scalar linear units are projected from native schema
+definitions by `SchemaMetadata`. They do not resolve composition or implement
+schema inheritance. Runtime metadata is read from the composed stage.
 
 ### 12.3 Does it simplify the core? Yes — by deletion, not addition
 
@@ -646,8 +642,7 @@ not and should not shrink these.
 
 - **"All the features"?** For *structure/identity/wiring/composition/layout/serialization* — **yes**, and
   the `openusd` crate already implements them. For the *engine* — **no, and never**; USD is a data model.
-  The absent USD pieces (OpenExec, schema registry) are ones we already cover with our own runtime, so
-  their absence costs us nothing.
+  The runtime value plane remains owned by our simulation engines.
 - **"Simplify the core"?** **Yes, meaningfully — the structure/plumbing core shrinks by deletion** (three
   wiring systems → one, several dead taxonomies gone, bespoke conventions → standard schemas), while the
   runtime core is unchanged. The result is a **smaller, standard-shaped core** with one clean seam: `openusd`

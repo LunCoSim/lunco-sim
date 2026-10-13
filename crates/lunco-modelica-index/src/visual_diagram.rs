@@ -125,10 +125,8 @@ pub struct PortDef {
     pub y: f32,
     /// Wire color (RGB 0..=255) sourced from the connector class's
     /// `Icon` annotation — `lineColor` of the first colored graphic,
-    /// `fillColor` as fallback. `None` means "fall back to the
-    /// leaf-name palette in `wire_color_for`". Mirrors the OMEdit /
-    /// Dymola behavior where wire colors come from each connector
-    /// class's icon definition rather than a hardcoded table.
+    /// `fillColor` when no line color is authored. `None` preserves absent
+    /// presentation metadata; the renderer uses its neutral theme wire token.
     #[serde(default)]
     pub color: Option<[u8; 3]>,
     /// Port size in the parent class's icon coordinate system, taken

@@ -77,9 +77,8 @@ use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_core::program::ProgramGraph;
 use lunco_usd_bevy_stage::read::has_runtime_port_surface;
 use lunco_usd_bevy_stage::{StageView, UsdRead};
-use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
+use openusd_schemas::physics::tokens as ptok;
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.
@@ -108,6 +107,7 @@ fn applied_schemas(reader: &StageView<'_>, prim: &SdfPath) -> Vec<String> {
     reader
         .stage()
         .prim(prim.clone())
+        .expect("validated USD path")
         .api_schemas()
         .map(|v| v.iter().map(|s| s.as_str().to_string()).collect())
         .unwrap_or_default()
@@ -145,7 +145,7 @@ fn subtree_has_collider(reader: &StageView<'_>, sorted: &[String], path: &str) -
             break;
         }
         if let Ok(p) = SdfPath::new(s) {
-            if reader.has_api_schema(&p, ptok::API_COLLISION) {
+            if reader.has_api_schema(&p, ptok::PHYSICS_COLLISION_API) {
                 return true;
             }
         }
@@ -236,7 +236,7 @@ fn collider_world_aabb(
     let mut acc: Option<(Vec3, Vec3)> = None;
     for s in subtree {
         let Ok(p) = SdfPath::new(&s) else { continue };
-        if !reader.has_api_schema(&p, ptok::API_COLLISION) {
+        if !reader.has_api_schema(&p, ptok::PHYSICS_COLLISION_API) {
             continue;
         }
         if inside_nested_body(bodies, path, &s) {
@@ -356,17 +356,17 @@ fn vehicle_part_facts(
             }
             let vehicle = nearest_path_in_set(vehicle_roots, path)?;
             let body = nearest_path_in_set(bodies, path).unwrap_or_default();
-            let collision_api = reader.has_api_schema(path, ptok::API_COLLISION);
+            let collision_api = reader.has_api_schema(path, ptok::PHYSICS_COLLISION_API);
             let wheel_projector = reader.has_api_schema(path, "PhysxVehicleWheelAPI");
             let physical_wheel = physical_wheels.contains(path.as_str());
-            let rigid_body_api = reader.has_api_schema(path, ptok::API_RIGID_BODY);
+            let rigid_body_api = reader.has_api_schema(path, ptok::PHYSICS_RIGID_BODY_API);
             let collision_attribute_authored =
-                reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED);
+                reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED);
             let collision_state = if collision_api {
                 match lunco_usd_avian_reader::read_authored_bool_or_default(
                     reader,
                     path,
-                    ptok::A_COLLISION_ENABLED,
+                    ptok::PHYSICS_COLLISION_ENABLED,
                     true,
                 ) {
                     Ok(true) => "enabled",
@@ -374,10 +374,10 @@ fn vehicle_part_facts(
                     Err(()) => "malformed",
                 }
             } else {
-                match reader.boolean(path, ptok::A_COLLISION_ENABLED) {
+                match reader.boolean(path, ptok::PHYSICS_COLLISION_ENABLED) {
                     Some(true) => "enabled_without_api",
                     Some(false) => "disabled",
-                    None if reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED) => {
+                    None if reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED) => {
                         "malformed"
                     }
                     None => "missing",
@@ -524,10 +524,10 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
 
         let realization = match drive
             .drive_type
-            .unwrap_or(openusd::schemas::physics::DriveType::Force)
+            .unwrap_or(openusd_schemas::physics::DriveType::Force)
         {
-            openusd::schemas::physics::DriveType::Force => "force_based",
-            openusd::schemas::physics::DriveType::Acceleration => "acceleration_based",
+            openusd_schemas::physics::DriveType::Force => "force_based",
+            openusd_schemas::physics::DriveType::Acceleration => "acceleration_based",
         };
         let stiffness = drive.stiffness.unwrap_or(0.0);
         let damping = drive.damping.unwrap_or(0.0);
@@ -575,8 +575,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let collision_enabled_without_api: Vec<H> = paths
         .iter()
         .filter(|p| {
-            reader.boolean(p, ptok::A_COLLISION_ENABLED) == Some(true)
-                && !reader.has_api_schema(p, ptok::API_COLLISION)
+            reader.boolean(p, ptok::PHYSICS_COLLISION_ENABLED) == Some(true)
+                && !reader.has_api_schema(p, ptok::PHYSICS_COLLISION_API)
                 && !reader.has_api_schema(p, "LunCoTerrainAPI")
                 && !reader.has_api_schema(p, "PhysxVehicleWheelAPI")
         })
@@ -586,7 +586,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let mut bodies: HashSet<String> = HashSet::new();
     let mut joint_paths: Vec<SdfPath> = Vec::new();
     for p in &paths {
-        if reader.has_api_schema(p, ptok::API_RIGID_BODY) {
+        if reader.has_api_schema(p, ptok::PHYSICS_RIGID_BODY_API) {
             bodies.insert(p.to_string());
         }
         let is_joint = reader
@@ -676,7 +676,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let known: HashSet<String> = paths.iter().map(|p| p.to_string()).collect();
     let mut filtered_pairs: Vec<H> = Vec::new();
     for p in &paths {
-        if !reader.has_api_schema(p, ptok::API_FILTERED_PAIRS) {
+        if !reader.has_api_schema(p, ptok::PHYSICS_FILTERED_PAIRS_API) {
             continue;
         }
         let path = p.to_string();
@@ -688,7 +688,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             }
         };
         let targets: Vec<String> = reader
-            .rel_targets(p, ptok::A_FILTERED_PAIRS)
+            .rel_targets(p, ptok::PHYSICS_FILTERED_PAIRS)
             .into_iter()
             .map(|t| t.to_string())
             .filter(|t| !t.is_empty())
@@ -714,7 +714,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let mut collision_groups: Vec<H> = Vec::new();
     let group_paths: HashSet<String> = paths
         .iter()
-        .filter(|p| reader.prim_type_name(p).as_deref() == Some(ptok::T_PHYSICS_COLLISION_GROUP))
+        .filter(|p| reader.prim_type_name(p).as_deref() == Some(ptok::PHYSICS_COLLISION_GROUP))
         .map(|p| p.to_string())
         .collect();
     for p in &paths {
@@ -728,7 +728,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .map(|t| t.to_string())
             .collect();
         let filtered: Vec<String> = reader
-            .rel_targets(p, ptok::A_FILTERED_GROUPS)
+            .rel_targets(p, ptok::PHYSICS_FILTERED_GROUPS)
             .into_iter()
             .map(|t| t.to_string())
             .collect();
@@ -750,13 +750,17 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ("path", H::str(path)),
             (
                 "merge",
-                H::str(reader.text(p, ptok::A_MERGE_GROUP).unwrap_or_default()),
+                H::str(
+                    reader
+                        .text(p, ptok::PHYSICS_MERGE_GROUP)
+                        .unwrap_or_default(),
+                ),
             ),
             (
                 "invert",
                 H::Bool(
                     reader
-                        .boolean(p, ptok::A_INVERT_FILTERED_GROUPS)
+                        .boolean(p, ptok::PHYSICS_INVERT_FILTERED_GROUPS)
                         .unwrap_or(false),
                 ),
             ),
@@ -786,7 +790,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         .iter()
         .filter(|p| {
             reader.kind(p).as_deref() == Some("assembly")
-                && reader.has_api_schema(p, ptok::API_RIGID_BODY)
+                && reader.has_api_schema(p, ptok::PHYSICS_RIGID_BODY_API)
         })
         .map(ToString::to_string)
         .collect();
@@ -815,7 +819,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         if !bodies.contains(&path) {
             continue;
         }
-        let own_collider = reader.has_api_schema(p, ptok::API_COLLISION);
+        let own_collider = reader.has_api_schema(p, ptok::PHYSICS_COLLISION_API);
         let aabb = collider_world_aabb(reader, &sorted, &bodies, &path);
         body_facts.push(H::map([
             ("path", H::str(path.clone())),
@@ -824,7 +828,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "kinematic",
                 H::Bool(
                     reader
-                        .boolean(p, ptok::A_KINEMATIC_ENABLED)
+                        .boolean(p, ptok::PHYSICS_KINEMATIC_ENABLED)
                         .unwrap_or(false),
                 ),
             ),
@@ -832,7 +836,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "simulated",
                 H::Bool(
                     reader
-                        .boolean(p, ptok::A_RIGID_BODY_ENABLED)
+                        .boolean(p, ptok::PHYSICS_RIGID_BODY_ENABLED)
                         .unwrap_or(true),
                 ),
             ),
@@ -1123,22 +1127,17 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             let Some(name) = schema.strip_prefix("CollectionAPI:") else {
                 continue;
             };
-            let relationship = format!("collection:{name}:includes");
-            let explicit = reader
-                .value_str(p, &format!("collection:{name}:expansionRule"))
-                .as_deref()
-                == Some("explicitOnly");
-            let members = if explicit {
-                reader.rel_targets(p, &relationship)
-            } else {
-                let collection = Collection::new(p.clone(), name);
-                collection
-                    .compute_membership_query(reader.stage())
-                    .ok()
-                    .and_then(|query| {
-                        compute_included_paths(reader.stage(), &query, PrimPredicate::DEFAULT).ok()
-                    })
-                    .unwrap_or_default()
+            let (members, collection_error) = match reader.collection_members(p, name) {
+                Ok(members) => (
+                    H::Array(
+                        members
+                            .into_iter()
+                            .map(|member| H::str(member.to_string()))
+                            .collect(),
+                    ),
+                    H::Unit,
+                ),
+                Err(error) => (H::Unit, H::str(error)),
             };
             collections.push(H::map([
                 ("path", H::str(p.to_string())),
@@ -1151,15 +1150,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     ),
                 ),
                 ("name", H::str(name)),
-                (
-                    "members",
-                    H::Array(
-                        members
-                            .into_iter()
-                            .map(|member| H::str(member.to_string()))
-                            .collect(),
-                    ),
-                ),
+                ("members", members),
+                ("error", collection_error),
             ]));
         }
         let parent = p.parent().map(|x| x.to_string()).unwrap_or_default();

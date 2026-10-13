@@ -93,7 +93,7 @@
 //   facts.connector_programs[] #{ path, source_asset, connectors[] }
 //       every program that declares an acausal `connectors:*` interface.
 //
-//   facts.collections[] #{ path, parent, name, members[] }
+//   facts.collections[] #{ path, parent, name, members, error }
 //       standard computed collection membership from the composed stage.
 //
 //   facts.network_roots[] #{ path, parent, members[], synthesizer,
@@ -399,6 +399,7 @@ fn lint_usd(facts) {
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
     for f in empty_component_network(facts) { out.push(f); }
+    for f in invalid_collection(facts) { out.push(f); }
     for f in invalid_component_collection(facts) { out.push(f); }
     for f in invalid_network_synthesizer(facts) { out.push(f); }
     for f in telemetry_target_contract(facts) { out.push(f); }
@@ -1300,6 +1301,17 @@ fn empty_component_network(facts) {
         m += " Add the Modelica component facets to";
         m += " collection:components:includes or remove the empty network root.";
         out.push(finding("empty-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// Preserve native collection errors as structural diagnostics.
+fn invalid_collection(facts) {
+    let out = [];
+    for collection in facts.collections {
+        if !collection.contains("error") || collection.error == () { continue; }
+        out.push(finding("invalid-collection", "error", collection.path,
+            "CollectionAPI:" + collection.name + " cannot compute membership: " + collection.error));
     }
     out
 }

@@ -86,7 +86,6 @@ use pulse::{EdgePulseLayer, PulseGlowLayer};
 
 use edge::OrthogonalEdgeVisual;
 use node::IconNodeVisual;
-use paint::wire_color_for;
 
 fn build_registry() -> VisualRegistry {
     let mut reg = VisualRegistry::new();
@@ -112,7 +111,7 @@ fn build_registry() -> VisualRegistry {
         IconNodeVisual {
             type_label: type_label.clone(),
             class_name: type_label,
-            icon_only: d.icon_only,
+            partial: d.partial,
             expandable_connector: d.expandable_connector,
             icon_graphics: d.icon_graphics.clone(),
             resolution: d.resolution,
@@ -153,9 +152,7 @@ fn build_registry() -> VisualRegistry {
             })
             .collect();
         OrthogonalEdgeVisual {
-            color: d
-                .icon_color
-                .unwrap_or_else(|| wire_color_for(&d.connector_type)),
+            color: d.icon_color,
             from_dir: d.from_dir,
             to_dir: d.to_dir,
             is_causal,

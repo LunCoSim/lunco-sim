@@ -7,12 +7,9 @@
 //! 2. records the byte-level [`edit::Splice`]s that make the same change to the
 //!    source text.
 //!
-//! (2) is the source of truth for what lands on disk. It exists because
-//! round-tripping a class through rumoca's emitter is lossy — see
-//! [`edit`] for the failure it caused. Mutations must therefore **never**
-//! call `to_modelica()` on a node that already exists in the source; they splice
-//! the bytes they mean to change and leave every other byte alone. New nodes are
-//! rendered by [`crate::pretty`].
+//! (2) is the source of truth for what lands on disk. Structural edits splice
+//! only the targeted source ranges, preserving every untouched byte. Existing
+//! nodes are not re-emitted; new nodes are rendered by [`crate::pretty`].
 //!
 //! `tests/ast_mut_preserves_untouched_source.rs` enforces this: for each op it
 //! asserts that every line the op did not target is byte-identical afterwards.

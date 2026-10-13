@@ -82,6 +82,8 @@ impl Default for StageClosureLimits {
 pub struct StageRecipe {
     /// Canonical identifier of the root layer.
     pub root_id: String,
+    /// Explicit canonical session-layer identity, when this stack has session opinions.
+    pub session_layer: Option<String>,
     /// Layer identifier to file bytes for the available closure.
     pub bytes: HashMap<String, Vec<u8>>,
     /// Non-fatal missing dependencies discovered while fetching the closure.
@@ -105,6 +107,8 @@ pub struct StageLayerContent {
 pub struct StageContentClosure {
     /// Canonical logical identifier of the root layer.
     pub root_id: String,
+    /// Session layer participating in the replayed composition.
+    pub session_layer: Option<String>,
     /// All fetched layers, sorted by `layer_id` for stable comparison/encoding.
     pub layers: Vec<StageLayerContent>,
 }
@@ -114,6 +118,8 @@ pub struct StageContentClosure {
 pub enum StageContentClosureError {
     /// The root layer was not among the successfully fetched bytes.
     RootLayerMissing { root_id: String },
+    /// The declared session layer was not among the captured bytes.
+    SessionLayerMissing { session_layer: String },
     /// Composition had missing dependencies, so the available bytes are partial.
     UnresolvedDependencies(Vec<StageDependencyDiagnostic>),
     /// A fetched layer has no usable resolver identity.
@@ -127,6 +133,12 @@ impl std::fmt::Display for StageContentClosureError {
                 write!(
                     formatter,
                     "USD root layer `{root_id}` has no fetched content"
+                )
+            }
+            Self::SessionLayerMissing { session_layer } => {
+                write!(
+                    formatter,
+                    "USD session layer `{session_layer}` has no captured content"
                 )
             }
             Self::UnresolvedDependencies(diagnostics) => {
@@ -165,6 +177,12 @@ impl StageRecipe {
         let mut output = Self::new(root_id.clone(), HashMap::new());
         let mut frontier =
             std::collections::VecDeque::from([(self.root_id.clone(), root_id, 0_usize)]);
+        if let Some(session_layer) = &self.session_layer {
+            // A session is an explicitly identified layer, independent of the
+            // root's transport address, just like an absolute composition arc.
+            output.session_layer = Some(session_layer.clone());
+            frontier.push_back((session_layer.clone(), session_layer.clone(), 0));
+        }
         let mut seen = std::collections::HashSet::new();
         while let Some((source_id, target_id, depth)) = frontier.pop_front() {
             if !seen.insert((source_id.clone(), target_id.clone())) {
@@ -224,6 +242,7 @@ impl StageRecipe {
     pub fn new(root_id: impl Into<String>, bytes: HashMap<String, Vec<u8>>) -> Self {
         Self {
             root_id: root_id.into(),
+            session_layer: None,
             bytes,
             dependency_diagnostics: Vec::new(),
         }
@@ -259,6 +278,13 @@ impl StageRecipe {
             });
         }
 
+        if let Some(session_layer) = &self.session_layer {
+            if !self.bytes.contains_key(session_layer) {
+                return Err(StageContentClosureError::SessionLayerMissing {
+                    session_layer: session_layer.clone(),
+                });
+            }
+        }
         let mut layers = self
             .bytes
             .iter()
@@ -276,6 +302,7 @@ impl StageRecipe {
 
         Ok(StageContentClosure {
             root_id: self.root_id.clone(),
+            session_layer: self.session_layer.clone(),
             layers,
         })
     }
@@ -330,8 +357,16 @@ over "Asset" {
             assert_eq!(prepared.root_id, anchor);
             assert_eq!(prepared.bytes.len(), 4);
             assert!(prepared.bytes.contains_key(absolute));
-            let child_id = crate::child_layer_ids(anchor, root).unwrap()[0].clone();
-            let grand_id = crate::child_layer_ids(&child_id, child).unwrap()[0].clone();
+            let child_id = crate::canonicalize_at(
+                "parts/child.usda",
+                Some(&openusd::ar::ResolvedPath::new(anchor)),
+            )
+            .unwrap();
+            let grand_id = crate::canonicalize_at(
+                "grand.usda",
+                Some(&openusd::ar::ResolvedPath::new(&child_id)),
+            )
+            .unwrap();
             assert_eq!(prepared.bytes[&child_id], child);
             assert_eq!(prepared.bytes[&grand_id], grand);
             if anchor != transport_root {
@@ -342,7 +377,9 @@ over "Asset" {
                 .resolver(resolver)
                 .open(anchor)
                 .expect("compose closure");
-            let prim = stage.prim(openusd::sdf::Path::new("/Asset").unwrap());
+            let prim = stage
+                .prim(openusd::sdf::Path::new("/Asset").unwrap())
+                .unwrap();
             assert_eq!(
                 prim.attribute("nested").get::<String>().unwrap().as_deref(),
                 Some("composed")
@@ -360,10 +397,10 @@ over "Asset" {
                 .expect("asset value");
             assert_eq!(value.as_str(), "images/paint #%.png");
             let stack = attribute.property_stack().unwrap();
-            assert_eq!(stack[0].0, child_id);
+            assert_eq!(stack[0].layer, child_id);
             let image_id = crate::canonicalize_at(
                 value.as_str(),
-                Some(&openusd::ar::ResolvedPath::new(&stack[0].0)),
+                Some(&openusd::ar::ResolvedPath::new(&stack[0].layer)),
             )
             .unwrap();
             if anchor == transport_root {
@@ -440,6 +477,15 @@ over "Asset" {
             missing_root.content_closure(),
             Err(StageContentClosureError::RootLayerMissing {
                 root_id: "root.usda".into()
+            })
+        );
+
+        let mut missing_session = StageRecipe::from_source("root.usda", "root");
+        missing_session.session_layer = Some("session.usdc".into());
+        assert_eq!(
+            missing_session.content_closure(),
+            Err(StageContentClosureError::SessionLayerMissing {
+                session_layer: "session.usdc".into()
             })
         );
 

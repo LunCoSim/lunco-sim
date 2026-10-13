@@ -27,7 +27,7 @@ semantic owner.
 - Prefer a generic applied schema plus authored role/token data over a schema for
   every component role.
 - Keep the schema source in `crates/lunco-usd-document/schema/schema.usda`; regenerate
-  `generatedSchema.usda` and `plugInfo.json` with `scripts/gen_schema.py`.
+  `generatedSchema.usda` and `plugInfo.json` with `cargo run -p lunco-usd-authoring --example gen_schema -j 4 --`.
 - Add a composition test proving the authored property is present and a runtime
   test proving a real reader consumes it.
 - If no reader consumes the property, delete it instead of documenting it as a

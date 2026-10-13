@@ -193,7 +193,7 @@ Ports and projection are the proof the primitive isn't terrain-specific: they ar
    No unbounded `cache_dir` growth (today's precompute has *none* — a slow disk leak).
 6. **Global (cross-queue) WASM main-thread budget.** On wasm all `CpuExec`/`GpuExec` share
    the main thread; the yield/time budget is global across queues, or one queue's burst
-   freezes the others (the `icon_warmer` freeze, generalized).
+   freezes the others.
 7. **Wider (sha256/CID) keys for anything persisted or shared.** fnv1a u64 only for
    ephemeral RAM memo; a planet-scale disk/peer cache needs collision-safe keys or it serves
    the wrong artifact silently.
@@ -324,7 +324,7 @@ Layers 1–2 are what make it scale: a static scene costs ~nil because nothing i
    real, physics-coupled artifact.
 3. **Fold in `derived_layers` + `stream_viz`** (already precompute / already budgeted) — 3–4
    near-identical hand-rolls in one crate collapse onto the generic.
-4. **Horizon bake** (quantized-sun key) and **`icon_warmer`/`class_cache`** (highest
+4. **Horizon bake** (quantized-sun key) and **`class_cache`** (highest
    WASM-correctness payoff — correct-by-construction).
 5. **`GpuExec`** — build only when a concrete expensive procedural shader (regolith) is worth
    baking down; net-new render-graph plumbing, separate platform matrix (WebGL2 = no compute).

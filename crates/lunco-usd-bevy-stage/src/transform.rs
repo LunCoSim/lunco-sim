@@ -121,18 +121,15 @@ fn validated_live_xform_op_order(
     reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Result<Option<Vec<String>>, TransformReadError> {
-    let Some(order) = read_xform_op_order(reader, path) else {
-        if !UsdReadObject::has_authored_attribute(reader, path, "xformOpOrder")
-            || authored_empty_xform_op_order(reader, path)
-        {
-            return Ok(None);
-        }
-        return Err(malformed_transform(path));
-    };
-    if !valid_xform_op_order(reader, path, &order) {
-        return Err(malformed_transform(path));
-    }
-    Ok(Some(order))
+    use openusd_schemas::geom::{Xformable, XformableSchema};
+    let xform =
+        Xformable::from_prim_unchecked(reader.stage().prim(path).expect("validated USD path"));
+    let order = xform
+        .xform_op_order()
+        .map_err(|_| malformed_transform(path))?;
+    Ok(order
+        .filter(|order| !order.is_empty())
+        .map(|order| order.into_iter().map(|token| token.to_string()).collect()))
 }
 
 fn local_to_parent_matrix_d_at(
@@ -140,11 +137,16 @@ fn local_to_parent_matrix_d_at(
     path: &SdfPath,
     time: f64,
 ) -> Result<DMat4, TransformReadError> {
-    use openusd::schemas::geom::Xformable as _;
+    use openusd_schemas::geom::{Xformable, XformableExt};
 
-    let matrix = XformablePrim(reader.stage().prim(path.clone()))
-        .local_to_parent_transform(time)
-        .map_err(|_| malformed_transform(path))?;
+    let matrix = Xformable::from_prim_unchecked(
+        reader
+            .stage()
+            .prim(path.clone())
+            .expect("validated USD path"),
+    )
+    .local_transformation(openusd::usd::TimeCode::new(time))
+    .map_err(|_| malformed_transform(path))?;
     // Gf matrices are row-major for row-vector transforms. Interpreting that
     // storage as Bevy columns transposes into the equivalent column-vector
     // matrix, including moving translation into the final column.
@@ -273,95 +275,40 @@ pub fn transform_in_body_frame(
 
 /// Resolve inherited USD Imageable visibility and purpose on a live stage.
 pub(crate) fn stage_prim_is_invisible_or_guide(reader: &StageView<'_>, path: &SdfPath) -> bool {
-    use openusd::schemas::geom::Imageable as _;
-    let imageable = XformablePrim(reader.stage().prim(path.clone()));
+    use openusd_schemas::geom::{Imageable, ImageableExt};
+    let imageable = Imageable::from_prim_unchecked(
+        reader
+            .stage()
+            .prim(path.clone())
+            .expect("validated USD path"),
+    );
     imageable
-        .compute_visibility()
-        .map(|value| value == openusd::schemas::geom::Visibility::Invisible)
+        .compute_visibility(None)
+        .map(|value| value == openusd_schemas::geom::Visibility::Invisible)
         .unwrap_or(false)
         || imageable
             .compute_purpose()
-            .map(|value| value == openusd::schemas::geom::Purpose::Guide)
+            .map(|value| value == openusd_schemas::geom::Purpose::Guide)
             .unwrap_or(false)
 }
 
 pub fn read_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<String>> {
-    let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
-        Value::TokenVec(values) => values.iter().map(ToString::to_string).collect(),
-        Value::StringVec(values) => values,
-        Value::TokenListOp(op) => op
-            .flatten()
-            .into_iter()
-            .map(|token| token.to_string())
-            .collect(),
-        Value::StringListOp(op) => op.flatten(),
-        _ => return None,
+    let Value::TokenVec(values) = reader.attr_value(path, "xformOpOrder")? else {
+        return None;
     };
+    let order = values
+        .into_iter()
+        .map(|token| token.to_string())
+        .collect::<Vec<_>>();
     (!order.is_empty()).then_some(order)
-}
-
-fn is_valid_xform_op_token(op: &str, index: usize) -> bool {
-    let (inverted, base) = match op.strip_prefix("!invert!") {
-        Some(base) => (true, base),
-        None => (false, op),
-    };
-    if base == RESET_XFORM_STACK {
-        return !inverted && index == 0;
-    }
-    if inverted && base.starts_with('!') {
-        return false;
-    }
-    [
-        "xformOp:translate",
-        "xformOp:scale",
-        "xformOp:transform",
-        "xformOp:orient",
-        "xformOp:rotateX",
-        "xformOp:rotateY",
-        "xformOp:rotateZ",
-        "xformOp:rotateXYZ",
-        "xformOp:rotateXZY",
-        "xformOp:rotateYXZ",
-        "xformOp:rotateYZX",
-        "xformOp:rotateZXY",
-        "xformOp:rotateZYX",
-    ]
-    .iter()
-    .any(|kind| base == *kind || base.strip_prefix(kind).is_some_and(|s| s.starts_with(':')))
-}
-
-fn valid_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath, order: &[String]) -> bool {
-    order.iter().enumerate().all(|(index, op)| {
-        if !is_valid_xform_op_token(op, index) {
-            return false;
-        }
-        let base = op.strip_prefix("!invert!").unwrap_or(op);
-        base == RESET_XFORM_STACK || reader.has_authored_attribute(path, base)
-    })
 }
 
 fn authored_empty_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> bool {
     match reader.attr_value(path, "xformOpOrder") {
         Some(Value::TokenVec(values)) => values.is_empty(),
-        Some(Value::StringVec(values)) => values.is_empty(),
-        Some(Value::TokenListOp(op)) => op.flatten().is_empty(),
-        Some(Value::StringListOp(op)) => op.flatten().is_empty(),
         _ => false,
     }
 }
-
-struct XformablePrim(openusd::usd::Prim);
-
-impl openusd::usd::SchemaBase for XformablePrim {
-    const KIND: openusd::usd::SchemaKind = openusd::usd::SchemaKind::AbstractTyped;
-
-    fn prim(&self) -> &openusd::usd::Prim {
-        &self.0
-    }
-}
-
-impl openusd::schemas::geom::Imageable for XformablePrim {}
-impl openusd::schemas::geom::Xformable for XformablePrim {}
 
 pub const RESET_XFORM_STACK: &str = "!resetXformStack!";
 
@@ -400,7 +347,8 @@ def Xform "Parent" {
 
     #[test]
     fn double3_time_samples_keep_precision_for_grid_splitting() {
-        let stage = plan(
+        let stage = crate::canonical::CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "high_precision.usda",
             r#"#usda 1.0
 (
     metersPerUnit = 1
@@ -415,11 +363,12 @@ def Xform "Vehicle"
     uniform token[] xformOpOrder = ["xformOp:translate"]
 }
 "#,
-        );
+        ))
+        .expect("native temporal stage");
         let path = SdfPath::new("/Vehicle").expect("valid prim path");
 
         assert_eq!(
-            grid_translation_d_at(&stage, &path, 5.0).expect("valid stack"),
+            grid_translation_d_at(&stage.view(), &path, 5.0).expect("valid stack"),
             Some(DVec3::new(149_597_870_700.25, 0.0, 0.0))
         );
     }

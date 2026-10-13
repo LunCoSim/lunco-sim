@@ -17,7 +17,7 @@ const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(SUBJECT_PATH);
     #{ modelica_entities: [subject], entity_reads: [subject], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "QueryPhysicsState", "ResolveUsdTarget", "InspectSelection", "InspectUsdSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
+       query_reads: ["QueryUsdPrim", "QueryUsdPrims", "QueryPhysicsState", "ResolveUsdTarget", "InspectSelection", "InspectUsdSelection", "ScriptInspect", "ScriptStatus", "ReadExposures", "InspectUsdCurveView"],
        required_inputs: [] }
 }
 
@@ -90,14 +90,13 @@ fn ribbon_width_matches(doc, expected) {
     widths != () && widths.len() == 1 && (widths[0] - expected).abs() < 0.001
 }
 
-fn ribbon_normals_match(doc, count) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["normals"],
-    });
-    result != () && result.ok != false && result.attrs != ()
-        && result.attrs["normals"] != () && result.attrs["normals"].len() == count
+fn ribbon_view_ready(doc, point_count) {
+    let entity = find_path(RIBBON_GEOMETRY);
+    if entity < 0 { return false; }
+    let result = query("InspectUsdCurveView", #{ doc_id: doc, entity_id: entity });
+    result != () && result.ok != false && result.state == "ready"
+        && result.applied_revision == result.requested_revision
+        && to_int(result.result_segment_count) == point_count - 1
 }
 
 fn ribbon_anchor_matches_point(doc, point_path) {
@@ -218,6 +217,9 @@ fn invalid_edit_checks(doc) {
         controlled_path: SUBJECT_PATH,
     });
     let missing_position = waypoint_editor::on_move(context(doc, "/RouteLifecycle/NotAPoint", ()));
+    let missing_ribbon = waypoint_editor::update_ribbon_view(
+        doc, ROOT + "/NotARoute", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    );
     let program = program_editor::list(doc, ROUTE);
     let program_path = if program.ok && program.programs.len() > 0 {
         program.programs[0]["path"]
@@ -230,6 +232,9 @@ fn invalid_edit_checks(doc) {
     [
         t_true(missing_context.ok == false, "click without a world position is rejected"),
         t_true(missing_position.ok == false, "move without a world position is rejected"),
+        t_true(missing_ribbon.ok == false && missing_ribbon.retryable == false
+            && missing_ribbon.error != "",
+            "a rejected ribbon seed is a terminal presentation diagnostic"),
         t_true(program_delete.ok == false, "delete cannot target the route program"),
         t_true(normalized == ROUTE,
             "a program identity is normalized to its containing route scope"),
@@ -460,7 +465,7 @@ fn route_step_route_fixture_action(me) {
     this.doc = route.doc_id;
     this.subject = find_path(SUBJECT_PATH);
     if this.subject < 0 || point_count(this.doc) != 3 || !ribbon_present(this.doc)
-        || !ribbon_normals_match(this.doc, 3)
+        || !ribbon_view_ready(this.doc, 3)
         || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
         return;
     }

@@ -13,10 +13,6 @@ path = "src/bin/build_modelica_library_assets.rs"
 name = "modelica_library_indexer"
 path = "src/bin/modelica_library_indexer.rs"
 
-[[bin]]
-name = "modelica_library_parse_bench"
-path = "src/bin/modelica_library_parse_bench.rs"
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # This package is a native asset/tool boundary. Its wasm target keeps an empty
 # library/bin surface, so the archive/indexer toolchain stays out of web builds.

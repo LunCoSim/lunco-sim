@@ -386,7 +386,8 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             };
             let sdf = SdfPath::new(&item.path).expect("enriched selection has a valid path");
             let variant_sets = stage
-                .prim(sdf.as_str())
+                .prim(&sdf)
+                .expect("validated USD path")
                 .variant_sets()
                 .get_all_variant_selections()
                 .is_ok_and(|sets| !sets.is_empty());
@@ -407,7 +408,8 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             let item = enrich_selection(&view, matches[0].clone())?;
             let sdf = SdfPath::new(path).expect("enriched selection has a valid path");
             let variant_sets = stage
-                .prim(sdf.as_str())
+                .prim(&sdf)
+                .expect("validated USD path")
                 .variant_sets()
                 .get_all_variant_selections()
                 .is_ok_and(|sets| !sets.is_empty());

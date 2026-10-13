@@ -36,8 +36,8 @@
 use bevy::prelude::*;
 use lunco_camera_core::CameraPoseMode;
 use lunco_usd_bevy_stage::read::read_vec3_f64;
-use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
+use openusd_schemas::geom::{self, tokens};
 
 use lunco_usd_bevy_scene::UsdSceneProjectionFailed;
 use lunco_usd_data::units::{ConventionTransform, StageMetrics};
@@ -100,11 +100,11 @@ pub fn read_camera_exposure_ev100(
     path: &SdfPath,
 ) -> Result<Option<f32>, CameraExposureError> {
     let authored = [
-        tokens::A_EXPOSURE_ISO,
-        tokens::A_EXPOSURE_TIME,
-        tokens::A_EXPOSURE_F_STOP,
-        tokens::A_EXPOSURE_RESPONSIVITY,
-        tokens::A_EXPOSURE,
+        tokens::EXPOSURE_ISO,
+        tokens::EXPOSURE_TIME,
+        tokens::EXPOSURE_F_STOP,
+        tokens::EXPOSURE_RESPONSIVITY,
+        tokens::EXPOSURE,
     ]
     .iter()
     .any(|name| reader.has_authored_attribute(path, name));
@@ -115,12 +115,12 @@ pub fn read_camera_exposure_ev100(
         return Ok(None);
     }
 
-    let iso = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_ISO, 100.0, true)?;
-    let time = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_TIME, 1.0, true)?;
-    let f_stop = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_F_STOP, 1.0, true)?;
+    let iso = read_camera_exposure_real(reader, path, tokens::EXPOSURE_ISO, 100.0, true)?;
+    let time = read_camera_exposure_real(reader, path, tokens::EXPOSURE_TIME, 1.0, true)?;
+    let f_stop = read_camera_exposure_real(reader, path, tokens::EXPOSURE_F_STOP, 1.0, true)?;
     let responsivity =
-        read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_RESPONSIVITY, 1.0, true)?;
-    let compensation = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE, 0.0, false)?;
+        read_camera_exposure_real(reader, path, tokens::EXPOSURE_RESPONSIVITY, 1.0, true)?;
+    let compensation = read_camera_exposure_real(reader, path, tokens::EXPOSURE, 0.0, false)?;
     let ev100 = (f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation;
     if !ev100.is_finite() {
         error!("[usd-bevy] {path} has an authored camera exposure that produces a non-finite EV");
@@ -168,7 +168,7 @@ pub fn instantiate_camera_prim(
     entity: Entity,
     quality: lunco_render::RenderQualityProfile,
 ) -> CameraProjectionOutcome {
-    if prim_type != Some(tokens::T_CAMERA) {
+    if prim_type != Some(tokens::CAMERA) {
         return CameraProjectionOutcome::NotCamera;
     }
 
@@ -439,7 +439,7 @@ pub fn apply_camera_look_at(
     convention: &ConventionTransform,
     transform: &mut Transform,
 ) {
-    if prim_type != Some(tokens::T_CAMERA) {
+    if prim_type != Some(tokens::CAMERA) {
         return;
     }
     let look_at = match read_camera_look_at(reader, sdf_path) {
@@ -503,7 +503,7 @@ fn read_projection(
 ) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit as f32;
-    let clipping_value = reader.attr_value(path, tokens::A_CLIPPING_RANGE);
+    let clipping_value = reader.attr_value(path, tokens::CLIPPING_RANGE);
     let resolved_clipping = clipping_value
         .clone()
         .and_then(|value| value.get::<[f32; 2]>())
@@ -513,7 +513,7 @@ fn read_projection(
         });
     let clipping = match resolved_clipping {
         Some(range) => Some(range),
-        None if reader.has_authored_attribute(path, tokens::A_CLIPPING_RANGE) => {
+        None if reader.has_authored_attribute(path, tokens::CLIPPING_RANGE) => {
             error!(
                 "[usd-bevy] {} has an authored clippingRange with an unsupported value type",
                 path.as_str()
@@ -547,13 +547,13 @@ fn read_projection(
         let h_aperture = read_positive_camera_real(
             reader,
             path,
-            tokens::A_HORIZONTAL_APERTURE,
+            tokens::HORIZONTAL_APERTURE,
             DEFAULT_HORIZONTAL_APERTURE_MM,
         )?;
         let v_aperture = read_positive_camera_real(
             reader,
             path,
-            tokens::A_VERTICAL_APERTURE,
+            tokens::VERTICAL_APERTURE,
             DEFAULT_VERTICAL_APERTURE_MM,
         )?;
         Some((
@@ -566,22 +566,18 @@ fn read_projection(
             None,
         ))
     } else {
-        let focal = read_positive_camera_real(
-            reader,
-            path,
-            tokens::A_FOCAL_LENGTH,
-            DEFAULT_FOCAL_LENGTH_MM,
-        )?;
+        let focal =
+            read_positive_camera_real(reader, path, tokens::FOCAL_LENGTH, DEFAULT_FOCAL_LENGTH_MM)?;
         let v_aperture = read_positive_camera_real(
             reader,
             path,
-            tokens::A_VERTICAL_APERTURE,
+            tokens::VERTICAL_APERTURE,
             DEFAULT_VERTICAL_APERTURE_MM,
         )?;
         let h_aperture = read_positive_camera_real(
             reader,
             path,
-            tokens::A_HORIZONTAL_APERTURE,
+            tokens::HORIZONTAL_APERTURE,
             DEFAULT_HORIZONTAL_APERTURE_MM,
         )?;
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
@@ -607,14 +603,14 @@ fn read_usd_camera_projection(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<geom::Projection> {
-    match reader.attr_value(path, tokens::A_PROJECTION) {
+    match reader.attr_value(path, tokens::PROJECTION) {
         Some(Value::Token(value)) => match geom::Projection::from_token(value) {
             Some(projection) => Some(projection),
             None => {
                 error!(
                     "[usd-bevy] {} has unsupported {} token",
                     path.as_str(),
-                    tokens::A_PROJECTION
+                    tokens::PROJECTION
                 );
                 None
             }
@@ -623,15 +619,15 @@ fn read_usd_camera_projection(
             error!(
                 "[usd-bevy] {} has an authored {} with an unsupported value type",
                 path.as_str(),
-                tokens::A_PROJECTION
+                tokens::PROJECTION
             );
             None
         }
-        None if reader.has_authored_attribute(path, tokens::A_PROJECTION) => {
+        None if reader.has_authored_attribute(path, tokens::PROJECTION) => {
             error!(
                 "[usd-bevy] {} has an authored {} with an unsupported value type",
                 path.as_str(),
-                tokens::A_PROJECTION
+                tokens::PROJECTION
             );
             None
         }
@@ -794,7 +790,7 @@ mod tests {
             instantiate_camera_prim(
                 &stage.view(),
                 &path,
-                Some(tokens::T_CAMERA),
+                Some(tokens::CAMERA),
                 &mut commands,
                 entity.0,
                 lunco_render::RenderQualityProfile::default(),

@@ -45,14 +45,13 @@ Adding a new primitive shape:
 
 USD has standard `payload`/`references` syntax for pointing at external
 layers. Pixar's distribution handles `.gltf`/`.glb` via the `UsdGltf`
-SdfFileFormat plugin — `prepend payload = @./body.glb@` *just works*. Our
-`openusd` fork (v0.5) has no plugin system, so we approximate:
+SdfFileFormat plugin. The native Rust `openusd` reader supports its registered
+USD formats and reports foreign binary composition arcs as unresolved.
 
-1. **The compose path (folded into `lunco-usd-bevy`)** detects binary
-   extensions on `payload`/`references`, skips the USD-text read, and composes
-   the arc through an empty stub because the Rust USD fork has no file-format
-   plugin API. The render projection reads the authored arc live from the
-   composed prim stack and canonicalizes it relative to its authoring layer.
+1. The compose loader fetches USD layers through the shared asset boundary.
+   Foreign binary arcs remain native composition diagnostics. The renderer
+   reads each authored arc from the native prim stack and anchors it to its
+   contributing layer before importing it through Bevy.
 2. **`sync_usd_visuals`** reads that binary payload/reference through the shared
    composed reader and dispatches:
    - `lunco:assetMode = "mesh"` → `asset_server.load::<Mesh>("<uri>#Mesh0/Primitive0")`,

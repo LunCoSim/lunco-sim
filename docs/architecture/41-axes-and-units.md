@@ -16,7 +16,7 @@ The mandate above is **honoured for USD geometry and transforms**. Two types:
 
 | Type | What it is |
 |---|---|
-| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by `StageMetrics::from_reader`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
+| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by the `StageMetrics::from_reader` adapter or native `StageMetrics::from_stage`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
 | **`ConventionTransform`** | the precomputed stage→canonical **similarity** `S = k·Q` (uniform scale `k = metersPerUnit`, rotation `Q` = identity for Y-up, `Rx(−90°)` for Z-up). Built solely by `ConventionTransform::from_stage_metrics`. `#[must_use]`. |
 
 **The conversion is baked into the shared decoders, not applied to a root
@@ -83,8 +83,9 @@ stating plainly:
 > **A `UsdOp`'s spatial values are always canonical. Stage frame exists only
 > inside the layer.**
 
-The document resolves that frame from its composed authoring stage. Runtime and
-view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
+The document resolves that frame from its native composed authoring stage
+through `StageMetrics::from_stage`. Native metadata errors reject the edit.
+Runtime and view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
 can substitute USD's centimetre default and move a transient presentation prim
 100× away from its authored points.
 
@@ -364,12 +365,16 @@ Plus `#[must_use]` on `ConventionTransform` so an unused gate warns.
   matching `from_canonical`-on-save is applied at the `UsdDocument::apply`
   boundary, so an edit authored onto a non-canonical stage is written in that
   stage's own units and a read-modify-write round trip is the identity.
+  Schema-declared scalar lengths use the native composed prim type, including
+  types contributed by references beneath local overs. Transform edit inverses
+  retain the native composed `xformOpOrder`; a sparse authored merge is not an
+  edit-context reader.
 
 ## Spokes
 
 | Spoke | Convention source | Status |
 |---|---|---|
-| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built, both directions** — `StageMetrics` / `ConventionTransform`, with save applied at the `UsdDocument::apply` seam. `SetTimeSample` and `kilogramsPerUnit` are not covered. |
+| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built, both directions** — `StageMetrics` / `ConventionTransform`, with save applied at the `UsdDocument::apply` seam. `SetTimeSample` uses the same authoring conversion; `kilogramsPerUnit` is not covered. |
 | glTF | fixed Y-up / metres (≈ identity spoke) | not built — additive |
 | Blender (live) | Z-up / −Y-fwd / metres, via USD interchange | not built — the USD spoke already covers a Z-up Blender export |
 | Isaac Sim | USD Z-up + centimetres | **covered by the USD spoke** — this is the exact stage the spoke was built for |
@@ -395,9 +400,9 @@ its keep (YAGNI).
 3. **Promote to a `lunco-axes-and-units` crate + `CanonicalScene` trait** when a
    *second* format spoke actually arrives. Speculative today — USD is the
    interchange hub, so Blender/Isaac arrive *through* USD, not beside it.
-4. **Save path — OPEN.** `from_canonical` on write-back so files round-trip in
-   their declared metrics. Until it exists, authoring onto a non-canonical stage
-   is a known, warned-about gap.
+4. **Save path — DONE.** Document operations convert canonical values at the
+   authoring boundary, including defaults and time samples, so Save preserves
+   the stage's declared metrics.
 5. **Dimensional scalars — OPEN.** `kilogramsPerUnit`, and the
    `mass()`/`stiffness()`/`damping()` accessors that a non-SI mass would need.
    Nothing we load is non-SI in mass today.

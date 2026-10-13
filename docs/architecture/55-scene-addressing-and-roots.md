@@ -205,15 +205,13 @@ After the matching loaded event, it records the generation serialized into the
 restart overlay and closes its projection cursor only after ECS admission.
 Edits after that serialized generation retain their normal pending suffix.
 
-Composed default `asset` and `asset[]` values retain their contributing layer's
-canonical identifier. The vendored OpenUSD owner uses its existing strongest
-opinion, expression-variable context and `create_identifier` result even when
-no external payload is loaded. The derived annotation is not serialized and
-does not change authored strings or equality. `UsdRead::asset` remains the
-raw authoring/query read; I/O consumers use fallible `asset_identifier`. A
-consumed value without context fails visibly. Time-sampled assets currently
-lack contributing-layer annotations and are rejected when consumed rather
-than anchored to the scene root.
+Composed `asset` and `asset[]` reads retain the contributing spec reported by
+OpenUSD's `Attribute::resolve_info_at`. Prepared plans capture source-layer
+identity with default and sampled asset values; live reads ask the same native
+owner. `UsdRead::asset` is the authored/query spelling, and fallible
+`asset_identifier` anchors the evaluated value against its source layer before
+external bytes are fetched. A consumed value without contributing-layer context
+fails visibly. Authored strings and serialized values remain native USD data.
 
 Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.
 `./x` and `../x` are strictly layer-relative. A search path, a relative

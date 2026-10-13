@@ -26,7 +26,7 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use openusd::schemas::lux::tokens as ltok;
+use openusd_schemas::lux::tokens as ltok;
 
 /// Select one live scene entity through the render-free shared selection
 /// resource. Editor packages may add highlights or gizmos, but authored tools
@@ -2078,14 +2078,14 @@ pub fn persist_environment_light_to_runtime_layer(
     // authored here round-trips on reload (name, USD type, USD-literal value).
     let mut attrs: Vec<(&str, &str, String)> = Vec::new();
     if let Some(lux) = cmd.illuminance {
-        attrs.push((ltok::A_INTENSITY, "float", lux.to_string()));
+        attrs.push((ltok::INPUTS_INTENSITY, "float", lux.to_string()));
     }
     if let Some([r, g, b]) = cmd.sun_color {
-        attrs.push((ltok::A_COLOR, "color3f", format!("({r}, {g}, {b})")));
+        attrs.push((ltok::INPUTS_COLOR, "color3f", format!("({r}, {g}, {b})")));
     }
     if let Some(v) = cmd.shadow_max_distance {
         // Standard `UsdLuxShadowAPI`, not an invented `lunco:` name.
-        attrs.push((ltok::A_SHADOW_DISTANCE, "float", v.to_string()));
+        attrs.push((ltok::INPUTS_SHADOW_DISTANCE, "float", v.to_string()));
     }
     if let Some(v) = cmd.shadow_first_cascade_bound {
         // The one renderer-specific knob: cascaded shadow maps are a rasterizer
@@ -2197,7 +2197,7 @@ pub fn persist_environment_light_to_runtime_layer(
     // invent. `on_set_environment_light` is where that is reported.
     let mut fill_attrs: Vec<(&str, &str, String)> = Vec::new();
     if let Some([r, g, b]) = cmd.earthshine_color {
-        fill_attrs.push((ltok::A_COLOR, "color3f", format!("({r}, {g}, {b})")));
+        fill_attrs.push((ltok::INPUTS_COLOR, "color3f", format!("({r}, {g}, {b})")));
     }
     if !fill_attrs.is_empty() {
         for prim in &q_earthshine {
@@ -2326,7 +2326,7 @@ pub fn persist_environment_light_to_runtime_layer(
                     edit_target: LayerId::runtime(),
                     parent_path: env_path,
                     name: "AmbientFill".to_string(),
-                    type_name: Some(ltok::T_DOME_LIGHT.to_string()),
+                    type_name: Some(ltok::DOME_LIGHT.to_string()),
                     reference: None,
                     reference_prim_path: None,
                 },
@@ -2338,7 +2338,7 @@ pub fn persist_environment_light_to_runtime_layer(
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::runtime(),
                 path: fill_path,
-                name: ltok::A_INTENSITY.to_string(),
+                name: ltok::INPUTS_INTENSITY.to_string(),
                 type_name: "float".to_string(),
                 value: intensity.to_string(),
             },

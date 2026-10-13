@@ -155,7 +155,7 @@ package checks after changing skill metadata or packaging.
   metadata, and no Rust-side default may hide missing metadata.
 - A movable mounted part needs both a rigid body and a joint; hierarchy is not
   attachment. The `nested-body-no-joint` lint guards this.
-- Edit schema sources and regenerate with `scripts/gen_schema.py`; update
+- Edit schema sources and regenerate with `cargo run -p lunco-usd-authoring --example gen_schema -j 4 --`; update
   `docs/crates-index.md` for crate changes. Persist user preferences through
   `lunco-settings`/`lunco-storage`, not new per-feature files. Do not use JSON
   for internal change detection. Hardcoded tunable values belong in the owning

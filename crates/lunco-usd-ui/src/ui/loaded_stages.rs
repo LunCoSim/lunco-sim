@@ -313,7 +313,17 @@ impl LoadedStage for WorkspaceStage {
         let (source, generation, name) = {
             let host = registry.host(self.doc_id)?;
             let doc = host.document();
-            (doc.source(), doc.generation(), doc.origin().display_name())
+            (
+                match doc.source() {
+                    Ok(source) => source,
+                    Err(error) => {
+                        bevy::log::error!("USD source display failed: {error}");
+                        return None;
+                    }
+                },
+                doc.generation(),
+                doc.origin().display_name(),
+            )
         };
 
         self.ensure_parsed(&source, generation);

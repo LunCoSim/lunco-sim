@@ -2,8 +2,8 @@ use avian3d::prelude::JointDamping;
 use bevy::math::{DQuat, DVec3};
 use lunco_usd_avian_contracts::{JointDrive, PendingUsdJoint};
 use lunco_usd_bevy_stage::world_transform;
-use openusd::schemas::physics::{DriveType, tokens as ptok};
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::physics::{DriveType, tokens as ptok};
 
 use crate::{read_authored_quat, read_authored_real, read_authored_vec3};
 
@@ -26,7 +26,7 @@ pub fn has_rigid_body_ancestor(
         if p.is_abs_root() {
             return false;
         }
-        if reader.has_api_schema(&p, ptok::API_RIGID_BODY) {
+        if reader.has_api_schema(&p, ptok::PHYSICS_RIGID_BODY_API) {
             return true;
         }
         cur = p.parent();
@@ -43,9 +43,9 @@ pub fn has_rigid_body_ancestor(
 /// A collider that DOES have a rigid-body ancestor is not a body — it is folded
 /// into that ancestor's compound shape — so it is deliberately not one here.
 fn is_avian_body(reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject, path: &SdfPath) -> bool {
-    reader.has_api_schema(path, ptok::API_RIGID_BODY)
+    reader.has_api_schema(path, ptok::PHYSICS_RIGID_BODY_API)
         || reader.has_api_schema(path, "LunCoTerrainAPI")
-        || (reader.has_api_schema(path, ptok::API_COLLISION)
+        || (reader.has_api_schema(path, ptok::PHYSICS_COLLISION_API)
             && !has_rigid_body_ancestor(reader, path))
 }
 
@@ -188,7 +188,7 @@ pub fn is_runtime_joint_enabled(
     path: &SdfPath,
 ) -> bool {
     reader.boolean(path, "lunco:lintOnly") != Some(true)
-        && reader.boolean(path, ptok::A_JOINT_ENABLED) != Some(false)
+        && reader.boolean(path, ptok::PHYSICS_JOINT_ENABLED) != Some(false)
 }
 
 fn read_joint_spec_with_policy(
@@ -210,9 +210,9 @@ fn read_joint_spec_with_policy(
     // track is better still than swinging — needs a way to say so without editing
     // the component. `over "YawJoint" { uniform bool physics:jointEnabled = false }`
     // is that way, and it is stock UsdPhysics rather than anything invented here.
-    let joint_enabled = match view.boolean(path, ptok::A_JOINT_ENABLED) {
+    let joint_enabled = match view.boolean(path, ptok::PHYSICS_JOINT_ENABLED) {
         Some(value) => value,
-        None if !view.has_authored_attribute(path, ptok::A_JOINT_ENABLED) => true,
+        None if !view.has_authored_attribute(path, ptok::PHYSICS_JOINT_ENABLED) => true,
         None => return None,
     };
     if !joint_enabled {
@@ -259,19 +259,17 @@ fn read_joint_spec_with_policy(
     // square to the hull.
     let axis_of = |axis: &str| -> Option<DVec3> {
         Some(conv.dir_d(match axis {
-            ptok::AXIS_X => DVec3::X,
-            ptok::AXIS_Y => DVec3::Y,
-            ptok::AXIS_Z => DVec3::Z,
+            ptok::X => DVec3::X,
+            ptok::Y => DVec3::Y,
+            ptok::Z => DVec3::Z,
             _ => return None,
         }))
     };
     let read_axis = || -> Option<DVec3> {
-        let axis = match view.text(path, ptok::A_AXIS) {
-            Some(axis) if matches!(axis.as_str(), ptok::AXIS_X | ptok::AXIS_Y | ptok::AXIS_Z) => {
-                axis
-            }
+        let axis = match view.text(path, ptok::PHYSICS_AXIS) {
+            Some(axis) if matches!(axis.as_str(), ptok::X | ptok::Y | ptok::Z) => axis,
             Some(_) => return None,
-            None if !view.has_authored_attribute(path, ptok::A_AXIS) => ptok::AXIS_X.to_string(),
+            None if !view.has_authored_attribute(path, ptok::PHYSICS_AXIS) => ptok::X.to_string(),
             None => return None,
         };
         axis_of(&axis)
@@ -298,8 +296,8 @@ fn read_joint_spec_with_policy(
         let resolve = |target: &SdfPath| -> Option<String> {
             Some(nearest_body_path(reader, target)?.to_string())
         };
-        let targets0 = reader.rel_targets(path, ptok::A_BODY0);
-        let targets1 = reader.rel_targets(path, ptok::A_BODY1);
+        let targets0 = reader.rel_targets(path, ptok::PHYSICS_BODY0);
+        let targets1 = reader.rel_targets(path, ptok::PHYSICS_BODY1);
         if targets0.len() > 1 || targets1.len() > 1 {
             return None;
         }
@@ -314,10 +312,10 @@ fn read_joint_spec_with_policy(
         if b0 == b1 {
             return None;
         }
-        let lp0_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_0)
+        let lp0_auth = read_authored_vec3(reader, path, ptok::PHYSICS_LOCAL_POS0)
             .ok()?
             .map(|value| conv.point_d(value));
-        let lp1_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_1)
+        let lp1_auth = read_authored_vec3(reader, path, ptok::PHYSICS_LOCAL_POS1)
             .ok()?
             .map(|value| conv.point_d(value));
         let (lp0, lp1) = if let (Some(lp0), Some(lp1)) = (lp0_auth, lp1_auth) {
@@ -330,11 +328,11 @@ fn read_joint_spec_with_policy(
                 .flatten()?;
             (lp0_auth.unwrap_or(derived.0), lp1_auth.unwrap_or(derived.1))
         };
-        let local_rot0 = read_authored_quat(reader, path, ptok::A_LOCAL_ROT_0)
+        let local_rot0 = read_authored_quat(reader, path, ptok::PHYSICS_LOCAL_ROT0)
             .ok()?
             .map(|value| conv.rotation_d(value))
             .unwrap_or(DQuat::IDENTITY);
-        let local_rot1 = read_authored_quat(reader, path, ptok::A_LOCAL_ROT_1)
+        let local_rot1 = read_authored_quat(reader, path, ptok::PHYSICS_LOCAL_ROT1)
             .ok()?
             .map(|value| conv.rotation_d(value))
             .unwrap_or(DQuat::IDENTITY);
@@ -383,18 +381,23 @@ fn read_joint_spec_with_policy(
         };
         let read_value =
             |name: &str| -> Result<Option<f64>, ()> { read_authored_real(view, path, name) };
-        let property = |sub: &str| format!("drive:{ns}:physics:{sub}");
-        let target_position_name = property(ptok::DRIVE_SUB_TARGET_POSITION);
-        let target_velocity_name = property(ptok::DRIVE_SUB_TARGET_VELOCITY);
-        let max_force_name = property(ptok::DRIVE_SUB_MAX_FORCE);
-        let stiffness_name = property(ptok::DRIVE_SUB_STIFFNESS);
-        let damping_name = property(ptok::DRIVE_SUB_DAMPING);
+        let property = |template: &str| {
+            openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, ns)
+                .to_string()
+        };
+        let target_position_name =
+            property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_POSITION);
+        let target_velocity_name =
+            property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_VELOCITY);
+        let max_force_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_MAX_FORCE);
+        let stiffness_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_STIFFNESS);
+        let damping_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_DAMPING);
         let tp = read_value(&target_position_name)?.map(target);
         let tv = read_value(&target_velocity_name)?.map(target);
         let mf = read_value(&max_force_name)?.map(force);
         let k = read_value(&stiffness_name)?.map(gain);
         let c = read_value(&damping_name)?.map(gain);
-        let type_name = property(ptok::DRIVE_SUB_TYPE);
+        let type_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TYPE);
         let ty = match view.attr_value(path, &type_name) {
             Some(value) => Some(value.get::<DriveType>().ok_or(())?),
             None if !view.has_authored_attribute(path, &type_name) => None,
@@ -448,38 +451,30 @@ fn read_joint_spec_with_policy(
 
     let type_name = view.type_name(path)?;
     let spec = match type_name.as_str() {
-        ptok::T_PHYSICS_REVOLUTE_JOINT => {
+        ptok::PHYSICS_REVOLUTE_JOINT => {
             let b = base()?;
             let axis = read_axis()?;
-            let lo = read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
-            let hi = read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
-            let drive = read_drive(ptok::DOF_ANGULAR).ok()?;
-            pending_from(b, axis, lo, hi, ptok::T_PHYSICS_REVOLUTE_JOINT, None, drive)
+            let lo = read_limit(ptok::PHYSICS_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
+            let hi = read_limit(ptok::PHYSICS_UPPER_LIMIT, f64::INFINITY)?.to_radians();
+            let drive = read_drive(ptok::ANGULAR).ok()?;
+            pending_from(b, axis, lo, hi, ptok::PHYSICS_REVOLUTE_JOINT, None, drive)
         }
-        ptok::T_PHYSICS_PRISMATIC_JOINT => {
+        ptok::PHYSICS_PRISMATIC_JOINT => {
             let b = base()?;
             let axis = read_axis()?;
             // Linear limits are authored in scene units, like the anchors.
-            let lo = conv.length(read_limit(ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?);
-            let hi = conv.length(read_limit(ptok::A_UPPER_LIMIT, f64::INFINITY)?);
-            let drive = read_drive(ptok::DOF_LINEAR).ok()?;
-            pending_from(
-                b,
-                axis,
-                lo,
-                hi,
-                ptok::T_PHYSICS_PRISMATIC_JOINT,
-                None,
-                drive,
-            )
+            let lo = conv.length(read_limit(ptok::PHYSICS_LOWER_LIMIT, f64::NEG_INFINITY)?);
+            let hi = conv.length(read_limit(ptok::PHYSICS_UPPER_LIMIT, f64::INFINITY)?);
+            let drive = read_drive(ptok::LINEAR).ok()?;
+            pending_from(b, axis, lo, hi, ptok::PHYSICS_PRISMATIC_JOINT, None, drive)
         }
-        ptok::T_PHYSICS_SPHERICAL_JOINT => {
+        ptok::PHYSICS_SPHERICAL_JOINT => {
             let b = base()?;
             let axis = read_axis()?;
             // `physics:coneAngle{0,1}Limit` is in degrees, while Avian's
             // `AngleLimit` is in radians.
-            let cone0 = read_limit(ptok::A_CONE_ANGLE_0_LIMIT, -1.0)?;
-            let cone1 = read_limit(ptok::A_CONE_ANGLE_1_LIMIT, -1.0)?;
+            let cone0 = read_limit(ptok::PHYSICS_CONE_ANGLE0_LIMIT, -1.0)?;
+            let cone1 = read_limit(ptok::PHYSICS_CONE_ANGLE1_LIMIT, -1.0)?;
             let swing = (cone0 >= 0.0 || cone1 >= 0.0)
                 .then_some((cone0.max(0.0).to_radians(), cone1.max(0.0).to_radians()));
             pending_from(
@@ -487,40 +482,40 @@ fn read_joint_spec_with_policy(
                 axis,
                 f64::NEG_INFINITY,
                 f64::INFINITY,
-                ptok::T_PHYSICS_SPHERICAL_JOINT,
+                ptok::PHYSICS_SPHERICAL_JOINT,
                 swing,
                 None,
             )
         }
-        ptok::T_PHYSICS_FIXED_JOINT => {
+        ptok::PHYSICS_FIXED_JOINT => {
             let b = base()?;
             pending_from(
                 b,
                 DVec3::Y,
                 f64::NEG_INFINITY,
                 f64::INFINITY,
-                ptok::T_PHYSICS_FIXED_JOINT,
+                ptok::PHYSICS_FIXED_JOINT,
                 None,
                 None,
             )
         }
-        ptok::T_PHYSICS_DISTANCE_JOINT => {
+        ptok::PHYSICS_DISTANCE_JOINT => {
             let b = base()?;
             // Distances are scene units; a negative authored value is the
             // schema's "limit disabled" sentinel.
-            let lo = conv.length(read_limit(ptok::A_MIN_DISTANCE, -1.0)?);
-            let hi = conv.length(read_limit(ptok::A_MAX_DISTANCE, -1.0)?);
+            let lo = conv.length(read_limit(ptok::PHYSICS_MIN_DISTANCE, -1.0)?);
+            let hi = conv.length(read_limit(ptok::PHYSICS_MAX_DISTANCE, -1.0)?);
             pending_from(
                 b,
                 DVec3::Y,
                 lo,
                 hi,
-                ptok::T_PHYSICS_DISTANCE_JOINT,
+                ptok::PHYSICS_DISTANCE_JOINT,
                 None,
                 None,
             )
         }
-        ptok::T_PHYSICS_JOINT => {
+        ptok::PHYSICS_JOINT => {
             // Generic/D6 reduces through per-DOF UsdPhysicsLimitAPI.
             let b = base()?;
             let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint(reader, path)?;
@@ -556,25 +551,28 @@ fn reduce_generic_joint(
     path: &SdfPath,
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     const DOFS: [(&str, DVec3, bool); 6] = [
-        (ptok::DOF_TRANS_X, DVec3::X, false),
-        (ptok::DOF_TRANS_Y, DVec3::Y, false),
-        (ptok::DOF_TRANS_Z, DVec3::Z, false),
-        (ptok::DOF_ROT_X, DVec3::X, true),
-        (ptok::DOF_ROT_Y, DVec3::Y, true),
-        (ptok::DOF_ROT_Z, DVec3::Z, true),
+        (ptok::TRANS_X, DVec3::X, false),
+        (ptok::TRANS_Y, DVec3::Y, false),
+        (ptok::TRANS_Z, DVec3::Z, false),
+        (ptok::ROT_X, DVec3::X, true),
+        (ptok::ROT_Y, DVec3::Y, true),
+        (ptok::ROT_Z, DVec3::Z, true),
     ];
     let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
     let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
     for (inst, axis, is_rot) in DOFS {
-        let api_name = format!("{}:{inst}", ptok::API_LIMIT);
-        let property = |bound: &str| format!("limit:{inst}:physics:{bound}");
+        let api_name = format!("{}:{inst}", ptok::PHYSICS_LIMIT_API);
+        let property = |template: &str| {
+            openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, inst)
+                .to_string()
+        };
         let read_bound = |name: &str, default: f64| match reader.real(path, name) {
             Some(value) if !value.is_nan() => Some(value),
             None if !reader.has_authored_attribute(path, name) => Some(default),
             _ => None,
         };
-        let low_name = property(ptok::LIMIT_SUB_LOW);
-        let high_name = property(ptok::LIMIT_SUB_HIGH);
+        let low_name = property(ptok::LIMIT_MULTIPLE_APPLY_TEMPLATE_PHYSICS_LOW);
+        let high_name = property(ptok::LIMIT_MULTIPLE_APPLY_TEMPLATE_PHYSICS_HIGH);
         let (low, high) = match reader.has_api_schema(path, &api_name) {
             true => (
                 read_bound(&low_name, f64::NEG_INFINITY)?,
