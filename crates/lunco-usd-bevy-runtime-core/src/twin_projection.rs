@@ -5108,10 +5108,7 @@ fn rebuild_scene_from_composed(
     composed_source: &str,
 ) -> bool {
     use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
-    use lunco_usd_compose::recipe::StageRecipe;
-    // Recipe = the edited composed source as the root layer + every referenced
-    // `.usda` the current stage already loaded (keyed by the same canonical ids).
-    let (scene_layer, mut bytes) = {
+    let snapshot = {
         let _span = bevy::log::info_span!("usd_twin_rebuild_snapshot_live_layers").entered();
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
@@ -5119,13 +5116,16 @@ fn rebuild_scene_from_composed(
         else {
             return false;
         };
-        (cs.scene_layer.clone(), cs.layer_bytes_snapshot())
+        cs.admitted_recipe()
     };
-    bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
-    let recipe = StageRecipe::new(scene_layer, bytes);
     let replacement = match {
         let _span = bevy::log::info_span!("usd_twin_rebuild_prepare_live_stage").entered();
-        CanonicalStage::from_recipe(&recipe)
+        snapshot.and_then(|mut recipe| {
+            let data = lunco_usd_authoring::author::usda_to_data(composed_source)?;
+            let bytes = lunco_usd_authoring::author::layer_bytes(&recipe.root_id, &data)?;
+            recipe.bytes.insert(recipe.root_id.clone(), bytes);
+            CanonicalStage::from_recipe(&recipe)
+        })
     } {
         Ok(stage) => stage,
         Err(error) => {

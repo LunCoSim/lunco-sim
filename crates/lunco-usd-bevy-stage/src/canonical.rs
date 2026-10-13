@@ -17,7 +17,7 @@
 //! and captures change notices. Initial asset projection uses the immutable
 //! prepared plan; this stage owns authoring and incremental re-projection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -73,6 +73,9 @@ pub struct CanonicalStage {
     pub runtime_layer: String,
     /// Sink inbox drained by the projection system each tick.
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
+    /// Layers changed since admission. Unedited binary layers retain their
+    /// admitted buffers instead of decoding every field during a snapshot.
+    modified_layers: Arc<Mutex<HashSet<String>>>,
     // Held to keep the sink alive for the stage's lifetime.
     _sink_id: StageSinkId,
     /// The live resolver's shared byte-map handle, when this stage was built
@@ -83,6 +86,7 @@ pub struct CanonicalStage {
     /// stages built via [`from_stage`](Self::from_stage) over a foreign resolver
     /// (native `compose_file_to_stage` / tests) — those can't gain layers.
     resolver_bytes: Option<lunco_usd_compose::SharedLayerBytes>,
+    dependency_diagnostics: Vec<lunco_usd_compose::recipe::StageDependencyDiagnostic>,
     /// Identity and revision let document editors reuse the dependency closure
     /// recipe without cloning every layer's bytes on each authored edit.
     resolver_identity: u64,
@@ -107,12 +111,23 @@ pub struct CanonicalStage {
 /// the current root layer and loaded dependency closure so readers can prepare
 /// immutable facts on a worker and validate them against the captured
 /// canonical generation before commit.
-pub struct CanonicalStageRecipeSnapshot(StageRecipe);
+pub struct CanonicalStageRecipeSnapshot {
+    recipe: StageRecipe,
+    authored_layers: Vec<(String, openusd::sdf::Data)>,
+}
 
 impl CanonicalStageRecipeSnapshot {
     /// Prepare the shared composed read plan from this exact layer snapshot.
-    pub fn prepare_projection_plan(&self) -> anyhow::Result<UsdStageProjectionPlan> {
-        UsdStageProjectionPlan::from_recipe(&self.0)
+    pub fn prepare_projection_plan(self) -> anyhow::Result<UsdStageProjectionPlan> {
+        UsdStageProjectionPlan::from_recipe(&self.into_recipe()?)
+    }
+
+    fn into_recipe(mut self) -> anyhow::Result<StageRecipe> {
+        for (identifier, data) in self.authored_layers {
+            let bytes = lunco_usd_authoring::author::layer_bytes(&identifier, &data)?;
+            self.recipe.bytes.insert(identifier, bytes);
+        }
+        Ok(self.recipe)
     }
 }
 
@@ -123,7 +138,13 @@ impl CanonicalStage {
     pub fn from_stage(stage: Stage, scene_layer: impl Into<String>) -> Self {
         let inbox = Arc::new(Mutex::new(Vec::new()));
         let sink_inbox = inbox.clone();
+        let modified_layers = Arc::new(Mutex::new(HashSet::new()));
+        let sink_modified_layers = modified_layers.clone();
         let sink_id = stage.add_sink(move |_stage: &Stage, change: &CommittedChange<'_>| {
+            sink_modified_layers
+                .lock()
+                .expect("canonical modified-layer lock poisoned")
+                .insert(change.layer_identifier.to_owned());
             if let Ok(mut q) = sink_inbox.lock() {
                 let connection_paths_changed = change
                     .resynced
@@ -147,8 +168,10 @@ impl CanonicalStage {
             scene_layer: scene_layer.into(),
             runtime_layer: String::new(),
             inbox,
+            modified_layers,
             _sink_id: sink_id,
             resolver_bytes: None,
+            dependency_diagnostics: Vec::new(),
             resolver_identity: NEXT_CANONICAL_STAGE_ID.fetch_add(1, Ordering::Relaxed),
             resolver_revision: std::cell::Cell::new(0),
             reference_recipes: HashMap::new(),
@@ -170,6 +193,7 @@ impl CanonicalStage {
         let (stage, shared) = crate::compose::build_stage_with_resolver(recipe)?;
         let mut cs = Self::from_stage(stage, recipe.root_id.clone());
         cs.resolver_bytes = Some(shared);
+        cs.dependency_diagnostics = recipe.dependency_diagnostics.clone();
         Ok(cs)
     }
 
@@ -698,29 +722,69 @@ impl CanonicalStage {
             .unwrap_or(false)
     }
 
-    /// A snapshot clone of the live resolver's full layer-byte closure (every
-    /// referenced `.usda` loaded so far). Lets the coarse `full_reload` path
-    /// (Save-As / whole-source undo) rebuild a fresh stage from an edited root
-    /// source that still references those layers, reusing the already-loaded
-    /// closure so it recomposes without re-fetching. Empty if this stage has no
-    /// injectable resolver.
-    pub fn layer_bytes_snapshot(&self) -> HashMap<String, Vec<u8>> {
-        self.resolver_bytes
-            .as_ref()
-            .map(|shared| shared.borrow().clone())
-            .unwrap_or_default()
+    /// Capture the admitted source buffers and native root/session identities.
+    /// Live edits are captured separately by [`Self::recipe_snapshot`]. A stage
+    /// without an owned resolver closure cannot provide a replayable recipe.
+    pub fn admitted_recipe(&self) -> anyhow::Result<StageRecipe> {
+        let shared = self.resolver_bytes.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("canonical stage has no admitted resolver byte closure")
+        })?;
+        let bytes = shared.borrow().clone();
+        let root_id = self.stage.root_layer().identifier().to_owned();
+        anyhow::ensure!(
+            bytes.contains_key(&root_id),
+            "admitted root layer is missing: {root_id}"
+        );
+        let session_layer = self
+            .stage
+            .session_layer()
+            .map(|layer| layer.identifier().to_owned());
+        if let Some(identifier) = &session_layer {
+            anyhow::ensure!(
+                bytes.contains_key(identifier),
+                "admitted session layer is missing: {identifier}"
+            );
+        }
+        let dependency_diagnostics = self
+            .dependency_diagnostics
+            .iter()
+            .filter(|diagnostic| !bytes.contains_key(&diagnostic.dependency))
+            .cloned()
+            .collect();
+        Ok(StageRecipe {
+            root_id,
+            session_layer,
+            bytes,
+            dependency_diagnostics,
+        })
     }
 
-    /// Snapshot the current authored root layer and its loaded dependency
-    /// closure into an owned recipe suitable for worker preparation.
+    /// Capture current authored opinions without merging layers or encoding on
+    /// the live thread. The worker selects each changed layer's native codec;
+    /// unedited and not-yet-opened dependencies retain their admitted bytes.
     pub fn recipe_snapshot(&self) -> anyhow::Result<CanonicalStageRecipeSnapshot> {
-        let root_source = self.stage.root_layer().export_to_string()?;
-        let mut bytes = self.layer_bytes_snapshot();
-        bytes.insert(self.scene_layer.clone(), root_source.into_bytes());
-        Ok(CanonicalStageRecipeSnapshot(StageRecipe::new(
-            self.scene_layer.clone(),
-            bytes,
-        )))
+        let recipe = self.admitted_recipe()?;
+        let mut authored_layers = Vec::new();
+        let mut identifiers = self.stage.layer_identifiers();
+        identifiers.sort();
+        let modified = self
+            .modified_layers
+            .lock()
+            .map_err(|_| anyhow::anyhow!("canonical modified-layer lock poisoned"))?
+            .clone();
+        for identifier in identifiers {
+            if modified.contains(&identifier) || !recipe.bytes.contains_key(&identifier) {
+                let layer = self.stage.layer(&identifier).ok_or_else(|| {
+                    anyhow::anyhow!("loaded native layer is missing: {identifier}")
+                })?;
+                authored_layers
+                    .push((identifier, openusd::sdf::Data::from_abstract(layer.data())?));
+            }
+        }
+        Ok(CanonicalStageRecipeSnapshot {
+            recipe,
+            authored_layers,
+        })
     }
 
     /// The canonical layer id an `asset_path` reference resolves to on *this*
@@ -1628,6 +1692,129 @@ mod recipe_tests {
         assert_eq!(
             view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
             Some(3.0)
+        );
+    }
+
+    #[test]
+    fn recipe_snapshot_preserves_native_codecs_sessions_and_captured_edits() {
+        use openusd::sdf::{FieldKey, Value};
+        let root_id = "lunco://fixture/scene.usdc";
+        let base = lunco_usd_authoring::author::usda_to_data(FIXTURE).unwrap();
+        let runtime = lunco_usd_authoring::author::usda_to_data(
+            "#usda 1.0\nover \"Root\" { over \"Box\" { double size = 7 } }",
+        )
+        .unwrap();
+        let mut input = lunco_usd_authoring::author::document_stage_recipe(
+            &base,
+            &runtime,
+            &openusd::sdf::Data::new(),
+            Some(&StageRecipe::new(root_id.to_owned(), HashMap::new())),
+        )
+        .unwrap();
+        let unopened_id = "lunco://fixture/unopened.usda";
+        input
+            .bytes
+            .insert(unopened_id.to_owned(), FIXTURE.as_bytes().to_vec());
+        let session_id = input.session_layer.clone().unwrap();
+        let canonical = CanonicalStage::from_recipe(&input).unwrap();
+        let size = SdfPath::new("/Root/Box.size").unwrap();
+        let runtime_id = canonical
+            .stage()
+            .sub_layers(&session_id)
+            .into_iter()
+            .find(|id| id.ends_with("document_runtime__.usdc"))
+            .unwrap();
+        for (id, value) in [(root_id, 5.0), (runtime_id.as_str(), 11.0)] {
+            canonical
+                .stage()
+                .layer_mut(id)
+                .unwrap()
+                .edit(|edit| {
+                    edit.data_mut().set_field(
+                        &size,
+                        FieldKey::Default.as_str(),
+                        Value::Double(value),
+                    );
+                    Ok(())
+                })
+                .unwrap();
+        }
+        canonical
+            .stage()
+            .layer_mut(&session_id)
+            .unwrap()
+            .edit(|edit| {
+                edit.data_mut().set_field(
+                    &SdfPath::abs_root(),
+                    FieldKey::Comment.as_str(),
+                    Value::String("captured session".to_owned()),
+                );
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = canonical.recipe_snapshot().unwrap();
+        assert_eq!(snapshot.authored_layers.len(), 3);
+        canonical
+            .stage()
+            .layer_mut(root_id)
+            .unwrap()
+            .edit(|edit| {
+                edit.data_mut()
+                    .set_field(&size, FieldKey::Default.as_str(), Value::Double(99.0));
+                Ok(())
+            })
+            .unwrap();
+        let captured = std::thread::spawn(move || snapshot.into_recipe())
+            .join()
+            .unwrap()
+            .unwrap();
+        assert_eq!(captured.root_id, root_id);
+        assert_eq!(captured.session_layer.as_deref(), Some(session_id.as_str()));
+        assert_eq!(captured.bytes[unopened_id], input.bytes[unopened_id]);
+        assert!(captured.bytes[root_id].starts_with(b"PXR-USDC"));
+        let replay = CanonicalStage::from_recipe(&captured).unwrap();
+        assert_eq!(
+            replay
+                .view()
+                .value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
+            Some(11.0)
+        );
+        assert_eq!(
+            replay
+                .stage()
+                .root_layer()
+                .data()
+                .try_field(&size, FieldKey::Default.as_str())
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            &Value::Double(5.0)
+        );
+        assert_eq!(
+            replay
+                .stage()
+                .session_layer()
+                .unwrap()
+                .data()
+                .try_field(&SdfPath::abs_root(), FieldKey::Comment.as_str())
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            &Value::String("captured session".to_owned())
+        );
+        assert!(replay.recipe_snapshot().unwrap().authored_layers.is_empty());
+
+        let foreign = CanonicalStage::from_stage(
+            lunco_usd_authoring::author::open_doc_stage(&base).unwrap(),
+            root_id,
+        );
+        assert!(
+            foreign
+                .recipe_snapshot()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("no admitted resolver byte closure")
         );
     }
 

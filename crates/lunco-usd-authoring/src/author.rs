@@ -79,6 +79,22 @@ pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
     parse_usda(text).map_err(|e| anyhow!("{e}"))
 }
 
+/// Encode one authored layer with the native codec selected by its identity.
+/// This preserves the resolver anchor and never stores text under a binary id.
+pub fn layer_bytes(identifier: &str, data: &sdf::Data) -> Result<Vec<u8>> {
+    let anchor = ResolvedPath::new(identifier);
+    let extension = anchor
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| anyhow!("USD layer has no UTF-8 format extension: {identifier}"))?;
+    let format = sdf::LayerRegistry::find_by_extension(extension)
+        .ok_or_else(|| anyhow!("unknown USD layer format: {identifier}"))?;
+    if format.format_id() == "usda" {
+        ensure_usda_serializable(data)?;
+    }
+    Ok(format.write_bytes(data)?.bytes.as_ref().to_vec())
+}
+
 /// Capture one authored prim subtree as a self-contained USDA fragment.
 ///
 /// The fragment contains only the selected spec subtree, remapped beneath a
@@ -534,28 +550,15 @@ pub fn document_stage_recipe(
         lunco_usd_compose::recipe::StageRecipe::new(root_id.clone(), Default::default())
     });
     output.session_layer = Some(session_id.clone());
-    let extension = root_anchor
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .ok_or_else(|| anyhow!("document root has no UTF-8 format extension: {root_id}"))?;
-    let root_format = sdf::LayerRegistry::find_by_extension(extension)
-        .ok_or_else(|| anyhow!("unknown document root format: {root_id}"))?;
-    if root_format.format_id() == "usda" {
-        ensure_usda_serializable(base)?;
-    }
-    output.bytes.insert(
-        root_id,
-        root_format.write_bytes(base)?.bytes.as_ref().to_vec(),
-    );
-    let format = sdf::LayerRegistry::find_by_extension("usdc").expect("native USDC format");
+    let root_bytes = layer_bytes(&root_id, base)?;
+    output.bytes.insert(root_id, root_bytes);
     for (id, data) in [
         (runtime_id, runtime),
         (view_id, view),
         (session_id, &session),
     ] {
-        output
-            .bytes
-            .insert(id, format.write_bytes(data)?.bytes.as_ref().to_vec());
+        let bytes = layer_bytes(&id, data)?;
+        output.bytes.insert(id, bytes);
     }
     Ok(output)
 }
@@ -965,9 +968,11 @@ def "Part" { double referenced = 23 }
                     document_stage_recipe(&base, &runtime, &view, Some(&recipe)).unwrap();
                 assert_eq!(captured.root_id, root_id);
                 assert!(captured.session_layer.is_some());
-                let (captured_stage, _) =
-                    lunco_usd_compose::open_recipe(captured.clone(), crate::schema::native_registry())
-                        .unwrap();
+                let (captured_stage, _) = lunco_usd_compose::open_recipe(
+                    captured.clone(),
+                    crate::schema::native_registry(),
+                )
+                .unwrap();
                 assert_eq!(captured_stage.root_layer().identifier(), root_id.as_str());
                 assert_eq!(
                     captured_stage

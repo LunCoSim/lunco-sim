@@ -1228,7 +1228,7 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// Supply the document owner with its resolver-backed authoring context. A
 /// canonical stage's immutable dependency closure is reused by revision; an
 /// unmounted file document rebuilds its root recipe from current opinions.
-fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
+fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) -> Result<(), String> {
     let update = if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
     {
         let revision = stage.layer_bytes_revision();
@@ -1236,25 +1236,18 @@ fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
             .get_resource::<DocumentRegistry<UsdDocument>>()
             .and_then(|registry| registry.host(doc))
             .and_then(|host| host.document().authoring_recipe_revision());
-        (cached_revision != Some(revision)).then(|| {
-            (
-                Some(revision),
-                Some(lunco_usd_compose::recipe::StageRecipe::new(
-                    stage.scene_layer.clone(),
-                    stage.layer_bytes_snapshot(),
-                )),
-            )
-        })
+        if cached_revision != Some(revision) {
+            let recipe = stage
+                .admitted_recipe()
+                .map_err(|error| format!("cannot capture USD authoring context: {error}"))?;
+            Some((Some(revision), Some(recipe)))
+        } else {
+            None
+        }
     } else {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match unmounted_document_authoring_recipe(world, doc) {
-                Ok(recipe) => Some((None, recipe)),
-                Err(error) => {
-                    warn!("[UsdAuthoringRecipe] {error}");
-                    Some((None, None))
-                }
-            }
+            Some((None, unmounted_document_authoring_recipe(world, doc)?))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1269,6 +1262,7 @@ fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
             host.document_mut().set_authoring_recipe(revision, recipe);
         }
     }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1327,7 +1321,16 @@ fn on_create_usd_proposal(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        refresh_authoring_recipe(world, command.doc_id);
+        if let Err(error) = refresh_authoring_recipe(world, command.doc_id) {
+            warn!("[CreateUsdProposal] {error}");
+            return finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(error),
+                ApiErrorCode::CommandRejected,
+            );
+        }
         let outcome = match world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(command.doc_id)
@@ -1479,7 +1482,16 @@ fn on_commit_usd_proposal(
         {
             None => Err(format!("unknown USD proposal {}", proposal_id.0)),
             Some(proposal) => {
-                refresh_authoring_recipe(world, proposal.doc);
+                if let Err(error) = refresh_authoring_recipe(world, proposal.doc) {
+                    warn!("[CommitUsdProposal] {error}");
+                    return finish_command_result(
+                        world,
+                        command_id,
+                        correlation_id,
+                        Err(error),
+                        ApiErrorCode::CommandRejected,
+                    );
+                }
                 let current = world
                     .resource::<DocumentRegistry<UsdDocument>>()
                     .host(proposal.doc)
@@ -1709,8 +1721,9 @@ fn on_apply_usd_op(
         )
         .entered();
         let paths_for_error = paths.clone();
-        refresh_authoring_recipe(world, doc);
-        let result = match expand_usd_geometry_ops(vec![op]) {
+        let result = match refresh_authoring_recipe(world, doc)
+            .and_then(|()| expand_usd_geometry_ops(vec![op]))
+        {
             Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
             Ok(mut expanded) if expanded.len() == 1 => {
                 let expanded_op = expanded.remove(0);
@@ -2198,7 +2211,7 @@ fn apply_ops_as_change_set_result(
     if ops.iter().any(|op| op.edit_target().is_view()) {
         return Err("the disposable view layer only accepts ApplyUsdTransientOps".to_string());
     }
-    refresh_authoring_recipe(world, doc);
+    refresh_authoring_recipe(world, doc)?;
     validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();
     let paths: Vec<String> = ops.iter().flat_map(UsdOp::affected_paths).collect();
@@ -2252,7 +2265,7 @@ fn apply_transient_ops_result(
         .into_iter()
         .map(|op| op.with_edit_target(LayerId::view()))
         .collect::<Vec<_>>();
-    refresh_authoring_recipe(world, doc);
+    refresh_authoring_recipe(world, doc)?;
     validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();
     let result = {
