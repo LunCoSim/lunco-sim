@@ -75,8 +75,7 @@ use lunco_usd_bevy_stage::read::{
 };
 use lunco_usd_bevy_stage::source::{UsdSourceBytes, UsdSourceBytesLoader};
 use lunco_usd_bevy_stage::{
-    UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader, UsdStageAsset, canonical,
-    read,
+    UsdInstanceMember, UsdInstanceRoot, UsdLoader, UsdStageAsset, canonical, read,
 };
 use lunco_usd_bevy_stage::{
     UsdRead, UsdReadObject, canonical::CanonicalStages, grid_translation_d_at, local_transform_at,
@@ -314,14 +313,9 @@ struct PendingUsdMesh {
     build: PendingUsdMeshBuild,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     path: SdfPath,
-    /// Ordinary scene geometry is read from the canonical stage and must be
+    /// Composed geometry is read from the canonical stage and must be
     /// discarded if that stage changes before the worker result lands.
-    /// Referenced runtime instances are different: their geometry comes from
-    /// the immutable instance projection plan, while the containing scene's
-    /// canonical generation advances for the instance's runtime placement and
-    /// view edits. Such a task is fenced by the instance plan, not by the
-    /// containing scene generation.
-    canonical_generation: Option<u64>,
+    canonical_generation: u64,
     profile: lunco_render::RenderQualityProfile,
 }
 
@@ -572,7 +566,6 @@ fn instantiate_usd_prim(
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
     inherited_member: Option<&UsdInstanceMember>,
-    instance_projection: Option<&UsdInstanceProjection>,
     parent_grid: Option<&Grid>,
     preview_only: bool,
     commands: &mut Commands,
@@ -602,7 +595,6 @@ fn instantiate_usd_prim(
         existing_vis,
         existing_tf,
         inherited_member,
-        instance_projection,
         parent_grid,
         preview_only,
         commands,
@@ -630,7 +622,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
     inherited_member: Option<&UsdInstanceMember>,
-    instance_projection: Option<&UsdInstanceProjection>,
     parent_grid: Option<&Grid>,
     preview_only: bool,
     commands: &mut Commands,
@@ -1067,9 +1058,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             build: PendingUsdMeshBuild::Nurbs(task),
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
-                            canonical_generation: instance_projection
-                                .is_none()
-                                .then_some(stage_generation),
+                            canonical_generation: stage_generation,
                             profile: quality,
                         },
                         UsdSceneGeometryPending,
@@ -1116,9 +1105,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             build: PendingUsdMeshBuild::Primitive(request),
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
-                            canonical_generation: instance_projection
-                                .is_none()
-                                .then_some(stage_generation),
+                            canonical_generation: stage_generation,
                             profile: quality,
                         },
                         UsdSceneGeometryPending,
@@ -1725,7 +1712,6 @@ fn ensure_point_instancer_prototypes(
                     UsdSceneProjectionQueued,
                 ),
                 (),
-                None,
                 prototype.clone(),
             );
         }
@@ -1852,7 +1838,6 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
     parent: Entity,
     base: Base,
     extra: Extra,
-    projection: Option<UsdInstanceProjection>,
     prim_path: String,
 ) -> Entity {
     let child = commands.spawn_empty().id();
@@ -1867,9 +1852,6 @@ fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
             return;
         };
         entity.insert((base, ChildOf(parent), extra));
-        if let Some(projection) = projection {
-            entity.insert(projection);
-        }
     });
     child
 }
@@ -2084,7 +2066,6 @@ fn process_queued_usd_visuals(
             Option<&Visibility>,
             Option<&Transform>,
             Option<&UsdInstanceMember>,
-            Option<&UsdInstanceProjection>,
         ),
         (
             With<UsdSceneProjectionQueued>,
@@ -2161,7 +2142,7 @@ fn process_queued_usd_visuals(
         };
         visual_state.queued_entities.remove(&entity);
         visited += 1;
-        let Ok((entity, prim_path, vis, tf, member, instance_projection)) = q.get(entity) else {
+        let Ok((entity, prim_path, vis, tf, member)) = q.get(entity) else {
             continue;
         };
         if stages.get(&prim_path.stage_handle).is_none() {
@@ -2227,7 +2208,6 @@ fn process_queued_usd_visuals(
             vis,
             tf,
             member,
-            instance_projection,
             parent_grid,
             preview_only,
             &mut commands,
@@ -2273,7 +2253,6 @@ struct UsdChildAdmissionContext<'w, 's> {
             &'static UsdPrimPath,
             Has<UsdInstanceRoot>,
             Option<&'static UsdInstanceMember>,
-            Option<&'static UsdInstanceProjection>,
         ),
         (With<UsdSceneProjected>, With<UsdSceneProjectionQueued>),
     >,
@@ -2335,8 +2314,7 @@ fn admit_pending_usd_children(
         };
         visited += 1;
 
-        let Ok((parent_prim_path, is_instance_root, inherited_member, instance_projection)) =
-            context.parent.get(parent)
+        let Ok((parent_prim_path, is_instance_root, inherited_member)) = context.parent.get(parent)
         else {
             pending_children.discard_parent(parent);
             continue;
@@ -2477,7 +2455,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (member, big_space::grid::propagation::LowPrecisionRoot),
-                instance_projection.cloned(),
                 child_path_for_span.clone(),
             ),
             Some(member) if is_grid_entity => queue_usd_child_spawn(
@@ -2485,7 +2462,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (member, CellCoord::default()),
-                instance_projection.cloned(),
                 child_path_for_span.clone(),
             ),
             Some(member) => queue_usd_child_spawn(
@@ -2493,7 +2469,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (member,),
-                instance_projection.cloned(),
                 child_path_for_span.clone(),
             ),
             None if is_low_precision_root_target => queue_usd_child_spawn(
@@ -2501,7 +2476,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (big_space::grid::propagation::LowPrecisionRoot,),
-                instance_projection.cloned(),
                 child_path_for_span.clone(),
             ),
             None if is_grid_entity => queue_usd_child_spawn(
@@ -2509,7 +2483,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (CellCoord::default(),),
-                instance_projection.cloned(),
                 child_path_for_span.clone(),
             ),
             None => queue_usd_child_spawn(
@@ -2517,7 +2490,6 @@ fn admit_pending_usd_children(
                 parent,
                 base_components,
                 (),
-                instance_projection.cloned(),
                 child_path_for_span,
             ),
         };
@@ -2562,9 +2534,8 @@ fn fail_usd_projection(
 /// definition. This side only validates the stage identity, the applicable
 /// geometry-generation fence, and the quality snapshot, then inserts the
 /// worker-produced Bevy mesh and binds the already authored appearance intent.
-/// A live edit or scene replacement cancels ordinary canonical-stage work;
-/// immutable referenced-instance work is fenced by its source projection plan
-/// and is unaffected by runtime edits in the containing scene.
+/// A live edit or scene replacement cancels work from the outgoing canonical
+/// stage generation.
 fn poll_pending_usd_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -2596,9 +2567,7 @@ fn poll_pending_usd_meshes(
         let stale = !visual_synced
             || prim_path.stage_handle.id() != pending.stage_id
             || SdfPath::new(&prim_path.path).ok().as_ref() != Some(&pending.path)
-            || pending
-                .canonical_generation
-                .is_some_and(|generation| stage_generation != generation)
+            || stage_generation != pending.canonical_generation
             || current_profile != pending.profile;
         if stale {
             commands

@@ -15,7 +15,7 @@ mod geometry;
 use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
-use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdInstanceRoot, UsdStageAsset};
 
 pub use geometry::{
     MeshCollisionApproximationError, ShapeDims, UsdGeomAxis, UsdMeshTopology,
@@ -416,42 +416,19 @@ pub fn scene_root_ancestor(
     Err(SceneRootAncestorError::DepthExceeded)
 }
 
-/// Resolve the instance namespace for an ECS entity.
+/// Resolve the instance namespace from authoritative entity provenance.
 pub fn instance_key(
     entity: Entity,
     provenance: &Query<&lunco_core::Provenance>,
     global_ids: &Query<&lunco_core::GlobalEntityId>,
     instance_roots: &Query<(), With<UsdInstanceRoot>>,
-    projections: &Query<&UsdInstanceProjection>,
-) -> Option<u64> {
-    instance_key_from_projection(
-        entity,
-        provenance,
-        global_ids,
-        instance_roots,
-        projections.get(entity).ok(),
-    )
-}
-
-/// Resolve instance scope when the caller already fetched the projection.
-pub fn instance_key_from_projection(
-    entity: Entity,
-    provenance: &Query<&lunco_core::Provenance>,
-    global_ids: &Query<&lunco_core::GlobalEntityId>,
-    instance_roots: &Query<(), With<UsdInstanceRoot>>,
-    projection: Option<&UsdInstanceProjection>,
 ) -> Option<u64> {
     match provenance.get(entity) {
         Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
-        _ => projection
-            .and_then(|projection| projection.root)
-            .and_then(|root| global_ids.get(root).map(|id| id.get()).ok())
-            .or_else(|| {
-                instance_roots
-                    .contains(entity)
-                    .then(|| global_ids.get(entity).map(|id| id.get()).ok())
-                    .flatten()
-            }),
+        _ => instance_roots
+            .contains(entity)
+            .then(|| global_ids.get(entity).map(|id| id.get()).ok())
+            .flatten(),
     }
 }
 

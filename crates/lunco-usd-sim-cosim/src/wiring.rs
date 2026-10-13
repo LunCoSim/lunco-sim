@@ -144,7 +144,6 @@ pub(super) struct WiringQueries<'w, 's> {
             Option<&'static lunco_environment::DirectionSourceRequirements>,
             Option<&'static DeclaredOutputPorts>,
             Option<&'static lunco_port_core::PortSurface>,
-            Option<&'static UsdInstanceProjection>,
         ),
         Or<(
             With<lunco_port_core::PortSurfaceReady>,
@@ -286,7 +285,6 @@ pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
         .add_observer(mark_wiring_dirty_for_endpoint_add::<SimComponent>)
         .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdPrimPath>)
         .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_core::GlobalEntityId>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdInstanceProjection>)
         .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_usd_sim_core::UsdSimProcessed>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
@@ -294,8 +292,7 @@ pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
         .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_usd_sim_core::UsdSimProcessed>)
         .add_observer(mark_wiring_dirty_for_path_remove)
-        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>)
-        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<UsdInstanceProjection>);
+        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>);
 }
 
 /// Last published Modelica participant status. `SimComponent` also carries
@@ -550,13 +547,12 @@ pub(super) fn rewire_usd_connections(
     // A prim's instance identity (its instance-root GID, `None` for scene prims)
     // is what keeps two spawns of one asset — byte-identical stage-relative paths
     // and all — from collapsing onto one entity below. See `instance_key`.
-    let instance_of = |e: Entity, projection: Option<&UsdInstanceProjection>| {
-        lunco_usd_bevy_scene::instance_key_from_projection(
+    let instance_of = |e: Entity| {
+        lunco_usd_bevy_scene::instance_key(
             e,
             &wiring.provenance,
             &wiring.global_ids,
             &wiring.instance_roots,
-            projection,
         )
     };
     let mut active_cache_keys = HashSet::new();
@@ -605,7 +601,7 @@ pub(super) fn rewire_usd_connections(
     let mut port_surfaces = HashMap::new();
     {
         let _span = bevy::log::info_span!("usd_cosim_wiring_index_live_endpoints").entered();
-        for (e, p, _, generated, is_probe, direction_requirements, declared, surface, projection) in
+        for (e, p, _, generated, is_probe, direction_requirements, declared, surface) in
             live_endpoints.iter().copied()
         {
             if is_probe {
@@ -618,7 +614,7 @@ pub(super) fn rewire_usd_connections(
             if let Some(surface) = surface {
                 port_surfaces.insert(e, surface);
             }
-            let instance = instance_of(e, projection);
+            let instance = instance_of(e);
             let key = (p.stage_handle.id(), instance, p.path.as_str());
             by_path.insert(key, e);
             if let Some(generated) = generated {
@@ -674,14 +670,14 @@ pub(super) fn rewire_usd_connections(
 
     {
         let _span = bevy::log::info_span!("usd_cosim_wiring_derive_connections").entered();
-        for (entity, prim_path, has_modelica, _, _, _, _, wheel_endpoints, projection) in
+        for (entity, prim_path, has_modelica, _, _, _, _, wheel_endpoints) in
             live_endpoints.iter().copied()
         {
             let id = prim_path.stage_handle.id();
             let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
                 continue;
             };
-            let sink_instance = instance_of(entity, projection);
+            let sink_instance = instance_of(entity);
             let (reader, generation) = canonical.reader_for(id, stage_asset);
             let view: &dyn UsdReadObject = &reader;
             let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
@@ -708,7 +704,7 @@ pub(super) fn rewire_usd_connections(
             let is_modelica_member = {
                 let _span = bevy::log::info_span!("usd_cosim_wiring_modelica_membership").entered();
                 network_members
-                    .get_or_insert_with(id, generation, sink_instance, || {
+                    .get_or_insert_with(id, generation, || {
                         lunco_usd_bevy_core::program::modelica_network_member_paths(view)
                     })
                     .contains(&prim_path.path)

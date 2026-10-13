@@ -13,7 +13,7 @@ use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
 use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot};
+use lunco_usd_bevy_stage::UsdInstanceRoot;
 use std::collections::HashMap;
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
@@ -282,7 +282,6 @@ pub fn fire_connected_events(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    q_instance_projection: Query<&UsdInstanceProjection>,
     fixed_time: Res<Time<Fixed>>,
     sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
     mission_clock: Option<Res<lunco_time::MissionClock>>,
@@ -300,13 +299,7 @@ pub fn fire_connected_events(
         return;
     };
     let instance_of = |entity| {
-        lunco_usd_bevy_scene::instance_key(
-            entity,
-            &q_provenance,
-            &q_gid,
-            &q_instance_root,
-            &q_instance_projection,
-        )
+        lunco_usd_bevy_scene::instance_key(entity, &q_provenance, &q_gid, &q_instance_root)
     };
     let mut by_path = HashMap::new();
     for (entity, path, component, gid) in &sources {

@@ -20,9 +20,7 @@ use lunco_usd_bevy_scene::{
     FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionFailed,
     UsdSceneProjectionQueued, UsdSceneRoot,
 };
-use lunco_usd_bevy_stage::{
-    UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
-};
+use lunco_usd_bevy_stage::{UsdInstanceMember, UsdInstanceRoot, UsdStageAsset};
 
 pub(crate) const INCOMPLETE_COMPOSITION_POLICY_HOOK: &str = "usd.scene_composition";
 
@@ -949,7 +947,6 @@ pub fn spawn_usd_child_under_parent(
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.
     let parent_member = world.get::<UsdInstanceMember>(parent_entity).cloned();
-    let parent_projection = world.get::<UsdInstanceProjection>(parent_entity).cloned();
     let parent_is_root = world.get::<UsdInstanceRoot>(parent_entity).is_some();
     let member = parent_member.or_else(|| {
         parent_is_root.then(|| UsdInstanceMember {
@@ -996,9 +993,6 @@ pub fn spawn_usd_child_under_parent(
         world
             .entity_mut(entity)
             .insert(big_space::grid::propagation::LowPrecisionRoot);
-    }
-    if let Some(projection) = parent_projection {
-        world.entity_mut(entity).insert(projection);
     }
     debug!("[scene] incremental spawn: `{}` (entity {})", path, entity);
     Some(entity)

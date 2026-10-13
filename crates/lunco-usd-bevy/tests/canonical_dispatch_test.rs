@@ -586,8 +586,7 @@ fn externally_composed_asset_has_prepared_projection_plan() {
     assert!(
         asset
             .projection_plan
-            .prims
-            .iter()
+            .prims_of_type("Cube")
             .any(|prim| prim.path == "/World/Box"),
         "every asset construction path must provide the prepared composed plan"
     );

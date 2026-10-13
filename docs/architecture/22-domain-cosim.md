@@ -708,8 +708,8 @@ paths back to their network roots: structural paths invalidate overlapping
 network/member scopes, while non-transform info paths invalidate the exact
 network root or a member subtree. Transform-only info paths advance the stage
 generation without re-reading a network because synthesis does not consume
-transforms. Runtime-instance plans are excluded because they are immutable
-projections, not readers of the canonical stage. A changed USD asset requeues
+transforms. Every runtime network remains indexed against its canonical stage.
+A changed USD asset requeues
 indexed roots on that stage; a missed generation batch does the same as a safety
 pass. Neither path scans every USD prim. Initial discovery snapshots the USD
 prim entity IDs once, then processes at most 64 sorted candidates per app
@@ -721,7 +721,7 @@ resolved member-class facts remain reusable because they belong to shared
 Modelica source assets, not a scene.
 The same discovery pass records each root's selected synthesizer from its
 already-read member role schemas. Projection reuses that root-scoped selection
-until root/member invalidation or instance-plan rediscovery, so it does not
+until root/member invalidation or source rediscovery, so it does not
 walk the component collection and query both role APIs a second time.
 Prim arrivals whose stage asset is not ready wait in a stage-keyed set and are
 requeued by that asset's readiness event, rather than being retried on stable

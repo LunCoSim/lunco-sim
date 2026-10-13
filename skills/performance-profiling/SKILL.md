@@ -643,8 +643,8 @@ fault owner. Do not run a whole-stage topology traversal synchronously in
 For USD simulation admission, check whether visual-only prims consume the
 participant prefix. The vehicle owner excludes ordinary prims using only its
 current-generation topology index, alongside existing preview exclusion;
-missing/stale facts and runtime-instance plans remain eligible. Keep the same
-simulation-work limit, stable stage/instance/path order, and readiness markers.
+missing or stale facts remain eligible. Keep the same simulation-work limit,
+stable stage/composed-path order, and readiness markers.
 Inspect physical-wheel fixtures through the shared reflected `PhysicalWheel`
 contract, and run simulation queries under their real Twin-owned scenario route.
 
@@ -684,8 +684,8 @@ are separate full-upload events.
 For general `SpawnEntity`/`DeleteEntity`, measure the command, USD add/remove,
 live structural reconciliation, and referenced asset admission separately.
 Keep edit-to-projection wall time separate from frame time. A new referenced
-entity may still be preparing its source plan across frames; each live instance
-retains that prepared asset so later matching spawns are warm. Measure the
+entity may still be preparing its source closure across frames; the scene
+admission owner retains the source handle and settled reference facts. Measure the
 first spawn, a warm spawn, and deletion separately, while checking render-frame
 and fixed-step cadence during each. Use the production spans
 `scene_spawn_entity_command`, `usd_apply_ops_document`,

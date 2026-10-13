@@ -59,8 +59,8 @@ use lunco_usd_bevy_scene::{
     UsdVisualProjectionSet, instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::{
-    Purpose, TransformReadError, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
-    UsdRead, UsdStageAsset, effective_purpose, world_transform,
+    Purpose, TransformReadError, UsdInstanceMember, UsdInstanceRoot, UsdRead, UsdStageAsset,
+    effective_purpose, world_transform,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -1643,7 +1643,6 @@ fn build_usd_physics_joints(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    q_instance_projection: Query<&UsdInstanceProjection>,
     q_instance_member: Query<&UsdInstanceMember>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -1663,13 +1662,7 @@ fn build_usd_physics_joints(
         // after Avian creates the solver body-island nodes. Holding
         // this builder would deadlock readiness because the binding epoch waits
         // for the pending joint marker to clear.
-        let joint_root = instance_key(
-            joint_entity,
-            &q_provenance,
-            &q_gid,
-            &q_instance_root,
-            &q_instance_projection,
-        );
+        let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots.
         // The paths were already resolved to real bodies at parse time (see
         // [`nearest_body_path`]), so this is an exact match by construction. An
@@ -1682,13 +1675,7 @@ fn build_usd_physics_joints(
             .find(|(e, path)| {
                 path.path == pending.body0_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && instance_key(
-                        *e,
-                        &q_provenance,
-                        &q_gid,
-                        &q_instance_root,
-                        &q_instance_projection,
-                    ) == joint_root
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
         let body1_ent = q_bodies
@@ -1696,13 +1683,7 @@ fn build_usd_physics_joints(
             .find(|(e, path)| {
                 path.path == pending.body1_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && instance_key(
-                        *e,
-                        &q_provenance,
-                        &q_gid,
-                        &q_instance_root,
-                        &q_instance_projection,
-                    ) == joint_root
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
 

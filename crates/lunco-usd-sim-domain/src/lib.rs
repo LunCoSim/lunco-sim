@@ -28,7 +28,7 @@ use lunco_usd_bevy_core::program::{
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::read::UsdReadObject as ComposedReader;
-use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_core::PendingEntityWork;
 use openusd::sdf::Path as SdfPath;
 
@@ -534,9 +534,6 @@ struct PendingDomainProjection {
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
     scene_generation: u64,
-    /// Prepared runtime instances are immutable read surfaces. Their scene
-    /// stage generation may advance when the spawn layer is authored, so the
-    /// canonical-generation fence only applies to ordinary scene plans.
     root_path: String,
     model_name: String,
     requested: String,
@@ -549,8 +546,8 @@ struct PendingDomainProjection {
 /// In-flight domain synthesis owned by the scene projection lifecycle.
 ///
 /// One network has one synthesis owner. Completion is fenced by the USD entity
-/// and Twin generation, then by either the ordinary canonical-stage generation
-/// or the exact immutable prepared instance plan before it can publish a result.
+/// and Twin generation, then by the canonical-stage generation before it can
+/// publish a result.
 #[derive(Resource, Default)]
 pub struct PendingDomainProjections {
     tasks: VecDeque<PendingDomainProjection>,
@@ -981,16 +978,10 @@ pub fn queue_added_domain_prim(
 /// namespace. Instance roots/members and unsettled provenance still require
 /// identity admission; the shared instance-key reader owns their final scope.
 fn identity_can_affect_domain_namespace(
-    (provenance, instance_root, instance_member, projection): (
-        Option<&lunco_core::Provenance>,
-        bool,
-        bool,
-        Option<&UsdInstanceProjection>,
-    ),
+    (provenance, instance_root, instance_member): (Option<&lunco_core::Provenance>, bool, bool),
 ) -> bool {
     instance_root
         || instance_member
-        || projection.is_some()
         || !matches!(provenance, Some(lunco_core::Provenance::Content { .. }))
 }
 
@@ -1001,7 +992,6 @@ pub fn queue_added_domain_identity(
             Option<&lunco_core::Provenance>,
             Has<lunco_usd_bevy_stage::UsdInstanceRoot>,
             Has<lunco_usd_bevy_stage::UsdInstanceMember>,
-            Option<&UsdInstanceProjection>,
         ),
         With<UsdPrimPath>,
     >,
@@ -1011,16 +1001,6 @@ pub fn queue_added_domain_identity(
         .get(trigger.entity)
         .is_ok_and(identity_can_affect_domain_namespace)
     {
-        pending.discovery.insert(trigger.entity);
-    }
-}
-
-pub fn queue_added_domain_instance_projection(
-    trigger: On<Add, UsdInstanceProjection>,
-    prims: Query<(), With<UsdPrimPath>>,
-    mut pending: ResMut<PendingDomainProjectionCandidates>,
-) {
-    if prims.contains(trigger.entity) {
         pending.discovery.insert(trigger.entity);
     }
 }
@@ -1032,7 +1012,6 @@ pub fn queue_removed_domain_identity(
             Option<&lunco_core::Provenance>,
             Has<lunco_usd_bevy_stage::UsdInstanceRoot>,
             Has<lunco_usd_bevy_stage::UsdInstanceMember>,
-            Option<&UsdInstanceProjection>,
         ),
         With<UsdPrimPath>,
     >,
@@ -1042,16 +1021,6 @@ pub fn queue_removed_domain_identity(
         .get(trigger.entity)
         .is_ok_and(identity_can_affect_domain_namespace)
     {
-        pending.discovery.insert(trigger.entity);
-    }
-}
-
-pub fn queue_removed_domain_instance_projection(
-    trigger: On<Remove, UsdInstanceProjection>,
-    prims: Query<(), With<UsdPrimPath>>,
-    mut pending: ResMut<PendingDomainProjectionCandidates>,
-) {
-    if prims.contains(trigger.entity) {
         pending.discovery.insert(trigger.entity);
     }
 }
@@ -1518,19 +1487,13 @@ pub fn project_domain_islands(
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    prims: Query<(
-        Entity,
-        &UsdPrimPath,
-        Option<&UsdInstanceProjection>,
-        Has<DomainNetworkProjectionPending>,
-    )>,
+    prims: Query<(Entity, &UsdPrimPath, Has<DomainNetworkProjectionPending>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<lunco_usd_bevy_stage::UsdInstanceRoot>>,
     // A runtime-instanced descendant stays out of Modelica synthesis while its
-    // root identity is pending. Once the root GID is available, the durable
-    // instance projection scopes the generated session even after the transient
-    // membership marker is consumed.
+    // root identity is pending. The root GID scopes the generated session
+    // through the descendant's authoritative provenance.
     q_instance_member: Query<(), With<lunco_usd_bevy_stage::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -1581,7 +1544,7 @@ pub fn project_domain_islands(
         admission.cancel_queued(work_key);
     }
     for entity in candidate_entities {
-        let Ok((entity, prim, instance_projection, projection_pending)) = prims.get(entity) else {
+        let Ok((entity, prim, projection_pending)) = prims.get(entity) else {
             continue;
         };
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
@@ -1602,13 +1565,8 @@ pub fn project_domain_islands(
         // Scope every authored path to the same USD instance as the generated
         // network. Runtime-spawned copies intentionally share stage-relative
         // paths; the instance root identity is the structural disambiguator.
-        let instance_id = lunco_usd_bevy_scene::instance_key_from_projection(
-            entity,
-            &q_provenance,
-            &q_gid,
-            &q_instance_root,
-            instance_projection,
-        );
+        let instance_id =
+            lunco_usd_bevy_scene::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
         // Identity still pending — wait for it rather than compile under a name
         // that is neither stable nor unique. The upgrade lands a
         // `GlobalEntityId`, which re-triggers this system through
@@ -1640,11 +1598,10 @@ pub fn project_domain_islands(
             }
         };
         let (canonical_reader, stage_generation) = canonical.reader_for(id, stage_asset);
-        let prepared_network = instance_projection.is_none()
-            && class_users
-                .paths_by_root
-                .get(&entity)
-                .is_some_and(|paths| paths.stage_generation == 0);
+        let prepared_network = class_users
+            .paths_by_root
+            .get(&entity)
+            .is_some_and(|paths| paths.stage_generation == 0);
         let reader: &dyn ComposedReader = if prepared_network {
             stage_asset.projection_plan.as_ref()
         } else {
@@ -2702,7 +2659,6 @@ pub fn resolve_member_classes(
     prims: Query<(
         Entity,
         &UsdPrimPath,
-        Option<&UsdInstanceProjection>,
         Option<&DomainProjectionState>,
         Has<DomainNetworkProjectionPending>,
     )>,
@@ -2859,9 +2815,7 @@ pub fn resolve_member_classes(
             .take_discovery_batch(MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE)
             .into_iter()
             .filter_map(|entity| prims.get(entity).ok());
-        for (entity, prim, instance_projection, projection_state, projection_pending) in
-            discovery_entities
-        {
+        for (entity, prim, projection_state, projection_pending) in discovery_entities {
             if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
                 class_users.remove_root(entity);
                 if projection_pending {
@@ -2992,7 +2946,7 @@ pub fn resolve_member_classes(
                 classes.handles.insert(asset.clone(), handle.clone());
                 classes.pending.insert(asset, handle);
             }
-            let canonical_paths = instance_projection.is_none().then(|| DomainRootPaths {
+            let canonical_paths = Some(DomainRootPaths {
                 stage_id: id,
                 root_path: prim.path.clone(),
                 stage_generation,
@@ -3521,9 +3475,7 @@ mod tests {
                 .contains(&entity)
         );
 
-        assert!(identity_can_affect_domain_namespace((
-            None, false, false, None
-        )));
+        assert!(identity_can_affect_domain_namespace((None, false, false)));
         assert!(identity_can_affect_domain_namespace((
             Some(&lunco_core::Provenance::Derived {
                 parent: 14,
@@ -3531,7 +3483,6 @@ mod tests {
             }),
             false,
             false,
-            None,
         )));
         assert!(identity_can_affect_domain_namespace((
             Some(&lunco_core::Provenance::Content {
@@ -3541,7 +3492,6 @@ mod tests {
             }),
             false,
             true,
-            None,
         )));
     }
 

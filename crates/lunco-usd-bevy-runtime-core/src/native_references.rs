@@ -5,9 +5,7 @@ use bevy::prelude::*;
 use lunco_assets_core::asset_path::{PreparedAssetPaths, load_asset_path};
 use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
-use lunco_usd_bevy_stage::{
-    UsdNativeReferenceSource, UsdReferenceSnapshot, UsdStageAsset, UsdStageProjectionPlan,
-};
+use lunco_usd_bevy_stage::{UsdReferenceSnapshot, UsdStageAsset, UsdStageProjectionPlan};
 use lunco_usd_compose::recipe::StageRecipe;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -232,41 +230,6 @@ pub(crate) fn reference(
     reference: &str,
 ) -> Result<Option<PreparedReference>, String> {
     let owner = Owner::capture(world, stage)?;
-    // A live sibling retains the immutable preparation. Resolve only the actual
-    // loaded transport handle; no address I/O or re-composition is needed here.
-    let cached_path = world
-        .get_non_send::<CanonicalStages>()
-        .and_then(|stages| stages.get(stage))
-        .and_then(|stage| stage.reference_source_path(reference, owner.origin.as_ref()));
-    if let Some(path) = cached_path
-        && let Some(handle) = world
-            .resource::<AssetServer>()
-            .get_handle::<UsdStageAsset>(path)
-        && let Some((recipe, plan)) = current_source(world, &handle)?
-    {
-        let snapshot = world
-            .get_non_send::<CanonicalStages>()
-            .and_then(|stages| stages.get(stage))
-            .and_then(|stage| {
-                stage.reference_snapshot(reference, owner.origin.as_ref(), &recipe, &plan)
-            });
-        if let Some(snapshot) = snapshot {
-            let source = snapshot
-                .native_source
-                .as_ref()
-                .ok_or_else(|| "cached native reference has no admitted source".to_owned())?;
-            source
-                .address_paths
-                .validate_owner(world.get_resource::<lunco_assets_core::TwinRoots>())
-                .map_err(|error| error.to_string())?;
-            if let Some(paths) = snapshot.plan.native_asset_paths_snapshot() {
-                paths
-                    .validate_owner(world.get_resource::<lunco_assets_core::TwinRoots>())
-                    .map_err(|error| error.to_string())?;
-            }
-            return Ok(Some(PreparedReference { handle, snapshot }));
-        }
-    }
     let reference_key = (stage, reference.to_owned());
     let ready = world
         .resource::<crate::twin_projection::ReferenceLayerInputs>()
@@ -416,20 +379,10 @@ pub(crate) fn advance(world: &mut World) {
                     match paths.validate_owner(world.get_resource::<lunco_assets_core::TwinRoots>())
                     {
                         Ok(()) => match world.resource::<AssetServer>().get_path(handle.id()) {
-                            Some(path) => Phase::Ready {
+                            Some(_) => Phase::Ready {
                                 prepared: PreparedReference {
                                     handle: handle.clone(),
-                                    snapshot: Arc::new(UsdReferenceSnapshot {
-                                        recipe,
-                                        plan,
-                                        native_source: Some(UsdNativeReferenceSource {
-                                            recipe: Arc::clone(source_recipe),
-                                            plan: Arc::clone(source_plan),
-                                            path: path.into_owned(),
-                                            origin: entry.owner.origin.clone(),
-                                            address_paths: Arc::new(paths.clone()),
-                                        }),
-                                    }),
+                                    snapshot: Arc::new(UsdReferenceSnapshot { recipe, plan }),
                                 },
                                 source_recipe: Arc::clone(source_recipe),
                                 source_plan: Arc::clone(source_plan),

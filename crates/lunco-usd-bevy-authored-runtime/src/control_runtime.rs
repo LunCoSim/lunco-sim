@@ -8,7 +8,7 @@
 //! visual-only consumers do not compile or install control behavior.
 
 use crate::program_runtime::{
-    apply_program_owner_projection, modelica_network_members_for_owner, resolve_program_owner,
+    apply_program_owner_projection, modelica_network_members_for_stage, resolve_program_owner,
 };
 use bevy::asset::Assets;
 use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
@@ -116,7 +116,7 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
             continue;
         }
-        let network_members = modelica_network_members_for_owner(world, stage_id, entity);
+        let network_members = modelica_network_members_for_stage(world, stage_id);
         let (surface, prepared_program) = {
             let Some(stage_asset) = world
                 .get_resource::<Assets<UsdStageAsset>>()

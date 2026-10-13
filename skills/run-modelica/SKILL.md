@@ -269,7 +269,7 @@ Initial network results may publish as a bounded four-root prefix only while
 their own fixed-clock admission hold is present and no prior projection is
 installed. Live replacements remain one per Update; repeated results for a
 root wait for ECS publication. Worker completion never bypasses the oldest
-request or its Twin/stage/instance validation.
+request or its Twin/stage/source-revision validation.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
 DAE cache. Native experiment `CompileBatch` requests use this same actor and

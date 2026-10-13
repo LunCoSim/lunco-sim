@@ -130,11 +130,10 @@ Scene Files dependency traversal passes bounded raw bytes to the native USD
 format owner, so USDC is decoded by OpenUSD rather than a UTF-8 gate. Native
 format diagnostics remain terminal at the traversal owner.
 Referenced stage closures follow the same event boundary before a reference is
-authored onto the live stage. Each instance retains the real source handle and
-one shared `UsdReferenceSnapshot` containing the canonical recipe, unscoped plan
-and actual loaded source revision. The canonical stage caches only weak snapshot
-identities: warm sibling reuse must validate the exact scene origin, current
-source recipe/plan and live mount before skipping address I/O and composition. Native
+authored onto the live stage. `ReferenceLayerInputs` retains the real source
+handle and admitted canonical recipe/plan for the scene lifetime. Its existing
+bounded preparation entries reuse settled facts only while the source revision,
+stage and live mount match. Native
 file-URI references prepare confined typed addresses and `StageRecipe::reanchor`
 composition on the shared bounded reference lane, used by incremental spawns
 and coarse rebuilds. Preserve authored layer bytes and absolute identifiers;

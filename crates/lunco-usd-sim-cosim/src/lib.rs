@@ -49,8 +49,7 @@ use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjectionReset}
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::read::read_authored_bool_strict;
 use lunco_usd_bevy_stage::{
-    UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, UsdWiringDirty,
-    canonical::CanonicalStages,
+    UsdInstanceRoot, UsdStageAsset, UsdWiringDirty, canonical::CanonicalStages,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -516,11 +515,11 @@ fn any_pending_modelica_wrap(pending: Res<PendingModelicaWrapWork>) -> bool {
 
 pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdSourcedCosim>>,
+    query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     mut pending: ResMut<PendingUsdCosimPrimWork>,
     parents: Query<&ChildOf>,
     preview_roots: Query<(), With<UsdPreviewOnly>>,
-    mut membership: ModelicaNetworkMembershipInputs,
+    mut membership: ResMut<lunco_usd_bevy_core::program::ModelicaNetworkMembershipCache>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -535,12 +534,12 @@ pub(crate) fn process_usd_cosim_prims(
         // This single bootstrap pass covers entities that predate plugin
         // installation. Normal scene arrivals are queued by the lifecycle
         // observer and do not need a population scan.
-        entities.extend(query.iter().map(|(entity, _, _)| entity));
+        entities.extend(query.iter().map(|(entity, _)| entity));
     }
     let mut entities: Vec<_> = entities.into_iter().collect();
     entities.sort_unstable();
     for entity in entities {
-        let Ok((entity, prim_path, instance_projection)) = query.get(entity) else {
+        let Ok((entity, prim_path)) = query.get(entity) else {
             continue;
         };
         if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
@@ -668,21 +667,13 @@ pub(crate) fn process_usd_cosim_prims(
             wiring_dirty.0 = true;
             continue;
         }
-        let instance = lunco_usd_bevy_scene::instance_key_from_projection(
-            entity,
-            &membership.provenance,
-            &membership.global_ids,
-            &membership.instance_roots,
-            instance_projection,
-        );
-        let members = if let Some(members) = membership.cache.get(id, generation, instance) {
+        let members = if let Some(members) = membership.get(id, generation) {
             members
         } else {
             let _span = bevy::log::info_span!("usd_cosim_membership_index_build").entered();
-            membership.cache.insert(
+            membership.insert(
                 id,
                 generation,
-                instance,
                 lunco_usd_bevy_core::program::modelica_network_member_paths(&reader),
             )
         };
@@ -701,14 +692,6 @@ pub(crate) fn process_usd_cosim_prims(
             canonical.native_asset_paths_for(id, stage_asset),
         );
     }
-}
-
-#[derive(SystemParam)]
-struct ModelicaNetworkMembershipInputs<'w, 's> {
-    provenance: Query<'w, 's, &'static lunco_core::Provenance>,
-    global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
-    instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
-    cache: ResMut<'w, lunco_usd_bevy_core::program::ModelicaNetworkMembershipCache>,
 }
 
 /// Report Python availability once the scene's USD prims have finished
@@ -803,11 +786,10 @@ fn project_usd_telemetry(
         Option<&lunco_core::Provenance>,
         Option<&lunco_core::GlobalEntityId>,
         Has<UsdInstanceRoot>,
-        Option<&UsdInstanceProjection>,
     )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
-    mut membership: ModelicaNetworkMembershipInputs,
+    mut membership: ResMut<lunco_usd_bevy_core::program::ModelicaNetworkMembershipCache>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
     diagnostics: Option<ResMut<RuntimeDiagnostics>>,
 ) {
@@ -867,7 +849,7 @@ fn project_usd_telemetry(
         index.stale_outputs_cleared = false;
     }
 
-    for (entity, prim_path, provenance, gid, is_root, instance_projection) in &pending_query {
+    for (entity, prim_path, provenance, gid, is_root) in &pending_query {
         if index.processed_entities.contains(&entity) {
             continue;
         }
@@ -921,16 +903,8 @@ fn project_usd_telemetry(
                         .get(entity)
                         .is_ok_and(|(sim, ready, pending)| !pending && (sim || ready));
                     let network_member = !direct_surface && {
-                        let instance = lunco_usd_bevy_scene::instance_key_from_projection(
-                            entity,
-                            &membership.provenance,
-                            &membership.global_ids,
-                            &membership.instance_roots,
-                            instance_projection,
-                        );
                         membership
-                            .cache
-                            .get_or_insert_with(id, generation, instance, || {
+                            .get_or_insert_with(id, generation, || {
                                 lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
                             })
                             .contains(&prim_path.path)
@@ -2586,8 +2560,6 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
             .add_observer(lunco_usd_sim_domain::queue_removed_domain_identity)
-            .add_observer(lunco_usd_sim_domain::queue_added_domain_instance_projection)
-            .add_observer(lunco_usd_sim_domain::queue_removed_domain_instance_projection)
             .add_observer(lunco_usd_sim_domain::forget_domain_projection_entity)
             .add_observer(lunco_usd_sim_domain::queue_generated_source_document_sync)
             .add_observer(lunco_usd_sim_domain::queue_model_document_sync_for_generated_source)

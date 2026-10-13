@@ -12,7 +12,7 @@
 //! required. Preview focus, duplicate prim paths, and detached cached stages
 //! never choose the query target.
 //! Referenced instances use the same native stage/document owner throughout
-//! their lifetime; prepared instance plans only drive ECS materialization.
+//! their lifetime. Native composition supplies referenced namespaces.
 //!
 //! ## Why a query provider and not a rhai binding
 //!

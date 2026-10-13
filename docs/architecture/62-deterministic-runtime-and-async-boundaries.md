@@ -469,7 +469,7 @@ validation on workers. A live canonical OpenUSD reader stays main-thread-owned;
 its typed network snapshot is sent through the bounded worker admission path,
 which performs policy and source validation off-cycle. Completed networks
 publish in request order, at most one per Update, after matching the Twin,
-canonical USD, or exact prepared instance generation. Both shipped synthesis
+canonical USD generation and exact admitted source revision. Both shipped synthesis
 policies reject calls from scenario, UI, or REPL cycles.
 The settled USD scene-time owner uses the completed edge's `SceneTransitionId`
 for `scene.time.select` in the same `Twin/Lifecycle/Preparation` context. The
@@ -1395,8 +1395,8 @@ The whole-simulation guarantee remains open because:
    results retain input order before contact-graph insertion; narrow-phase
    status bitsets combine before serial graph/solver updates; the active
    collision filter is read-only. USD projection supplies `PhysicsOrderKey`
-   from the stable logical stage source, instance root, and authored prim path.
-   Dynamic-body admission uses the same source/instance/path order and faults
+   from the stable logical stage source and native composed prim path.
+   Dynamic-body admission uses the same source/composed-path order and faults
    before promoting bodies when identities are ambiguous. The physics owner
    validates joint keys after Avian prepares solver data and before its substep loop;
    native joints, motor warm-start, custom prismatic correction, raycast

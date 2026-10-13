@@ -87,7 +87,7 @@ path, and authored prim path for bounded admission, topology-preparation order,
 and dynamic-body promotion; missing or ambiguous identities fault, remain
 queued, or stay kinematic.
 Physics operations that can accumulate into shared bodies use `PhysicsOrderKey`
-from the stable logical stage source, instance root, and authored prim path.
+from the stable logical stage source and native composed prim path.
 Joint solving, motor warm-start, custom prismatic correction, raycast and jointed tire forces,
 and raycast mass-property folds consume stable key order.
 The production `multi_rover_stress` Rhai gate selects a profile from typed

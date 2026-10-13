@@ -158,7 +158,7 @@ The USD scene lifecycle owns required deterministic
 `usd.scene_composition(facts: Map) -> Map`. Incomplete fetched closures for an
 initial scene stage reach it after structural projection drains and before the
 scene transition releases its simulation hold. Incomplete closures for a
-newly mounted reference reach it before the prepared instance plan is consumed,
+newly mounted reference reach it before its native arc is authored,
 before layer bytes are installed in the live stage, and before ECS projection.
 `facts` contains the mounted root `scene_path` and authored-order
 `missing_dependencies: [{referring_layer, dependency}]`. Calls use

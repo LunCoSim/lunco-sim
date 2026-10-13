@@ -335,7 +335,7 @@ journaling, and ECS projection still commit through their ordered owner path.
 Domain-network fact extraction from that live stage is bounded to one network
 per update; Rhai policy, graph synthesis, Modelica parsing, and validation run
 through `AsyncWorkAdmission`. Results commit in request order after Twin, stage,
-and instance-generation checks. Initial prepared-plan synthesis runs entirely on
+and canonical-generation checks. Initial prepared-plan synthesis runs entirely on
 a worker. This dependency-recipe cache removes redundant snapshots while the
 domain pipeline keeps non-critical computation off the UI and physics cycles.
 The USD policy projector caches authored policy facts per stage asset, prepared
@@ -1084,16 +1084,12 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   live prim once for each changed path. A referenced spawn merges its immutable
   `StageRecipe` through the canonical stage's weak recipe-identity cache. Reuse
   of the same admitted recipe avoids another closure scan, while a new recipe
-  revision refreshes changed layer bytes. Each live instance retains the real
-  source asset handle and a shared `UsdReferenceSnapshot` containing its canonical
-  recipe, unscoped prepared plan and actual loaded source revision. The canonical
-  stage's weak snapshot cache does not retain unloaded assets. Warm native
-  instances reuse the snapshot only after exact-origin, source-revision and live
-  mount checks; they do not repeat address I/O or canonical composition. Cold source
-  preparation remains asynchronous, and only the affected instance is admitted
-  at the ordered live-stage boundary. Its prepared read view shares the
-  immutable source snapshot and stores only the instance namespace and root
-  overrides, so creating the view does not copy the asset's prim tree.
+  revision refreshes changed layer bytes. `ReferenceLayerInputs` retains real
+  source handles and shared canonical recipe/plan snapshots for the scene
+  lifetime. The bounded preparation owner checks the current loaded source
+  revision, stage and live mount before reusing those facts. Native USD
+  composition supplies the namespace and root opinions; runtime entities read
+  the canonical scene stage.
   Native file-URI references prepare confined typed addresses and reanchored
   recipes on the existing bounded reference worker lane. The canonical recipe
   keeps the authored file identity, while the handle keeps the Twin transport

@@ -26,7 +26,6 @@ use openusd::sdf::Path as SdfPath;
 struct ModelicaNetworkMembershipKey {
     stage: AssetId<UsdStageAsset>,
     generation: u64,
-    instance: Option<u64>,
 }
 
 /// Shared composed-stage membership facts used by program projection, cosim
@@ -38,41 +37,30 @@ pub struct ModelicaNetworkMembershipCache {
 }
 
 impl ModelicaNetworkMembershipCache {
-    /// Reuse the membership set for one composed source revision and instance.
+    /// Reuse the membership set for one composed source revision.
     pub fn get(
         &self,
         stage: AssetId<UsdStageAsset>,
         generation: u64,
-        instance: Option<u64>,
     ) -> Option<Arc<HashSet<String>>> {
         self.entries
-            .get(&ModelicaNetworkMembershipKey {
-                stage,
-                generation,
-                instance,
-            })
+            .get(&ModelicaNetworkMembershipKey { stage, generation })
             .cloned()
     }
 
     /// Publish one computed membership set, replacing stale generations for
-    /// the same stage and instance.
+    /// the same stage.
     pub fn insert(
         &mut self,
         stage: AssetId<UsdStageAsset>,
         generation: u64,
-        instance: Option<u64>,
         members: HashSet<String>,
     ) -> Arc<HashSet<String>> {
-        let key = ModelicaNetworkMembershipKey {
-            stage,
-            generation,
-            instance,
-        };
+        let key = ModelicaNetworkMembershipKey { stage, generation };
         if let Some(existing) = self.entries.get(&key) {
             return Arc::clone(existing);
         }
-        self.entries
-            .retain(|cached, _| cached.stage != stage || cached.instance != instance);
+        self.entries.retain(|cached, _| cached.stage != stage);
         let members = Arc::new(members);
         self.entries.insert(key, Arc::clone(&members));
         members
@@ -83,13 +71,12 @@ impl ModelicaNetworkMembershipCache {
         &mut self,
         stage: AssetId<UsdStageAsset>,
         generation: u64,
-        instance: Option<u64>,
         build: impl FnOnce() -> HashSet<String>,
     ) -> Arc<HashSet<String>> {
-        if let Some(members) = self.get(stage, generation, instance) {
+        if let Some(members) = self.get(stage, generation) {
             return members;
         }
-        self.insert(stage, generation, instance, build())
+        self.insert(stage, generation, build())
     }
 
     /// Drop all stage-derived facts at the scene replacement boundary.
@@ -1131,26 +1118,18 @@ mod tests {
     fn modelica_membership_cache_reuses_revision_and_replaces_stale_generation() {
         let stage = AssetId::<UsdStageAsset>::default();
         let mut cache = ModelicaNetworkMembershipCache::default();
-        let prepared = cache.get_or_insert_with(stage, 0, None, || {
-            HashSet::from(["/Prepared/Member".to_string()])
-        });
-        let reused = cache.get_or_insert_with(stage, 0, None, || {
+        let prepared =
+            cache.get_or_insert_with(stage, 0, || HashSet::from(["/Prepared/Member".to_string()]));
+        let reused = cache.get_or_insert_with(stage, 0, || {
             panic!("a cached generation must not rescan the composed stage")
         });
         assert!(Arc::ptr_eq(&prepared, &reused));
         assert!(reused.contains("/Prepared/Member"));
 
-        let edited = cache.get_or_insert_with(stage, 1, None, || {
-            HashSet::from(["/Live/Member".to_string()])
-        });
+        let edited =
+            cache.get_or_insert_with(stage, 1, || HashSet::from(["/Live/Member".to_string()]));
         assert!(edited.contains("/Live/Member"));
         assert_eq!(cache.entries.len(), 1);
-
-        let instance = cache.get_or_insert_with(stage, 0, Some(17), || {
-            HashSet::from(["/Instance/Member".to_string()])
-        });
-        assert!(instance.contains("/Instance/Member"));
-        assert_eq!(cache.entries.len(), 2);
 
         cache.clear();
         assert!(cache.entries.is_empty());
@@ -1166,7 +1145,6 @@ mod tests {
             .insert(
                 AssetId::<UsdStageAsset>::default(),
                 0,
-                None,
                 HashSet::from(["/Prepared/Member".to_string()]),
             );
 

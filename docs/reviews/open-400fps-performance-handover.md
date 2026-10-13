@@ -2323,7 +2323,7 @@ Tracy: `bf9bca7c13f8f81bf707e6d5d46398f620abf886f8ce2f500bfb0db743696f5e`.
 `lunco-usd-sim` shares one native archetype filter between dynamic admission and
 its schedule gate. Initialization-pending, invalid or paused bodies retain
 `ShouldBeDynamic` but do not trigger a full stable-identity scan when no body
-can be promoted. The admission body retains stable stage/instance/path
+can be promoted. The admission body retains stable stage/composed-path
 validation, duplicate-identity faults, preview checks, ordered promotion,
 authored velocity seeding and joint holds. No solver, precision, external
 dependency or physics cadence changes are made.
@@ -6664,7 +6664,7 @@ USD plans run network synthesis fully on workers. Live canonical OpenUSD
 readers remain thread-bound, so that path captures the typed network facts on
 the owning thread and moves Rhai policy execution, matrix construction, source
 parsing, and validation to a worker. Both hook-backed and actuator-wrench
-policies use this split. Completed results are fenced by Twin/stage/instance
+policies use this split. Completed results are fenced by Twin/stage/source-revision
 generation, published in request order, and limited to one network commit per
 Update; live-reader facts are snapshotted for at most one network per Update.
 Authored telemetry ownership indexes persist by canonical generation
@@ -6995,7 +6995,7 @@ worker builds the authored telemetry index under prepared-plan identity, while
 ordinary result publication previously requested a canonical-generation key
 even though `CanonicalStages` selected the prepared plan. Commit now uses the
 prepared plan and identity-keyed entry whenever the committed read generation
-is zero, including runtime-instance plans; later canonical generations retain
+is zero; later canonical generations retain
 their generation-keyed live reader and cache. This is a source-verified
 correction, but the 21.426 ms `domain_telemetry_index` event in the preceding
 capture did not record its read scope, so it cannot be attributed to this
@@ -7074,7 +7074,7 @@ the full component collection and querying both role schemas after
 `resolve_member_classes` had already visited those members. Discovery now
 derives the selection while it reads the member roles and stores it with the
 root's indexed facts. Projection reuses that selection until root/member
-invalidation or instance-plan rediscovery. The capture did not include a
+invalidation or source rediscovery. The capture did not include a
 selection-specific span, so this source-attributed duplicate is a targeted
 optimization rather than a proven explanation of the full 122 ms outlier. The
 change adds `domain_member_role_discovery` and

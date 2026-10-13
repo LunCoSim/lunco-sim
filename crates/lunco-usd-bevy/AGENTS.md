@@ -16,10 +16,12 @@ Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
 
 ## Reading USD attributes
 
-All composed runtime reads go through the `UsdRead` trait (`src/read.rs`). The
+All composed runtime reads go through the `UsdRead` trait (`../lunco-usd-bevy-stage/src/read.rs`). The
 live canonical `StageView` implementation owns authoring and incremental edits;
 the loader-produced `UsdStageProjectionPlan` implementation owns the initial
-asset snapshot. Authoring-layer reads use `UsdDataExt` separately; extractors
+asset snapshot. Native USD composition supplies reference namespaces and root
+opinions; runtime entities use the canonical scene reader. Detached mesh work
+is fenced by that stage's generation. Authoring-layer reads use `UsdDataExt` separately; extractors
 must not switch between those authorities.
 
 **Real-valued reads use the `real` family, never `scalar::<f64>`/`scalar::<f32>`
@@ -77,7 +79,7 @@ only inside our pipeline. A future collaborative/Nucleus-like protocol should
 take a distinct scheme (e.g. `lunco-net://`).
 
 **USD composition resolution is separate from asset-source resolution.** The
-asset-source boundary belongs to `lunco-assets-runtime`; this crate owns `canonicalize`
+asset-source boundary belongs to `lunco-assets-runtime`; `lunco-usd-compose` owns `canonicalize_at`
 and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
 layer, which is USD composition semantics. It must not re-derive where a scheme
 points: ask `lunco_assets_core` (`has_scheme`, `local_path`, `shipped_asset_root`,

@@ -110,10 +110,10 @@ Native USD dependency reads prepare their typed Twin addresses on the loader's
 I/O worker. Live reference admission uses the existing bounded reference lane;
 the composition owner reanchors the fetched recipe to its authored canonical
 identity before publication, while the real source handle retains hot reload.
-Live instances retain one shared canonical recipe/plan snapshot. The canonical
-stage's existing weak reference cache permits sibling reuse after exact-origin,
-actual source-revision and live-mount checks, without another native lookup or
-composition; removing the live instances releases that snapshot.
+`ReferenceLayerInputs` retains loaded source handles and canonical recipe/plan
+snapshots for the scene lifetime. Its bounded native preparation entries reuse
+settled facts only while the source revision, stage identity and live mount
+match; scene teardown releases those retained inputs.
 
 The Windows job in `.github/workflows/nightly.yml` runs exact native-path and storage
 regressions after the desktop release build, using that release profile and
