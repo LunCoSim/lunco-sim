@@ -497,6 +497,21 @@ pub fn open_doc_stage_with_layers(
     view: &sdf::Data,
     recipe: Option<&lunco_usd_compose::recipe::StageRecipe>,
 ) -> Result<Stage> {
+    let input = document_stage_recipe(&sdf::Data::new(), runtime, view, recipe)?;
+    let (stage, _) = lunco_usd_compose::open_recipe(input, crate::schema::native_registry())?;
+    populate_doc_root(stage, base)
+}
+
+/// Capture the document's separate layers as a send-safe native stage input.
+/// The root codec matches its identifier; runtime and view use native USDC.
+/// Authored arcs and the original root identity are preserved. Runtime and view
+/// are session opinions, never a merged root or a flattened scene.
+pub fn document_stage_recipe(
+    base: &sdf::Data,
+    runtime: &sdf::Data,
+    view: &sdf::Data,
+    recipe: Option<&lunco_usd_compose::recipe::StageRecipe>,
+) -> Result<lunco_usd_compose::recipe::StageRecipe> {
     let root_id = recipe
         .map(|recipe| recipe.root_id.as_str())
         .unwrap_or(DOC_ROOT_ID)
@@ -504,55 +519,45 @@ pub fn open_doc_stage_with_layers(
     let root_anchor = ResolvedPath::new(&root_id);
     let runtime_asset = ".__luncosim_document_runtime__.usdc";
     let view_asset = ".__luncosim_document_view__.usdc";
+    let session_asset = ".__luncosim_document_session__.usdc";
     let runtime_id = lunco_usd_compose::canonicalize_at(runtime_asset, Some(&root_anchor))?;
     let view_id = lunco_usd_compose::canonicalize_at(view_asset, Some(&root_anchor))?;
-
-    let session_asset = ".__luncosim_document_session__.usdc";
     let session_id = lunco_usd_compose::canonicalize_at(session_asset, Some(&root_anchor))?;
-    let mut session_layer = sdf::Data::new();
-    session_layer
+    let mut session = sdf::Data::new();
+    session
         .create_spec(SdfPath::abs_root(), sdf::SpecType::PseudoRoot)
         .add(
             sdf::FieldKey::SubLayers.as_str(),
             Value::StringVec(vec![view_asset.to_owned(), runtime_asset.to_owned()]),
         );
-
-    let mut bytes = recipe
-        .map(|recipe| recipe.bytes.clone())
-        .unwrap_or_default();
+    let mut output = recipe.cloned().unwrap_or_else(|| {
+        lunco_usd_compose::recipe::StageRecipe::new(root_id.clone(), Default::default())
+    });
+    output.session_layer = Some(session_id.clone());
     let extension = root_anchor
         .extension()
         .and_then(|extension| extension.to_str())
         .ok_or_else(|| anyhow!("document root has no UTF-8 format extension: {root_id}"))?;
     let root_format = sdf::LayerRegistry::find_by_extension(extension)
         .ok_or_else(|| anyhow!("unknown document root format: {root_id}"))?;
-    bytes.insert(
-        root_id.clone(),
-        root_format
-            .write_bytes(&sdf::Data::new())?
-            .bytes
-            .as_ref()
-            .to_vec(),
+    if root_format.format_id() == "usda" {
+        ensure_usda_serializable(base)?;
+    }
+    output.bytes.insert(
+        root_id,
+        root_format.write_bytes(base)?.bytes.as_ref().to_vec(),
     );
     let format = sdf::LayerRegistry::find_by_extension("usdc").expect("native USDC format");
     for (id, data) in [
         (runtime_id, runtime),
         (view_id, view),
-        (session_id.clone(), &session_layer),
+        (session_id, &session),
     ] {
-        bytes.insert(id, format.write_bytes(data)?.bytes.as_ref().to_vec());
+        output
+            .bytes
+            .insert(id, format.write_bytes(data)?.bytes.as_ref().to_vec());
     }
-
-    let resolver = lunco_usd_compose::LuncoUsdResolver::new(bytes)?;
-    let diagnostics = resolver.diagnostics();
-    let stage = Stage::builder()
-        .resolver(resolver)
-        .schema_registry(crate::schema::native_registry())
-        .session_layer(session_id)
-        .open(&root_id);
-    diagnostics.check()?;
-    let stage = stage.map_err(|error| anyhow!("create layered document stage: {error}"))?;
-    populate_doc_root(stage, base)
+    Ok(output)
 }
 
 fn populate_doc_root(stage: Stage, data: &sdf::Data) -> Result<Stage> {
@@ -945,6 +950,7 @@ over "World" { double value = 3 }
             let root_id = format!("lunco://models/root.{extension}");
             let recipe = lunco_usd_compose::recipe::StageRecipe {
                 root_id: root_id.to_owned(),
+                session_layer: None,
                 bytes: std::collections::HashMap::from([(
                     "lunco://models/parts/part.usda".to_owned(),
                     br#"#usda 1.0
@@ -954,6 +960,53 @@ def "Part" { double referenced = 23 }
                 )]),
                 dependency_diagnostics: Vec::new(),
             };
+            if extension != "usda" {
+                let captured =
+                    document_stage_recipe(&base, &runtime, &view, Some(&recipe)).unwrap();
+                assert_eq!(captured.root_id, root_id);
+                assert!(captured.session_layer.is_some());
+                let (captured_stage, _) =
+                    lunco_usd_compose::open_recipe(captured.clone(), crate::schema::native_registry())
+                        .unwrap();
+                assert_eq!(captured_stage.root_layer().identifier(), root_id.as_str());
+                assert_eq!(
+                    captured_stage
+                        .attribute("/World.inherited")
+                        .unwrap()
+                        .get::<f64>()
+                        .unwrap(),
+                    Some(17.0)
+                );
+                assert_eq!(
+                    captured_stage
+                        .attribute("/World.referenced")
+                        .unwrap()
+                        .get::<f64>()
+                        .unwrap(),
+                    Some(23.0)
+                );
+                assert_eq!(
+                    captured_stage
+                        .attribute("/World.value")
+                        .unwrap()
+                        .get::<f64>()
+                        .unwrap(),
+                    Some(3.0)
+                );
+                let mut missing_session = captured.clone();
+                missing_session
+                    .bytes
+                    .remove(missing_session.session_layer.as_ref().unwrap());
+                assert!(
+                    lunco_usd_compose::open_recipe(
+                        missing_session,
+                        crate::schema::native_registry()
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("captured session")
+                );
+            }
             let stage = open_doc_stage_with_layers(&base, &runtime, &view, Some(&recipe)).unwrap();
             assert_eq!(stage.root_layer().identifier(), root_id.as_str());
             for (name, expected) in [("inherited", 17.0), ("referenced", 23.0), ("value", 3.0)] {

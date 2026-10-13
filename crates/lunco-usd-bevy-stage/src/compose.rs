@@ -39,9 +39,7 @@ use openusd::usd::Stage;
 
 use crate::asset::UsdLayerReadReceipt;
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
-use lunco_usd_compose::{
-    LuncoUsdResolver, SharedLayerBytes, check_stage_closure_limits, child_layer_ids,
-};
+use lunco_usd_compose::{SharedLayerBytes, check_stage_closure_limits, child_layer_ids};
 
 fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {
     match error {
@@ -456,21 +454,8 @@ where
 ///
 /// The runtime adapter owns the live canonical stage.
 pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
-    let _resolver_span = bevy::log::info_span!("usd_live_resolver_snapshot").entered();
-    let resolver = LuncoUsdResolver::new(recipe.bytes.clone())?;
-    drop(_resolver_span);
-    let shared = resolver.shared();
-    let diagnostics = resolver.diagnostics();
-    let stage = {
-        let _open_span = bevy::log::info_span!("usd_live_open_stage").entered();
-        Stage::builder()
-            .schema_registry(lunco_usd_authoring::schema::native_registry())
-            .resolver(resolver)
-            .open(&recipe.root_id)
-    };
-    diagnostics.check()?;
-    let stage = stage.map_err(|e| anyhow!("USD composition error: {e}"))?;
-    Ok((stage, shared))
+    let _span = bevy::log::info_span!("usd_live_open_stage").entered();
+    lunco_usd_compose::open_recipe(recipe.clone(), lunco_usd_authoring::schema::native_registry())
 }
 
 #[cfg(test)]

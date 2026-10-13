@@ -1777,16 +1777,14 @@ impl UsdDocument {
         &self,
         prim: &SdfPath,
         attr: &str,
-    ) -> lunco_usd_authoring::schema::LinearUnit {
+    ) -> Result<lunco_usd_authoring::schema::LinearUnit, DocumentError> {
         use lunco_usd_authoring::schema::{LinearUnit, SchemaMetadata};
-        let reg = SchemaMetadata::global();
-        if let Some(ty) = self.composed_arc().prim_type_name(prim) {
-            let u = reg.linear_unit(&ty, attr);
-            if u != LinearUnit::None {
-                return u;
-            }
-        }
-        LinearUnit::None
+        let stage = self.open_composed_stage()?;
+        let prim = stage.prim(prim.clone()).map_err(author_err)?;
+        let Some(type_name) = prim.type_name().map_err(author_err)? else {
+            return Ok(LinearUnit::None);
+        };
+        Ok(SchemaMetadata::global().linear_unit(type_name.as_str(), attr))
     }
 
     fn open_target_stage(&self, target: TargetLayer) -> Result<Stage, DocumentError> {
@@ -2228,12 +2226,6 @@ fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
     }
 }
 
-fn xform_op_order_for_edit(data: &sdf::Data, prim: &SdfPath, op_name: &str) -> (Vec<String>, bool) {
-    let order = xform_op_order_tokens(data, prim);
-    let append = !order.iter().any(|token| token == op_name);
-    (order, append)
-}
-
 fn author_xform_op_order(
     stage: &openusd::usd::Stage,
     path: &str,
@@ -2578,16 +2570,15 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(authored)
                     .map_err(author_err)?;
+                let restore_order = append_op.then(|| {
+                    let mut order = composed_order.clone();
+                    order.push("xformOp:translate".into());
+                    order
+                });
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:translate")?;
                 }
                 let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
-
-                let restore_order = append_op.then(|| {
-                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
-                    order.push("xformOp:translate".into());
-                    order
-                });
                 // A first local opinion on a composed prim is undone by
                 // removing only that opinion. Replacing the whole layer would
                 // reproject unrelated live entities and restart programs.
@@ -2908,16 +2899,15 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(authored)
                     .map_err(author_err)?;
+                let restore_order = append_op.then(|| {
+                    let mut order = composed_order.clone();
+                    order.push("xformOp:rotateXYZ".into());
+                    order
+                });
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:rotateXYZ")?;
                 }
                 let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
-
-                let restore_order = append_op.then(|| {
-                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
-                    order.push("xformOp:rotateXYZ".into());
-                    order
-                });
                 let inverse = if !rotate_existed {
                     UsdOp::RemoveXformOp {
                         edit_target: id.clone(),
@@ -2974,16 +2964,15 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(authored)
                     .map_err(author_err)?;
+                let restore_order = append_op.then(|| {
+                    let mut order = composed_order.clone();
+                    order.push("xformOp:scale".into());
+                    order
+                });
                 if append_op {
                     author_xform_op_order(&stage, &path, composed_order, "xformOp:scale")?;
                 }
                 let new_data = extract_edit_layer_data(&stage).map_err(author_err)?;
-
-                let restore_order = append_op.then(|| {
-                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
-                    order.push("xformOp:scale".into());
-                    order
-                });
                 let inverse = if !scale_existed {
                     UsdOp::RemoveXformOp {
                         edit_target: id.clone(),
@@ -3083,7 +3072,7 @@ impl Document for UsdDocument {
                 // `stage_units_per_unit` is not always 1: `UsdGeomCamera` defines
                 // focal length and aperture in TENTHS of a world unit, so a bare
                 // "is a length" flag would still author those wrong by 10x.
-                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let linear = self.linear_unit_of(&prim_sdf, &name)?;
                 let val = match linear {
                     lunco_usd_authoring::schema::LinearUnit::Length {
                         stage_units_per_unit,
@@ -3260,7 +3249,7 @@ impl Document for UsdDocument {
                 // serialized file on any non-canonical stage.
                 let conv = self.composed_stage_convention()?;
                 let val = conv.stage_physics_joint_value(&name, &type_name, val);
-                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let linear = self.linear_unit_of(&prim_sdf, &name)?;
                 let val = match linear {
                     lunco_usd_authoring::schema::LinearUnit::Length {
                         stage_units_per_unit,
@@ -3276,7 +3265,10 @@ impl Document for UsdDocument {
                 // transform evaluator ignores.
                 let (composed_order, append_xform_op) =
                     if name.starts_with("xformOp:") && name != "xformOpOrder" {
-                        xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, &name)
+                        {
+                            let (_, order, append) = self.transform_edit_context(&path, &name)?;
+                            (order, append)
+                        }
                     } else {
                         (Vec::new(), false)
                     };
@@ -3383,7 +3375,7 @@ impl Document for UsdDocument {
                         _ => None,
                     });
                 let conv = self.composed_stage_convention()?;
-                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let linear = self.linear_unit_of(&prim_sdf, &name)?;
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
                     let old = conv.canonical_physics_joint_value(&name, &ty, old);
                     let old = match linear {

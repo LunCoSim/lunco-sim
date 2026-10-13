@@ -40,6 +40,17 @@ Document edit-unit conversion also reads
 that native composed stage through the shared `StageMetrics` owner; it does
 not read a custom merged layer or treat native errors as omitted metadata.
 
+Typed attribute and connection preflight also uses the current document's native
+stage, with the projected stage id used only for dynamic runtime ports. The
+separate authored-data preflight and projected-value selection are removed.
+Native prim types select scalar length declarations; transform inverses retain
+the native composed operation order. `StageRecipe` now carries an explicit
+session layer, and native document/runtime stage opening shares
+`lunco-usd-compose::open_recipe`. Captured session content participates in replay
+identity; missing session bytes are rejected. Unmounted authoring captures the
+separate native root/runtime/view layers and fetches their dependency closure
+within one budget. It does not serialize a custom merged layer.
+
 Transient document composition copies authored base specs through native Sdf
 operations into the identified root; runtime and view use native USDC buffers.
 The original root identity anchors relative arcs.
@@ -130,7 +141,25 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   coincident-point translation solve completed. API Exit and port release were
   verified.
 
-Logs are in `/tmp/luncosim-openusd-*.log` and
+- Native preflight/session follow-up: the layered inheritance/reference/strength
+  mechanism check, missing-session content check, scalar-length conversion
+  check, and `cargo check -p lunco-usd-commands --lib -j 4` passed. The production
+  binary rebuilt. `USD_QUERY_API` passed five checks on port 4161, including
+  schema type rejection without mutation; `ASSEMBLY_EDITOR_PROPOSAL` passed
+  fifteen checks on port 4162; `USD_VARIANT_CONNECTION_PLAN` passed its selected
+  source and rejected unselected source checks on port 4163. The owned PID,
+  checkout, and binary were verified; all ports were released.
+  The final ownership-only API check passed with
+  `cargo check -p lunco-usd-bevy-stage --lib -j 4`; owned recipes move their bytes
+  into the resolver without another whole-closure copy.
+- The native SDK writer fix is committed locally in the owned adjacent
+  `openusd-native` checkout as `d794244d092a1ee7fcf8a61c23fd07862663c3d4`.
+  Its focused round-trip check passed for all five inheritance list operators.
+  Pixar OpenUSD 26.08 opened the native writer's schema output and matched all
+  55 root prim names and 54 inheritance opinions. Cargo still uses published
+  0.8.0; publication of the SDK commit is awaiting explicit user authorization.
+
+Logs are in `/tmp/luncosim-sysml-*.log`, `/tmp/luncosim-openusd-*.log` and
 `/tmp/luncosim-native-*.log`. Agent-owned sessions and ports were released.
 No push, packaged acceptance, Windows CI, full mission verdict, or FPS result
 is claimed.
@@ -150,8 +179,8 @@ is claimed.
    assertion with successful interoperability coverage.
 2. `author::compose_layers`, the document's composed-data memo, and consumers
    of its merged source remain. Runtime mounting, previews, persistence, and
-   remaining document edit-context/schema-unit readers must carry explicit
-   native layer stacks/recipes before that merge and its tests can be deleted.
+   terrain/light readers must carry explicit native layer stacks/recipes before
+   that merge and its tests can be deleted.
    Native `Stage::flatten` resolves and removes composition arcs, so it cannot replace an authored-layer merge or save.
    This review does not claim that all reinvention or fallback paths are gone.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance

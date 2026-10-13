@@ -4,8 +4,8 @@
 >
 > ⚠️ **PART DESIGN SPEC.** §1–§4 and §5–§5a describe the current identity,
 > authoring-layer, and simulation-state contracts. §6 onward remains the
-> collaboration target: the `ar::Resolver` seam is unused, `find_or_open` does
-> not exist in our `openusd` fork, and there is no replicated live layer.
+> collaboration target. Native OpenUSD composition uses the asset-backed
+> `ar::Resolver`; replicated live layers remain a separate collaboration design.
 
 Complements [`10-document-system.md`](10-document-system.md), which defines what a
 Document *is*. This one answers: **who owns a file, what happens when two writers
@@ -131,6 +131,20 @@ Shipping collaboration before fixing rhai's addressing would destroy work quietl
 USD authoring follows the non-destructive layer pattern: keep the shipped or
 Twin-authored source intact and write local edits into an explicit stronger
 layer. Each edit names its target; the composed stage resolves the result.
+
+Typed attribute preflight reads the current document's native stage over its
+admitted dependency closure. The projected stage supplies only the live
+identity needed to validate dynamic ports. Scalar length declarations use the
+native composed prim type, and transform inverses retain the native composed
+operation order. Missing connection-source declarations and native failures
+reject at this owner.
+
+`StageRecipe` captures root bytes and an optional explicit session layer.
+`lunco-usd-compose::open_recipe` is the shared native stage factory for document
+and runtime readers. Session content participates in the closure identity;
+a declared session without captured bytes is rejected. Captured root codecs
+match the root extension, while runtime/view session layers use USDC. Closure
+preparation fetches dependencies from all captured layers within one budget.
 
 ```
 DOCUMENT — authored USD opinions and derived view, composed in strength order.

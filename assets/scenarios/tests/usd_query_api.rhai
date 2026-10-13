@@ -120,6 +120,28 @@ fn on_tick(me, ctx) {
             return;
         }
 
+        let invalid = assembly_edit::batch(this.doc, "Reject a schema type mismatch", [
+            #{ SetAttribute: #{ edit_target: "@root@", path: ARC_TARGET,
+                name: "visibility", type_name: "float", value: "1.0" }},
+        ], this.base_generation);
+        if invalid == () || invalid.id == () {
+            fail(this, "schema type preflight did not return a command identity");
+            return;
+        }
+        this.command_id = invalid.id;
+        this.phase = 10;
+        return;
+    }
+
+    if this.phase == 10 {
+        let command = command_result(this.command_id);
+        if command.status == "pending" { return; }
+        if command.status != "rejected" || command.ok != false
+            || !command.error.contains("composed stage declares `token`")
+            || usd_document_generation(this.doc) != this.base_generation {
+            fail(this, "schema type mismatch did not fail before document mutation: " + command.to_string());
+            return;
+        }
         let edit = assembly_edit::add_prim(
             this.doc,
             "@root@",
@@ -248,6 +270,7 @@ fn on_tick(me, ctx) {
     finish(this, [
         t_true(true, "document inspection is explicit and reads composed USD facts"),
         t_true(true, "reference inspection and target resolution use native document composition"),
+        t_true(true, "native schema type preflight rejects invalid edits without mutation"),
         t_true(true, "document synchronization returns typed deltas and rejects future cursors"),
         t_true(true, "expired operation history returns the complete authored layer snapshot"),
     ]);

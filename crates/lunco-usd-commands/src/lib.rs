@@ -47,7 +47,7 @@ use lunco_doc_bevy::{
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{StageView, UsdStageAsset};
 use lunco_usd_core::commands::{
     ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
     CommitUsdProposal, CreateUsdProposal, DetachComponent, OpenUsdSourceDocument,
@@ -1292,15 +1292,20 @@ fn unmounted_document_authoring_recipe(
         ));
     }
     let path = path.clone();
-    let composed = document.composed_arc();
-    let source = lunco_usd_authoring::author::data_to_usda(&composed)
-        .map_err(|error| format!("cannot serialize USD document composition: {error}"))?;
     let (root_id, assets_root, twin_root) = document_composition_context(world, doc, &path)?;
-    let recipe = lunco_usd_compose::recipe_from_source_with_roots(
-        &root_id,
-        &source,
+    let anchor = lunco_usd_compose::recipe::StageRecipe::new(root_id, Default::default());
+    let input = lunco_usd_authoring::author::document_stage_recipe(
+        document.data(),
+        document.runtime_data(),
+        document.view_data(),
+        Some(&anchor),
+    )
+    .map_err(|error| format!("cannot capture USD document layers: {error}"))?;
+    let recipe = lunco_usd_compose::fetch_recipe_with_roots(
+        input,
         assets_root.as_deref(),
         twin_root.as_deref(),
+        lunco_usd_compose::recipe::StageClosureLimits::default(),
     )
     .map_err(|error| format!("cannot resolve USD document composition: {error}"))?;
     for diagnostic in &recipe.dependency_diagnostics {
@@ -2282,10 +2287,9 @@ fn apply_transient_ops_result(
 }
 
 /// Validate typed attribute operations against the document's composed stage
-/// before changing its authored layer. Mounted documents use their canonical
-/// stage; standalone file documents resolve the same dependency closure through
-/// `lunco-usd-compose`. The document owns local SDF declarations, while this
-/// check covers referenced, payloaded, and variant-composed declarations.
+/// before changing its authored layer. The current document layers compose over
+/// their admitted dependency closure, including references, payloads, and
+/// variants. The projected stage id supplies live dynamic-port identity.
 /// Keeping the check before registry mutation preserves the edit transaction
 /// when OpenUSD would reject a role or array-shape mismatch.
 fn validate_live_attribute_types(
@@ -2325,37 +2329,13 @@ fn validate_live_attribute_types(
     else {
         return Ok(());
     };
-    let document_composed = document.composed_arc();
-    if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
-        let view = stage.view();
-        let stage_id = world
-            .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .and_then(|scenes| lunco_usd_bevy_twin::stage_asset_for_document(scenes, doc));
-        return validate_attribute_types_in_view(world, ops, &planned_attributes, &view, stage_id);
-    }
-
-    let has_connected_source = ops
-        .iter()
-        .any(|op| matches!(op, UsdOp::SetConnection { sources, .. } if !sources.is_empty()));
-    if !has_connected_source {
-        return validate_authored_attribute_types(&document_composed, ops, &planned_attributes);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        document.authoring_recipe().ok_or_else(|| {
-            format!("USD document {doc} has no resolved composition for typed connection preflight")
-        })?;
-        let stage = document.open_composed_stage().map_err(|error| {
-            format!("cannot compose USD document for connection preflight: {error}")
-        })?;
-        let view = StageView::new(&stage);
-        validate_attribute_types_in_view(world, ops, &planned_attributes, &view, None)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        validate_authored_attribute_types(&document_composed, ops, &planned_attributes)
-    }
+    let stage = document.open_composed_stage().map_err(|error| {
+        format!("cannot compose USD document for typed edit preflight: {error}")
+    })?;
+    let stage_id = world
+        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+        .and_then(|scenes| lunco_usd_bevy_twin::stage_asset_for_document(scenes, doc));
+    validate_attribute_types_in_stage(world, ops, &planned_attributes, &stage, stage_id)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2482,14 +2462,25 @@ fn composed_planned_attribute_types(
     Ok(composed)
 }
 
-fn validate_attribute_types_in_view(
+fn validate_attribute_types_in_stage(
     world: &World,
     ops: &[UsdOp],
     planned_attributes: &HashMap<(String, String), String>,
-    view: &StageView<'_>,
+    stage: &openusd::usd::Stage,
     stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
 ) -> Result<(), String> {
-    let planned_attributes = composed_planned_attribute_types(planned_attributes, view)?;
+    let view = StageView::new(stage);
+    let planned_attributes = composed_planned_attribute_types(planned_attributes, &view)?;
+    let attribute_type =
+        |path: &openusd::sdf::Path, name: &str| -> Result<Option<String>, String> {
+            let prim = stage
+                .prim(path.clone())
+                .map_err(|error| error.to_string())?;
+            prim.attribute(name)
+                .type_name()
+                .map(|value| value.map(|value| value.to_string()))
+                .map_err(|error| error.to_string())
+        };
     for op in ops {
         let (path, name, requested) = match op {
             UsdOp::SetAttribute {
@@ -2515,7 +2506,7 @@ fn validate_attribute_types_in_view(
         let sdf_path = openusd::sdf::Path::new(path).map_err(|error| {
             format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
         })?;
-        if let Some(declared) = view.attr_type_name(&sdf_path, name) {
+        if let Some(declared) = attribute_type(&sdf_path, name)? {
             if declared != *requested && !attribute_type_is_replaced(ops, path, name) {
                 return Err(format!(
                     "typed USD edit `{path}.{name}` requests `{requested}`, but the composed stage declares `{declared}`"
@@ -2538,11 +2529,14 @@ fn validate_attribute_types_in_view(
                 ));
             };
             let source_key = (source_prim.to_string(), source_name.to_string());
-            let source_type = planned_attributes
-                .get(&source_key)
-                .cloned()
-                .or_else(|| view.attr_type_name(&source_prim, source_name));
-            if !view.has_prim(&source_prim)
+            let source_type = match planned_attributes.get(&source_key) {
+                Some(type_name) => Some(type_name.clone()),
+                None => attribute_type(&source_prim, source_name)?,
+            };
+            let prim = stage
+                .prim(source_prim.clone())
+                .map_err(|error| error.to_string())?;
+            if !prim.is_valid().map_err(|error| error.to_string())?
                 && !planned_attributes
                     .keys()
                     .any(|(path, _)| path == &source_prim.to_string())
@@ -2553,11 +2547,16 @@ fn validate_attribute_types_in_view(
             }
             let Some(source_type) = source_type else {
                 if type_name == "double" && is_environment_probe_output(source_name) {
-                    if view.has_api_schema(&source_prim, "LunCoEnvironmentProbeAPI") {
+                    if prim
+                        .api_schemas()
+                        .map_err(|error| error.to_string())?
+                        .iter()
+                        .any(|schema| schema.as_str() == "LunCoEnvironmentProbeAPI")
+                    {
                         continue;
                     }
                 }
-                if lunco_usd_bevy_stage::read::has_runtime_port_surface(view, &source_prim)
+                if lunco_usd_bevy_stage::read::has_runtime_port_surface(&view, &source_prim)
                     && stage_id.is_some_and(|stage_id| {
                         live_runtime_port_exists(world, stage_id, &source_prim, source_name)
                     })
@@ -2628,106 +2627,6 @@ fn live_runtime_port_exists(
         };
     }
     false
-}
-
-/// The document-owned fallback for command preflight while a preview's
-/// canonical composed stage is still settling. It covers self-contained and
-/// newly opened documents; once a canonical stage exists the live composed
-/// reader above remains authoritative for references, payloads, and variants.
-fn validate_authored_attribute_types(
-    composed: &openusd::sdf::Data,
-    ops: &[UsdOp],
-    planned_attributes: &HashMap<(String, String), String>,
-) -> Result<(), String> {
-    let attr_type = |path: &openusd::sdf::Path, name: &str| {
-        let property = path.append_property(name).ok()?;
-        match composed.field(&property, "typeName") {
-            Some(openusd::sdf::Value::Token(type_name)) => Some(type_name.to_string()),
-            Some(openusd::sdf::Value::String(type_name)) => Some(type_name.clone()),
-            _ => None,
-        }
-    };
-    let planned_prim = |path: &openusd::sdf::Path| {
-        let path = path.to_string();
-        planned_attributes.keys().any(|(prim, _)| prim == &path)
-    };
-    for op in ops {
-        let (path, name, requested) = match op {
-            UsdOp::SetAttribute {
-                path,
-                name,
-                type_name,
-                ..
-            }
-            | UsdOp::SetTimeSample {
-                path,
-                name,
-                type_name,
-                ..
-            }
-            | UsdOp::SetConnection {
-                path,
-                name,
-                type_name,
-                ..
-            } => (path, name, type_name),
-            _ => continue,
-        };
-        let target_path = openusd::sdf::Path::new(path).map_err(|error| {
-            format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
-        })?;
-        if let Some(declared) = attr_type(&target_path, name) {
-            if declared != *requested && !attribute_type_is_replaced(ops, path, name) {
-                return Err(format!(
-                    "typed USD edit `{path}.{name}` requests `{requested}`, but the composed document declares `{declared}`"
-                ));
-            }
-        }
-        let UsdOp::SetConnection { sources, .. } = op else {
-            continue;
-        };
-        for source in sources {
-            let source_path = openusd::sdf::Path::new(source).map_err(|error| {
-                format!("USD connection `{path}.{name}` has invalid source `{source}`: {error}")
-            })?;
-            let Some((source_prim, source_name)) = source_path.split_property() else {
-                return Err(format!(
-                    "USD connection `{path}.{name}` source `{source}` is not a property path; author a source attribute such as `/Controller.outputs:throttle`"
-                ));
-            };
-            let source_key = (source_prim.to_string(), source_name.to_string());
-            let source_type = planned_attributes
-                .get(&source_key)
-                .cloned()
-                .or_else(|| attr_type(&source_prim, source_name));
-            if composed.prim_type_name(&source_prim).is_none() && !planned_prim(&source_prim) {
-                return Err(format!(
-                    "USD connection `{path}.{name}` source `{source}` references missing prim `{source_prim}`"
-                ));
-            }
-            let Some(source_type) = source_type else {
-                if requested == "double"
-                    && lunco_usd_data::usd_data::has_authored_api_schema(
-                        composed,
-                        &source_prim,
-                        "LunCoEnvironmentProbeAPI",
-                    )
-                    && is_environment_probe_output(source_name)
-                {
-                    continue;
-                }
-                return Err(format!(
-                    "USD connection `{path}.{name}` source `{source}` references missing property `{source_name}` on `{source_prim}`"
-                ));
-            };
-            if source_type != *requested {
-                return Err(format!(
-                    "USD connection `{path}.{name}` source `{source}` declares `{source_type}`, but the sink declares `{requested}`"
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn apply_ops_as_change_set(

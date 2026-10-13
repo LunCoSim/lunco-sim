@@ -257,19 +257,44 @@ pub fn compose_source_to_stage_with_roots(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn compose_recipe_to_stage(
-    recipe: recipe::StageRecipe,
+    mut recipe: recipe::StageRecipe,
     registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
-    let diagnostics = recipe.dependency_diagnostics;
-    let resolver = LuncoUsdResolver::new(recipe.bytes)?;
-    let resolver_diagnostics = resolver.diagnostics();
-    let stage = Stage::builder()
-        .schema_registry(registry)
-        .resolver(resolver)
-        .open(&recipe.root_id);
-    resolver_diagnostics.check()?;
-    let stage = stage.map_err(|error| anyhow!("USD composition error: {error}"))?;
+    let diagnostics = std::mem::take(&mut recipe.dependency_diagnostics);
+    let (stage, _) = open_recipe(recipe, registry)?;
     Ok((stage, diagnostics))
+}
+
+/// Open one captured native layer stack and expose its admitted resolver bytes
+/// for deterministic layer injection by the live-stage owner.
+pub fn open_recipe(
+    recipe: recipe::StageRecipe,
+    registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
+) -> Result<(Stage, SharedLayerBytes)> {
+    anyhow::ensure!(
+        recipe.bytes.contains_key(&recipe.root_id),
+        "USD captured root `{}` is missing",
+        recipe.root_id
+    );
+    if let Some(session_layer) = &recipe.session_layer {
+        anyhow::ensure!(
+            recipe.bytes.contains_key(session_layer),
+            "USD captured session `{session_layer}` is missing"
+        );
+    }
+    let resolver = LuncoUsdResolver::new(recipe.bytes)?;
+    let shared = resolver.shared();
+    let diagnostics = resolver.diagnostics();
+    let mut builder = Stage::builder()
+        .schema_registry(registry)
+        .resolver(resolver);
+    if let Some(session_layer) = &recipe.session_layer {
+        builder = builder.session_layer(session_layer);
+    }
+    let stage = builder.open(&recipe.root_id);
+    diagnostics.check()?;
+    let stage = stage.map_err(|error| anyhow!("USD composition error: {error}"))?;
+    Ok((stage, shared))
 }
 
 /// Resolve the transitive USD layer closure for an in-memory root layer using
@@ -292,9 +317,8 @@ pub fn recipe_from_source_with_roots(
     )
 }
 
-/// Resolve a native text-layer closure from bytes already read by its source
-/// owner. OpenUSD interprets the layer; binary input fails the text dependency
-/// inspection boundary with an explicit diagnostic.
+/// Resolve a native USD layer closure from bytes already read by its source
+/// owner. OpenUSD interprets each layer through its registered file format.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn recipe_from_bytes_with_roots(
     root_id: &str,
@@ -304,11 +328,48 @@ pub fn recipe_from_bytes_with_roots(
     limits: StageClosureLimits,
 ) -> Result<recipe::StageRecipe> {
     let root_id = canonicalize_at(root_id, None)?;
-    check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
-    let mut total_bytes = root_bytes.len();
-    let mut bytes = HashMap::from([(root_id.to_owned(), root_bytes)]);
-    let mut seen = std::collections::HashSet::from([root_id.to_owned()]);
-    let mut queue = vec![(root_id.to_owned(), 0_usize)];
+    let input = recipe::StageRecipe::new(root_id.clone(), HashMap::from([(root_id, root_bytes)]));
+    fetch_recipe_with_roots(input, assets_root, twin_root, limits)
+}
+
+/// Resolve the dependencies of a captured native root/session layer stack.
+/// Captured layers take precedence over storage reads; all retained bytes and
+/// discovered arcs share the same closure budget. Fetch order is stable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_recipe_with_roots(
+    mut recipe: recipe::StageRecipe,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+    limits: StageClosureLimits,
+) -> Result<recipe::StageRecipe> {
+    anyhow::ensure!(
+        recipe.bytes.contains_key(&recipe.root_id),
+        "USD captured root `{}` is missing",
+        recipe.root_id
+    );
+    if let Some(session_layer) = &recipe.session_layer {
+        anyhow::ensure!(
+            recipe.bytes.contains_key(session_layer),
+            "USD captured session `{session_layer}` is missing"
+        );
+    }
+    let mut total_bytes = recipe.bytes.values().try_fold(0usize, |total, bytes| {
+        total
+            .checked_add(bytes.len())
+            .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))
+    })?;
+    check_stage_closure_limits(&limits, recipe.bytes.len(), 0, 0, total_bytes)?;
+    let mut bytes = std::mem::take(&mut recipe.bytes);
+    let mut seen = bytes
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let mut queue = bytes
+        .keys()
+        .cloned()
+        .map(|id| (id, 0usize))
+        .collect::<Vec<_>>();
+    queue.sort_by(|left, right| right.0.cmp(&left.0));
     let mut diagnostics = Vec::new();
     while let Some((id, depth)) = queue.pop() {
         let raw = bytes.get(&id).expect("queued USD layer is present");
@@ -349,7 +410,7 @@ pub fn recipe_from_bytes_with_roots(
             queue.push((child_id, child_depth));
         }
     }
-    let mut recipe = recipe::StageRecipe::new(root_id, bytes);
+    recipe.bytes = bytes;
     recipe.dependency_diagnostics = diagnostics;
     Ok(recipe)
 }
