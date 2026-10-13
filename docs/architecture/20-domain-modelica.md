@@ -382,6 +382,11 @@ compiler and solver failures remain on the linked Modelica runtime state.
 The projector carries the interface extracted while validating the generated
 source into installation, so validation and runtime setup share one Rumoca AST
 parse rather than independently recovering the same policy result.
+Its declaration interface is scoped to the exact validated root class through
+Rumoca's AST lookup; generated unit classes cannot contribute unrelated boundary
+ports or parameter bindings. File-backed sources scope their declaration facts
+to their selected runnable class. Compiler facts remain authoritative for
+inherited declarations, aliases, and evaluated runtime values.
 
 The generated-domain projector is lifecycle-driven. Its scheduler condition
 opens only for a newly projected prim or identity, a USD wiring edit, or a

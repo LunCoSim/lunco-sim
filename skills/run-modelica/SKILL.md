@@ -184,6 +184,14 @@ manifest. The worker commits root preparations in admission order before
 compilation, rejects unadmitted roots, and reports failed roots without retrying
 synchronous discovery. Synchronous compiler helpers remain for standalone CLI
 callers.
+
+Source-interface parameter/input bindings and explicit causal ports belong to
+the selected class. Generated source uses its exact validated root class;
+sibling, nested, and connector declarations do not merge into that boundary.
+Source-root admission still covers the complete source definition. Inheritance,
+alias causality, evaluated defaults, and runtime metadata come from checked
+compiler facts. The production `modelica_source_target.rhai` gate checks scoped
+preflight facts as well as source replacement and participant retirement.
 The worker's successful load acknowledgement carries the authored top-level
 namespaces parsed by that exact source-set operation. The registry retains those
 names on the scoped owner entry, and compile admission resolves each qualified

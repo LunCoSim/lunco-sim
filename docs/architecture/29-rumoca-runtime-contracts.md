@@ -158,6 +158,13 @@ Library-only web documents open for inspection without a solver participant.
 Generated networks compile the exact root name already validated by synthesis;
 they do not select another class from the source-wide interface. The production
 `modelica_source_target.rhai` gate covers source rejection and live replacement.
+Precompile source interfaces project only direct declarations of the selected
+class: parameter/input literal bindings, explicit causal ports, and authored
+documentation. Generated synthesis requests its exact validated class through
+Rumoca's qualified AST lookup. Sibling and nested class declarations never enter
+that interface. Source-root requirements still cover the complete definition;
+checked DAE/FMI facts own inheritance, aliases, evaluated defaults, and live
+variable metadata.
 Live telemetry units, descriptions, and input bounds come exclusively from the
 checked FMI scalar inventory. Construction carries that inventory through the typed worker
 result alongside the installed solver plan. Session and source-generation fences

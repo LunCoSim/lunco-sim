@@ -1,16 +1,9 @@
-//! AST-based extraction functions for Modelica source code.
+//! Parsed Modelica source facts for runtime, validation, and authoring.
 //!
-//! Walks the full Modelica AST produced by `rumoca_phase_parse::parse_to_ast`.
-//! All functions accept raw source text and parse internally — callers that
-//! already hold an `Arc<StoredDefinition>` can use the lower-level helpers
-//! instead.
-//!
-//! ## Design Notes
-//!
-//! - **All types**: Projects Real, Integer, Boolean, String, and custom types.
-//! - **Full class coverage**: Walks all top-level and nested classes, not just
-//!   the first `model|class|block|package` declaration.
-//! - **Expression-aware**: Reads authored numeric bindings from AST expressions.
+//! Rumoca owns syntax and class identity. A source interface projects direct
+//! declarations of its selected runnable class; source-root discovery covers
+//! the complete definition. Checked DAE/FMI facts own inherited declarations,
+//! alias causality, evaluated defaults, and live variable metadata.
 
 use rumoca_core::{Causality, ClassType, Variability};
 use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};
@@ -34,10 +27,7 @@ pub fn is_plot_node_record_call(expr: &Expression) -> bool {
 // Parsing entry point
 // ---------------------------------------------------------------------------
 
-/// Parse Modelica source code into a `StoredDefinition` AST.
-///
-/// Returns `None` on parse failure. Use [`extract_from_source`] for the
-/// high-level API that extracts all symbols in one pass.
+/// Recover source facts through Rumoca's tolerant syntax projection.
 fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
     // Interface metadata uses the compiler's tolerant syntax projection.
     rumoca_phase_parse::parse_to_syntax(source, file_label)
@@ -58,7 +48,7 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 /// takes, what it is tuned by.
 #[derive(Debug, Default, Clone)]
 pub struct ModelInterface {
-    /// First runnable model/block/class, qualified by package nesting.
+    /// Selected class, relative to `within` and qualified by package nesting.
     pub model_name: Option<String>,
     /// The file's `within` clause — the package its classes actually live in.
     /// The only authority on what a `.mo` is CALLED from outside it, which is
@@ -69,7 +59,7 @@ pub struct ModelInterface {
     /// The sorted set is prepared with the interface so runtime admission does
     /// not need to parse the same source on the application schedule.
     pub required_source_roots: BTreeSet<String>,
-    /// `parameter` declarations with their authored values.
+    /// Direct numeric `parameter` bindings of the selected class.
     pub parameters: HashMap<String, f64>,
     /// Declared input names. The checked DAE owns initialization values;
     /// interface discovery never creates a numerical sample.
@@ -77,11 +67,11 @@ pub struct ModelInterface {
     /// Literal numeric declaration bindings projected for source/lint facts.
     /// This is not the solver's scoped default evaluation.
     pub input_defaults: HashMap<String, f64>,
-    /// Every causal output declared by the model, including output connector
-    /// types whose causality is carried by the connector class.
+    /// Direct declarations with explicit `output` causality in the selected
+    /// class. Checked compiler facts resolve alias and inherited causality.
     pub outputs: std::collections::BTreeSet<String>,
-    /// Documentation projected from the same parsed declarations as this
-    /// interface. Solver adapters use it for observable telemetry metadata.
+    /// Authored documentation from the selected declarations. Checked FMI
+    /// inventory supplies live telemetry metadata.
     pub variable_metadata: HashMap<String, ModelicaVariableMetadata>,
 }
 
@@ -98,7 +88,7 @@ pub struct ModelicaVariableMetadata {
     pub unit: Option<String>,
 }
 
-/// Extract authored descriptions and units for variables in a Modelica source.
+/// Read direct variable documentation of the selected runnable class.
 ///
 /// An undocumented declaration produces no entry. Consumers therefore preserve
 /// the absence of documentation instead of manufacturing prose from a variable
@@ -108,42 +98,24 @@ pub fn variable_metadata(
     file_label: &str,
 ) -> HashMap<String, ModelicaVariableMetadata> {
     let ast = parse_recovered(source, file_label);
-    variable_metadata_from_ast(&ast)
+    parse_model_interface_from_ast(&ast).variable_metadata
 }
 
-fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, ModelicaVariableMetadata> {
-    fn collect(class: &ClassDef, output: &mut HashMap<String, ModelicaVariableMetadata>) {
-        for component in class.components.values() {
-            let description = description_from_tokens(&component.description);
-            let unit = component
-                .modifications
-                .get("unit")
-                .and_then(string_literal_value)
-                .filter(|unit| !unit.is_empty());
-            if description.is_some() || unit.is_some() {
-                output.insert(
-                    component.name.clone(),
-                    ModelicaVariableMetadata { description, unit },
-                );
-            }
-        }
-        for nested in class.classes.values() {
-            collect(nested, output);
-        }
-    }
-
-    let mut output = HashMap::new();
-    for class in ast.classes.values() {
-        collect(class, &mut output);
-    }
-    output
+fn declaration_metadata(component: &rumoca_ir_ast::Component) -> Option<ModelicaVariableMetadata> {
+    let description = description_from_tokens(&component.description);
+    let unit = component
+        .modifications
+        .get("unit")
+        .and_then(string_literal_value)
+        .filter(|unit| !unit.is_empty());
+    (description.is_some() || unit.is_some())
+        .then_some(ModelicaVariableMetadata { description, unit })
 }
 
 /// Read a model's interface from source, in one lenient parse.
 ///
-/// The ONE way any USD-driven path derives a `ModelicaModel` stub, whether the
-/// source was fetched as an asset (`cosim::dispatch_loaded_modelica_sources`)
-/// or emitted by the network projector (`lunco-usd-sim-domain`).
+/// File-backed assets select their default runnable declaration here.
+/// Generated networks use [`model_interface_for_class`] for their validated root.
 ///
 /// Lenient (`best_effort`): a model with a semantic error still yields usable
 /// name/parameter/input snapshots, the same recovery `Session::recovered_file_query`
@@ -153,25 +125,77 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
     parse_model_interface_from_ast(&ast)
 }
 
-/// Read a model's interface from an already recovered AST.
+/// Read direct declarations of the selected runnable class from a recovered AST.
+/// Library-only definitions have no model interface. Source-root requirements
+/// still cover every declaration in the definition.
 ///
 /// Callers that already parsed the source MUST use this variant so name,
 /// parameter, input, output, and metadata projections cannot silently drift
 /// through separate parses or recovery modes.
 pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface {
-    let defaults = extract_inputs_with_defaults_from_ast(ast);
+    let (model_name, class) = match find_first_runnable_qualified(&ast.classes, "") {
+        Some((name, class)) => (Some(name), Some(class)),
+        None => (None, None),
+    };
+    project_model_interface(ast, model_name, class)
+}
+
+/// Project one explicitly selected class through Rumoca's qualified AST lookup.
+/// Missing targets return no interface and never select another class.
+pub fn model_interface_for_class(ast: &StoredDefinition, target: &str) -> Option<ModelInterface> {
+    let class = ast.get_class_by_qualified_name(target)?;
     let within = within_package(ast);
-    let required_source_roots = required_source_roots_from_ast(ast);
-    ModelInterface {
-        model_name: extract_model_name_from_ast(ast),
-        within,
-        required_source_roots,
-        parameters: extract_parameters_from_ast(ast),
-        inputs: extract_input_names_from_ast(ast).into_iter().collect(),
-        input_defaults: defaults,
-        outputs: extract_output_names_from_ast(ast),
-        variable_metadata: variable_metadata_from_ast(ast),
+    let name = within
+        .as_deref()
+        .and_then(|within| target.strip_prefix(&format!("{within}.")))
+        .unwrap_or(target);
+    Some(project_model_interface(
+        ast,
+        Some(name.to_owned()),
+        Some(class),
+    ))
+}
+
+fn project_model_interface(
+    ast: &StoredDefinition,
+    model_name: Option<String>,
+    class: Option<&ClassDef>,
+) -> ModelInterface {
+    let mut interface = ModelInterface {
+        model_name,
+        within: within_package(ast),
+        required_source_roots: required_source_roots_from_ast(ast),
+        ..Default::default()
+    };
+    if let Some(class) = class {
+        for component in class.components.values() {
+            if matches!(component.variability, Variability::Parameter(_))
+                && let Some(value) = extract_numeric_binding(&component.binding)
+            {
+                interface.parameters.insert(component.name.clone(), value);
+            }
+            match component.causality {
+                Causality::Input(_) => {
+                    interface.inputs.insert(component.name.clone());
+                    if let Some(value) = extract_numeric_binding(&component.binding) {
+                        interface
+                            .input_defaults
+                            .insert(component.name.clone(), value);
+                    }
+                }
+                Causality::Output(_) => {
+                    interface.outputs.insert(component.name.clone());
+                }
+                Causality::Empty => {}
+            }
+            if let Some(metadata) = declaration_metadata(component) {
+                interface
+                    .variable_metadata
+                    .insert(component.name.clone(), metadata);
+            }
+        }
     }
+    interface
 }
 
 /// Extract the model name from Modelica source code.
@@ -194,7 +218,7 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// Returns the selected runnable name relative to the document's `within`
 /// clause, including its package nesting inside the document.
 pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
-    find_first_runnable_qualified(&ast.classes, "")
+    find_first_runnable_qualified(&ast.classes, "").map(|(name, _)| name)
 }
 
 /// The package a file's classes belong to, from its `within` clause —
@@ -252,10 +276,10 @@ pub fn string_literal_value(e: &Expression) -> Option<String> {
 }
 
 /// Select a runnable class, checking the current level before nested packages.
-fn find_first_runnable_qualified(
-    classes: &AstIndexMap<String, ClassDef>,
+fn find_first_runnable_qualified<'a>(
+    classes: &'a AstIndexMap<String, ClassDef>,
     parent: &str,
-) -> Option<String> {
+) -> Option<(String, &'a ClassDef)> {
     // Runnable = Model / Block / Class. Skip connectors, records,
     // types, functions — they have no equations to simulate and
     // compile would only produce `EmptySystem` / type errors.
@@ -264,7 +288,7 @@ fn find_first_runnable_qualified(
     // First pass: prefer a runnable class AT THIS level.
     for (name, class) in classes {
         if is_runnable(&class.class_type) {
-            return Some(qualify(parent, name));
+            return Some((qualify(parent, name), class));
         }
     }
     // Second pass: descend into each package.
@@ -280,197 +304,6 @@ fn find_first_runnable_qualified(
     None
 }
 
-/// Extract parameter values from Modelica source code.
-///
-/// Finds all components with `parameter` variability across all classes and
-/// extracts their binding values. Handles any component type, not just
-/// `parameter Real`.
-///
-pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
-    let ast = match parse(source) {
-        Some(a) => a,
-        None => return HashMap::new(),
-    };
-    extract_parameters_from_ast(&ast)
-}
-
-/// AST-based variant — call this from any hot path that already
-/// holds a parsed `StoredDefinition`. The `_source` variants above
-/// re-parse on every call, which is catastrophic (~minutes) on
-/// 150 KB source library package files; hot paths like `on_compile_model`
-/// MUST use these.
-///
-/// This source-interface projection selects outer declarations by depth.
-/// Runtime initialization is owned by the compiler at qualified DAE paths.
-pub fn extract_parameters_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
-    let mut collector = DefaultCollector::default();
-    collect_parameters_from_classes(&ast.classes, "", 0, &mut collector);
-    collector.values
-}
-
-/// Extract numeric input bindings for source-interface presentation.
-/// Runtime input initialization uses the compiled declaration, not this map.
-pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
-    let ast = match parse(source) {
-        Some(a) => a,
-        None => return HashMap::new(),
-    };
-    extract_inputs_with_defaults_from_ast(&ast)
-}
-
-/// AST-based variant — see `extract_parameters_from_ast`. Callers that need the
-/// runtime initialization use the compiler, which retains each declaration.
-pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
-    let mut collector = DefaultCollector::default();
-    collect_inputs_with_defaults_from_classes(&ast.classes, "", 0, &mut collector);
-    collector.values
-}
-
-/// Every `input` this model declares, bound or not — the model's INPUT
-/// INTERFACE, as opposed to [`extract_inputs_with_defaults_from_ast`]'s map of
-/// the subset that authored a numeric default.
-///
-/// The two answer different questions, and conflating them cost a whole class of
-/// wiring. A driven input is normally declared UNBOUND —
-/// `input Real drive_left "Normalized left-side drive command";` — precisely
-/// because a wire supplies it. The defaults map skips those (correctly: there is
-/// no authored default to report), so using it as the port list published an
-/// interface with no inputs at all. Every wire into such a model was then
-/// dropped by `PortRegistry::write_port` with
-/// `[cosim] connection targets unknown input port …`, while its OUTPUTS arrived
-/// normally from the solver — so the entity looked live, reported a port
-/// surface, and silently accepted nothing. `RoverMotorThermal`'s
-/// `drive_left`/`drive_right` are the shipped case.
-pub fn extract_input_names_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    collect_input_names_from_classes(&ast.classes, &mut names);
-    names
-}
-
-/// Every output-typed component in the parsed Modelica source. This is the
-/// source-level interface used when a USD prim carries additional native
-/// outputs alongside its Modelica facet: only outputs the instantiated class
-/// actually owns may be emitted into a generated Modelica wrapper.
-pub fn extract_output_names_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    collect_output_names_from_classes(&ast.classes, &mut names);
-    names
-}
-
-// ---------------------------------------------------------------------------
-// Internal AST walkers
-// ---------------------------------------------------------------------------
-
-/// Source-interface projection for the selected outer class. Shallower
-/// declarations take precedence over nested class metadata; this is not a
-/// runtime initialization map.
-#[derive(Default)]
-struct DefaultCollector {
-    /// Leaf name → carried default.
-    values: HashMap<String, f64>,
-    /// Leaf name → (qualified scope that owns the carried value, its depth).
-    origin: HashMap<String, (String, usize)>,
-}
-
-impl DefaultCollector {
-    fn offer(&mut self, name: &str, scope: &str, depth: usize, value: f64) {
-        let Some((_, prev_depth)) = self.origin.get(name).cloned() else {
-            self.values.insert(name.to_string(), value);
-            self.origin
-                .insert(name.to_string(), (scope.to_string(), depth));
-            return;
-        };
-        if depth < prev_depth {
-            self.values.insert(name.to_string(), value);
-            self.origin
-                .insert(name.to_string(), (scope.to_string(), depth));
-        }
-    }
-}
-
-/// `Outer.Inner` — the scope path a nested class sits at, used only to NAME a
-/// collision (the map key stays the leaf, which is what `set_input` takes).
-fn qualify_scope(scope: &str, class_name: &str) -> String {
-    if scope.is_empty() {
-        class_name.to_string()
-    } else {
-        format!("{scope}.{class_name}")
-    }
-}
-
-fn collect_parameters_from_classes(
-    classes: &AstIndexMap<String, ClassDef>,
-    scope: &str,
-    depth: usize,
-    out: &mut DefaultCollector,
-) {
-    for (class_name, class) in classes.iter() {
-        let class_scope = qualify_scope(scope, class_name);
-        for component in class.components.values() {
-            if matches!(component.variability, Variability::Parameter(_)) {
-                if let Some(value) = extract_numeric_binding(&component.binding) {
-                    out.offer(&component.name, &class_scope, depth, value);
-                }
-            }
-        }
-        collect_parameters_from_classes(&class.classes, &class_scope, depth + 1, out);
-    }
-}
-
-fn collect_inputs_with_defaults_from_classes(
-    classes: &AstIndexMap<String, ClassDef>,
-    scope: &str,
-    depth: usize,
-    out: &mut DefaultCollector,
-) {
-    for (class_name, class) in classes.iter() {
-        let class_scope = qualify_scope(scope, class_name);
-        for component in class.components.values() {
-            if matches!(component.causality, Causality::Input(_)) {
-                // An unbound input has no authored default.  Inventing `0.0`
-                // here changes Modelica's initialization semantics and later
-                // makes the CLI/workbench overwrite a model's own start value.
-                if let Some(value) = extract_numeric_binding(&component.binding) {
-                    out.offer(&component.name, &class_scope, depth, value);
-                }
-            }
-        }
-        collect_inputs_with_defaults_from_classes(&class.classes, &class_scope, depth + 1, out);
-    }
-}
-
-/// Recursive half of [`extract_input_names_from_ast`]. Unlike the defaults
-/// collector, an unbound `input` is exactly what this is looking for.
-fn collect_input_names_from_classes(
-    classes: &AstIndexMap<String, ClassDef>,
-    names: &mut BTreeSet<String>,
-) {
-    for class in classes.values() {
-        for component in class.components.values() {
-            if matches!(component.causality, Causality::Input(_)) {
-                names.insert(component.name.clone());
-            }
-        }
-        collect_input_names_from_classes(&class.classes, names);
-    }
-}
-
-fn collect_output_names_from_classes(
-    classes: &AstIndexMap<String, ClassDef>,
-    names: &mut BTreeSet<String>,
-) {
-    for class in classes.values() {
-        for component in class.components.values() {
-            if matches!(component.causality, Causality::Output(_))
-                || is_output_connector_type(&component.type_name.to_string())
-            {
-                names.insert(component.name.clone());
-            }
-        }
-        collect_output_names_from_classes(&class.classes, names);
-    }
-}
-
 /// Try to extract a numeric `f64` value from a binding expression.
 ///
 /// Handles `Expression::Terminal` with Real, Integer, or unsigned numeric types.
@@ -479,20 +312,6 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
     let expr = expr.as_ref()?;
     numeric_of(expr)
 }
-
-// Walk the component tree of a chosen root class (depth-first
-// through nested instance components) and emit instance-qualified
-// variable names — `tank.m`, `engine.thrust`, … — matching what the
-// simulator publishes once compiled. Pre-compile, this lets the
-// Variables list show "where" each value lives instead of a flat
-// list of leaf identifiers that collide across components.
-//
-// Stops recursing when a component's declared type isn't an AST
-// class in this `StoredDefinition` (i.e. resolves to a source library or
-// user library that we'd need rumoca's resolver to walk). Those
-// components are emitted as leaves under their qualified path —
-// good enough for the common authored-domain models where Tank /
-// Engine / Valve sit in the same file as RocketStage.
 
 /// Parse a numeric literal expression (including a leading `-` unary
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
@@ -705,7 +524,7 @@ pub fn description_from_tokens(tokens: &[rumoca_core::Token]) -> Option<String> 
 
 /// Extract every input-typed component for a class with rich metadata
 /// (name, type, unit, default if any, description). Companion to the
-/// existing `extract_input_names_from_ast` which only returns names.
+/// the selected source interface, which carries declaration names.
 #[derive(Debug, Clone)]
 pub struct TypedComponent {
     /// Component name as authored in the class.
@@ -726,17 +545,6 @@ pub struct TypedComponent {
     pub min: Option<f64>,
     /// Optional upper bound from the declaration.
     pub max: Option<f64>,
-}
-
-/// Parse-phase output inventory for source assets awaiting compilation.
-/// Scoped authoring queries use the session's resolved declarations instead.
-fn is_output_connector_type(type_name: &str) -> bool {
-    let bare = type_name.split('[').next().unwrap_or(type_name);
-    let short = rumoca_core::top_level_last_segment(bare);
-    matches!(
-        short,
-        "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"
-    ) || short.ends_with("Output")
 }
 
 /// Read the unit value decoded by Rumoca, when authored as a string literal.
@@ -867,7 +675,8 @@ end Metadata;"#;
         );
         let ast = parse(source).expect("parses");
 
-        let names = extract_input_names_from_ast(&ast);
+        let interface = parse_model_interface_from_ast(&ast);
+        let names = &interface.inputs;
         assert!(
             names.contains("drive_left"),
             "unbound input missing from the interface: {names:?}"
@@ -879,7 +688,7 @@ end Metadata;"#;
         );
 
         // The defaults map keeps its own meaning: only the authored binding.
-        let defaults = extract_inputs_with_defaults_from_ast(&ast);
+        let defaults = &interface.input_defaults;
         assert_eq!(defaults.get("gain"), Some(&2.5));
         assert!(
             !defaults.contains_key("drive_left"),
@@ -903,6 +712,75 @@ end Metadata;"#;
 
         assert_eq!(interface.outputs, BTreeSet::from(["value".to_string()]));
         assert!(!interface.outputs.contains("internal"));
+    }
+
+    #[test]
+    fn interface_is_scoped_to_selected_runnable_class() {
+        let source = r#"
+within Demo;
+package Models
+  connector UnselectedConnector
+    parameter Real gain = 99;
+    input Real connector_input = 88;
+    output Real connector_output;
+  end UnselectedConnector;
+  model Selected
+    parameter Real gain = 3;
+    input Real command = 2;
+    output Real sample(unit="m") "selected output";
+    model Nested
+      input Real nested_input = 77;
+      output Real sample(unit="s") "nested output";
+    end Nested;
+  equation
+    sample = gain * command;
+  end Selected;
+  model Sibling
+    parameter Real sibling_parameter = 66;
+    input Real sibling_input = 55;
+    output Real sibling_output;
+  equation
+    sibling_output = sibling_input;
+  end Sibling;
+end Models;
+"#;
+        let interface = parse_model_interface(source, "Models.mo");
+        assert_eq!(interface.model_name.as_deref(), Some("Models.Selected"));
+        assert_eq!(interface.parameters, HashMap::from([("gain".into(), 3.0)]));
+        assert_eq!(interface.inputs, BTreeSet::from(["command".into()]));
+        assert_eq!(
+            interface.input_defaults,
+            HashMap::from([("command".into(), 2.0)])
+        );
+        assert_eq!(interface.outputs, BTreeSet::from(["sample".into()]));
+        assert_eq!(
+            interface.variable_metadata["sample"].unit.as_deref(),
+            Some("m")
+        );
+        assert_eq!(
+            interface.variable_metadata["sample"].description.as_deref(),
+            Some("selected output")
+        );
+        let ast = parse_recovered(source, "Models.mo");
+        let explicit = model_interface_for_class(&ast, "Demo.Models.Sibling").unwrap();
+        assert_eq!(explicit.model_name.as_deref(), Some("Models.Sibling"));
+        assert_eq!(
+            explicit.parameters,
+            HashMap::from([("sibling_parameter".into(), 66.0)])
+        );
+        assert_eq!(explicit.inputs, BTreeSet::from(["sibling_input".into()]));
+        assert!(model_interface_for_class(&ast, "Demo.Models.Missing").is_none());
+        let library = parse_model_interface(
+            "connector Library input Real value=4; parameter Real gain=7; end Library;",
+            "Library.mo",
+        );
+        assert!(library.model_name.is_none());
+        assert!(
+            library.parameters.is_empty()
+                && library.inputs.is_empty()
+                && library.outputs.is_empty()
+                && library.input_defaults.is_empty()
+        );
     }
 
     // --- extract_model_name ---
@@ -986,10 +864,8 @@ end MyPackage;
         );
     }
 
-    // --- extract_parameters ---
-
     #[test]
-    fn test_extract_parameters_simple() {
+    fn interface_keeps_numeric_parameter_bindings() {
         let source = r#"
 model SpringMass
   parameter Real k = 100.0;
@@ -997,28 +873,26 @@ model SpringMass
   Real x;
 end SpringMass;
 "#;
-        let params = extract_parameters(source);
+        let params = parse_model_interface(source, "parameters.mo").parameters;
         assert_eq!(params.len(), 2);
         assert_eq!(params.get("k"), Some(&100.0));
         assert_eq!(params.get("m"), Some(&1.0));
     }
 
     #[test]
-    fn test_extract_parameters_no_binding() {
+    fn interface_preserves_absent_parameter_bindings() {
         let source = r#"
 model Test
   parameter Real k;
 end Test;
 "#;
-        let params = extract_parameters(source);
+        let params = parse_model_interface(source, "parameters.mo").parameters;
         // Parameter without binding value should not appear (no numeric value)
         assert!(params.is_empty());
     }
 
-    // --- extract_inputs_with_defaults ---
-
     #[test]
-    fn test_extract_inputs_with_defaults() {
+    fn interface_keeps_numeric_input_bindings() {
         let source = r#"
 model Test
   input Real g = 9.81;
@@ -1027,7 +901,7 @@ equation
   y = g;
 end Test;
 "#;
-        let inputs = extract_inputs_with_defaults(source);
+        let inputs = parse_model_interface(source, "inputs.mo").input_defaults;
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs.get("g"), Some(&9.81));
     }

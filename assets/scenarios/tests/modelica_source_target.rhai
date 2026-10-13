@@ -1,7 +1,9 @@
+import "lunco://scripting/tools/asset_preflight" as preflight;
+
 // Source admission rejects absent targets and retires a replaced live model.
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["ListOpenDocuments", "CosimStatus"], required_inputs: []}
+      query_reads: ["ListOpenDocuments", "CosimStatus", "ValidateAsset"], required_inputs: []}
 }
 const ROOT = "/ModelicaRuntimeContracts";
 const LIBRARY = "lunco://models/tests/SourceLibrary.mo";
@@ -28,6 +30,8 @@ fn finish(state, failures) {
 }
 fn on_start(me, ctx) {
     this = #{done: false, ticks: 0, phase: "admission", doc: (), failures: []};
+    this.preflight = preflight::create([TARGET]);
+    this.interface_checked = false;
     this.participants = query("CosimStatus").synchronization.active_participants;
     for doc in query("ListOpenDocuments").open_documents {
         if doc.kind == "usd" && doc.title == "modelica_runtime_contracts" { this.doc = doc.doc_id; }
@@ -44,6 +48,22 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.ticks += 1;
     if this.ticks > 3000 { this = finish(this, ["source target admission timed out at " + this.phase]); return; }
+    if !this.interface_checked {
+        this.preflight = preflight::advance(this.preflight);
+        if this.preflight.error != () { this = finish(this, [this.preflight.error]); return; }
+        if !this.preflight.done { return; }
+        let report = this.preflight.reports[TARGET];
+        this.failures += [
+            t_true(report.info.model == "SourceTargetProbe" && report.info.params.len() == 1
+                && report.info.params.gain == 3.0,
+                "source parameters belong to the selected runnable class"),
+            t_true(report.info.inputs.len() == 0,
+                "unselected and nested class inputs are absent from the source interface"),
+            t_true(report.info.input_defaults.len() == 0,
+                "unselected and nested defaults are absent from the source interface")
+        ];
+        this.interface_checked = true;
+    }
     let status = query("CosimStatus");
     if status == () || status.entities == () { return; }
     let fresh = row(status.entities, ROOT + "/NoTarget");

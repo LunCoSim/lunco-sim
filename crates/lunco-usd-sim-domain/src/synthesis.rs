@@ -918,7 +918,8 @@ fn validate_generated_source(
             }
         }
     }
-    Ok(parse_model_interface_from_ast(&ast))
+    model_interface_for_class(&ast, model_name)
+        .ok_or_else(|| format!("root class `{model_name}` has no source interface"))
 }
 
 /// Read a policy-owned unit partition and prove that it is only rearranging
@@ -1875,6 +1876,12 @@ impl ActuatorWrenchSynthesizer {
                     ),
                 }]
             })?;
+        let interface = model_interface_for_class(&interface, &model_name).ok_or_else(|| {
+            vec![DomainProjectionError {
+                path: root_string.clone(),
+                message: format!("root class `{model_name}` has no source interface"),
+            }]
+        })?;
         let source_roots = parse_policy_source_roots(
             hook_map_value(&map, "source_roots"),
             ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER,
@@ -1892,7 +1899,7 @@ impl ActuatorWrenchSynthesizer {
         // that does not exist.
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
-            interface: parse_model_interface_from_ast(&interface),
+            interface,
             inputs,
             outputs,
             component_paths,

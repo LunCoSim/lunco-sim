@@ -13,7 +13,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
-    ModelInterface, ModelicaVariableMetadata, parse_model_interface_from_ast,
+    ModelInterface, ModelicaVariableMetadata, model_interface_for_class,
 };
 use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_runtime::{
