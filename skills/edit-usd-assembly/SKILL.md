@@ -1006,7 +1006,9 @@ include view opinions; restart clears them and publishes root/runtime input.
 Incremental edits and deferred reference roots use the named native edit target.
 A coarse replacement waits for native address admission and its root projection
 notice before document synchronization completes. Closing or rehoming the
-projection retires the source-input lease and retained stage handle.
+projection retires the source-input lease and retained stage handle. Identical
+input publication preserves an in-flight capture; preview publication records
+its current document generation before live synchronization.
 
 The numeric production gate `scenes/tests/terrain_document_authoring.usdc`
 uses verdict channel `TERRAIN_DOCUMENT_AUTHORING`. It covers native internal

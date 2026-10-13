@@ -3234,11 +3234,12 @@ fn release_preview_projection(world: &mut World, doc: DocumentId) {
 fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
     let coords = resolve_viewport_twin_coords(world, doc)?;
     let root_id = lunco_assets_core::twin_uri(&coords.0, &coords.1);
-    let input = world
+    let document = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)?
-        .document()
-        .capture_stage_input(&root_id, true);
+        .document();
+    let generation = document.generation();
+    let input = document.capture_stage_input(&root_id, true);
     let input = match input {
         Ok(input) => input,
         Err(error) => {
@@ -3251,6 +3252,9 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     let mut backed = world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
     backed.track_preview(doc, coords.0.clone(), coords.1.clone());
     let result = backed.publish_stage_input(doc, &roots, &server, input);
+    if result.is_ok() {
+        backed.mark_overlay_synced(doc, generation);
+    }
     if let Err(error) = result {
         report_preview_error(world, "usd-source-preparation-failed", error);
         return None;

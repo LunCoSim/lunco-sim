@@ -174,7 +174,10 @@ the original root retains its own authored arcs and native codec.
 `DocBackedTwinScenes` owns a publication lease and strong asset handle for this
 immutable input. The asset loader captures the lease revision and rejects it if
 publication changed or the document retired before preparation completed.
-Closing or rehoming a projection retires that input and its stage handle.
+Publishing an identical recipe preserves the current capture. The preview
+producer records the document generation it published, so initial live
+synchronization consumes that input without a second publication. Closing or
+rehoming a projection retires that input and its stage handle.
 
 The initial Twin scene asset includes `@root@` and `@runtime@`; its view layer is
 empty. Its live

@@ -78,7 +78,7 @@ impl Default for StageClosureLimits {
 /// The recipe crosses async/task boundaries as data. The Bevy runtime crate
 /// consumes it to build its non-`Send` canonical stage; document authoring uses
 /// the same bytes to resolve authored arcs without owning runtime state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageRecipe {
     /// Canonical identifier of the root layer.
     pub root_id: String,

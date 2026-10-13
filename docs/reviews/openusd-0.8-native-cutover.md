@@ -212,6 +212,19 @@ Skill validation and Python syntax checks pass. Evidence is in
 `/tmp/luncosim-native-integrated-query-api.log`, and
 `/tmp/luncosim-native-integrated-editor-proposal.log`.
 
+Binary source-preview acceptance also passes: the owned windowed session on port
+4180 ran `test_usd_source_isolation.py` with the replacement scene and the USDC
+terrain source selected at `/TerrainRocksTest/Terrain`. Its eight Rhai checks
+verify one settled source preview, exact source identity, preview-scoped
+selection, unchanged active Twin/physics topology, continuing physics, and
+invalid-source rejection without a runtime fault. API Exit and port release
+were verified. `StageRecipe` provides typed equality; identical publications
+preserve an in-flight capture, while changed content and retirement invalidate
+it. Preview publication records its generation before live synchronization.
+The focused input lifecycle test passes with those semantics. Evidence is in
+`/tmp/luncosim-native-input-idempotence-test.log` and
+`/tmp/luncosim-native-binary-source-isolation-final.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

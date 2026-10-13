@@ -142,6 +142,9 @@ impl DocumentStageInputOwner {
             previous.root_id == recipe.root_id,
             "document stage input cannot change its root identity"
         );
+        if previous.as_ref() == &recipe {
+            return Ok(());
+        }
         *current = Some(Arc::new(recipe));
         Ok(())
     }
@@ -283,6 +286,13 @@ mod document_input_tests {
         assert!(owner.publish(recipe("other.usda")).is_err());
         reader.validate_capture(&first).unwrap();
         owner.publish(recipe("scene.usda")).unwrap();
+        reader.validate_capture(&first).unwrap();
+        owner
+            .publish(lunco_usd_compose::recipe::StageRecipe::from_source(
+                "scene.usda",
+                "#usda 1.0\n(defaultPrim = \"World\")\ndef Xform \"World\" {}\n",
+            ))
+            .unwrap();
         assert!(reader.validate_capture(&first).is_err());
         let second = reader.capture().unwrap();
         reader.validate_capture(&second).unwrap();
