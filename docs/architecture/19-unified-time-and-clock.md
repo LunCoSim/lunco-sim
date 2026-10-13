@@ -130,6 +130,13 @@ barrier it presents the upper endpoint, `n`, then remains fixed. The sample's
 simulation seconds, MET, and Julian date all come from the same `MissionClock`
 mapping as `WorldTime`.
 
+Avian's transform-easing dependency applies the same `[0, 1]` bound to linear,
+spherical, and Hermite interpolation. Retained whole fixed cycles can make
+`Time<Fixed>::overstep_fraction()` exceed one; they remain queued demand and
+must not extrapolate a rendered transform beyond its captured endpoints. The
+vendored dependency owns this bound without changing the simulation clock or
+normalizing invalid authored rotations.
+
 Ordinary USD time-sampled transforms, visibility, and material channels use
 this physical presentation sample. Avian and other causal simulation state
 advance from `WorldTime` at integer fixed ticks; celestial body state reads

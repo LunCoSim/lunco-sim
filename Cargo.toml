@@ -248,6 +248,8 @@ default-members = [
 resolver = "2"
 
 [patch.crates-io]
+# Bounded render easing over retained fixed cycles; see vendor provenance.
+bevy_transform_interpolation = { path = "third_party/bevy_transform_interpolation" }
 # Native dimensional motor integration; see third_party/avian3d/LUNCOSIM-PROVENANCE.md.
 avian3d = { path = "third_party/avian3d" }
 # Native GJK stall classification and scalar determinism; see the vendor provenance.

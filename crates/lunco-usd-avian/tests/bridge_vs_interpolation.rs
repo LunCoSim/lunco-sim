@@ -135,3 +135,57 @@ fn interpolation_does_not_drag_the_solved_position() {
          {tick:.4} m/tick = {worst:.4} m; steps = {steps:?}"
     );
 }
+
+#[test]
+fn queued_fixed_cycles_do_not_extrapolate_the_render_pose() {
+    let mut app = make_app();
+    let grid = shell(&mut app);
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            LinearVelocity(Vector::X),
+            Transform::default(),
+            ChildOf(grid),
+        ))
+        .id();
+    let mut rocks = Vec::new();
+    for i in 0..1440 {
+        rocks.push(
+            app.world_mut()
+                .spawn((
+                    RigidBody::Static,
+                    Transform::from_rotation(Quat::from_rotation_y(
+                        i as f32 * std::f32::consts::TAU / 1440.0,
+                    )),
+                    ChildOf(grid),
+                ))
+                .id(),
+        );
+    }
+    app.add_systems(
+        RunFixedMainLoop,
+        (|mut time: ResMut<Time<Fixed>>| {
+            time.accumulate_overstep(Duration::from_secs(5));
+        })
+        .after(bevy::app::RunFixedMainLoopSystems::FixedMainLoop)
+        .before(avian3d::interpolation::TransformEasingSystems::Ease),
+    );
+    app.update();
+    app.update();
+    let pending = app.world().resource::<Time<Fixed>>().overstep();
+    assert!(pending >= Duration::from_secs(5));
+    let solved = app.world().get::<Position>(body).unwrap().x;
+    let rendered = app.world().get::<Transform>(body).unwrap().translation.x as f64;
+    assert!(
+        rendered <= solved + 1e-6,
+        "rendered {rendered}, solved {solved}, pending {pending:?}"
+    );
+    for rock in rocks {
+        let rotation = app.world().get::<Transform>(rock).unwrap().rotation;
+        assert!(
+            rotation.is_normalized(),
+            "{rotation:?}, pending {pending:?}"
+        );
+    }
+}

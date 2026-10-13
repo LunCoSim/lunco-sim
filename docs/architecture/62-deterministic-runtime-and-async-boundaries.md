@@ -280,7 +280,9 @@ the time owner drains `FixedMain` synchronously before `Update`, up to 64
 complete fixed cycles per app update at every transport rate. The virtual
 clock admits the complete running delta; budget exhaustion leaves pending
 duration in `Time<Fixed>::overstep`. Every step still receives the same
-`Time<Fixed>` delta. Typed scene-tool and menu hooks run in a separate bounded UI queue after picking in
+`Time<Fixed>` delta. Render transform easing bounds its interpolation fraction
+to `[0, 1]` independently of that backlog: queued cycles cannot extrapolate
+positions or rotations beyond completed endpoints. Typed scene-tool and menu hooks run in a separate bounded UI queue after picking in
 `PreUpdate`, before that fixed loop, so they do not wait behind general REPL
 requests or the current frame's fixed-step work. The UI and simulation still
 share the GUI thread: a long tick or catch-up burst delays the next native input
