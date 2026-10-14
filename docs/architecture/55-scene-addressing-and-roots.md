@@ -213,6 +213,13 @@ owner. `UsdRead::asset` is the authored/query spelling, and fallible
 external bytes are fetched. A consumed value without contributing-layer context
 fails visibly. Authored strings and serialized values remain native USD data.
 
+Source-layer serialization selects the native format by exact layer identity
+and requires its `FileFormatCaps::EDIT` capability before publishing replacement
+bytes. Native USDZ supports a fresh single-layer export but rejects replacement:
+the document's `Sdf Data` does not retain the package's sibling layers and assets.
+Package entry identity and provenance must reach the storage/document owner
+before USDZ can be admitted as an editable source.
+
 Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.
 `./x` and `../x` are strictly layer-relative. A search path, a relative
 spelling without a scheme or leading `./`/`../` such as `@terrain/site@`,

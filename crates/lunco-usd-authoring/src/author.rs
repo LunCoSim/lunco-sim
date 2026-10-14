@@ -79,7 +79,7 @@ pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
     parse_usda(text).map_err(|e| anyhow!("{e}"))
 }
 
-/// Encode one authored layer with the native codec selected by its identity.
+/// Encode replacement bytes with the native editable codec for this identity.
 /// This preserves the resolver anchor and never stores text under a binary id.
 pub fn layer_bytes(identifier: &str, data: &sdf::Data) -> Result<Vec<u8>> {
     let anchor = ResolvedPath::new(identifier);
@@ -89,6 +89,13 @@ pub fn layer_bytes(identifier: &str, data: &sdf::Data) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow!("USD layer has no UTF-8 format extension: {identifier}"))?;
     let format = sdf::LayerRegistry::find_by_extension(extension)
         .ok_or_else(|| anyhow!("unknown USD layer format: {identifier}"))?;
+    if !format.caps().can_edit() {
+        return Err(sdf::ExportError::NotEditable {
+            identifier: identifier.to_owned(),
+            format: format.format_id(),
+        }
+        .into());
+    }
     if format.format_id() == "usda" {
         ensure_usda_serializable(data)?;
     }
@@ -934,6 +941,35 @@ mod tests {
     use lunco_usd_data::usd_data::UsdDataExt;
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n    def Sphere \"Box\"\n    {\n        double radius = 1\n        def Sphere \"Inner\"\n        {\n            double radius = 9\n        }\n    }\n}\n";
+
+    #[test]
+    fn source_codec_respects_native_editability() {
+        let data = usda_to_data(SCENE).unwrap();
+        for extension in ["usd", "usda", "usdc"] {
+            let identifier = format!("lunco://models/root.{extension}");
+            let bytes = layer_bytes(&identifier, &data).unwrap();
+            let restored = sdf::Layer::from_bytes(&identifier, bytes).unwrap();
+            assert_eq!(
+                restored
+                    .data()
+                    .try_field(&SdfPath::new("/World/Box.radius").unwrap(), "default")
+                    .unwrap()
+                    .as_deref(),
+                Some(&Value::Double(1.0))
+            );
+        }
+        let package_format = sdf::LayerRegistry::find_by_extension("usdz").unwrap();
+        assert!(package_format.caps().can_write());
+        assert!(!package_format.caps().can_edit());
+        assert!(package_format.write_bytes(&data).is_ok());
+        let identifier = "lunco://models/root.usdz";
+        let error = layer_bytes(identifier, &data).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<sdf::ExportError>(),
+            Some(sdf::ExportError::NotEditable { identifier: rejected, format })
+                if rejected == identifier && format == "usdz"
+        ));
+    }
 
     #[test]
     fn layered_stage_preserves_inheritance_identity_and_opinion_strength() {

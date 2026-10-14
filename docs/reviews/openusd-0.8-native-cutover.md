@@ -386,3 +386,10 @@ Evidence is under `/tmp/luncosim-native-input-*.log`.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
+   Native `usdz::open_package`, `package_contains`, and `package_entry` already
+   own archive access and scoped caching; application wiring must consume them
+   rather than adding a ZIP reader. Source replacement serialization now checks
+   native `FileFormatCaps::EDIT`, so the single-layer USDZ writer cannot replace
+   a package and drop sibling layers or textures. Fresh native package export
+   remains available. `source_codec_respects_native_editability` covers supported
+   source codecs and the package rejection at this serialization seam.
