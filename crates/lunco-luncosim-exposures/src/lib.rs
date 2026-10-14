@@ -7,8 +7,8 @@
 //! Domain values and transformations remain in their authored owners.
 //!
 //! Continuous sources are invalidated by Bevy change ticks and coalesced to the
-//! bounded exposure cadence. Static or paused scenes do not repeat the expensive
-//! resolution work.
+//! bounded real-time exposure cadence. Unchanged snapshots do not repeat the
+//! expensive resolution work; simulation pause does not pause UI refresh.
 
 use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Rotation};
 use bevy::math::{DQuat, DVec3};
@@ -1288,17 +1288,34 @@ mod exposure_schedule_tests {
     use super::*;
 
     #[test]
-    fn publisher_timer_runs_at_the_exposure_cadence() {
-        let mut timer = None;
-
-        assert!(!exposure_publish_due_at(
-            &mut timer,
-            Duration::from_millis(49)
-        ));
-        assert!(exposure_publish_due_at(
-            &mut timer,
-            Duration::from_millis(2)
-        ));
+    fn publisher_cadence_uses_real_time_during_simulation_pause_and_warp() {
+        let mut world = World::new();
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(ExposureRefresh {
+            first_update: false,
+            driven_vessel_dirty: true,
+            ..Default::default()
+        });
+        world.resource_mut::<Time<Virtual>>().pause();
+        let mut condition = IntoSystem::into_system(exposure_publish_due);
+        condition.initialize(&mut world);
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(49));
+        assert!(!condition.run((), &mut world).unwrap());
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(2));
+        assert!(condition.run((), &mut world).unwrap());
+        world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs(1));
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(1));
+        assert!(!condition.run((), &mut world).unwrap());
     }
 }
 
@@ -1722,7 +1739,7 @@ fn clear_scene_exposures_impl(exposures: &mut EngineExposures, refresh: &mut Exp
 /// publisher still uses [`ExposureRefresh`] to decide whether its snapshot
 /// actually needs rebuilding.
 pub(crate) fn exposure_publish_due(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     refresh: Res<ExposureRefresh>,
     mut timer: Local<Option<Timer>>,
 ) -> bool {

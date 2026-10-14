@@ -1318,6 +1318,7 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         // write. Returning `None`/`false` is what lets the registry fall through to a
         // backend that DOES own the name.
         read_input: |_, _, _| None,
+        initial_expression: None,
         resolve_output: Some(resolve_link_port_slot),
         resolve_input: None,
         read_slot: Some(read_link_port_slot),

@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "ModelicaRuntimeContracts"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/modelica_initialization_network.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+}

@@ -285,21 +285,23 @@ The ordering above is *within* a tick. The other half of an FMI-CS master is the
 for whom. Stating it explicitly (finding `A3` — it was previously unstated, and
 the code did not implement any coherent version of it):
 
-**1. Communication points are explicit and sub-rated.** Every model carries a
+**1. Communication points follow the fixed master clock.** Every model carries a
 `communication_period_secs` and `next_communication_time`. The world still
 advances on the fixed 60 Hz clock, but a Modelica participant is not a 60 Hz
-render callback. Inputs are sampled and outputs are published only at the next
-declared point; the last validated output is held between points. The USD
+render callback. Each interval retains the ordered input vector sampled at its
+start coordinate; outputs are published at its declared endpoint. Intervening
+master ticks cannot overwrite that interval's inputs. The last validated output
+is held between endpoints. The USD
 `LunCoProgramAPI` property `lunco:program:communicationPeriod` is the source of
-truth. When the property is omitted, the schema's documented 0.1 s (10 Hz)
-value is used. An authored non-finite, sub-tick, over-sized, or non-lattice
+truth. When the property is omitted, the schema and runtime use one master physics
+tick (1/60 second). Longer authored periods explicitly select multirate
+exchange with held outputs. An authored non-finite, sub-tick, over-sized, or non-lattice
 value is a terminal model-configuration error and is never replaced by that
 semantic default. The live Rumoca participant accepts communication periods
 from one master fixed tick through `MAX_MACRO_STEP_DT`, in integer master-tick
 units. This master admits at most one asynchronous participant transaction per
 fixed tick, so a sub-tick period is rejected instead of being silently
-undersampled. A model that needs every physics tick authors one fixed-tick
-period explicitly.
+undersampled. The default exchanges state on every physics tick.
 
 **2. The macro step is `communication_point − current_time`, bounded by the
 participant contract.**
@@ -316,37 +318,37 @@ in-flight response at that endpoint. A worker result is still required before
 the shared world crosses the communication point, so no stale value crosses a
 causal boundary.
 
-**3. The communication barrier follows the causal topology; worker execution is asynchronous.**
-The `Step` dispatched at tick *N* is executed on the worker thread. The
-simulation waits before crossing the communication point only for participants
-in the graph-derived reverse causal closure of a stateful engine sink. A
-telemetry, electrical, or supervisory model with no path to shared physics may
-remain in flight while Avian and the rest of the shared world continue using
-its last validated output. This is synchronous semantics for causal paths,
-with non-blocking implementation for independent paths:
+**3. Every active participant synchronizes at its communication points.**
+The master dispatches the complete due set in stable participant order. Workers
+may solve that set concurrently, but the next complete fixed cycle waits until
+every due result is validated and committed. This includes telemetry,
+electrical, and supervisory models: the absence of a native force consumer does
+not grant a separate clock. A slower authored communication period changes the
+due set; its last committed output is held between those points.
 
-* `SimulationBarrier` is raised at a coupled participant's communication point
-  and projected by the time spine onto `Time<Virtual>`. Therefore `SimTick`, Rhai,
-  controllers, connection propagation, Modelica inputs, and Avian stop only at
-  a real causal exchange boundary. Between boundaries they continue using the
-  declared zero-order hold. A result is consumed in `Update`; the next fixed
-  tick then reads the fresh output, propagates it, applies forces/motors once,
-  and schedules the next point.
-* For a coupled request, the current fixed tick is the last tick admitted until
-  the worker result returns. The time owner retains remaining same-frame fixed
-  time and resumes it after the barrier clears, so a slow solver costs wall
-  time without dropping simulation time or letting a Rhai/controller tick run
-  ahead of the state it observes. An independent request does not raise this
-  barrier and its last validated output remains held until its next completed
-  communication point.
-* Membership is computed from the composed wiring projection by walking
-  backwards from backend-owned `CausalStateSink` capabilities. Avian, joint,
-  hardware, and wheel backends mark the actual endpoint that writes state;
-  future FMU or other backends join the same rule by marking their own
-  state-writing endpoint. This captures intermediate participant chains and
-  feedback without classifying every Modelica model as global. While the
-  binding epoch or any edge is unresolved, membership remains fail-closed and
-  all live Modelica participants retain the barrier.
+`SimulationBarrier` gates `FixedMain`, including SimTick, Rhai, controllers,
+connection propagation, Modelica input sampling, and Avian. Results are consumed
+by the single `SimulationCompletions` schedule before clock projection. The
+native driver also services that schedule on response readiness between app
+updates; readiness never consumes a receipt or advances a clock. Partial
+receipts do not require another complete application update.
+
+While a running solver is pending, elapsed pacing demand remains in the fixed
+accumulator. User pause and scene preparation freeze demand. Rate changes alter
+the number of fixed ticks admitted per wall second; they do not change the
+physics quantum or the Modelica time interval associated with a tick. A step
+already dispatched before a pause may commit its existing endpoint, but pause
+dispatches no new steps and accrues no demand from paused wall time.
+
+The same input latch serves default and slower communication periods. The
+accepted step record contains that retained vector and its start/end coordinates.
+Session replacement, reset, and failure retire any pending interval inputs;
+user pause preserves a partially accumulated interval.
+
+The composed topology tracks the full Modelica population and separately exposes
+the reverse closure of native `CausalStateSink` endpoints for diagnostics.
+Scenario dependency plans authorize access independently of clock membership.
+Unresolved topology remains fail-closed during admission.
 
 **4. Script participants use the same fixed-step transaction boundary.**
 `sync_script_inputs` runs after causal propagation and physics actuation, then
@@ -366,19 +368,16 @@ from depending on incidental system order. Modelica input sampling and script
 input sampling therefore occur at fixed schedule edges, not as unsynchronised
 per-frame callbacks.
 
-This ordering contract does not make every dynamic script read a declared
-co-simulation edge. Rhai's direct `get`/`port` access can read a Modelica value
-without adding a `SimConnection`, so those accesses are not represented in the
-causal barrier graph yet. The whole-simulation dependency and async admission
-contract is tracked in
+Rhai direct reads and writes require the calling scenario's declared access
+plan even when the participant already belongs to the shared clock. The access
+and admission contract is specified in
 [`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md).
 
-Because the wait is real, it is **surfaced**: `lunco_modelica_worker::worker::CosimLag`
-records the communication gap for every live participant every fixed tick, and
-`warn!`s (rate-limited) past 0.25 s. An off-thread worker is not a second
-simulation clock. An independent model still uses the same authoritative world
-time and explicit communication points; it is simply not allowed to stall the
-world when its outputs are not on a shared-state causal path.
+`CosimLag` exposes the communication gap for each live participant. Worker wall
+time measures service latency; it never advances simulation time. The production
+`modelica_initialization_network` gate checks both default and explicit 30 Hz
+participants through 4x, 0.25x, pause, and resume, including Modelica's own `time`
+coordinate.
 
 **5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
 The worker's command-squashing (which correctly collapses redundant

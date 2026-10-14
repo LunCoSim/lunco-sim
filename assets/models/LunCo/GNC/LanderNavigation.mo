@@ -66,22 +66,24 @@ model LanderNavigation
     "Geometric altitude innovation used by the observer";
   LunCo.Sensors.FilteredSignal altitude_observation_authority(
     time_constant_s = 0.02,
-    acquisition_time_constant_s = altitude_observation_acquisition_time_constant_s);
+    acquisition_time_constant_s = altitude_observation_acquisition_time_constant_s,
+    u = 0.0,
+    sample_valid = position_observation_valid);
   LunCo.Sensors.FrameVectorTransform acceleration_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = imu_attitude_quat_w,
+    quaternion_x = imu_attitude_quat_x,
+    quaternion_y = imu_attitude_quat_y,
+    quaternion_z = imu_attitude_quat_z,
+    vector_x = imu_coordinate_accel_local_x,
+    vector_y = imu_coordinate_accel_local_y,
+    vector_z = imu_coordinate_accel_local_z);
 
 equation
   // The IMU supplies specific force in the body frame. Rotate it into the
   // navigation frame with the measured attitude, then restore gravity. The
   // controller never integrates a body-local axis as though it were a
   // navigation axis; the frame conversion remains in the Modelica estimator.
-  acceleration_transform.quaternion_w = imu_attitude_quat_w;
-  acceleration_transform.quaternion_x = imu_attitude_quat_x;
-  acceleration_transform.quaternion_y = imu_attitude_quat_y;
-  acceleration_transform.quaternion_z = imu_attitude_quat_z;
-  acceleration_transform.vector_x = imu_coordinate_accel_local_x;
-  acceleration_transform.vector_y = imu_coordinate_accel_local_y;
-  acceleration_transform.vector_z = imu_coordinate_accel_local_z;
   navigation_accel_x = acceleration_transform.world_frame_x + gravity_nav_x;
   navigation_accel_y = acceleration_transform.world_frame_y + gravity_nav_y;
   navigation_accel_z = acceleration_transform.world_frame_z + gravity_nav_z;
@@ -110,8 +112,6 @@ equation
   // gap may have a large innovation because the IMU-only state continued to
   // propagate. The canonical acquisition primitive makes authority continuous
   // as valid position evidence resumes.
-  altitude_observation_authority.u = 0.0;
-  altitude_observation_authority.sample_valid = position_observation_valid;
   altitude_position_error = altimeter_vehicle_position_y - nav_pos_y;
   der(nav_pos_y) = nav_vel_y + altitude_position_correction_gain
     * altitude_observation_authority.acquisition * altitude_position_error;

@@ -174,25 +174,23 @@ already hit `BDF step too small` and worker OOM on `RoverThermalSystem` / `Abdul
 
 1. **Off the render thread.** Heavy steppers run on the worker / server tick
    (already true — rumoca runs on a worker thread per [`22-domain-cosim.md`](22-domain-cosim.md)),
-   never blocking the UI/update loop. For a causal participant, the worker is
-   asynchronous in wall-clock execution while the shared simulation remains at
-   one deterministic communication point until the result arrives. An
-   independent participant may finish without holding the world; its last
-   validated output remains zero-order-held. The app remains responsive and a
+   never blocking the UI/update loop. Worker execution is asynchronous in wall
+   time while the shared simulation remains at one deterministic communication
+   point until all due participants finish. Every active participant uses this
+   boundary; slower domains retain outputs between their declared points. The app remains responsive and a
    failed worker step becomes a durable model fault rather than being accepted
    as a successful result.
 2. **Sub-rate.** Slow domains change slowly — step thermal at 5–10 Hz, not 60.
    The live master now uses the authored
-   `lunco:program:communicationPeriod` as the co-simulation boundary (0.1 s by
-   default). It samples inputs and holds the last validated output between
-   points, while the 60 Hz `SimTick`, Avian, and Rhai continue. A model that
-   needs a fixed-tick exchange authors `1/60` explicitly; this is a causal
-   communication policy, not a wall-clock throttle.
+   `lunco:program:communicationPeriod` as the co-simulation boundary (one physics
+   tick by default). It samples inputs and holds the last validated output between
+   points, while the 60 Hz `SimTick`, Avian, and Rhai continue. Longer periods must be authored explicitly for intentional multirate
+   exchange; the default keeps Modelica and physics at the same fixed cadence.
 3. **Step budget.** Cap solver substeps per communication step; on exceed,
    report the participant failure and hold the shared simulation rather than
    silently degrading a state that other participants consume. An explicitly
-   independent domain may choose a separate communication policy, but that is
-   a declared co-simulation boundary, not an implicit Modelica fallback.
+   slower domain may choose a longer communication period, with the same
+   fixed master clock and completion requirement at each declared point.
 
 A program that makes no realtime promise tolerates all three naturally. One that DOES
 cannot sub-rate and cannot exceed its step budget — which is exactly why the promise is
@@ -448,8 +446,8 @@ end RoverBattery;
    promise. **Zero new Rust to author.**
 2. **ECS stepper** — confirm the model steps via the existing `FixedUpdate` cosim
    pipeline (`sync_modelica_outputs` → `propagate_connections` → `sync_inputs_to_modelica`
-   → worker step), gated on the sim running (`Time<Virtual>.relative_speed > 0`) and sub-rated to ~10 Hz
-   (every Nth `SimTick`), running on the worker thread.
+   → worker step), gated on the sim running (`Time<Virtual>.relative_speed > 0`) with an explicitly authored 0.1-second communication period for this slow
+   battery domain, running on the worker thread.
 3. **State-as-component** — store the stepper's `soc` on the entity as a small
    replicated component (`BatteryState { soc, voltage }`), the first concrete
    instance of "state vector = component" (§4). Snapshot/restore wired to

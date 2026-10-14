@@ -3323,7 +3323,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
  for every entity carrying a `ModelicaModel` (the Modelica worker
- drops its `steppers` / `cached_models` / `sim_streams` entries). Scene-owned
+ drops its `steppers` / `cached_models` entries). Scene-owned
  Rhai documents are stopped and closed by the shared `SceneTeardown` owner;
  independent API/editor documents remain open until their explicit close.
  Without these ownership boundaries, repeated reloads accumulate stale

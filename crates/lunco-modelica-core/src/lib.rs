@@ -254,14 +254,10 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    // ── Document foundation (moved out of the UI plugin so a headless server
-    // journals + replicates Modelica edits, not just the GUI) ──────────────
-    // The registry (source-of-truth for open `.mo` docs), the A3 journal-wire
-    // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
-    // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
-    // adds core first, so the GUI still gets them. The transport-free edit
-    // command plugin is owned by `lunco-modelica-api` and installed by API
-    // hosts. Guarded/idempotent so hosts can compose the packages independently.
+    // Every host shares this document registry, journal binding, and lifecycle
+    // drain. Workbench plugins consume these services without creating an
+    // execution engine. API hosts install the transport-free edit commands
+    // from lunco-modelica-api.
     app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>();
     // Structural source edits can arrive before the asynchronous syntax cache
     // catches up. The queue and its drain are document mechanics, so headless

@@ -27,10 +27,6 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-pub mod sim;
-
-pub use sim::{SimId, SimRegistry, SimSample, SimSnapshot, SimStream, VarHistory};
-
 /// Fallback ring-buffer depth when neither the signal nor the registry names one.
 /// Mirrors `WorkbenchState.max_history`.
 pub const DEFAULT_CAPACITY: usize = 2000;

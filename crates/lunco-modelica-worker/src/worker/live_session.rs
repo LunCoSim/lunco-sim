@@ -120,15 +120,10 @@ impl SessionHandle {
         self.last_step_duration_ns = None;
         let (tx, rx) = bounded(1);
         let id = self.id;
-        let queued_at = web_time::Instant::now();
         let submitted = self.lane.submit(move |sessions| {
-            let _span = bevy::log::info_span!(
-                "modelica_live_step_job",
-                construction_id = id,
-                step_id,
-                queue_wait_us = queued_at.elapsed().as_micros() as u64
-            )
-            .entered();
+            // Tracy includes span fields in source-location identity. Keep the
+            // per-step zone bounded; transaction ids live in the receipts.
+            let _span = bevy::log::info_span!("modelica_live_step_job").entered();
             let Some(stepper) = sessions.get_mut(&id) else {
                 let _ = tx.send(Err(owner_error(format!(
                     "live session {id} is absent from its owner"

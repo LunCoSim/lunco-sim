@@ -1244,17 +1244,17 @@ pub(super) fn causal_participants_changed(
         || revision.is_changed()
 }
 
-/// Recompute the shared-clock participant set from the resolved causal graph.
+/// Project Modelica clock membership and native causal-path diagnostics.
 ///
-/// A Modelica model is a shared-clock participant when, following authored
-/// causal connections backwards, it can reach a stateful engine sink:
+/// Native causal diagnostics follow authored connections backwards from a
+/// stateful engine sink:
 ///
 /// * an input on a backend-owned CausalStateSink endpoint.
 ///
 /// The reverse closure also captures intermediate Modelica or script nodes, so
-/// a model feeding another model that eventually drives a body remains coupled.
-/// Telemetry, electrical, or supervisory outputs do not become barriers merely
-/// because those models are live.
+/// a model feeding another model that eventually drives a body is included.
+/// Clock membership includes every live Modelica model, regardless of this
+/// diagnostic subset.
 ///
 /// The projection is fail-closed until the binding epoch is sealed and every
 /// connection has reached a terminal binding state. During that interval every
@@ -1286,8 +1286,7 @@ pub(super) fn derive_causal_barrier_participants(world: &mut World) {
 
     // Reverse adjacency: stateful sink <- upstream source. Only executable
     // edges participate in the causal closure. A failed edge is terminal for
-    // binding/readiness, but it is not a live signal path and must not couple
-    // an otherwise independent participant to the shared clock.
+    // binding/readiness, but it is not a live signal path in these diagnostics.
     let mut upstream: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
     for (start, end, _, binding) in &connections {

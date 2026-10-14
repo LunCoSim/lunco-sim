@@ -86,6 +86,12 @@ worker, UI, or solver state. `lunco-modelica-document` owns the headless
  presentation and the `lunica` application facade. The reusable egui graphics
 renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
 the diagram canvas and model preview consume that package directly.
+
+LunCoSim installs `ModelicaCorePlugin` and `ModelicaExecutionPlugin` in
+`LunCoSimSimulationPlugin` for windowed, headless, and offscreen hosts.
+`ModelicaPlugin` and `ModelicaWorkbenchPlugin` add presentation to that existing
+engine. The standalone `lunica` application likewise installs one engine before
+choosing its workbench or headless runner.
 HTML documentation rendering is isolated in
 [`lunco-modelica-docs-ui`](../../crates/lunco-modelica-docs-ui/); the Modelica
 view supplies only the selected class's documentation fragments.
@@ -655,15 +661,22 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
   — returned after each command
 
 The response bridge validates the session, step identity and communication
-endpoint before taking the in-flight transaction. Its sampled inputs move into
-the accepted-step record; observable variables reuse existing map keys, with
-step outputs applied after detected symbols. The accepted record and bounded
-UI sample queue share one immutable output slice. Detected symbols remain
-separate; `SimSampleBatch::samples` presents outputs followed by symbols without
-joining or copying their names. Reset and subsequent responses cannot mutate
-an earlier slice. The worker wire result still owns its output vector until
-admission. These ownership transfers preserve the admission boundary, sample
-order and native `f64` values.
+endpoint before taking the in-flight transaction. Observable variables reuse
+existing map keys and apply outputs after detected symbols. The accepted-step
+record takes ownership of the worker's input and output buffers after that
+projection. Reset and subsequent responses cannot mutate an earlier record.
+A successful session installation emits `ModelicaSessionStarted` with its
+entity and session identity. Presentation validates that identity before
+retiring that actor's plot bindings; it never writes retained live history.
+
+The worker publishes current observations through this response path only.
+`lunco-modelica-telemetry` retains accepted state in `SignalRegistry` using the
+shared recording-rate, channel-limit and retention settings.
+`TelemetryRetentionPlugin` installs that settings/storage plane once for both
+standalone Modelica hosts and the full mission sampler. Its chunked
+`ScalarHistory` owns history and immutable plot snapshots for native and browser
+consumers. History length never adds an entire per-variable copy before a step
+result can cross the communication barrier.
 
 The shared compiler owns native diagnostic heartbeat threads per compile.
 An RAII guard closes their stop channel and joins them on normal return,
@@ -740,7 +753,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v12`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v13`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through
@@ -913,8 +926,12 @@ Staleness: `stale = !is_compiled || compiled_generation != gen`, where
 `gen` is the document's current `generation_owned()`.
 
 Worker lifecycle and simulation time are separate schedule domains. The execution
-host registers `handle_modelica_responses` in `First`, after message rotation
-and before `ClockProjectionSet`. An off-thread compile or step can settle while
+host registers `handle_modelica_responses` once in the core runtime's
+`SimulationCompletions` schedule. `First` services that schedule after message
+rotation and before `ClockProjectionSet`; the native simulation driver also
+services it while waiting for the next fixed deadline. The same system state,
+validation, and ordered response reader serve every invocation. No clock or
+simulation tick advances in this schedule. An off-thread compile or step can settle while
 the fixed clock is held, and a completed causal step releases its hold before
 the virtual clock samples this update. Remaining participants and runtime faults
 retain the hold. Compile-intent admission stays in the `Update` lifecycle cycle.
@@ -1232,9 +1249,85 @@ in the ordered Update chain. Native `PendingModelicaSource` membership and the
 absence of `SceneLoadInFlight` admit its exclusive World boundary. A settled
 scene with no pending sources skips that boundary; deferred source insertion,
 recompile and scene replacement wake it through current component membership.
-While sources or causal producer samples are preparing, admission continues at
-the same boundary. Prim-path dispatch order and initialization sampling are
-unchanged.
+Source arrival publishes the selected Modelica declaration before connected
+input admission, including outputs that USD consumes without redeclaring them.
+An unloaded source retains `PortSurfacePending`; declaration publication clears
+that marker without publishing unsolved output samples. Source replacement
+refreshes the declaration and metadata through the same owner.
+
+
+### Coupled initial admission
+
+`lunco-usd-sim-cosim` owns admission of connected USD Modelica participants at
+`t=0`. Source interfaces and native physical definitions become available before
+numerical admission. Acyclic participants initialize from finite producer samples.
+When the remaining participants depend on one another, the owner captures their
+exact source, authored bindings, scene generation and ordered wiring. It invokes
+the required `synth.coupled-initialization` hook to emit a transient Modelica
+composite containing those instances, their input bindings and input probes.
+The existing Modelica worker compiles and solves the composite while paused;
+preparation neither advances simulation time nor blocks the live World on parsing
+or solver construction.
+
+The hook takes typed member/class/binding/probe facts and returns a typed map with
+`source`. The application policy registry installs `initialize` from
+`synth_acausal_network.rhai`, sharing its instance declaration emitter with acausal
+synthesis. The call inherits Twin lifecycle ownership, Preparation phase and no
+simulation clock. A missing policy, malformed result or unsatisfied initial system
+raises `modelica-initialization-failed` and holds the affected participants.
+
+A worker result is accepted only against the captured scene, sources, authored
+values, physical samples and wiring. Its finite input observations enter live
+construction through one-shot `ConsistentInitialInputs`. All members remain paused
+under `CoupledInitializationPending` until their own solvers are constructed at
+`t=0` and the actual connected observations agree with the composite within the
+active solver tolerances. Certification releases the members together. A changed
+source or wire cannot release an old certificate; failed certification reports the
+same terminal runtime fault. Scene teardown retires the transient participant and
+its admission state. Settled scenes skip the preparation coordinator.
+
+`lunco-usd-avian-joints` seats native joint definitions after validated initial
+body poses and installs them disabled. `PhysicsJointPrepared` keeps those
+measurements available while body readiness prevents solver-island admission.
+Activation waits for real Avian body nodes and removes only the owner's temporary
+disable. `lunco-physics` computes initial articulated membership in stable
+`PhysicsOrderKey` order. The Avian port backend exposes island mass as a typed
+`PortInitialExpression` over member mass inputs; the coordinator follows those
+inputs through their wires into Modelica equations. This uses the actual topology
+and modeled mass relations rather than a sampled or estimated assembly mass.
+`PortRegistry` selects this relation through the same declared owner as reads;
+an owner distinguishes a pending relation from an independent numerical sample.
+Pending initial topology holds admission even when a current active-island sample
+is available. An independent source must provide a real finite sample.
+
+This lifecycle follows FMI 3.0's separation of Initialization Mode and running
+communication: initialization loops are solved at one physical coordinate before
+participants advance. See the standard's [algebraic-loop rules](https://fmi-standard.org/docs/3.0.2/#algebraicLoops)
+and [initial unknowns](https://fmi-standard.org/docs/3.0.2/#ModelStructure).
+The composite implementation applies to source-backed Modelica participants.
+Running causal exchange retains its explicit communication-step semantics; this
+change does not establish FMU archive interoperability or conformance. Same-time
+coupling of opaque Co-Simulation FMUs requires their declared state/rollback and
+step capabilities; it cannot be obtained by repeatedly reading output ports.
+
+The production scenes `modelica_initialization_network.usda` and
+`modelica_initialization_failure.usda` exercise consistent feedback admission and
+terminal rejection of inconsistent initial equations respectively. Their shared
+Rhai gate observes the real participant ports and lifecycle. Twin acceptance stays
+in the Twin's authored tests.
+
+Persistent prepared solver records include the exact clean Rumoca build identity
+in their key and validated record. Unknown or dirty compiler identities disable
+persistent reuse; in-process reuse retains the process-owned executable graph.
+A compiler upgrade cannot admit a graph from another build.
+
+The default running communication interval is one master physics tick. Longer
+integer tick multiples are explicit multirate settings. Each worker request
+admits its ordered input vector atomically, and the shared clock waits for the
+complete validated response. Rumoca's native evaluator also covers zero-state
+algebraic components; their empty continuous state does not disable compiled
+output evaluation. The positive initialization scene additionally exercises
+connected participants using the default cadence and an authored 30 Hz period.
 
 ## 7. Type vs. instance distinction
 
@@ -1866,7 +1959,9 @@ defaults, repeated instances, overrides, reset, and invalid-default diagnostics.
 
 Compose a component with bound inputs through instance modifications when the
 parent supplies those values. An additional equation does not replace the
-declaration binding. The two rover drivetrain models bind guidance inputs in
-their `RoverAutopilotGuidance` instance modifiers, retaining the guidance class's
-standalone defaults and the parent formulas. See the
+declaration binding. Sensors, guidance blocks, rover drivetrain models, and
+the acausal-network synthesis policy use those modifiers for supplied inputs,
+retaining each component's standalone defaults and the parent formulas. The
+scoped-defaults gate checks both modifier replacement and rejection of a
+duplicate equation. See the
 [Modelica modification rules](https://specification.modelica.org/maint/3.6/inheritance-modification-and-redeclaration.html).

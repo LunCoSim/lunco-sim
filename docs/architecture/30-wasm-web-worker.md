@@ -122,10 +122,10 @@ same drain. The page still makes the session's owned AST copy at this
 transport boundary; native parse workers make that copy off-thread.
 
 `ModelicaCommand` and `ModelicaResult` derive `Serialize`/`Deserialize`.
-`ModelicaCommand::Compile.stream` is `#[serde(skip)]` because
-`Arc<ArcSwap<SimSnapshot>>` only makes sense in one address space; on
-wasm we always use the per-Step result-message path instead of the
-shared-snapshot fast-path.
+Native and browser workers return the same ordered per-step observations.
+The response owner validates and commits each result before the shared telemetry
+projection retains it in `SignalRegistry`'s chunked histories. Worker execution
+does not maintain a second plot-history store.
 
 ## Cross-platform footprint
 

@@ -14,10 +14,9 @@
 //! Wire format
 //! ----------
 //! Commands and results round-trip through `bincode::serialize` /
-//! `bincode::deserialize`. `ModelicaCommand::Compile.stream` is `#[serde(skip)]`
-//! because the underlying `Arc<ArcSwap<_>>` only makes sense in a single
-//! address space; on wasm we always go through the per-Step result-message
-//! path instead of the lock-free shared-snapshot fast path.
+//! `bincode::deserialize`. Native and browser workers publish the same current
+//! observations through ordered result messages. The response owner validates
+//! them before the shared telemetry registry retains history.
 //!
 //! Lifecycle
 //! ---------
@@ -596,7 +595,7 @@ fn queue_parse_failure(doc_id: lunco_doc::DocumentId, generation: u64, error: im
 /// Stash the result-side sender so the JS `onmessage` callback can push
 /// decoded results into the same crossbeam channel that
 /// `worker::handle_modelica_responses` drains. Called by the
-/// `ModelicaPlugin` setup; idempotent (later calls are silently dropped).
+/// `ModelicaExecutionPlugin` setup; returns false if a sender is already installed.
 pub fn register_result_sender(tx_res: Sender<ModelicaResult>) -> bool {
     RESULT_TX.set(tx_res).is_ok()
 }
@@ -621,7 +620,7 @@ pub fn is_worker_active() -> bool {
 /// the worker wasm and run `wasm_bindgen(start)`.
 ///
 /// Call exactly once on startup, after `register_result_sender` (which
-/// `ModelicaPlugin::build` does for you), and before any commands fire.
+/// `ModelicaExecutionPlugin::build` does for you), and before any commands fire.
 ///
 /// Creates a pool of workers sized from the persisted
 /// `experiments.max_parallel` setting (auto = 1 on wasm), clamped to
@@ -1532,7 +1531,6 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         extra_sources: Vec::new(),
         parameter_overrides: Vec::new(),
         initial_inputs: Vec::new(),
-        stream: None,
         // A transport smoke-test compile drives no predicted body.
         realtime_safe: false,
     };

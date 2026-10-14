@@ -2,20 +2,23 @@
 
 Modelica workbench UI and `lunica` application facade for LunCoSim.
 
-The headless compiler, document runtime, simulation worker, and CLI tools live
-in [`lunco-modelica-core`](../lunco-modelica-core/). The reusable Modelica
+The document runtime lives in [`lunco-modelica-core`](../lunco-modelica-core/);
+[`lunco-modelica-execution`](../lunco-modelica-execution/) installs solver
+execution. Hosts install both before adding these UI plugins. LunCoSim does so
+in its shared simulation composition; `lunica` does so for both modes.
+The reusable Modelica
 graphics renderer lives in [`lunco-modelica-icon-ui`](../lunco-modelica-icon-ui/).
 The reusable HTML documentation renderer lives in
 [`lunco-modelica-docs-ui`](../lunco-modelica-docs-ui/).
 The shared render-independent experiment plot state and trajectory cache live
 in [`lunco-experiments-ui`](../lunco-experiments-ui/).
-This package adds the egui/workbench presentation and composes the core runtime
-for the standalone workbench.
+This package adds the egui/workbench presentation. The standalone application
+composes its execution engine separately from that presentation.
 
 ## What This Crate Does
 
 - **Workbench UI** — code editor, component diagrams, parameter tuning, time-series plots
-- **Application facade** — `ModelicaPlugin` and `ModelicaWorkbenchPlugin` compose core + UI
+- **Presentation facade** — `ModelicaPlugin` and `ModelicaWorkbenchPlugin` add panels and workbench integration to the host's Modelica runtime
 - **AST-based editing** — a `ModelicaDocument` whose source is canonical and whose AST is cached + refreshed per op; every editing action (diagram, code editor, parameter inspector) funnels through a typed `ModelicaOp` and a single span-based apply pipeline
 
 > Full architecture (document model, op set, apply pipeline, name

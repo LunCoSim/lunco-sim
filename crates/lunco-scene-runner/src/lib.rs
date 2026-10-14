@@ -1884,19 +1884,10 @@ fn reproject_test_transport(app: &mut App) -> Result<(), &'static str> {
         .get_resource::<lunco_core_runtime::SimulationProgress>()
         .ok_or("SimulationProgress resource is not installed")?
         .is_held();
-    let barrier_held = app
-        .world()
-        .get_resource::<lunco_core_runtime::SimulationBarrier>()
-        .ok_or("SimulationBarrier resource is not installed")?
-        .held;
     let Some(mut virtual_time) = app.world_mut().get_resource_mut::<Time<Virtual>>() else {
         return Err("Time<Virtual> resource is not installed");
     };
-    lunco_time::project_transport_state(
-        &transport,
-        &mut virtual_time,
-        progress_held || barrier_held,
-    );
+    lunco_time::project_transport_state(&transport, &mut virtual_time, progress_held);
     Ok(())
 }
 

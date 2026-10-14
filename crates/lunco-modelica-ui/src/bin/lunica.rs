@@ -102,18 +102,18 @@ fn main() {
     app.insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)));
 
     // ── Composition root ──────────────────────────────────────────────────
-    // Base plugins (window / render / winit backend) are chosen by mode in
-    // `default_plugins`; then we layer the egui workbench OR the headless
-    // compile core on top — lunica's "UI plugin" is the modelica crate's
-    // `ModelicaWorkbenchPlugin`, its "core plugin" the crate's
-    // `ModelicaCorePlugin` plus `ModelicaExecutionPlugin`. Mirrors
-    // `lunco_luncosim`'s Core/Ui/Headless split.
+    // Both hosts use one compiler/execution composition. Windowed mode adds
+    // the workbench presentation; headless mode adds a native schedule runner.
     app.add_plugins(default_plugins(headless));
     lunco_assets_runtime::register_lunco_asset_types(&mut app);
+    app.add_plugins((
+        lunco_modelica_core::ModelicaCorePlugin,
+        lunco_modelica_execution::ModelicaExecutionPlugin,
+    ));
 
     // GUI (native windowed, or wasm — always windowed). The whole workbench:
-    // WorkbenchPlugin + ModelicaPlugin + clipboard, autosave, worker. Same
-    // bundle the sandbox embeds as its Design tab.
+    // WorkbenchPlugin + ModelicaPlugin + clipboard and autosave. The same
+    // presentation bundle is embedded by LunCoSim.
     #[cfg(feature = "ui")]
     if !headless {
         if app
@@ -147,8 +147,6 @@ fn main() {
     // headless.)
     #[cfg(not(target_arch = "wasm32"))]
     if headless {
-        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
-        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
         #[cfg(feature = "api")]
         {
             app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);

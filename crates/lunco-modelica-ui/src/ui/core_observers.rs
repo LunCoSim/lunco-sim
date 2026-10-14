@@ -9,7 +9,6 @@
 
 use bevy::prelude::*;
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
-use lunco_telemetry::TelemetrySettings;
 use lunco_ui::log::LogBuffer;
 use lunco_viz::{SignalRef, SignalRegistry, VisualizationRegistry};
 
@@ -125,80 +124,28 @@ impl From<&LibraryLoadState> for MirrorMemo {
     }
 }
 
-/// Drain live-sim sample batches ([`lunco_modelica_runtime::SimSampleStream`]) into the viz
-/// `SignalRegistry` — the reactive UI projection of the running simulation.
-///
-/// The worker bridge publishes immutable step outputs and detected symbols.
-/// Per batch:
-/// clear bound history on a fresh compile, push recorded scalars, and reset
-/// the default graph bindings. Core telemetry owns checked channel metadata.
-pub fn drain_sim_samples_to_viz(
-    mut stream: ResMut<lunco_modelica_runtime::SimSampleStream>,
-    mut signals: Option<ResMut<SignalRegistry>>,
-    mut viz_registry: Option<ResMut<VisualizationRegistry>>,
-    telemetry_settings: Option<Res<TelemetrySettings>>,
-    owners: Query<Option<&lunco_core::GlobalEntityId>>,
+/// Retire plot bindings belonging to a newly installed solver session. History
+/// remains owned by the shared render-free telemetry projection.
+pub fn retire_recompiled_model_bindings(
+    mut starts: MessageReader<lunco_modelica_runtime::ModelicaSessionStarted>,
+    models: Query<&lunco_modelica_runtime::ModelicaModel>,
+    mut registry: Option<ResMut<VisualizationRegistry>>,
 ) {
-    if stream.batches.is_empty() {
-        return;
-    }
-    // Always take (so the queue can't grow); drop if there's no SignalRegistry.
-    let batches = std::mem::take(&mut stream.batches);
-    let Some(sigs) = signals.as_deref_mut() else {
-        return;
-    };
-    for batch in &batches {
-        let recorded: std::collections::HashSet<String> = viz_registry
-            .as_deref()
-            .into_iter()
-            .flat_map(|registry| registry.iter())
-            .flat_map(|(_, config)| config.inputs.iter())
-            .filter(|binding| binding.source.entity == batch.entity)
-            .map(|binding| binding.source.path.clone())
-            .collect();
-        let deadband = telemetry_settings
-            .as_deref()
-            .map(|settings| settings.default_deadband)
-            .unwrap_or_default();
-        if batch.is_new_model {
-            for (name, _) in batch.samples() {
-                // Core runtime telemetry owns unbound state retention.  Only
-                // clear a signal here when this UI-created plot binding is
-                // also being refreshed; otherwise a late UI observer would
-                // erase the inspector's retained state.
-                if recorded.contains(name) {
-                    sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
-                }
-            }
+    for started in starts.read() {
+        if !models
+            .get(started.entity)
+            .is_ok_and(|model| model.is_compiled && model.session_id == started.session_id)
+        {
+            continue;
         }
-        for (name, val) in batch.samples() {
-            if !recorded.contains(name) {
-                continue;
-            }
-            let signal = SignalRef::new(batch.entity, name.clone());
-            if let Ok(Some(owner)) = owners.get(batch.entity) {
-                sigs.associate_global_owner(&signal, *owner);
-            }
-            let changed = sigs
-                .scalar_history(&signal)
-                .and_then(lunco_signal::ScalarHistory::back)
-                .is_none_or(|sample| deadband.changed(sample.value, *val));
-            if changed {
-                sigs.push_scalar(signal, batch.time, *val);
-            }
-        }
-        // A fresh compile starts the default plot empty (users add signals via
-        // the Telemetry panel) — clear any stale bindings from a prior model.
-        if batch.is_new_model {
-            if let Some(reg) = viz_registry.as_deref_mut() {
-                if let Some(cfg) = reg.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
-                    cfg.inputs.clear();
-                }
+        if let Some(registry) = registry.as_deref_mut() {
+            if let Some(config) = registry.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
+                config
+                    .inputs
+                    .retain(|binding| binding.source.entity != started.entity);
             }
         }
     }
-
-    // Users choose plotted signals through the Telemetry panel checkboxes.
 }
 
 /// Publish lifecycle notices to Recent status; the shared history adapter feeds Console.
@@ -728,81 +675,5 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().resource::<StatusBus>().history().count(), 3);
-    }
-
-    #[test]
-    fn standalone_modelica_entities_still_project_live_samples() {
-        let mut app = App::new();
-        app.init_resource::<lunco_modelica_runtime::SimSampleStream>()
-            .init_resource::<SignalRegistry>()
-            .init_resource::<VisualizationRegistry>()
-            .add_systems(Update, drain_sim_samples_to_viz);
-
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<VisualizationRegistry>()
-            .insert(lunco_viz::VisualizationConfig {
-                id: crate::ui::viz::DEFAULT_MODELICA_GRAPH,
-                title: "Modelica".into(),
-                kind: lunco_viz::LINE_PLOT_KIND,
-                view: lunco_viz::ViewTarget::Panel2D,
-                inputs: vec![lunco_viz::SignalBinding::live(
-                    SignalRef::new(entity, "solar_power"),
-                    "y",
-                )],
-                style: serde_json::Value::Null,
-            });
-        app.world_mut()
-            .resource_mut::<lunco_modelica_runtime::SimSampleStream>()
-            .batches
-            .push(lunco_modelica_runtime::SimSampleBatch {
-                entity,
-                document: lunco_doc::DocumentId::default(),
-                time: 1.0,
-                outputs: vec![("solar_power".to_string(), 307.0)].into(),
-                detected_symbols: Vec::new(),
-                is_new_model: false,
-                is_parameter_update: false,
-            });
-
-        app.update();
-
-        let history = app
-            .world()
-            .resource::<SignalRegistry>()
-            .scalar_history(&SignalRef::new(entity, "solar_power"))
-            .expect("standalone Modelica output should still reach viz");
-        assert_eq!(history.len(), 1);
-    }
-
-    #[test]
-    fn unselected_modelica_state_is_not_retained() {
-        let mut app = App::new();
-        app.init_resource::<lunco_modelica_runtime::SimSampleStream>()
-            .init_resource::<SignalRegistry>()
-            .add_systems(Update, drain_sim_samples_to_viz);
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<lunco_modelica_runtime::SimSampleStream>()
-            .batches
-            .push(lunco_modelica_runtime::SimSampleBatch {
-                entity,
-                document: lunco_doc::DocumentId::default(),
-                time: 1.0,
-                outputs: vec![("solar_power".to_string(), 307.0)].into(),
-                detected_symbols: Vec::new(),
-                is_new_model: false,
-                is_parameter_update: false,
-            });
-
-        app.update();
-
-        assert!(
-            app.world()
-                .resource::<SignalRegistry>()
-                .scalar_history(&SignalRef::new(entity, "solar_power"))
-                .is_none(),
-            "the inspector exposes live state; history exists only after recording is selected"
-        );
     }
 }

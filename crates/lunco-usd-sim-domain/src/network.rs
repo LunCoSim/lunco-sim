@@ -266,7 +266,9 @@ pub(super) fn read_network_with_members(
                     });
                     continue;
                 }
-                let value = if let Some(value) = view.real(&path, &attr) {
+                let value = if let Some(value) = view.integer(&path, &attr) {
+                    ModelicaParameterValue::Integer(value)
+                } else if let Some(value) = view.real(&path, &attr) {
                     if !value.is_finite() {
                         extraction_errors.push(DomainProjectionError {
                             path: format!("{path}.{attr}"),
@@ -275,8 +277,6 @@ pub(super) fn read_network_with_members(
                         continue;
                     }
                     ModelicaParameterValue::Real(value)
-                } else if let Some(value) = view.integer(&path, &attr) {
-                    ModelicaParameterValue::Integer(value)
                 } else if let Some(value) = view.boolean(&path, &attr) {
                     ModelicaParameterValue::Boolean(value)
                 } else {

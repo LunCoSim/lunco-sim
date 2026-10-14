@@ -26,12 +26,8 @@ pub struct LunCoSimOffscreenPlugin;
 impl Plugin for LunCoSimOffscreenPlugin {
     fn build(&self, app: &mut App) {
         crate::camera::install_camera_realizations(app);
-        // Same non-UI cores the headless server needs (see the twin comments in
-        // `LunCoSimHeadlessPlugin`): the Modelica compiler and execution
-        // plugins plus the spawn-command registry normally arrive via UI
-        // plugins.
-        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
-        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
+        // The shared simulation composition owns Modelica execution. This host
+        // adds scene command surfaces supplied by the workbench in windowed runs.
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
         app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
         app.add_plugins(lunco_scene_selection::SceneSelectionPlugin);

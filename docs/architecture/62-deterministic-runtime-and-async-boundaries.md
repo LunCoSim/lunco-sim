@@ -204,12 +204,17 @@ The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 entities; the identity owner assigns their stable IDs; then the API registry
 publishes path lookups for those identities. `ClockProjectionSet` runs in
 `First`, before `TimeSystems` samples the next virtual delta. Modelica completion
-admission runs after message rotation and before `ClockProjectionSet`, using the
-existing session, source, step, and communication-endpoint fences. Only a fully
+admission uses the core runtime's `SimulationCompletions` schedule, serviced
+after message rotation and before `ClockProjectionSet` in `First`. The native
+driver also services that same schedule on response readiness while waiting for
+the next fixed deadline; partial receipts do not rerun the application update.
+The completion systems retain one state and their existing session, source,
+step, and communication-endpoint fences. Readiness does not consume or apply
+results, advance clocks, or choose commit order. Only a fully
 released causal barrier allows the fixed runner to resume. The fixed runner
 then checks current transport, scene-time, progress, and coupling admission
 before every complete `FixedMain` cycle. A barrier raised by one cycle stops
-the next cycle and keeps remaining `Time<Fixed>::overstep` queued until the
+the next cycle and keeps running demand in `Time<Fixed>::overstep` until the
 owner releases it. This makes newly admitted referenced entities
 visible through `find_path` on the first resumed tick, without a startup-only
 route or a second scene-ready signal. The identity owner collects assignments
@@ -276,7 +281,9 @@ frame. Worker ordering and the lifecycle commit boundary remain unchanged.
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 the time owner drains `FixedMain` synchronously before `Update`, up to 64
 complete fixed cycles per app update at every transport rate. The virtual
-clock admits the complete running delta; budget exhaustion leaves pending
+clock admits the complete running delta even while a solver result is pending.
+The coupling barrier gates fixed execution without discarding that demand;
+user pause and preparation holds freeze pacing. Budget exhaustion leaves pending
 duration in `Time<Fixed>::overstep`. Every step still receives the same
 `Time<Fixed>` delta. Render transform easing bounds its interpolation fraction
 to `[0, 1]` independently of that backlog: queued cycles cannot extrapolate
@@ -596,11 +603,10 @@ The causal transaction follows explicit owner phases:
 4. Dispatch off-thread participant work with a stable participant key and
    monotonically increasing step identity. A worker result is data; it does not
    commit itself into the live world.
-5. Wait only for participants in the declared causal closure of authoritative
-   state. Collect the complete required result set, validate session, source
-   revision, step, and target tick, then publish results in stable identity
-   order. Independent outputs remain explicit zero-order holds and cannot
-   silently become same-tick state inputs.
+5. Wait for every active participant due at this communication point. Validate
+   session, source revision, step, and endpoint before crossing the next fixed
+   boundary. A slower declared period holds the last committed output between
+   points; worker completion timing never selects an authoritative input.
 6. Run stateful Rhai hooks against the committed tick snapshot. Until their
    reads are immutable and their writes are typed intents, execute them serially
    by stable actor identity. Merge any intents in that same stable order at a
@@ -971,7 +977,8 @@ the validated scenario parameter map. It returns a map with
 All five arrays are required even when empty, so an incomplete source cannot
 silently run with missing causal edges. The owner resolves every listed id
 against the live registry. Directional access arrays can name any live entity.
-A declared Modelica id joins the shared barrier;
+Every active Modelica participant already shares the fixed-step barrier;
+a declared id grants the scenario access to that participant.
 `modelica_entities` remains the direction-independent dependency for
 participants whose ports or events the scenario uses. Unresolved ids are
 terminal source diagnostics. Each required input
@@ -981,7 +988,7 @@ the scenario's existing activation hold until the next owner-state revision;
 Ready admits initialization, and Failed reports the producer diagnostics.
 The dependency plan runs once per source/parameter revision, and readiness is
 checked again only after an owner publishes a change. Omitting the hook declares
-no Rhai dependencies; the USD causal graph still applies. The hook resolves
+no Rhai access dependencies; the shared simulation clock still applies. The hook resolves
 identities from its `me` id, parameters, and stable owner metadata. The built-in
 `usd_path(id)` reads the stable identity-to-`UsdPrimPath` index, so it can resolve
 the scenario host path during planning without reading pose or component state.
@@ -1004,7 +1011,8 @@ same broad providers used by later scenario hooks.
 After an ordered simulation command materializes a new entity, the caller can
 extend its committed directional plan with `track_entity_read` or
 `track_entity_write` before accessing that live id. A tracked id that is or
-becomes a Modelica participant also joins that scenario's barrier contribution.
+becomes a Modelica participant retains the same shared clock; tracking grants
+scenario access without changing its timing contract.
 The update occurs synchronously in the caller's serialized simulation order.
 
 Current Rhai world verbs can read and mutate live ECS/port state, and `cmd()`
@@ -1037,25 +1045,16 @@ cancellation and failure semantics in the task tree.
 
 ## 6. Co-simulation and dependency closure
 
-The causal barrier is only sound when it contains every path by which a
-participant result can affect authoritative state. USD `SimConnection`s and
-Rhai scenario dependencies both contribute to the same barrier projection. A
-scenario that needs direction-independent access to a Modelica entity lists
-it in `modelica_entities`; this grants both read and write access and adds the
-participant to the shared barrier. Directional `entity_reads` and
-`entity_writes` may identify any live entity and grant only their named
-direction. If such an id is a Modelica participant, it also contributes to
-the scenario's barrier. Rhai keeps the selection policy; Rust resolves the
-returned ids against the live registry. Required owner inputs occupy the same
-plan but do not add Modelica barrier participants. While a dependency
-plan is pending, all Modelica
-participants are synchronized. After admission, direct simulation-clock access
-to an undeclared Modelica participant or event fails at the scripting owner with a
-diagnostic that names the missing hook. This includes `get`, `port`, and
-`query("ReadPorts", #{ api_id, port_names })`; the query surface cannot bypass the plan.
-Presentation reads continue to observe
-committed state without joining the authoritative barrier. Continuous
-calculations and physics remain in their domain owners.
+Every active Modelica participant synchronizes at its declared communication
+points, regardless of whether USD wiring reaches a native force consumer.
+Different rates change the due set within the same fixed master clock. A
+scenario that needs direction-independent access lists the live participant in
+`modelica_entities`; directional `entity_reads` and `entity_writes` grant only
+their named direction. Rhai chooses access policy and Rust validates the ids.
+Required owner inputs use the same plan. Scenario preparation retains its exact
+progress hold until its access and readiness plan is committed. Direct
+simulation access to undeclared state fails at the scripting owner. Presentation
+reads observe committed state without changing participant clock membership.
 
 The shared barrier synchronizes solver work; it does not grant script access.
 For Modelica participants, the scripting owner checks port reads through

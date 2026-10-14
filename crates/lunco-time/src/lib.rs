@@ -524,6 +524,24 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
     transport_running && virtual_running && !coupling_held && !progress_held && scene_time_ready
 }
 
+/// Next wall-clock deadline for servicing the fixed accumulator, bounded by a
+/// host lifecycle deadline. The existing time resources remain the only clock
+/// owners. A held simulation waits for its completion event or the host bound.
+pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
+    if !fixed_simulation_is_admitted(world) {
+        return latest;
+    }
+    let fixed = world.resource::<Time<Fixed>>();
+    let virtual_time = world.resource::<Time<Virtual>>();
+    let remaining = fixed.timestep().saturating_sub(fixed.overstep());
+    world
+        .resource::<Time<Real>>()
+        .last_update()
+        .map_or(latest, |sample| {
+            latest.min(sample + remaining.div_f64(virtual_time.relative_speed_f64()))
+        })
+}
+
 /// Run each admitted fixed tick as one complete causal cycle.
 ///
 /// The clock conserves admitted duration across completed and pending time:
@@ -907,36 +925,33 @@ pub fn advance_world_clock(
     world.met_secs = clock.met_secs(tick.0);
 }
 
-/// Project the transport and all causal admission holds onto Bevy's virtual
-/// clock before the fixed loop admits work.
+/// Project transport and scene preparation onto the pacing clock. Coupling
+/// gates fixed execution while its elapsed demand remains queued.
 fn project_time_transport(
     transport: Res<TimeTransport>,
     mut virtual_time: ResMut<Time<Virtual>>,
-    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     scene_time: Option<Res<SceneTimeState>>,
 ) {
-    // Coupling, scene admission, and scene-time selection hold the complete
-    // fixed simulation so every causal consumer shares one boundary. Optional
-    // resources keep the time spine usable in focused and headless hosts.
-    let coupling_held = coupling.is_some_and(|state| state.held);
+    // Preparation and user pauses consume no running time. A running solver
+    // barrier instead holds FixedMain without discarding elapsed demand.
     let admission_held = progress.is_some_and(|state| state.is_held());
     let scene_time_pending = scene_time.is_some_and(|state| !state.is_ready());
     project_transport_state(
         &transport,
         &mut virtual_time,
-        coupling_held || admission_held || scene_time_pending,
+        admission_held || scene_time_pending,
     );
 }
 
-/// Apply transport and an owner-supplied causal hold to Bevy's virtual clock.
+/// Apply transport and an owner-supplied preparation hold to the pacing clock.
 /// The scheduled time spine and lifecycle owners use this same projection.
 pub fn project_transport_state(
     transport: &TimeTransport,
     virtual_time: &mut Time<Virtual>,
-    causal_hold: bool,
+    admission_hold: bool,
 ) {
-    let paused = matches!(transport.mode, TransportMode::Paused) || causal_hold;
+    let paused = matches!(transport.mode, TransportMode::Paused) || admission_hold;
     let relative_speed = advance_clock(transport.rate, paused);
 
     // Frozen transport is projected onto Bevy's `paused` flag, never onto
@@ -983,7 +998,12 @@ impl Plugin for TimePlugin {
                 SimulationAdmissionSet.after(lunco_core_runtime::SimulationProgressAdmissionSet),
             ),
         )
-        .configure_sets(First, ClockProjectionSet.before(TimeSystems));
+        .configure_sets(
+            First,
+            ClockProjectionSet
+                .after(lunco_core_runtime::SimulationCompletionSet)
+                .before(TimeSystems),
+        );
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
         // self-sufficient where it doesn't.
@@ -1616,25 +1636,84 @@ mod tests {
     }
 
     #[test]
-    fn realtime_coupling_barrier_pauses_the_fixed_simulation() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = bevy::prelude::World::new();
-        world.insert_resource(lunco_core_runtime::SimTick(0));
-        world.insert_resource(TimeTransport::default());
-        world.insert_resource(MissionClock::default());
-        world.insert_resource(WorldTime::default());
+    fn fixed_deadline_reads_pacing_without_advancing_clocks() {
+        let mut world = World::new();
+        let sample = Instant::now();
+        let mut real_time = Time::<Real>::default();
+        real_time.update_with_instant(sample);
+        let mut fixed_time = Time::<Fixed>::from_duration(Duration::from_millis(20));
+        fixed_time.accumulate_overstep(Duration::from_millis(5));
+        world.insert_resource(real_time);
+        world.insert_resource(fixed_time);
         world.insert_resource(Time::<Virtual>::default());
-        world.insert_resource(lunco_core_runtime::SimulationBarrier {
-            held: true,
-            ..Default::default()
-        });
+        world.insert_resource(lunco_core_runtime::SimulationBarrier::default());
+        let latest = sample + Duration::from_millis(100);
+        assert_eq!(
+            next_fixed_deadline(&world, latest),
+            sample + Duration::from_millis(15)
+        );
+        assert_eq!(
+            world.resource::<Time<Fixed>>().overstep(),
+            Duration::from_millis(5)
+        );
+        assert_eq!(world.resource::<Time<Fixed>>().elapsed(), Duration::ZERO);
+        world
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = true;
+        assert_eq!(next_fixed_deadline(&world, latest), latest);
+        world
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = false;
+        world.resource_mut::<Time<Virtual>>().pause();
+        assert_eq!(next_fixed_deadline(&world, latest), latest);
+    }
 
-        world.run_system_once(project_time_transport).unwrap();
-
-        let vt = world.resource::<Time<Virtual>>();
-        assert!(vt.is_paused());
-        assert_eq!(vt.relative_speed_f64(), 1.0);
+    #[test]
+    fn coupling_wait_retains_pacing_demand_without_advancing_fixed_state() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins(bevy::time::TimePlugin)
+            .add_plugins(TimePlugin)
+            .insert_resource(lunco_core_runtime::SimulationBarrier {
+                held: true,
+                ..Default::default()
+            });
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(Duration::from_millis(10));
+        for delta in [50, 30] {
+            app.world_mut()
+                .run_system_once(project_time_transport)
+                .unwrap();
+            assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+            app.world_mut()
+                .resource_mut::<Time<Virtual>>()
+                .advance_by(Duration::from_millis(delta));
+            app.world_mut().run_schedule(RunFixedMainLoop);
+            assert_eq!(
+                app.world().resource::<Time<Fixed>>().elapsed(),
+                Duration::ZERO
+            );
+        }
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::from_millis(80)
+        );
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = false;
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .advance_by(Duration::ZERO);
+        app.world_mut().run_schedule(RunFixedMainLoop);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            Duration::from_millis(80)
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
     }
 
     #[test]

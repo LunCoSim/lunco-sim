@@ -33,9 +33,23 @@ model AttitudeReference
   output Real estimated_up_z "Estimated world-up direction in body Z";
 
   FrameVectorTransform up_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = attitude_quat_w,
+    quaternion_x = attitude_quat_x,
+    quaternion_y = attitude_quat_y,
+    quaternion_z = attitude_quat_z,
+    vector_x = 0.0,
+    vector_y = 1.0,
+    vector_z = 0.0);
   FrameVectorTransform target_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = attitude_quat_w,
+    quaternion_x = attitude_quat_x,
+    quaternion_y = attitude_quat_y,
+    quaternion_z = attitude_quat_z,
+    vector_x = target_world_x / target_norm,
+    vector_y = target_world_y / target_norm,
+    vector_z = target_world_z / target_norm);
   Real target_world_x;
   Real target_world_y;
   Real target_world_z;
@@ -45,13 +59,6 @@ equation
   // World/navigation +Y expressed in the body frame (the transpose of the
   // body-to-navigation quaternion rotation). The shared transform owns the
   // normalization and transpose used here and by every other consumer.
-  up_transform.quaternion_w = attitude_quat_w;
-  up_transform.quaternion_x = attitude_quat_x;
-  up_transform.quaternion_y = attitude_quat_y;
-  up_transform.quaternion_z = attitude_quat_z;
-  up_transform.vector_x = 0.0;
-  up_transform.vector_y = 1.0;
-  up_transform.vector_z = 0.0;
   estimated_up_x = up_transform.body_frame_x;
   estimated_up_y = up_transform.body_frame_y;
   estimated_up_z = up_transform.body_frame_z;
@@ -66,13 +73,6 @@ equation
     target_world_x * target_world_x
       + target_world_y * target_world_y
       + target_world_z * target_world_z));
-  target_transform.quaternion_w = attitude_quat_w;
-  target_transform.quaternion_x = attitude_quat_x;
-  target_transform.quaternion_y = attitude_quat_y;
-  target_transform.quaternion_z = attitude_quat_z;
-  target_transform.vector_x = target_world_x / target_norm;
-  target_transform.vector_y = target_world_y / target_norm;
-  target_transform.vector_z = target_world_z / target_norm;
 
   // Cross(current body +Y, desired body-frame thrust direction) gives the
   // shortest restoring axis in body coordinates. In components this is

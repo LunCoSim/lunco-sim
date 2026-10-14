@@ -73,7 +73,9 @@ component value cannot read an unrelated root variable with the same leaf name.
 Compiled reuse requires the exact target and source unit. Prepared solver reuse
 uses the compiler's exact participating-source identity, including generated
 identifiers and literals. Class documentation uses qualified declaration ownership
-and Rumoca-decoded strings. Optional prepared disk records use version 12.
+and Rumoca-decoded strings. Optional prepared disk records use version 13 and
+require the exact clean compiler build identity; an unknown or dirty compiler
+build disables disk reuse.
 
 Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
 including inherited units and scalar array entries. Editing a draft does not
@@ -286,6 +288,11 @@ and actor requests plus solve preparations share bounded admission. Persistent
 solve-cache reads and writes run with DAE lowering in the preparation pool; the
 native owner thread does not perform cache I/O or fall back to synchronous
 lowering. Wasm keeps compilation inside its Modelica Web Worker.
+
+Windowed, headless, and offscreen LunCoSim install the compiler and execution
+plugins through `LunCoSimSimulationPlugin`. Workbench plugins add presentation
+to that engine; they do not start another worker. Standalone `lunica` installs
+the same compiler/execution pair before choosing its host presentation.
 
 Native preparation uses the startup-captured
 `lunco_modelica_worker::worker::ModelicaWorkerLimits` resource. Its independent
@@ -998,16 +1005,36 @@ Twin Modelica directories may use `.` to designate the admitted Twin root;
 the directory resolver preserves this manifest semantic without permitting
 parent traversal or using it as a concrete file address.
 
-For causal USD models, initialization waits for all wired producers to publish
-finite current samples. Link class declarations refresh at this initialization
-boundary, including nodes created by the current projection transaction.
-External environment sources must be wired into explicit network boundary
-inputs when their consumers belong to a generated acausal collection.
-Explicit unconnected USD inputs and connected samples
-enter `Compile.initial_inputs`; no interface placeholder is an initialization
-value. An unbound input without a declaration default or admitted runtime value
-fails visibly. Reset and reinitialization admit current input values before
-solving initialization equations.
+For causal USD models, publish the selected source interface before waiting for
+connected samples. Acyclic inputs initialize from real finite producer samples;
+connected Modelica feedback uses the paused composite and certification boundary
+owned by `lunco-usd-sim-cosim`. Native initial algebraic relations remain typed
+port-owner facts. See [coupled initial admission](../../docs/architecture/20-domain-modelica.md#coupled-initial-admission)
+for the hook, lifecycle and FMI boundary. No interface placeholder is a numerical
+initial value. External environment sources consumed by an acausal collection
+must be wired through explicit network boundary inputs. Nested Modelica inputs
+with declaration bindings must receive connection overrides through instance
+modifiers. Authored integer parameters retain their integer type.
+
+Verify connected initialization through both production scenes on a free owned
+port, using the already-built production binary:
+
+```sh
+"$LUNCOSIM_BIN" test --api 4275 --scene scenes/tests/modelica_initialization_network.usda --max-ticks 300 --readiness-timeout 100
+"$LUNCOSIM_BIN" test --api 4275 --scene scenes/tests/modelica_initialization_failure.usda --max-ticks 300 --readiness-timeout 100
+```
+
+The first requires a real Rhai verdict and solved participant outputs. The second
+requires the exact terminal `modelica-initialization-failed` fault and a surviving
+process. Omitted `lunco:program:communicationPeriod` exchanges on each fixed
+physics tick. Author a longer integer multiple only for intentional multirate
+exchange; outputs are held between those declared points. The worker applies
+the complete ordered input vector as one atomic solver transaction. Each interval
+retains the inputs sampled at its start coordinate, including across intervening
+physics ticks for slower participants. `ReadModelicaStepSamples` reports those
+same inputs and interval coordinates. Pause preserves a pending interval; reset,
+session replacement, and failure retire it.
+
 Input rejection and invalid solver observations stop the affected participant
 with a `modelica-step-failed` runtime fault. Check this boundary through the
 production negative gate:

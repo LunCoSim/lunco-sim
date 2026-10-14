@@ -30,6 +30,9 @@ pub struct ModelicaTelemetryPlugin;
 
 impl Plugin for ModelicaTelemetryPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_telemetry::TelemetryRetentionPlugin>() {
+            app.add_plugins(lunco_telemetry::TelemetryRetentionPlugin);
+        }
         app.init_resource::<RuntimeTelemetrySessions>().add_systems(
             Update,
             retain_modelica_runtime_state

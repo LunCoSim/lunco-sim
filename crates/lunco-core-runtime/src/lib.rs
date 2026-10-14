@@ -62,6 +62,36 @@ pub struct SimTick(pub u64);
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimTickSet;
 
+/// Commit completed simulation work without advancing any clock or executing
+/// a tick. Participants retain their validation and deterministic commit order.
+#[derive(ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimulationCompletions;
+
+/// Lifecycle ordering anchor before the host samples simulation pacing.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimulationCompletionSet;
+
+/// Run the one completion-admission schedule. Hosts may service it between
+/// application updates; this never runs physics, scripts, or presentation.
+pub fn admit_simulation_completions(world: &mut World) {
+    world.run_schedule(SimulationCompletions);
+}
+
+/// Shared completion service for simulation and standalone execution hosts.
+pub struct SimulationCompletionPlugin;
+
+impl Plugin for SimulationCompletionPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_schedule(SimulationCompletions).add_systems(
+            First,
+            admit_simulation_completions
+                .in_set(SimulationCompletionSet)
+                .after(bevy::ecs::message::MessageUpdateSystems)
+                .before(bevy::time::TimeSystems),
+        );
+    }
+}
+
 impl SimTick {
     /// Signed tick distance `self - other`, wrapping-safe.
     pub fn wrapping_diff(self, other: SimTick) -> i64 {
@@ -113,6 +143,9 @@ impl Plugin for LunCoCoreRuntimePlugin {
             .register_type::<health::PhysicsHealthSnapshot>();
 
         register_core_resources(app);
+        if !app.is_plugin_added::<SimulationCompletionPlugin>() {
+            app.add_plugins(SimulationCompletionPlugin);
+        }
         app.add_observer(record_command_cadence);
         app.add_observer(acquire_scene_progress_hold)
             .add_observer(release_completed_scene_progress_hold)

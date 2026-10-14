@@ -1565,27 +1565,23 @@ Evidence lives under `target/entity-tree-perf/`, prefixes `exchange-owner-`
 and `source-fanout-windowed-baseline-`. Loading, visual FPS and physics
 throughput acceptance remain open; official Trello tools are unavailable.
 
-## Share admitted Modelica output snapshots — 2026-10-11
+## Admitted Modelica observations
 
-`lunco-modelica-runtime` owns immutable output slices shared by the accepted
-communication transaction and the bounded presentation queue. The worker
-bridge converts its owned result vector after session and transaction fencing;
-retaining the accepted record clones only the slice's `Arc`. Observable
-variables still reuse their existing keys and apply outputs after detected
-symbols. `SimSampleBatch::samples` reads outputs followed by detected symbols
-without joining those buffers. Subsequent responses and reset cannot mutate
-an earlier snapshot. The serialized worker protocol, reflected variable map,
-solver inputs, native f64 values, clocks, ordering and fixed-step publication
-remain unchanged. This is generic payload ownership, with no changeable
-policy or hook and no external-library edit.
+The response owner validates session, transaction and endpoint before updating
+observable variables and transferring the input/output buffers into the accepted
+record. Live history belongs to `lunco-modelica-telemetry` and the shared chunked
+`SignalRegistry`, with one persisted retention policy installed by
+`TelemetryRetentionPlugin`. Native and browser workers return current values
+through the same ordered result path. `ModelicaSessionStarted` carries the exact
+installed actor/session identity to presentation; UI binding cleanup validates
+that identity and does not write or clear live history.
 
-`cargo test -p lunco-modelica-worker --lib accepted_step_reuses_variable_keys_and_transfers_sample_buffers -j 4`
-passes one check (64 filtered). The existing resource-seam check now verifies
-shared allocation identity and original string ownership, exact sample order,
-reset isolation, signed-zero preservation and stale-result rejection. Both
-production builds pass; their only warning is the existing unused
-`PreparedSolveCache::clear` method. Architecture and profiling guidance use
-the shared slice and chained presentation reader.
+The focused `accepted_step_reuses_variable_keys_and_transfers_sample_buffers`
+resource seam covers original buffer ownership, signed-zero preservation,
+detected-symbol/output precedence, reset isolation and stale-result rejection.
+The production `modelica_initialization_network` gate covers Modelica and Avian
+time, multirate exchange, pause/resume/rate changes, and shared retained history
+in headless and windowed hosts. Broader performance acceptance remains open.
 
 Normal artifact
 `750f96d5b58c9efd9adccb11e24e2960665ccb6820cb8f3895ac5ac4ea7417c8`
@@ -9229,3 +9225,47 @@ already own footprint preparation for bake consumers; any further work must
 reuse those owners and preserve exact values, fold order, query bounds and
 bounded lifetime. The temporary diagnostic is removed and original source
 bytes are verified. Its evidence is `region-preparation-diagnostic-20261012.log`.
+
+
+## Griffin coupling and current performance acceptance — 2026-10-14
+
+Rumoca main `e3da928cce08b794c6ec78ef85d2db0bd521547f` supplies the checked
+comprehension lowering, zero-state native eligibility, and static conditional
+index incidence. LunCoSim uses that Git main dependency through Cargo.lock.
+All active projected Modelica participants share the fixed master clock, with
+one physics-tick communication by default and explicit integer-tick subrates.
+Each interval retains its start-point input vector. The production initialization
+network passes 34 checks in native headless and windowed hosts across default
+and 30 Hz exchange, pause/resume, 4x and 0.25x transport, actual physics elapsed
+time, accepted Modelica timestamps, and shared retained history. Inconsistent
+initialization and non-finite observations produce their expected terminal
+runtime faults without crashing the process.
+
+The unused worker-owned histories and UI-owned sample queue are removed.
+Worker responses publish current observations and accepted transaction records;
+shared telemetry owns retained history in every host. Completion admission has
+one reader and one clock-free schedule; the native realtime driver services it
+on response readiness without running another application update.
+
+The latest clean regular-Cargo windowed Griffin run on owned API 4273 advances
+at 0.972 realtime over the sampled interval. Its final fixed-cycle window has
+p50 5.592 ms, p95 7.987 ms and max 11.381 ms, with 0.784 s queued demand and
+zero clipped demand. The inspected screenshot shows the rover clear of the
+ramps, 64 FPS and approximately 2.3 ms native physics service. These observations
+are below the requested 200 FPS and sub-1 ms physics targets. A pre-existing
+user application remains active throughout; this is concurrent-workload evidence.
+The owned app exits zero and releases its port. Evidence is
+`target/griffin-windowed-clean{.log,.png,-samples.json}`.
+
+A separate 55,308,116-byte native Tracy capture validates through CSV export;
+the collector reports 52.73 MiB and 9,913,988 zones over 96.7 seconds. One
+999.213 ms fixed cycle spends 982.339 ms in `usd_apply_transient_ops`, a
+ten-operation view-layer edit invoked by the rover-release task. The earlier
+647.139 ms first cycle spends 623.847 ms in its initial native Rhai task.
+These are attribution results, not clean performance acceptance. The first
+startup observer in that diagnostic capture exceeded its query/value bounds;
+its errors are recorded and its throughput must not be treated as acceptance.
+Capture, native exports, process/port ownership, and selected long zones use the
+`target/griffin-current` prefix. The next work is the USD compound-edit owner
+and whole-simulation/render isolation specified in architecture 62. Moving only
+Avian, dropping fixed ticks, changing substeps, or reducing quality is not admitted.

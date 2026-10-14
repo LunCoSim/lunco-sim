@@ -60,6 +60,7 @@ use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, Usd
 /// Installs USD-authored co-simulation participant and connection projection.
 pub struct UsdSimCosimPlugin;
 
+mod initialization;
 pub mod readiness;
 pub mod sync;
 mod wiring;
@@ -1573,6 +1574,9 @@ fn process_usd_cosim_prim_read(
         });
     }
     if modelica_path.is_some() {
+        commands
+            .entity(entity)
+            .try_insert(lunco_port_core::PortSurfacePending);
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(source_load_path.clone()),
             asset_path: lunco_assets_core::asset_path::anchor_of(&source_load_path),
@@ -1734,7 +1738,6 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     mut pending: Local<QueryState<Entity, With<PendingModelicaSource>>>,
 ) {
     let entities: Vec<_> = pending.iter(world).collect();
-    world.run_schedule(lunco_cosim_core::schedule::InitializationSampling);
     let admissions: HashMap<_, _> = entities
         .into_iter()
         .map(|entity| {
@@ -1745,6 +1748,62 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     if let Err(error) = world.run_system_cached_with(dispatch_admitted_modelica_sources, admissions)
     {
         error!("[usd-cosim] Modelica initialization admission failed: {error}");
+    }
+}
+
+/// Publish every loaded source's declaration before admitting connected inputs.
+/// Modelica owns ports even when USD only authors a wire to them. Declaration
+/// availability never publishes an unsolved numerical sample.
+fn publish_loaded_modelica_interfaces(
+    mut commands: Commands,
+    mut pending: Query<
+        (
+            Entity,
+            &PendingModelicaSource,
+            &mut SimComponent,
+            Option<&DeclaredOutputPorts>,
+            Option<&ModelicaSignalLayout>,
+            Option<&UsdModelicaPortContract>,
+        ),
+        With<lunco_port_core::PortSurfacePending>,
+    >,
+    sources: Res<Assets<ModelicaSource>>,
+) {
+    for (entity, pending, mut component, declared, current_layout, contract) in &mut pending {
+        let Some(source) = sources.get(&pending.handle) else {
+            continue;
+        };
+        if source.interface.model_name.is_none() {
+            continue;
+        }
+        for name in &source.interface.inputs {
+            if !component.inputs.contains_key(name) {
+                component.inputs.declare(name.clone());
+            }
+        }
+        let mut outputs = DeclaredOutputPorts::default();
+        if let Some(contract) = contract {
+            outputs.names.extend(contract.outputs.iter().cloned());
+        }
+        outputs
+            .names
+            .extend(source.interface.outputs.iter().cloned());
+        if declared.is_none_or(|declared| declared.names != outputs.names) {
+            commands.entity(entity).try_insert(outputs);
+        }
+        let mut layout = current_layout.cloned().unwrap_or_default();
+        layout.metadata = source
+            .interface
+            .variable_metadata
+            .iter()
+            .map(|(name, metadata)| (name.clone(), metadata.clone()))
+            .collect();
+        if current_layout.is_none_or(|current| current.metadata != layout.metadata) {
+            commands.entity(entity).try_insert(layout);
+        }
+        commands
+            .entity(entity)
+            .remove::<lunco_port_core::PortSurfacePending>();
     }
 }
 
@@ -1763,6 +1822,9 @@ fn reject_modelica_source(
     commands
         .entity(entity)
         .try_remove::<PendingModelicaSource>();
+    commands
+        .entity(entity)
+        .try_remove::<lunco_port_core::PortSurfacePending>();
     error!("[usd-cosim] {error}");
     notices.write(lunco_modelica_runtime::ModelicaNotice {
         level: lunco_modelica_runtime::NoticeLevel::Error,
@@ -1789,7 +1851,6 @@ fn dispatch_admitted_modelica_sources(
         &mut SimComponent,
         Option<&UsdInputDefaults>,
         Option<&UsdModelicaSchedule>,
-        Option<&mut ModelicaSignalLayout>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1815,11 +1876,9 @@ fn dispatch_admitted_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _, _, _), (_, _, b, _, _, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _), (_, _, b, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults, schedule, current_layout) in
-        pending
-    {
+    for (entity, pending, prim_path, mut component, usd_defaults, schedule) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -1852,19 +1911,6 @@ fn dispatch_admitted_modelica_sources(
                 Some("missing Modelica initialization admission".to_owned()),
             ),
         };
-
-        // The co-simulation port backend reads authored variable contracts
-        // from the same source-derived layout as other Modelica consumers.
-        // Refresh the complete map on each source load so removed declarations
-        // cannot leave stale unit metadata on live ports.
-        let mut signal_layout = current_layout.as_deref().cloned().unwrap_or_default();
-        signal_layout.metadata = src
-            .interface
-            .variable_metadata
-            .iter()
-            .map(|(name, metadata)| (name.clone(), metadata.clone()))
-            .collect();
-        commands.entity(entity).try_insert(signal_layout);
 
         // The source asset loader prepares this interface on Bevy's async
         // compute pool. `ModelicaModel::inputs` is a write buffer seeded from
@@ -1966,7 +2012,6 @@ fn dispatch_admitted_modelica_sources(
                         extra_sources: Vec::new(),
                         parameter_overrides,
                         initial_inputs,
-                        stream: None,
                         // Declared, never inferred. A program without the promise is
                         // authoritative live co-simulation, not client prediction.
                         realtime_safe: q_realtime_safe.contains(entity),
@@ -2328,6 +2373,9 @@ pub(crate) fn request_modelica_parameter_recompile(
         component.outputs.clear();
         component.status = SimStatus::Compiling;
 
+        commands
+            .entity(entity)
+            .try_insert(lunco_port_core::PortSurfacePending);
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(load_path),
             asset_path,
@@ -2679,6 +2727,7 @@ impl Plugin for UsdSimCosimPlugin {
         app.add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
         app.add_systems(lunco_core::SceneTeardown, reset_modelica_wrap_work);
         app.add_systems(lunco_core::SceneTeardown, reset_wiring_facts_cache);
+        app.add_systems(lunco_core::SceneTeardown, initialization::retire);
         app.add_systems(
             lunco_core::SceneTeardown,
             lunco_usd_sim_domain::reset_scene_projection_work,
@@ -2756,6 +2805,11 @@ impl Plugin for UsdSimCosimPlugin {
                 rewire_usd_connections.run_if(wiring_due),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
+                publish_loaded_modelica_interfaces
+                    .run_if(any_with_component::<PendingModelicaSource>),
+                initialization::coordinate
+                    .run_if(initialization::needed)
+                    .run_if(not(resource_exists::<SceneLoadInFlight>)),
                 dispatch_loaded_modelica_sources
                     .run_if(any_with_component::<PendingModelicaSource>)
                     .run_if(not(resource_exists::<SceneLoadInFlight>)),
@@ -3285,7 +3339,7 @@ mod tests {
     }
 
     #[test]
-    fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {
+    fn causal_diagnostics_do_not_exclude_other_models_from_the_shared_clock() {
         let mut world = World::new();
         world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         let mut revision = lunco_cosim_core::BindingRevision::default();
@@ -3328,7 +3382,7 @@ mod tests {
         assert!(participants.entities.contains(&coupled));
         assert!(!participants.entities.contains(&telemetry_only));
         assert!(participants.requires_barrier(coupled));
-        assert!(!participants.requires_barrier(telemetry_only));
+        assert!(participants.requires_barrier(telemetry_only));
     }
 
     #[test]
@@ -3361,7 +3415,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_edge_does_not_make_model_a_shared_clock_participant() {
+    fn failed_edge_does_not_remove_model_from_the_shared_clock() {
         let mut world = World::new();
         world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         let mut revision = lunco_cosim_core::BindingRevision::default();
@@ -3390,7 +3444,7 @@ mod tests {
         let participants = world.resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         assert!(participants.topology_ready);
         assert!(!participants.entities.contains(&model));
-        assert!(!participants.requires_barrier(model));
+        assert!(participants.requires_barrier(model));
     }
 
     // ── interface published at parse, not at solve ───────────────────

@@ -12,8 +12,8 @@ use crossbeam_channel::unbounded;
 #[cfg(target_arch = "wasm32")]
 use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 use lunco_modelica_runtime::{
-    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet,
-    ModelicaVariables, SimSampleStream,
+    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSessionStarted,
+    ModelicaSet, ModelicaVariables,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -38,6 +38,9 @@ pub struct ModelicaExecutionPlugin;
 
 impl Plugin for ModelicaExecutionPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::SimulationCompletionPlugin>() {
+            app.add_plugins(lunco_core_runtime::SimulationCompletionPlugin);
+        }
         let (tx_cmd, rx_cmd) = unbounded();
         let (tx_res, rx_res) = unbounded();
         app.init_resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
@@ -141,8 +144,7 @@ impl Plugin for ModelicaExecutionPlugin {
         }
 
         app.init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>();
-        app.init_resource::<lunco_signal::SimRegistry>();
-        app.init_resource::<SimSampleStream>();
+        app.add_message::<ModelicaSessionStarted>();
         app.init_resource::<lunco_modelica_runtime::ModelicaStepDiagnostics>();
         app.add_message::<ModelicaNotice>();
         app.add_message::<CompileRequested>();
@@ -150,11 +152,8 @@ impl Plugin for ModelicaExecutionPlugin {
         app.add_plugins(lunco_modelica_runner::ModelicaRunnerPlugin);
 
         app.configure_sets(
-            First,
-            ModelicaSet::HandleResponses
-                .after(bevy::ecs::message::MessageUpdateSystems)
-                .before(lunco_time::ClockProjectionSet)
-                .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+            lunco_core_runtime::SimulationCompletions,
+            ModelicaSet::HandleResponses.in_set(lunco_core::RuntimeCycleSet::Lifecycle),
         );
         app.configure_sets(
             Update,
@@ -175,7 +174,7 @@ impl Plugin for ModelicaExecutionPlugin {
             .add_observer(lunco_modelica_worker::worker::retire_closed_twin_models)
             .add_observer(lunco_modelica_worker::worker::retire_replication_models)
             .add_systems(
-                First,
+                lunco_core_runtime::SimulationCompletions,
                 (
                     lunco_modelica_worker::worker::validate_modelica_variable_ownership,
                     lunco_modelica_worker::worker::handle_modelica_responses,
@@ -232,10 +231,14 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(ModelicaExecutionPlugin)
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<lunco_core_runtime::SimTick>()
+            .init_resource::<Time<Fixed>>()
             .init_resource::<ClockProjectionObservations>()
             .add_systems(
                 First,
-                observe_clock_projection.in_set(lunco_time::ClockProjectionSet),
+                observe_clock_projection
+                    .in_set(lunco_time::ClockProjectionSet)
+                    .after(lunco_core_runtime::SimulationCompletionSet),
             );
         let (results, rx) = unbounded();
         let (tx, _commands) = unbounded();
@@ -271,6 +274,24 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        lunco_core_runtime::admit_simulation_completions(app.world_mut());
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ClockProjectionObservations>()
+                .0
+                .len(),
+            1
+        );
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            std::time::Duration::ZERO
+        );
         app.world_mut().run_schedule(First);
         results
             .send(lunco_modelica_runtime::ModelicaResult {
@@ -281,6 +302,24 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        lunco_core_runtime::admit_simulation_completions(app.world_mut());
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ClockProjectionObservations>()
+                .0
+                .len(),
+            2
+        );
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().elapsed(),
+            std::time::Duration::ZERO
+        );
         app.world_mut().run_schedule(First);
 
         assert_eq!(

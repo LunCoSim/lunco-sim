@@ -72,10 +72,10 @@ impl Default for ScenarioExecutionGate {
 pub struct ScenarioReadinessArm(pub bool);
 
 /// Language-neutral causal and data-readiness requirements declared by one
-/// prepared scenario. Modelica ids identify live participants that join the
-/// fixed-step barrier. Directional read/write ids authorize direct
+/// prepared scenario. Modelica ids authorize access to live participants on
+/// the shared fixed-step clock. Directional read/write ids authorize direct
 /// simulation-clock access to live entities; when one is a Modelica
-/// participant, it also joins this scenario's barrier contribution. Owner keys
+/// participant, its clock membership remains unchanged. Owner keys
 /// identify immutable inputs that must commit before initialization and the
 /// first lifecycle hook may run. Broad API query snapshots are named explicitly
 /// so the runtime can account for their reads without guessing from results.
@@ -1516,11 +1516,6 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 state.pending_transition_error = stop_error;
                 state.newly_compiled = false;
 
-                if let Some(mut participants) =
-                    world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
-                {
-                    participants.mark_scenario_plan_pending(*entity);
-                }
                 let progress_key = world.resource_scope(
                     |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
                         let mut progress =

@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
-use lunco_signal::{SignalExposure, SimStream};
+use lunco_signal::SignalExposure;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -32,8 +32,8 @@ pub struct ModelicaScalarMetadata {
 /// Maximum interval one live worker transaction may integrate.
 pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.0;
 
-/// Default communication period for a live Modelica participant.
-pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
+/// Omitted communication periods exchange on every master physics tick.
+pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = lunco_core_runtime::SECS_PER_TICK;
 
 /// Immutable shared-cache entry limits captured before each worker starts.
 /// These bound retained graph count, not the heap size of one graph or live
@@ -116,8 +116,8 @@ pub struct ModelicaStepSample {
     pub input_time_s: f64,
     pub output_time_s: f64,
     pub inputs: Vec<(String, f64)>,
-    /// Immutable worker outputs, also read by the presentation sample queue.
-    pub outputs: Arc<[(String, f64)]>,
+    /// Worker outputs owned by this accepted transaction.
+    pub outputs: Vec<(String, f64)>,
 }
 
 /// One exact communication transaction awaiting a worker result.
@@ -141,6 +141,56 @@ pub struct ModelicaChannels {
     pub rx_cmd: Receiver<ModelicaCommand>,
     #[cfg(target_arch = "wasm32")]
     pub tx_res: Sender<ModelicaResult>,
+}
+
+impl ModelicaChannels {
+    /// Let a native simulation host sleep until a response or its next pacing
+    /// deadline. Readiness never consumes a response: the ordered ECS admission
+    /// system remains the sole reader. Window/UI hosts must not block here.
+    pub fn wait_until_response_or(&self, deadline: std::time::Instant) {
+        let mut ready = crossbeam_channel::Select::new();
+        ready.recv(&self.rx);
+        let _ = ready.ready_deadline(deadline);
+        // A disconnected receiver is permanently ready. Leave its diagnostic
+        // to the admission owner, while preserving bounded host cadence.
+        if self.rx.is_empty() {
+            std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod channel_tests {
+    use super::*;
+
+    #[test]
+    fn host_response_wait_preserves_the_admission_reader() {
+        let (tx, _) = crossbeam_channel::unbounded();
+        let (result_tx, rx) = crossbeam_channel::unbounded();
+        let channels = ModelicaChannels { tx, rx };
+        result_tx
+            .send(ModelicaResult::worker_failure("first"))
+            .unwrap();
+        result_tx
+            .send(ModelicaResult::worker_failure("second"))
+            .unwrap();
+        channels.wait_until_response_or(std::time::Instant::now());
+        assert_eq!(
+            channels.rx.try_recv().unwrap().worker_failure.as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            channels.rx.try_recv().unwrap().worker_failure.as_deref(),
+            Some("second")
+        );
+        assert!(channels.rx.try_recv().is_err());
+        drop(result_tx);
+        channels.wait_until_response_or(std::time::Instant::now());
+        assert!(matches!(
+            channels.rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        ));
+    }
 }
 
 /// The admitted actor's execution domain, retained through cached rebuilds.
@@ -184,8 +234,6 @@ pub enum ModelicaCommand {
         parameter_overrides: Vec<(String, f64)>,
         /// Explicit finite input values admitted before solver initialization.
         initial_inputs: Vec<(String, f64)>,
-        #[serde(skip)]
-        stream: Option<SimStream>,
     },
     UpdateParameters {
         entity: Entity,
@@ -554,6 +602,10 @@ pub struct ModelicaModel {
     pub paused: bool,
     pub parameters: HashMap<String, f64>,
     pub inputs: HashMap<String, f64>,
+    /// Inputs latched at the start of the current communication interval.
+    /// Slower participants retain this sample across intervening master ticks.
+    #[reflect(ignore)]
+    pub pending_step_inputs: Option<Vec<(String, f64)>>,
     #[reflect(ignore)]
     pub compiled_input_names: BTreeSet<String>,
     #[reflect(ignore)]
@@ -601,6 +653,7 @@ impl Default for ModelicaModel {
             paused: false,
             parameters: HashMap::new(),
             inputs: HashMap::new(),
+            pending_step_inputs: None,
             compiled_input_names: BTreeSet::new(),
             last_error: None,
             document: lunco_doc::DocumentId::default(),
@@ -662,29 +715,12 @@ pub struct CompileRequested {
     pub resume_after_compile: bool,
 }
 
-/// One simulation step's observable samples.
-pub struct SimSampleBatch {
+/// A checked live solver session has been installed. Presentation may retire
+/// bindings for that exact session without owning sample history.
+#[derive(Message, Clone, Copy)]
+pub struct ModelicaSessionStarted {
     pub entity: Entity,
-    pub document: lunco_doc::DocumentId,
-    pub time: f64,
-    /// Worker outputs shared with the accepted communication transaction.
-    pub outputs: Arc<[(String, f64)]>,
-    pub detected_symbols: Vec<(String, f64)>,
-    pub is_new_model: bool,
-    pub is_parameter_update: bool,
-}
-
-impl SimSampleBatch {
-    /// Presentation order: step outputs followed by detected symbols.
-    pub fn samples(&self) -> impl Iterator<Item = &(String, f64)> {
-        self.outputs.iter().chain(&self.detected_symbols)
-    }
-}
-
-/// UI-agnostic queue of live simulation samples awaiting projection.
-#[derive(Resource, Default)]
-pub struct SimSampleStream {
-    pub batches: Vec<SimSampleBatch>,
+    pub session_id: u64,
 }
 
 /// System sets for asynchronous worker lifecycle and fixed-step exchange.

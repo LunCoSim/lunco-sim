@@ -100,6 +100,7 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
             .get(name)
             .copied()
     },
+    initial_expression: None,
     resolve_output: None,
     resolve_input: Some(|world, entity, name| {
         let model = world.get::<ModelicaModel>(entity)?;

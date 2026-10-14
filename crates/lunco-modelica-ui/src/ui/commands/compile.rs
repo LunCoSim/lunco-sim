@@ -1853,6 +1853,7 @@ fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(
     model.session_id = session_id;
     model.is_stepping = true;
     model.in_flight_step = None;
+    model.pending_step_inputs = None;
     model.next_step_id = 1;
     model.current_time = 0.0;
     // Reset rewinds the clock this model is coupled to; it must not owe

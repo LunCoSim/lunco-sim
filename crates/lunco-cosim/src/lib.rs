@@ -222,6 +222,10 @@ impl Plugin for CoSimPlugin {
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
         app.add_plugins(lunco_physics::assembly::DynamicJointIslandMassPlugin);
+        app.add_systems(
+            lunco_cosim_core::schedule::InitializationSampling,
+            lunco_physics::refresh_dynamic_joint_island_masses,
+        );
         app.init_resource::<lunco_port_core::ports::PortRegistry>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>()

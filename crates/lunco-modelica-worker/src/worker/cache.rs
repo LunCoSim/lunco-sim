@@ -134,6 +134,7 @@ pub(super) enum PreparedSolveCacheReadError {
 #[derive(Debug)]
 pub(super) enum PreparedSolveCacheWriteError {
     InvalidLimits(String),
+    MissingCompilerIdentity,
     InvalidPath,
     ConstructionWire(String),
     Codec(serde_json::Error),
@@ -146,6 +147,8 @@ impl std::fmt::Display for PreparedSolveCacheWriteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidLimits(error) => formatter.write_str(error),
+            Self::MissingCompilerIdentity => formatter
+                .write_str("persistent solver caching requires an identified clean compiler build"),
             Self::ConstructionWire(error) => write!(
                 formatter,
                 "checked component serialization rejected: {error}"
@@ -254,6 +257,7 @@ impl std::fmt::Display for PreparedSolveCacheReadError {
 /// share pure solve IR within one session too.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct PreparedSolveKey {
+    pub(super) compiler_identity: Option<&'static str>,
     pub(super) source_key: u64,
     pub(super) solver_id: String,
     pub(super) parameter_overrides: Vec<(String, u64)>,
@@ -263,6 +267,7 @@ pub(super) struct PreparedSolveKey {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize)]
 struct PreparedSolveDiskRecord<M, S, P> {
+    compiler_identity: Option<String>,
     version: u32,
     source_key: u64,
     solver_id: S,
@@ -274,6 +279,7 @@ struct PreparedSolveDiskRecord<M, S, P> {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct DecodedPreparedSolveDiskRecord {
+    compiler_identity: Option<String>,
     version: u32,
     source_key: u64,
     solver_id: String,
@@ -320,6 +326,8 @@ impl PreparedSolveCache {
         initial_inputs: &[(String, f64)],
     ) -> PreparedSolveKey {
         PreparedSolveKey {
+            compiler_identity: rumoca_core::build_identity()
+                .filter(|identity| !identity.ends_with("-dirty")),
             source_key,
             solver_id: spec.id.to_string(),
             parameter_overrides: parameter_overrides
@@ -344,6 +352,7 @@ impl PreparedSolveCache {
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
+        key.compiler_identity.hash(&mut hasher);
         key.source_key.hash(&mut hasher);
         key.solver_id.hash(&mut hasher);
         key.parameter_overrides.hash(&mut hasher);
@@ -405,6 +414,8 @@ impl PreparedSolveCache {
         let record: DecodedPreparedSolveDiskRecord =
             serde_json::from_slice(&bytes).map_err(PreparedSolveCacheReadError::Codec)?;
         if record.version != PREPARED_SOLVE_CACHE_VERSION
+            || key.compiler_identity.is_none()
+            || record.compiler_identity.as_deref() != key.compiler_identity
             || record.source_key != key.source_key
             || record.solver_id != key.solver_id
             || record.parameter_overrides != key.parameter_overrides
@@ -443,6 +454,11 @@ impl PreparedSolveCache {
             .validate()
             .map_err(PreparedSolveCacheWriteError::InvalidLimits)?;
         let record = PreparedSolveDiskRecord {
+            compiler_identity: Some(
+                key.compiler_identity
+                    .ok_or(PreparedSolveCacheWriteError::MissingCompilerIdentity)?
+                    .to_string(),
+            ),
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
             solver_id: key.solver_id.as_str(),
@@ -577,6 +593,7 @@ mod tests {
 
     fn key() -> PreparedSolveKey {
         PreparedSolveKey {
+            compiler_identity: Some("test-compiler"),
             source_key: 11,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.5_f64.to_bits())],
@@ -597,6 +614,7 @@ mod tests {
     ) -> PreparedSolveDiskRecord<rumoca_ir_solve::fmi::FmiComponent, String, Vec<(String, u64)>>
     {
         PreparedSolveDiskRecord {
+            compiler_identity: key.compiler_identity.map(str::to_string),
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key: key.source_key,
             solver_id: key.solver_id.clone(),
@@ -614,6 +632,7 @@ mod tests {
         >,
     ) -> Vec<u8> {
         let wire = PreparedSolveDiskRecord {
+            compiler_identity: record.compiler_identity.clone(),
             version: record.version,
             source_key: record.source_key,
             solver_id: &record.solver_id,
@@ -1079,7 +1098,7 @@ mod tests {
     #[test]
     fn prepared_solve_disk_cache_rejects_every_identity_mismatch() {
         let key = key();
-        for field in 0..5 {
+        for field in 0..7 {
             let mut record = record(&key);
             match field {
                 0 => record.version += 1,
@@ -1089,6 +1108,8 @@ mod tests {
                 4 => record
                     .initial_inputs
                     .push(("forcing".into(), 7.0_f64.to_bits())),
+                5 => record.compiler_identity = Some("another-compiler".into()),
+                6 => record.compiler_identity = None,
                 _ => unreachable!(),
             }
             let (storage, handle) = stored(&compress(&encode(&record)));
@@ -1228,6 +1249,7 @@ mod reuse_tests {
     fn immutable_reuse_cache_keeps_exact_solve_key_and_shared_model_identity() {
         let mut cache = PreparedSolveCache::new(NonZeroUsize::new(2).unwrap());
         let key = PreparedSolveKey {
+            compiler_identity: Some("test-compiler"),
             source_key: 1,
             solver_id: "generic-solver".into(),
             parameter_overrides: vec![("gain".into(), 3.0_f64.to_bits())],

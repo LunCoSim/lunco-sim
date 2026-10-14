@@ -138,7 +138,7 @@ class "LunCoProgramAPI"
     uniform string info:sourceCode = ""
     uniform token info:sourceAsset:subIdentifier = ""
     uniform bool lunco:program:realtimeSafe = false
-    uniform double lunco:program:communicationPeriod = 0.1
+    uniform double lunco:program:communicationPeriod = 0.016666666666666666
 }
 
 class "LunCoModelicaTopologyAPI"

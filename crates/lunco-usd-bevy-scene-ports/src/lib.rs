@@ -426,6 +426,7 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
     metadata: scene_property_metadata,
     read_output: |_, _, _| None,
     read_input,
+    initial_expression: None,
     resolve_output: None,
     resolve_input: Some(resolve_input_slot),
     read_slot: None,

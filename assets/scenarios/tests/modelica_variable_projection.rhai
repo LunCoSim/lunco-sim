@@ -37,6 +37,8 @@ fn on_tick(me, ctx) {
         t_true(this.retained, "the paused native snapshot remained published"),
         t_true(this.command_ok, "the public input command was accepted"),
         t_true(sample != (), "the worker admitted a subsequent communication result"),
+        t_true(sample != () && abs(sample.output_time_s - sample.input_time_s - dt()) < 1.0e-9,
+               "the omitted communication period exchanges on each fixed physics tick"),
         t_true(sample != () && sample.sampled_inputs.throttle == 1.0,
                "the admitted result consumed the commanded input"),
         t_true(sample != () && variables.thrust == sample.sampled_outputs.thrust

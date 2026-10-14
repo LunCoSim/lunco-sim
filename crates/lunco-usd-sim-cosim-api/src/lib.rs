@@ -792,6 +792,9 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     // here beside timing/ports so live API diagnosis does not
                     // require access to the process log.
                     "modelica_error": model.and_then(|m| m.last_error.clone()),
+                    "pending_initial_connections": world
+                        .get::<lunco_cosim_core::initialization::PendingInputConnections>(entity)
+                        .map(|pending| pending.0.iter().cloned().collect::<Vec<_>>()),
                     "outputs": ApiValue::Map(outputs),
                     "inputs": ApiValue::Map(inputs),
                     })
@@ -1202,25 +1205,37 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
-        let Some(mut admitted_revolute_query) =
-            QueryState::<(), With<avian3d::prelude::RevoluteJoint>>::try_new(world)
-        else {
+        let Some(mut admitted_revolute_query) = QueryState::<
+            (),
+            (
+                With<avian3d::prelude::RevoluteJoint>,
+                Without<avian3d::prelude::JointDisabled>,
+            ),
+        >::try_new(world) else {
             return api_error(
                 lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted revolute-joint query is unavailable",
             );
         };
-        let Some(mut admitted_prismatic_query) =
-            QueryState::<(), With<avian3d::prelude::PrismaticJoint>>::try_new(world)
-        else {
+        let Some(mut admitted_prismatic_query) = QueryState::<
+            (),
+            (
+                With<avian3d::prelude::PrismaticJoint>,
+                Without<avian3d::prelude::JointDisabled>,
+            ),
+        >::try_new(world) else {
             return api_error(
                 lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted prismatic-joint query is unavailable",
             );
         };
-        let Some(mut admitted_fixed_query) =
-            QueryState::<(), With<avian3d::prelude::FixedJoint>>::try_new(world)
-        else {
+        let Some(mut admitted_fixed_query) = QueryState::<
+            (),
+            (
+                With<avian3d::prelude::FixedJoint>,
+                Without<avian3d::prelude::JointDisabled>,
+            ),
+        >::try_new(world) else {
             return api_error(
                 lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted fixed-joint query is unavailable",

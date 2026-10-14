@@ -167,6 +167,12 @@ entry = "synthesize"
 deterministic = true
 
 [[policies]]
+hook = "synth.coupled-initialization"
+source = "synth_acausal_network.rhai"
+entry = "initialize"
+deterministic = true
+
+[[policies]]
 hook = "lint.usd"
 source = "lint_usd.rhai"
 entry = "lint_usd"

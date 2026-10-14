@@ -670,6 +670,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         w.get::<SimComponent>(e)
             .and_then(|c| c.inputs.get(n).copied())
     },
+    initial_expression: None,
     resolve_output: Some(|world, entity, name| {
         world
             .get::<SimComponent>(entity)?
@@ -718,6 +719,31 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
     metadata: avian_metadata,
     read_output: avian_read_output,
     read_input: avian_read_input,
+
+    initial_expression: Some(|world, entity, name, direction| {
+        use lunco_port_core::ports::{PortInitialExpression, PortInitialSource};
+        if name != "dynamic_joint_island_mass_kg" || direction != PortDirection::Out {
+            return Ok(PortInitialSource::Sample);
+        }
+        let Some(members) = world
+            .get_resource::<lunco_physics::DynamicJointIslandMasses>()
+            .and_then(|masses| masses.initial_members(entity))
+        else {
+            return Ok(PortInitialSource::Pending);
+        };
+        Ok(PortInitialSource::Expression(PortInitialExpression {
+            constant: 0.0,
+            terms: members
+                .iter()
+                .map(|member| lunco_port_core::ports::PortInitialTerm {
+                    entity: *member,
+                    name: "mass".into(),
+                    direction: PortDirection::In,
+                    coefficient: 1.0,
+                })
+                .collect(),
+        }))
+    }),
 
     resolve_output: Some(avian_resolve_output),
     resolve_input: Some(avian_resolve_input),
@@ -782,6 +808,7 @@ const PORT_BACKEND: PortBackend = PortBackend {
         }
         w.get::<Port>(e).map(|p| p.value)
     },
+    initial_expression: None,
     resolve_output: Some(|world, entity, name| {
         (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
     }),
@@ -873,6 +900,7 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .map(|port| port.value)
     },
     read_input: |_world, _entity, _name| None,
+    initial_expression: None,
     resolve_output: Some(|world, entity, name| {
         world.get::<OutputPorts>(entity)?.ports.resolve_slot(name)
     }),
@@ -977,6 +1005,7 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             .get::<Port>(authored.endpoint)
             .map(|endpoint| endpoint.value)
     },
+    initial_expression: None,
     resolve_output: Some(|world, entity, name| {
         let surface = world.get::<PortSurface>(entity)?;
         let authored = surface.ports.get(name)?;
@@ -1093,6 +1122,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
     },
     read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
     read_input: |_, _, _| None,
+    initial_expression: None,
     resolve_output: Some(|_world, _entity, name| (name == "piloted").then_some(0)),
     resolve_input: None,
     read_slot: Some(|world, entity, slot| (slot == 0).then(|| piloted_value(world, entity))),

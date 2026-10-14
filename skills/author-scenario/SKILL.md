@@ -139,7 +139,8 @@ identity discovery and declarations; read source facts in top-level
 initialization or `on_start`. For source-selected entities discovered there,
 call `track_entity_read(id)` or `track_entity_write(id)` before access.
 
-Modelica entities join the shared fixed-step causal barrier. Required input
+All active Modelica entities share the fixed-step barrier. Declarations grant
+scenario access without changing clock membership. Required input
 keys name an owner namespace and an exact identity; the generic runtime waits
 on owner-published Pending/Ready/Failed state before top-level initialization
 and `on_start`. A pending scenario keeps its existing activation hold and
@@ -153,9 +154,9 @@ or writes through a port or whose event it consumes. The aggregate solver
 barrier is not an access grant: membership through USD connections or another
 scenario's plan does not authorize this scenario to read that participant.
 `modelica_entities` grants both read and write access to those live Modelica
-participants and adds them to the shared simulation barrier. `entity_reads`
+participants. Clock membership is independent of that access grant. `entity_reads`
 and `entity_writes` grant directional access to any live entity; a Modelica
-entity in either set also joins the shared barrier. Direct reflected and port
+entity in either set retains its shared physics clock; these sets grant access. Direct reflected and port
 reads require read access, while direct reflected writes, port writes, and
 structural verbs require write access.
 Entity-targeted query providers report the ids they read. Declare those target
@@ -179,7 +180,7 @@ When an entity is discovered after required inputs become ready, or a typed
 simulation command creates an entity unavailable during planning, call `track_entity_read(id)` or
 `track_entity_write(id)` once the entity is live
 and before accessing it. This commits access in serialized simulation order;
-if the entity is a Modelica participant, it also joins the scenario's barrier.
+Modelica participants retain the same shared clock when access is added.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard

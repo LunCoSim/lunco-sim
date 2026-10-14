@@ -151,7 +151,8 @@ literals remain unchanged throughout source admission and cache identity.
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same
-correlated lowering. Prepared cache version 12 stores the canonical typed FMI
+correlated lowering. Prepared cache version 13 stores the exact clean compiler
+build identity and canonical typed FMI
 construction wire through a bounded JSON persistence adapter and zstd. Loading
 replays Rumoca's checked construction; unsupported versions, malformed metadata,
 identity mismatches, and oversized records are rejected before use.

@@ -27,7 +27,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   A zero collector exit does not prove capture integrity. Compare the saved
   file size with the collector's reported compressed size and require a
   successful native CSV export before using its zones. A size mismatch,
-  parser failure or stalled export leaves that capture unusable. Inspect the
+  parser failure or stalled export leaves that capture unusable. A reported
+  instrumentation failure also makes the requested window incomplete. Keep hot
+  zone names bounded: step ids, timestamps, and measured durations must not be
+  span fields when the Tracy layer uses those values as source-location identity. Inspect the
   exact owned exporter process before terminating an unsuccessful read; do not
   restart a still-running export solely because an observation timed out.
   Check disk space while the owned app is live as well as after it exits.
@@ -88,6 +91,22 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   state alongside camera and graphics settings.
 
 ## Architecture checks
+
+Modelica coupling holds `FixedMain`, while the pacing clock retains running
+demand in `Time<Fixed>::overstep`. Compare completed simulation time against
+monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
+a short native physics service time does not certify realtime co-simulation.
+Completed Modelica receipts have one reader in `SimulationCompletions`, serviced
+before clock projection and by the native driver on response readiness between
+application updates. Windowed completion admission still depends on application
+updates until its simulation owner is isolated. The default
+communication period is one physics tick; longer periods must be authored
+explicitly.
+
+UI exposure publication is paced by `Time<Real>`, independent of simulation
+pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep
+mission/timeline waits and telemetry deadlines on their declared simulation
+clocks; changing their timers to wall time changes simulation semantics.
 
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
@@ -298,17 +317,18 @@ Inspect scenario preparation separately from lifecycle execution. Unchanged
 actors borrow their canonical source; only admitted compile/retry work copies
 worker inputs. Do not defer initialization or change actor commit order to
 reduce this preparation cost.
-For Modelica response retention, reuse existing observable-variable keys and
-transfer owned input/output buffers after transaction validation. The accepted
-step and UI stream are separate consumers, so retain one output snapshot for
-the accepted record, shared with the bounded UI queue as an immutable slice.
-Read the UI sequence through `SimSampleBatch::samples`, which chains outputs
-then detected symbols. Verify shared allocation identity, reset isolation,
-stale-result rejection and exact sample order at the low-level seam, plus
-`rocket_engine_observables` through production for the public accepted-step
-reader. Preserve detected-symbol/output precedence. Measure this response path
-separately from fixed-step output publication; fewer copies alone do not prove
-throughput gain.
+For Modelica response retention, reuse observable-variable keys and move the
+worker's input/output buffers into the accepted record after transaction
+validation. Preserve detected-symbol/output precedence and verify reset
+isolation, signed-zero values and stale-result rejection at the owner seam.
+Modelica workers return current observations only. Retained samples belong to
+`lunco-modelica-telemetry` and the shared chunked `SignalRegistry`, installed
+through `TelemetryRetentionPlugin`. UI consumers read that same history and
+receive only a checked `ModelicaSessionStarted` lifecycle message when a new
+session requires binding cleanup. Verify retained history through
+`ListTelemetryChannels` and `QueryTelemetryHistory` in both hosts, and exercise
+the public accepted-step reader through production. Measure response latency
+separately from solver integration and fixed-step output publication.
 For loading, separate prepared-FMI lookup/lowering, live construction and ordered
 publication. `modelica_live_plan_admission` runs on the command owner;
 `modelica_live_construction_job` records queue wait and measures the native session,
@@ -1046,8 +1066,9 @@ the full running delta. Its separate `Time<Virtual>::max_delta` diagnostic
 detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
-response latency. The execution host admits completions in `First`, after
-message rotation and before `ClockProjectionSet`; compile requests remain in
+response latency. `SimulationCompletions` runs in `First`, after message
+rotation and before `ClockProjectionSet`, and in the native driver's bounded
+completion wait; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
 The profile is read on demand and is not a replay or UI-isolation verdict; a

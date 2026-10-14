@@ -145,6 +145,16 @@ input writes replace only the addressed slot, while internal and connected
 inputs retain their equation bindings. Run values enter Rumoca's simulation
 options before initialization; compiled DAE artifacts stay immutable.
 
+Initial algebraic dependencies use the optional typed `PortInitialExpression`
+backend contract. `PortRegistry::initial_expression` selects the same declared
+owner as a numerical read. `PortInitialSource` distinguishes independent samples,
+pending preparation and exact relations; a pending relation prevents reading a
+partial current topology as an initial value. The Avian island-mass output expresses the sum of its
+prepared mechanical members' mass inputs; USD Modelica admission consumes that
+relation through the existing wires. A declared interface carries no numerical
+sample until its owner produces one. See the [coupled admission lifecycle](../../docs/architecture/20-domain-modelica.md#coupled-initial-admission)
+for source-backed feedback initialization, certification and the FMI boundary.
+
 A missing demanded output or rejected input is a visible owner error. Do not
 substitute zero or continue a wire exchange with an absent value. Add an authored
 USD/Rhai production gate that observes the actual connected public ports when

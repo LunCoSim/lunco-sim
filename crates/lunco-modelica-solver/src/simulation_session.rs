@@ -18,10 +18,11 @@ fn adaptive_error(error: rumoca_sim::SimError) -> SimulationDiagnosticError {
 }
 
 impl LiveStepper {
-    pub fn set_input(&mut self, name: &str, value: f64) -> Result<(), SimulationDiagnosticError> {
+    /// Admit the complete communication-point input vector atomically.
+    pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.set_input(name, value).map_err(adaptive_error),
-            Self::Fixed(session) => session.set_input(name, value),
+            Self::Adaptive(session) => session.set_inputs(inputs).map_err(adaptive_error),
+            Self::Fixed(session) => session.set_inputs(inputs),
         }
     }
 

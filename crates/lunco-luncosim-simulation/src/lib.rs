@@ -576,8 +576,8 @@ impl Plugin for LunCoSimSimulationPlugin {
             // semantic-control clients and headless production regressions.
             .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             .add_systems(Startup, setup_luncosim)
-            // Cosim pipeline ordering: worker responses land in Update; the
-            // fixed loop then propagates, applies, and dispatches the next
+            // Cosim pipeline ordering: worker responses commit before clock
+            // admission. The fixed loop then propagates, applies, and dispatches the next
             // Modelica communication point.
             .configure_sets(
                 FixedUpdate,
@@ -589,6 +589,12 @@ impl Plugin for LunCoSimSimulationPlugin {
                     .chain(),
             );
         configure_big_space_propagation_gates(app);
+        // Every host installs the same Modelica engine from the simulation
+        // composition. Presentation plugins do not create solver owners.
+        app.add_plugins((
+            lunco_modelica_core::ModelicaCorePlugin,
+            lunco_modelica_execution::ModelicaExecutionPlugin,
+        ));
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
         // The terrain support projection must observe that promotion before it
         // decides whether physics may resume; plugin insertion order is not a
@@ -1034,9 +1040,20 @@ fn install_dynamic_headless_runner(app: &mut App) {
                 }
                 lunco_core_runtime::SimulationExecutionMode::MaxSpeed => Duration::ZERO,
             };
-            let elapsed = started.elapsed();
-            if elapsed < cadence {
-                std::thread::sleep(cadence - elapsed);
+            if !cadence.is_zero() {
+                loop {
+                    let deadline = lunco_time::next_fixed_deadline(app.world(), started + cadence);
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    app.world()
+                        .resource::<lunco_modelica_runtime::ModelicaChannels>()
+                        .wait_until_response_or(deadline);
+                    // Partial receipts do not need another application update.
+                    // The same schedule serves First and native continuation;
+                    // its systems retain one state and one validated reader.
+                    lunco_core_runtime::admit_simulation_completions(app.world_mut());
+                }
             }
         }
     });
@@ -1053,13 +1070,6 @@ impl Default for LunCoSimHeadlessPlugin {
 impl Plugin for LunCoSimHeadlessPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.execution_mode);
-        // Modelica compiler/document core plus the separate execution plugin —
-        // NO egui/viz/workbench. The split keeps compiler-only consumers free
-        // of solver workers while this runtime still installs the authoritative
-        // Modelica compile and execution path used by cosim scenes.
-        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
-        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
-
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with
         // `NetReplicate`). Windowed builds get this transitively via

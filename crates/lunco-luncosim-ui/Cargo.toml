@@ -13,8 +13,6 @@ default = []
 api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-celestial-spatial",
-    "dep:lunco-modelica-core",
-    "dep:lunco-modelica-execution",
     "dep:lunco-scene-camera",
     "dep:lunco-scene-commands",
     "dep:lunco-scripting-bridge-core",
@@ -119,8 +117,6 @@ lunco-luncosim-simulation = { path = "../lunco-luncosim-simulation", default-fea
 lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false }
 lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
 lunco-usd-prim-tree-ui = { path = "../lunco-usd-prim-tree-ui" }
-lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false, optional = true }
-lunco-modelica-execution = { path = "../lunco-modelica-execution", optional = true }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }

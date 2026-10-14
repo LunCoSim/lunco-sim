@@ -141,11 +141,7 @@ fn synthesize(net) {
         WRENCH_COMPONENT_HALF_WIDTH,
         WRENCH_COMPONENT_HALF_HEIGHT
     );
-    mutable += "    upper_command = {" + vector_ones(net.actuator_count)
-        + "}) annotation(Placement(transformation(origin = {" + WRENCH_ORIGIN_TEXT + "}, extent = "
-        + allocator_extent + ")));\n\n";
-    mutable += "equation\n";
-
+    mutable += "    upper_command = {" + vector_ones(net.actuator_count) + "}";
     let demanded = [
         "desired_force_x", "desired_force_y", "desired_force_z",
         "desired_torque_x", "desired_torque_y", "desired_torque_z"
@@ -155,8 +151,11 @@ fn synthesize(net) {
         for input in net.inputs {
             if input == name { value = input; }
         }
-        mutable += "  allocator." + name + " = " + value + ";\n";
+        mutable += ",\n    " + name + " = " + value;
     }
+    mutable += ") annotation(Placement(transformation(origin = {" + WRENCH_ORIGIN_TEXT + "}, extent = "
+        + allocator_extent + ")));\n\n";
+    mutable += "equation\n";
     for index in 0..net.outputs.len {
         mutable += "  " + net.outputs[index] + " = allocator.command[";
         mutable += (index + 1).to_string() + "];\n";

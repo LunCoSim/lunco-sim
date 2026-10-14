@@ -11,7 +11,6 @@ pub fn on_remove_modelica(
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
     )>,
     mut variables: Query<&mut ModelicaVariables>,
-    mut sim_registry: ResMut<lunco_signal::SimRegistry>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     mut commands: Commands,
 ) {
@@ -41,7 +40,6 @@ pub fn on_remove_modelica(
             }
         });
     }
-    sim_registry.remove_entity(entity);
     if let Some(mut diagnostics) = step_diagnostics {
         diagnostics.remove(entity);
     }
@@ -76,6 +74,7 @@ fn reject_missing_modelica_variables(
     model.is_compiled = false;
     model.is_stepping = false;
     model.in_flight_step = None;
+    model.pending_step_inputs = None;
     model.last_accepted_step = None;
     model.resume_after_compile = false;
     model.live_solver_snapshot = None;
@@ -213,8 +212,8 @@ pub fn request_modelica_compiles(
 /// committed in `Update`, and this system releases the exact participant hold
 /// on the next lifecycle pass. A terminal Modelica error releases the
 /// preparation hold; the readiness owner continues to report the failure.
-/// Intentionally paused models and models outside the shared causal closure do
-/// not gate world time.
+/// Intentionally paused models do not gate world time. Every projected active
+/// model must finish preparation before consuming physics time.
 pub fn reconcile_modelica_preparation_progress(
     models: Query<(
         Entity,
@@ -328,7 +327,7 @@ mod compile_admission_tests {
     }
 
     #[test]
-    fn modelica_preparation_holds_only_active_causal_participants() {
+    fn modelica_preparation_holds_active_projected_participants() {
         use lunco_core_runtime::{SimulationProgress, SimulationProgressOwner};
 
         let mut app = App::new();
@@ -354,10 +353,10 @@ mod compile_admission_tests {
                 ..Default::default()
             })
             .id();
-        let unrelated = app
+        let unprojected = app
             .world_mut()
             .spawn(ModelicaModel {
-                model_name: "UnrelatedPlant".to_owned(),
+                model_name: "UnprojectedPlant".to_owned(),
                 paused: false,
                 is_compiled: false,
                 ..Default::default()
@@ -368,7 +367,8 @@ mod compile_admission_tests {
             .world_mut()
             .resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
         participants.replace([active, paused]);
-        participants.replace_modelica_entities([active, paused, unrelated]);
+        participants.replace_modelica_entities([active, paused]);
+        assert!(!participants.requires_barrier(unprojected));
         drop(participants);
 
         app.world_mut().run_schedule(PreUpdate);
@@ -417,9 +417,8 @@ mod compile_admission_tests {
 ///
 /// The requested `dt` is the **whole deficit**, clamped to
 /// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None`. A coupled caller
-/// holds the shared target clock until the result lands; an independent caller
-/// may continue advancing its target clock while the worker runs, preserving
-/// the same communication-point semantics without stalling unrelated physics.
+/// holds the shared target clock until the result lands. A slower participant
+/// still commits each requested point before the next fixed cycle.
 ///
 /// While a step is in flight we do not dispatch another (one macro step per
 /// model at a time — the worker owns one `SimulationSession` per entity).
@@ -458,7 +457,7 @@ fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> 
 /// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    fixed_time: ResMut<Time<Fixed>>,
+    fixed_time: Res<Time<Fixed>>,
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
@@ -551,22 +550,12 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
-        // A live Modelica step is a barrier only when the resolved topology says
-        // this participant can affect shared state. A telemetry/electrical
-        // participant still owns an explicit communication schedule and may be
-        // in flight, but its zero-order-held outputs must not stop Avian or the
-        // controllers. The unresolved topology state is fail-closed above.
+        // Every admitted participant synchronizes at its own communication
+        // points. A slower exchange period changes those points, never the
+        // authoritative clock or the requirement to commit the result first.
         if model.is_stepping {
-            if !shared_clock_participant {
-                // The world keeps advancing while this independent participant
-                // solves. Account for that world time instead of freezing its
-                // target clock at the dispatch instant; the next communication
-                // point then represents the actual shared-world timestamp.
-                model.target_time += fixed_dt;
-            } else {
-                coupling_held = true;
-                shared_clock_models += 1;
-            }
+            coupling_held = true;
+            shared_clock_models += 1;
             live_models += 1;
             let lag_secs = (model.target_time - model.current_time).abs();
             if lag_secs > worst_secs {
@@ -574,6 +563,13 @@ pub fn spawn_modelica_requests(
                 worst_entity = Some(entity);
             }
             continue;
+        }
+
+        // Inputs belong to the interval's start coordinate, including for a
+        // subrate participant. Later native ticks may update `model.inputs`,
+        // but cannot rewrite the sample that this interval integrates.
+        if model.pending_step_inputs.is_none() {
+            model.pending_step_inputs = Some(ordered_modelica_inputs(&model.inputs));
         }
 
         // ── The world clock advances by exactly one FIXED tick ──────────────
@@ -604,10 +600,14 @@ pub fn spawn_modelica_requests(
             // micro-step ladder is discrete. Move the schedule to the next
             // point instead of repeatedly dispatching a sub-micro-step.
             model.next_communication_time = model.current_time + period;
+            model.pending_step_inputs = None;
             continue;
         };
 
-        let sampled_inputs = ordered_modelica_inputs(&model.inputs);
+        let sampled_inputs = model
+            .pending_step_inputs
+            .take()
+            .expect("the current communication interval owns its latched input sample");
 
         let Some(next_step_id) = model.next_step_id.checked_add(1) else {
             let error = format!(
@@ -693,18 +693,15 @@ pub fn spawn_modelica_requests(
         coupling.worst_entity = worst_entity;
     }
 
-    // Rate-limited divergence alarm. A coupled participant keeps the shared
-    // simulation held while it waits; an independent participant is allowed
-    // to finish asynchronously while its last validated output remains
-    // zero-order-held. The worker is asynchronous in wall-clock execution,
-    // never a second simulation-time authority.
+    // Solver latency is measured in wall time, but it never grants a second
+    // simulation clock or permits crossing an unfinished communication point.
     if lag.cooldown > 0 {
         lag.cooldown -= 1;
     } else if worst_secs > LAG_WARN_SECS {
         warn!(
             "[cosim] Modelica participant is {:.3}s behind its communication point \
-             (entity {:?}, {} live model(s)); causal membership determines \
-             whether the shared simulation waits for the result.",
+             (entity {:?}, {} live model(s)); the shared simulation waits \
+             for the result.",
             worst_secs, worst_entity, live_models,
         );
         lag.cooldown = LAG_WARN_COOLDOWN_TICKS;
@@ -763,6 +760,7 @@ fn include_compile_explanation(diagnostics: &mut [lunco_doc::Diagnostic], error:
 /// and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
+    initializing: Query<(), With<lunco_cosim_core::initialization::CoupledInitializationPending>>,
     mut worker_failure: Option<ResMut<lunco_modelica_runtime::ModelicaWorkerFailure>>,
     mut q_models: Query<(
         Entity,
@@ -787,10 +785,9 @@ pub fn handle_modelica_responses(
     // Lifecycle messages leave as core events; the reactive UI console observer
     // projects them. Core no longer references the console panel.
     mut notices: MessageWriter<ModelicaNotice>,
-    // Live sim samples leave the core handler through this UI-agnostic queue;
-    // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
-    // drains it into `lunco_viz`. Core no longer references any viz/plot types.
-    mut sample_stream: ResMut<SimSampleStream>,
+    // Presentation retires actor-scoped plot bindings after a checked session
+    // installation; retained state stays owned by shared telemetry.
+    mut session_starts: MessageWriter<ModelicaSessionStarted>,
     source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
@@ -962,6 +959,7 @@ pub fn handle_modelica_responses(
                     );
                 }
                 model.in_flight_step = None;
+                model.pending_step_inputs = None;
                 model.is_stepping = false;
                 model.paused = true;
                 model.is_compiled = false;
@@ -1013,6 +1011,7 @@ pub fn handle_modelica_responses(
                         }
                     }
                     model.in_flight_step = None;
+                    model.pending_step_inputs = None;
                     model.is_stepping = false;
                     model.is_compiling = false;
                     model.is_compiled = false;
@@ -1037,6 +1036,7 @@ pub fn handle_modelica_responses(
                         cs.clear_error(model.document);
                     }
                     model.in_flight_step = None;
+                    model.pending_step_inputs = None;
                     model.is_stepping = false;
                     model.is_compiling = false;
                     model.is_compiled = false;
@@ -1161,6 +1161,7 @@ pub fn handle_modelica_responses(
                         );
                     }
                     model.in_flight_step = None;
+                    model.pending_step_inputs = None;
                     model.is_stepping = false;
                     model.paused = true;
                     model.is_compiled = false;
@@ -1193,6 +1194,7 @@ pub fn handle_modelica_responses(
                     diagnostics.begin_session(result.entity, result.session_id);
                 }
                 model.in_flight_step = None;
+                model.pending_step_inputs = None;
                 model.last_accepted_step = None;
                 model.next_step_id = 1;
                 None
@@ -1204,17 +1206,7 @@ pub fn handle_modelica_responses(
                 model.variable_metadata = Some(std::sync::Arc::new(metadata));
             }
 
-            let outputs: std::sync::Arc<[(String, f64)]> = result.outputs.into();
-            if let Some(in_flight) = accepted_step {
-                model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
-                    session_id: model.session_id,
-                    step_id: in_flight.step_id,
-                    input_time_s: in_flight.start_time,
-                    output_time_s: result.new_time,
-                    inputs: in_flight.sampled_inputs,
-                    outputs: outputs.clone(),
-                });
-            }
+            let outputs = result.outputs;
 
             if lifecycle_result {
                 info!(
@@ -1425,7 +1417,8 @@ pub fn handle_modelica_responses(
                     } else {
                         0
                     };
-                    model.paused = !model.resume_after_compile;
+                    model.paused =
+                        initializing.contains(result.entity) || !model.resume_after_compile;
                     model.resume_after_compile = false;
                     // Worker has installed a stepper for this entity.
                     // `spawn_modelica_requests` now admits its next fixed step.
@@ -1531,21 +1524,20 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-            let time_val = model.current_time;
-
-            // Emit this step's observable samples to the reactive UI layer.
-            // The presentation observer projects queued outputs and symbols
-            // into SignalRegistry. Bound publication here so headless hosts
-            // without a drainer cannot grow the queue without limit.
-            if sample_stream.batches.len() < 16_384 {
-                sample_stream.batches.push(SimSampleBatch {
-                    entity: result.entity,
-                    document: model.document,
-                    time: time_val,
+            if let Some(in_flight) = accepted_step {
+                model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
+                    session_id: model.session_id,
+                    step_id: in_flight.step_id,
+                    input_time_s: in_flight.start_time,
+                    output_time_s: result.new_time,
+                    inputs: in_flight.sampled_inputs,
                     outputs,
-                    detected_symbols: result.detected_symbols,
-                    is_new_model: result.is_new_model,
-                    is_parameter_update: result.is_parameter_update,
+                });
+            }
+            if result.is_new_model && result.error.is_none() && model.is_compiled {
+                session_starts.write(ModelicaSessionStarted {
+                    entity: result.entity,
+                    session_id: model.session_id,
                 });
             }
         } else if lifecycle_result {
@@ -1589,6 +1581,7 @@ pub fn handle_modelica_responses(
                 model.is_compiled = false;
                 model.is_stepping = false;
                 model.in_flight_step = None;
+                model.pending_step_inputs = None;
                 model.resume_after_compile = false;
                 model.live_solver_snapshot = None;
                 model.variable_metadata = None;
@@ -1611,14 +1604,11 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-            sample_stream.batches.clear();
         }
     }
 
-    // A result landing is the only release edge for the coupling barrier. The
-    // First admits this completion before clock projection. The fixed loop
-    // may then consume the fresh output and dispatch the next communication
-    // point; an outstanding causal participant still holds the whole loop.
+    // A result landing is the only release edge for the coupling barrier.
+    // Admission precedes clock projection; outstanding participants keep it held.
     if let Some(mut coupling) = coupling {
         coupling.held = q_models.iter().any(|(entity, model, _, _, _)| {
             let shared_clock_participant = participants
@@ -1679,7 +1669,7 @@ mod compile_fault_tests {
             let mut app = App::new();
             app.add_message::<ModelicaNotice>()
                 .add_message::<CompileRequested>()
-                .init_resource::<SimSampleStream>()
+                .add_message::<ModelicaSessionStarted>()
                 .init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
                 .init_resource::<lunco_core::RuntimeFaults>()
                 .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
@@ -1800,7 +1790,7 @@ mod compile_fault_tests {
     fn missing_variable_state_rejects_late_lifecycle_results_after_restoration() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .add_systems(
                 First,
@@ -1876,14 +1866,18 @@ mod compile_fault_tests {
                     .is_empty()
             );
         }
-        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<ModelicaSessionStarted>>()
+                .is_empty()
+        );
     }
 
     #[test]
     fn accepted_step_reuses_variable_keys_and_transfers_sample_buffers() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .add_systems(First, handle_modelica_responses);
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
@@ -1944,7 +1938,11 @@ mod compile_fault_tests {
             })
             .unwrap();
         app.world_mut().run_schedule(First);
-        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<ModelicaSessionStarted>>()
+                .is_empty()
+        );
         assert_eq!(
             app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
             0.0
@@ -1975,18 +1973,7 @@ mod compile_fault_tests {
         assert_eq!(accepted.inputs[0].0.as_ptr(), input_key);
         assert_eq!(&*accepted.outputs, expected);
         assert!(model.in_flight_step.is_none());
-        let batch = &app.world().resource::<SimSampleStream>().batches[0];
-        assert!(std::sync::Arc::ptr_eq(&accepted.outputs, &batch.outputs));
         assert_eq!(accepted.outputs[0].0.as_ptr(), output_key);
-        assert_eq!(&*batch.outputs, expected);
-        assert_eq!(batch.detected_symbols, [("x".to_owned(), 8.0)]);
-        assert_eq!(
-            batch.samples().collect::<Vec<_>>(),
-            expected
-                .iter()
-                .chain(&batch.detected_symbols)
-                .collect::<Vec<_>>()
-        );
         let retained_outputs = accepted.outputs.clone();
         results
             .send(ModelicaResult {
@@ -2005,17 +1992,13 @@ mod compile_fault_tests {
         assert_eq!(variables["x"], 3.0);
         assert!(model.last_accepted_step.is_none());
         assert_eq!(&*retained_outputs, expected);
-        assert_eq!(
-            app.world().resource::<SimSampleStream>().batches[1].outputs[0],
-            ("x".to_owned(), 3.0)
-        );
     }
 
     #[test]
     fn checked_solver_facts_are_fenced_and_missing_metadata_is_terminal() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .add_systems(First, handle_modelica_responses);
 
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
@@ -2123,7 +2106,7 @@ mod compile_fault_tests {
     fn active_causal_compile_failure_faults_before_progress_can_resume() {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<lunco_core::RuntimeFaults>()
@@ -2207,7 +2190,7 @@ mod compile_fault_tests {
         app.add_message::<ModelicaNotice>()
             .add_message::<CompileRequested>()
             .add_message::<ModelicaNotice>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
@@ -2378,8 +2361,7 @@ mod document_runtime_owner_tests {
         let doc = lunco_doc::DocumentId::new(1);
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
-            .init_resource::<lunco_signal::SimRegistry>()
-            .init_resource::<SimSampleStream>()
+            .add_message::<ModelicaSessionStarted>()
             .add_observer(on_remove_modelica)
             .add_observer(retire_closed_twin_models)
             .add_systems(First, handle_modelica_responses);
@@ -2493,6 +2475,10 @@ mod document_runtime_owner_tests {
                 .values
                 .is_empty()
         );
-        assert!(app.world().resource::<SimSampleStream>().batches.is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<ModelicaSessionStarted>>()
+                .is_empty()
+        );
     }
 }

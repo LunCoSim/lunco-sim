@@ -590,30 +590,6 @@ fn policy_units(net) {
     result
 }
 
-fn boundary_equation(link) {
-    let line = "  ";
-    line += link.target_instance;
-    line += ".";
-    line += link.target_input;
-    line += " = ";
-    line += link.input;
-    line += ";\n";
-    line
-}
-
-fn causal_equation(link) {
-    let line = "  ";
-    line += link.target_instance;
-    line += ".";
-    line += link.target_input;
-    line += " = ";
-    line += link.source_instance;
-    line += ".";
-    line += link.source_output;
-    line += ";\n";
-    line
-}
-
 fn output_equation(output) {
     let line = "  ";
     line += output.name;
@@ -636,17 +612,27 @@ fn member_output_equation(output, instance) {
     line
 }
 
-fn component_declaration(component, positions) {
-    let line = "  " + component.class + " " + component.instance;
-    if component.modifications.len > 0 {
-        line += "(";
-        for index in 0..component.modifications.len {
-            let modification = component.modifications[index];
-            if index > 0 { line += ", "; }
-            line += modification.name + " = " + modification.value.to_string();
-        }
-        line += ")";
+fn component_declaration(component, positions, net, members) {
+    let bindings = [];
+    for modification in component.modifications {
+        let value = modification.value.to_string();
+        let binding = #{name: modification.name, value: value};
+        bindings.push(binding);
     }
+    for link in net.boundary_links {
+        if link.target_path == component.path {
+            let binding = #{name: link.target_input, value: link.input};
+            bindings.push(binding);
+        }
+    }
+    for link in net.causal_links {
+        if link.target_path == component.path && has_member(members, link.source_path) {
+            let value = link.source_instance + "." + link.source_output;
+            let binding = #{name: link.target_input, value: value};
+            bindings.push(binding);
+        }
+    }
+    let line = "  " + instance_declaration(component.class, component.instance, bindings);
     let p = position(positions, component.path);
     let component_extent = rect(
         -COMPONENT_HALF_WIDTH,
@@ -661,6 +647,36 @@ fn component_declaration(component, positions) {
     line
 }
 
+// Shared source emission for runtime and initialization composites.
+fn instance_declaration(class, name, bindings) {
+    let result = class + " " + name;
+    if bindings.len > 0 {
+        result += "(";
+        for index in 0..bindings.len {
+            if index > 0 { result += ", "; }
+            result += bindings[index].name + " = " + bindings[index].value;
+        }
+        result += ")";
+    }
+    result
+}
+
+// The importer supplies the exact initial causal graph and source snapshot.
+fn initialize(plan) {
+    if !valid_synthesis_context(runtime_context) {
+        throw("synth.coupled-initialization requires its Twin lifecycle preparation context");
+    }
+    let text = "model " + plan.model_name + "\n";
+    for member in plan.members {
+        text += "  " + instance_declaration(member.class, member.instance, member.bindings) + ";\n";
+    }
+    for probe in plan.probes { text += "  output Real " + probe.name + ";\n"; }
+    text += "equation\n";
+    for probe in plan.probes { text += "  " + probe.name + " = " + probe.value + ";\n"; }
+    text += "end " + plan.model_name + ";\n";
+    #{source: text}
+}
+
 fn emit_unit(net, unit, components, members, positions) {
     let source = "model " + unit.name + "\n";
     let mutable = source;
@@ -672,7 +688,7 @@ fn emit_unit(net, unit, components, members, positions) {
         }
     }
     for path in unit.components {
-        mutable += component_declaration(component_for(components, path), positions);
+        mutable += component_declaration(component_for(components, path), positions, net, members);
     }
     mutable += "equation\n";
     for edge in net.connections {
@@ -680,16 +696,6 @@ fn emit_unit(net, unit, components, members, positions) {
             mutable += connect_equation(edge);
             mutable += power_bus_annotation(edge, positions);
             mutable += ";\n";
-        }
-    }
-    for link in net.boundary_links {
-        if has_member(members, link.target_path) {
-            mutable += boundary_equation(link);
-        }
-    }
-    for link in net.causal_links {
-        if has_member(members, link.source_path) && has_member(members, link.target_path) {
-            mutable += causal_equation(link);
         }
     }
     for boundary in net.boundary_outputs {

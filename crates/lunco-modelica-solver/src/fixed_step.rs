@@ -102,32 +102,36 @@ impl FixedStepSession {
         })
     }
 
-    /// Set one runtime input. Input values are part of the solve parameter tail,
-    /// exactly as in Rumoca's adaptive session.
-    pub fn set_input(&mut self, name: &str, value: f64) -> Result<(), SimulationDiagnosticError> {
-        if !value.is_finite() {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "input '{name}' must be finite, got {value}"
-            )));
+    /// Validate the complete input vector before committing any parameter.
+    /// Repeated names apply in source order, matching the adaptive FMI host.
+    pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
+        let mut writes = Vec::with_capacity(inputs.len());
+        for &(name, value) in inputs {
+            if !value.is_finite() {
+                return Err(SimulationDiagnosticError::Solver(format!(
+                    "input '{name}' must be finite, got {value}"
+                )));
+            }
+            let index = self
+                .runtime
+                .model
+                .problem
+                .solve_layout
+                .input_parameter_index(name)
+                .ok_or_else(|| {
+                    SimulationDiagnosticError::Solver(format!("unknown input '{name}'"))
+                })?;
+            if index >= self.params.len() {
+                return Err(SimulationDiagnosticError::Solver(format!(
+                    "input '{name}' maps to parameter slot {index}, outside the {}-slot parameter vector",
+                    self.params.len(),
+                )));
+            }
+            writes.push((index, value));
         }
-        let Some(index) = self
-            .runtime
-            .model
-            .problem
-            .solve_layout
-            .input_parameter_index(name)
-        else {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "unknown input '{name}'"
-            )));
-        };
-        let Some(slot) = self.params.get_mut(index) else {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "input '{name}' maps to parameter slot {index}, outside the {}-slot parameter vector",
-                self.params.len(),
-            )));
-        };
-        *slot = value;
+        for (index, value) in writes {
+            self.params[index] = value;
+        }
         Ok(())
     }
 

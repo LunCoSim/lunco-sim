@@ -229,6 +229,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     },
     read_output: |_, _, _| None,
     read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
+    initial_expression: None,
     resolve_output: None,
     resolve_input: Some(resolve_shader_input),
     read_slot: None,

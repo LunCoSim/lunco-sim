@@ -196,6 +196,13 @@ catalog's labels still use `display_channel_label`.
 | Retention | `lunco_signal::SignalRegistry` scalar histories, with per-channel retention and deadband |
 | Unsubscribe | `UnsubscribeTelemetry` owns subscription lifecycle explicitly |
 
+`TelemetryRetentionPlugin` owns the persisted sampling settings and shared
+`SignalRegistryPlugin`. Both the full sampler and Modelica's render-free
+projection install this capability once. Standalone Modelica hosts therefore
+retain the same histories as the full simulation. Native and browser workers
+publish current observations through checked results; UI surfaces read the
+registry and do not maintain or write a second live history.
+
 `LunCoTelemetryPlugin` is registered in the shared simulation composition.
 Sampling is `run_if`-gated on a `Parameter` existing and runs on the fixed
 clock. When channels exist, the exclusive sampler checks one deadline heap per

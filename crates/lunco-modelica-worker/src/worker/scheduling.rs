@@ -210,7 +210,6 @@ mod tests {
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
             initial_inputs: Vec::new(),
-            stream: None,
         }
     }
 

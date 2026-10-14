@@ -737,6 +737,19 @@ fn mark_sampling_plan_dirty(
 
 pub struct LunCoTelemetryPlugin;
 
+/// Shared retained signal storage and its persisted sampling policy. Producers
+/// can use this plane without installing the mission-clock sampler.
+pub struct TelemetryRetentionPlugin;
+
+impl Plugin for TelemetryRetentionPlugin {
+    fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_signal::SignalRegistryPlugin>() {
+            app.add_plugins(lunco_signal::SignalRegistryPlugin);
+        }
+        app.register_settings_section::<TelemetrySettings>();
+    }
+}
+
 impl Plugin for LunCoTelemetryPlugin {
     fn build(&self, app: &mut App) {
         // Telemetry is a simulation subsystem, so it requires the same unified
@@ -745,19 +758,9 @@ impl Plugin for LunCoTelemetryPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
-        if !app.is_plugin_added::<lunco_signal::SignalRegistryPlugin>() {
-            app.add_plugins(lunco_signal::SignalRegistryPlugin);
+        if !app.is_plugin_added::<TelemetryRetentionPlugin>() {
+            app.add_plugins(TelemetryRetentionPlugin);
         }
-        app.register_settings_section::<TelemetrySettings>();
-        // The retention plane. `SignalRegistry` is the ring buffer every plot surface
-        // already reads — routing samples into it is what makes telemetry both *retained*
-        // and *plottable*, with no new storage type and no new renderer.
-        //
-        // `init_resource` is idempotent: `lunco-viz` also initialises it in a GUI build,
-        // and a headless run initialises it here. Deliberately NOT gated on the UI —
-        // a `--no-ui` run wants history just as much (that is the whole point of a black
-        // box), and `lunco-signal` is render-free precisely so it can.
-        app.init_resource::<lunco_signal::SignalRegistry>();
         // What the user is looking at, so a telemetry surface can narrow to it.
         // Initialised beside the registry (and for the same reason): the resource is
         // render-free intent, written by whichever app owns selection and read by
@@ -1521,6 +1524,7 @@ mod tests {
             metadata: test_output_metadata,
             read_output: read_test_output,
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -1552,6 +1556,7 @@ mod tests {
             metadata: test_output_metadata,
             read_output: read_test_declared_output,
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,

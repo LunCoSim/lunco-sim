@@ -161,11 +161,78 @@ model PositionPID3D
     initial_pos_z = initial_pos_z,
     initial_vel_x = initial_vel_x,
     initial_vel_y = initial_vel_y,
-    initial_vel_z = initial_vel_z);
-  PIDAxis pid_x;
-  PIDAxis pid_y;
-  PIDAxis pid_z;
-  AccelerationLimiter vertical_limiter;
+    initial_vel_z = initial_vel_z,
+    altimeter_range = altimeter_range,
+    altimeter_position_valid = altimeter_position_valid,
+    altimeter_vehicle_position_x = altimeter_vehicle_position_x,
+    altimeter_vehicle_position_y = altimeter_vehicle_position_y,
+    altimeter_vehicle_position_z = altimeter_vehicle_position_z,
+    imu_coordinate_accel_local_x = imu_coordinate_accel_local_x,
+    imu_coordinate_accel_local_y = imu_coordinate_accel_local_y,
+    imu_coordinate_accel_local_z = imu_coordinate_accel_local_z,
+    imu_attitude_quat_w = imu_attitude_quat_w,
+    imu_attitude_quat_x = imu_attitude_quat_x,
+    imu_attitude_quat_y = imu_attitude_quat_y,
+    imu_attitude_quat_z = imu_attitude_quat_z,
+    gravity_nav_x = 0.0,
+    gravity_nav_y = -g,
+    gravity_nav_z = 0.0,
+    altitude_velocity_correction_gain = altitude_velocity_correction_gain,
+    lateral_position_correction_gain = lateral_position_correction_gain,
+    lateral_velocity_correction_gain = lateral_velocity_correction_gain);
+  // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
+  // its own live gains; no axis is a copied or hidden special case. The
+  // observer's measured navigation position is the feedback point; the
+  // ballistic touchdown prediction remains an evidence channel rather than a
+  // second, delayed position loop that can over-correct near the pad.
+  // The outer lateral loop is a standard position/velocity PD controller. The
+  // navigation observer supplies both terms from the IMU and terrain-return
+  // correction; it never reads the rigid-body truth pose. A zero target rate is
+  // deliberate: the derivative term brakes the measured cross-range velocity
+  // while the proportional term brings the vehicle to the marked pad.
+  PIDAxis pid_x(
+    setpoint = target_x,
+    measurement = navigation.nav_pos_x,
+    setpoint_rate = target_vel_x,
+    measurement_rate = navigation.nav_vel_x,
+    kp = kp_x,
+    ki = ki_x,
+    kd = kd_x,
+    integral_limit = position_integral_limit,
+    output_limit = max_lateral_accel,
+    anti_windup_gain = anti_windup_gain);
+  PIDAxis pid_y(
+    setpoint = target_y,
+    measurement = navigation.nav_pos_y,
+    setpoint_rate = descent_rate_command,
+    measurement_rate = navigation.nav_vel_y,
+    kp = kp_y,
+    ki = ki_y,
+    kd = kd_y,
+    integral_limit = position_integral_limit,
+    output_limit = max_vertical_accel,
+    anti_windup_gain = anti_windup_gain);
+  PIDAxis pid_z(
+    setpoint = target_z,
+    measurement = navigation.nav_pos_z,
+    setpoint_rate = target_vel_z,
+    measurement_rate = navigation.nav_vel_z,
+    kp = kp_z,
+    ki = ki_z,
+    kd = kd_z,
+    integral_limit = position_integral_limit,
+    output_limit = max_lateral_accel,
+    anti_windup_gain = anti_windup_gain);
+  AccelerationLimiter vertical_limiter(
+    command = max(
+      target_contact_engine_gate * (g + pid_y_command),
+      landing_flare_gate
+        * g * landing_handoff_position_gate * (1.0 - landing_handoff)
+        * target_contact_engine_gate,
+      recovery_vertical_command,
+      lateral_support_vertical_command),
+    lower_limit = 0.0,
+    upper_limit = max_vertical_accel);
 
   Real max_thrust_accel;
   Real thrust_accel;
@@ -205,56 +272,20 @@ model PositionPID3D
   Real yaw_command_value;
   Real flight_command_gain;
   Real predicate_band;
-  LunCo.Sensors.FrameVectorTransform thrust_axis_transform;
+  LunCo.Sensors.FrameVectorTransform thrust_axis_transform(
+    quaternion_w = imu_attitude_quat_w,
+    quaternion_x = imu_attitude_quat_x,
+    quaternion_y = imu_attitude_quat_y,
+    quaternion_z = imu_attitude_quat_z,
+    vector_x = 0.0,
+    vector_y = 1.0,
+    vector_z = 0.0);
 
 equation
   // Measured predicates use one authored transition width. The ramp is fully
   // true at its inclusive threshold and reaches zero one band beyond it.
   predicate_band = max(1.0e-9, predicate_transition_band);
 
-  // Sensor -> navigation block.
-  navigation.altimeter_range = altimeter_range;
-  navigation.altimeter_position_valid = altimeter_position_valid;
-  navigation.altimeter_vehicle_position_x = altimeter_vehicle_position_x;
-  navigation.altimeter_vehicle_position_y = altimeter_vehicle_position_y;
-  navigation.altimeter_vehicle_position_z = altimeter_vehicle_position_z;
-  navigation.imu_coordinate_accel_local_x = imu_coordinate_accel_local_x;
-  navigation.imu_coordinate_accel_local_y = imu_coordinate_accel_local_y;
-  navigation.imu_coordinate_accel_local_z = imu_coordinate_accel_local_z;
-  navigation.imu_attitude_quat_w = imu_attitude_quat_w;
-  navigation.imu_attitude_quat_x = imu_attitude_quat_x;
-  navigation.imu_attitude_quat_y = imu_attitude_quat_y;
-  navigation.imu_attitude_quat_z = imu_attitude_quat_z;
-  navigation.gravity_nav_x = 0.0;
-  navigation.gravity_nav_y = -g;
-  navigation.gravity_nav_z = 0.0;
-  navigation.altitude_velocity_correction_gain = altitude_velocity_correction_gain;
-  navigation.lateral_position_correction_gain = lateral_position_correction_gain;
-  navigation.lateral_velocity_correction_gain = lateral_velocity_correction_gain;
-
-  // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
-  // its own live gains; no axis is a copied or hidden special case. The
-  // observer's measured navigation position is the feedback point; the
-  // ballistic touchdown prediction remains an evidence channel rather than a
-  // second, delayed position loop that can over-correct near the pad.
-  pid_x.setpoint = target_x;
-  pid_x.measurement = navigation.nav_pos_x;
-  // The outer lateral loop is a standard position/velocity PD controller. The
-  // navigation observer supplies both terms from the IMU and terrain-return
-  // correction; it never reads the rigid-body truth pose. A zero target rate is
-  // deliberate: the derivative term brakes the measured cross-range velocity
-  // while the proportional term brings the vehicle to the marked pad.
-  pid_x.setpoint_rate = target_vel_x;
-  pid_x.measurement_rate = navigation.nav_vel_x;
-  pid_x.kp = kp_x;
-  pid_x.ki = ki_x;
-  pid_x.kd = kd_x;
-  pid_x.integral_limit = position_integral_limit;
-  pid_x.output_limit = max_lateral_accel;
-  pid_x.anti_windup_gain = anti_windup_gain;
-
-  pid_y.setpoint = target_y;
-  pid_y.measurement = navigation.nav_pos_y;
   // Schedule the vertical rate from the measured navigation altitude.  This
   // is a terminal-descent profile, not a touchdown-speed assertion: it permits
   // about 3 m/s downward above the final approach, then tapers toward about
@@ -355,25 +386,6 @@ equation
     min(sqrt(2.0 * max(0.0, descent_braking_accel_mps2)
       * altitude_above_target), flare_descent_rate_magnitude));
   descent_rate_command = target_vel_y - descent_rate_schedule_magnitude;
-  pid_y.setpoint_rate = descent_rate_command;
-  pid_y.measurement_rate = navigation.nav_vel_y;
-  pid_y.kp = kp_y;
-  pid_y.ki = ki_y;
-  pid_y.kd = kd_y;
-  pid_y.integral_limit = position_integral_limit;
-  pid_y.output_limit = max_vertical_accel;
-  pid_y.anti_windup_gain = anti_windup_gain;
-
-  pid_z.setpoint = target_z;
-  pid_z.measurement = navigation.nav_pos_z;
-  pid_z.setpoint_rate = target_vel_z;
-  pid_z.measurement_rate = navigation.nav_vel_z;
-  pid_z.kp = kp_z;
-  pid_z.ki = ki_z;
-  pid_z.kd = kd_z;
-  pid_z.integral_limit = position_integral_limit;
-  pid_z.output_limit = max_lateral_accel;
-  pid_z.anti_windup_gain = anti_windup_gain;
 
   // Keep the realtime model event-free: the Rust output is exactly 0 or 1,
   // so it directly gates the available acceleration. The tiny denominator
@@ -411,15 +423,6 @@ equation
   lateral_support_vertical_command = max(0.0, min(max(0.0, g),
     max(0.0, lateral_accel_magnitude - lateral_support_threshold_mps2)
       / max(1.0e-9, tan(max(1.0e-9, command_tilt_limit_rad)))));
-  vertical_limiter.command = max(
-    target_contact_engine_gate * (g + pid_y_command),
-    landing_flare_gate
-      * g * landing_handoff_position_gate * (1.0 - landing_handoff)
-      * target_contact_engine_gate,
-    recovery_vertical_command,
-    lateral_support_vertical_command);
-  vertical_limiter.lower_limit = 0.0;
-  vertical_limiter.upper_limit = max_vertical_accel;
   vertical_limiter_output = vertical_limiter.bounded_command;
   // A zero vertical command means the descent law is deliberately coasting;
   // it must not become a lateral-only engine command. RCS may still pre-align
@@ -451,13 +454,6 @@ equation
   // This is a flight-computer authority limit, not a scene override: at 90 deg
   // the engine is off, during recovery it ramps with the real thrust-vector
   // projection, and at an upright attitude the normal throttle command is unchanged.
-  thrust_axis_transform.quaternion_w = imu_attitude_quat_w;
-  thrust_axis_transform.quaternion_x = imu_attitude_quat_x;
-  thrust_axis_transform.quaternion_y = imu_attitude_quat_y;
-  thrust_axis_transform.quaternion_z = imu_attitude_quat_z;
-  thrust_axis_transform.vector_x = 0.0;
-  thrust_axis_transform.vector_y = 1.0;
-  thrust_axis_transform.vector_z = 0.0;
   thrust_vertical_projection = noEvent(max(0.0, min(1.0,
     thrust_axis_transform.world_frame_y)));
   // A vehicle released on its side must first use RCS to turn its thrust axis

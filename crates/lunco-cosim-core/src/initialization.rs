@@ -10,6 +10,16 @@ use lunco_port_core::ports::PortRegistry;
 #[reflect(Component)]
 pub struct PendingInputConnections(pub std::collections::BTreeSet<String>);
 
+/// One-shot connected inputs certified by the coupled initialization owner.
+/// These are solved values at the admitted initial coordinate, not port holds.
+#[derive(Component, Debug)]
+pub struct ConsistentInitialInputs(pub Vec<(String, f64)>);
+
+/// Hold a prepared participant until the initialization importer certifies the
+/// connected live observations at t=0. This marker survives worker construction.
+#[derive(Component)]
+pub struct CoupledInitializationPending;
+
 /// Read a causal source through its registered backend. A missing sample is
 /// pending producer admission, never a numerical zero.
 pub fn read_causal_sample(
@@ -28,7 +38,7 @@ pub fn read_causal_sample(
 
 /// Capture the connected input values required by a new participant's
 /// initialization, with the same source order and affine sum as propagation.
-/// `None` holds initialization until every producer has published its sample.
+/// `None` waits for producer samples.
 /// Authored holds have the same priority as in the regular exchange.
 pub fn initialization_inputs(
     world: &mut World,
@@ -41,9 +51,22 @@ pub fn initialization_inputs(
     {
         return Ok(None);
     }
+    if let Some(inputs) = world.entity_mut(target).take::<ConsistentInitialInputs>() {
+        return Ok(Some(inputs.0));
+    }
+    let input_names: std::collections::BTreeSet<_> = world
+        .get::<SimComponent>(target)
+        .expect("solver participant checked above")
+        .inputs
+        .keys()
+        .map(str::to_owned)
+        .collect();
     let mut values = std::collections::BTreeMap::new();
     if let Some(pending) = world.get::<PendingInputConnections>(target) {
         for name in &pending.0 {
+            if !input_names.contains(name) {
+                continue;
+            }
             let Some(value) = world
                 .get_resource::<PortHolds>()
                 .and_then(|holds| holds.get(target, name))
@@ -59,7 +82,7 @@ pub fn initialization_inputs(
     let mut query = world.query::<&SimConnection>();
     let mut wires: Vec<_> = query
         .iter(world)
-        .filter(|wire| wire.end_element == target)
+        .filter(|wire| wire.end_element == target && input_names.contains(&wire.end_connector))
         .cloned()
         .collect();
     wires.sort_by(|a, b| {
@@ -106,18 +129,18 @@ pub fn initialization_inputs(
                 _ => {}
             }
         }
+        if world
+            .get::<lunco_port_core::PortSurfacePending>(wire.start_element)
+            .is_some()
+        {
+            return Ok(None);
+        }
         let declared = if wire.start_is_input {
             registry.has_input_port(world, wire.start_element, &wire.start_connector)
         } else {
             registry.has_output_port(world, wire.start_element, &wire.start_connector)
         };
         if !declared {
-            if world
-                .get::<lunco_port_core::PortSurfacePending>(wire.start_element)
-                .is_some()
-            {
-                return Ok(None);
-            }
             return Err(format!(
                 "initial input '{}' source port '{}' is not declared",
                 wire.end_connector, wire.start_connector
@@ -154,9 +177,11 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
         world.init_resource::<PortHolds>();
+        let mut component = SimComponent::default();
+        component.inputs.declare("initial_input".into());
         let entity = world
             .spawn((
-                SimComponent::default(),
+                component,
                 PendingInputConnections(std::collections::BTreeSet::from(["initial_input".into()])),
             ))
             .id();

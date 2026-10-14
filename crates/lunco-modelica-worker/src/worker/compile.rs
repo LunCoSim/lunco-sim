@@ -435,6 +435,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         paused: true,
         parameters: parameters.clone(),
         inputs,
+        pending_step_inputs: None,
         compiled_input_names: BTreeSet::new(),
         last_error: None,
         document: doc,
@@ -477,9 +478,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         return;
     };
     let tx = channels.tx.clone();
-    let stream = world
-        .get_resource_mut::<lunco_signal::SimRegistry>()
-        .map(|mut registry| registry.get_or_insert(entity));
     if tx
         .send(ModelicaCommand::Compile {
             execution_domain: if world
@@ -498,7 +496,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             extra_sources,
             parameter_overrides: Vec::new(),
             initial_inputs,
-            stream,
             realtime_safe: false,
         })
         .is_err()

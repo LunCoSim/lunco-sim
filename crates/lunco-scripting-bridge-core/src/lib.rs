@@ -605,8 +605,8 @@ pub fn validate_simulation_entity_access(
 /// Add an entity discovered during simulation execution to the calling
 /// scenario's directional access plan.
 ///
-/// The entity must already be live. Modelica entities added here join the
-/// scenario barrier when they enter the current Modelica projection.
+/// The entity must already be live. Tracking grants access without changing
+/// the participant's shared-clock membership.
 fn track_simulation_entity_access(gid: i64, access: ScriptEntityAccess) -> Result<(), String> {
     if execution_context().clock != lunco_core::RuntimeClock::Simulation {
         return Err("dynamic entity access declarations require the Simulation clock".into());
@@ -1230,9 +1230,8 @@ fn validate_simulation_query_read(world: &World, operation: &str) -> Result<(), 
 /// Reject live-port access during dependency planning and require the calling
 /// scenario's Modelica or generic entity access declaration at simulation time.
 ///
-/// Modelica declarations also join the shared barrier. Generic entity
-/// declarations authorize access only; USD causal edges contribute to the
-/// shared barrier but do not authorize a scenario's access. Port access from
+/// Modelica declarations authorize access on the shared clock. Generic entity
+/// declarations authorize access independently of clock membership. Port access from
 /// application/presentation cycles observes committed state without joining
 /// the authoritative simulation barrier.
 pub fn validate_simulation_port_read_access(gid: u64, name: &str) -> Result<(), String> {

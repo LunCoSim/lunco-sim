@@ -657,9 +657,9 @@ impl Plugin for ModelicaUiPlugin {
             // Reactive UI observer of core `LibraryLoadState` → status bus (moved
             // here from the core source library plugin; core no longer touches the bus).
             .add_systems(Update, core_observers::mirror_library_state_to_status_bus)
-            // Reactive UI observer: drain core live-sim samples → viz plots.
-            // The core worker no longer references lunco_viz.
-            .add_systems(Update, core_observers::drain_sim_samples_to_viz)
+            // Presentation retires bindings for checked session replacements.
+            // The shared telemetry owner retains all Modelica histories.
+            .add_systems(Update, core_observers::retire_recompiled_model_bindings)
             // Project core notices into status history and source-root load
             // state into the status bar.
             .add_systems(Update, core_observers::drain_notices_to_status_bus)

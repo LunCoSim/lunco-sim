@@ -1201,6 +1201,9 @@ pub struct PortBackend {
     pub read_output: fn(&World, Entity, &str) -> Option<f64>,
     /// Read the **input** named `name`, or `None`.
     pub read_input: fn(&World, Entity, &str) -> Option<f64>,
+    /// Algebraic relation active during consistent initialization. The same
+    /// declared owner selects this relation; it never supplies a guessed sample.
+    pub initial_expression: Option<PortInitialExpressionReader>,
     // ── Optional resolve→slot fast path (the FMI valueReference model) ──────────
     //
     // A backend with dynamic names or a multi-owner presence scan resolves an
@@ -1231,6 +1234,37 @@ pub struct PortBackend {
     /// value and must not alter port topology.
     pub write_slot: Option<fn(&mut World, Entity, u64, f64)>,
 }
+
+/// A scalar dependency in an owner's initialization equation.
+#[derive(Clone, Debug)]
+pub struct PortInitialTerm {
+    pub entity: Entity,
+    pub name: String,
+    pub direction: PortDirection,
+    pub coefficient: f64,
+}
+
+/// An affine initialization equation over declared scalar ports.
+#[derive(Clone, Debug)]
+pub struct PortInitialExpression {
+    pub constant: f64,
+    pub terms: Vec<PortInitialTerm>,
+}
+
+/// An owner's initial-coordinate source contract. Pending relations never
+/// permit a numerical read of a partially prepared topology.
+#[derive(Clone, Debug)]
+pub enum PortInitialSource {
+    /// The owner supplies an independent current numerical sample.
+    Sample,
+    /// The owner's initial relation is still being prepared.
+    Pending,
+    /// The owner supplies an exact affine relation over declared ports.
+    Expression(PortInitialExpression),
+}
+
+pub type PortInitialExpressionReader =
+    fn(&World, Entity, &str, PortDirection) -> Result<PortInitialSource, String>;
 
 /// A process-local resolved locator for one port on one backend — the FMI
 /// *valueReference* analogue, including the causality side selected at resolve.
@@ -1482,6 +1516,7 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .get::<InputPorts>(entity)
             .and_then(|inputs| inputs.values.get(name).copied())
     },
+    initial_expression: None,
     resolve_output: None,
     resolve_input: Some(|world, entity, name| {
         world.get::<InputPorts>(entity)?.values.resolve_slot(name)
@@ -1820,6 +1855,32 @@ impl PortRegistry {
     pub fn read_output_port(&self, world: &World, entity: Entity, name: &str) -> Option<f64> {
         let owner = self.port_owner(world, entity, name, ResolvedPortSide::Output)?;
         (self.backends[owner.backend].read_output)(world, entity, name)
+    }
+
+    /// Read the precedence-winning owner's initialization relation.
+    pub fn initial_expression(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+        direction: PortDirection,
+    ) -> Result<PortInitialSource, String> {
+        let side = match direction {
+            PortDirection::In => ResolvedPortSide::Input,
+            PortDirection::Out => ResolvedPortSide::Output,
+            _ => {
+                return Err(
+                    "an initialization reference must select input or output causality".into(),
+                );
+            }
+        };
+        let Some(owner) = self.port_owner(world, entity, name, side) else {
+            return Ok(PortInitialSource::Pending);
+        };
+        match self.backends[owner.backend].initial_expression {
+            Some(reader) => reader(world, entity, name, direction),
+            None => Ok(PortInitialSource::Sample),
+        }
     }
 
     /// Read the current value of port `name`, preferring an **output**, then
@@ -2726,6 +2787,7 @@ mod tests {
         read_input: no_read,
         resolve_input: Some(resolve_release_slot),
         write_slot: Some(accept_release_slot),
+        initial_expression: None,
         resolve_output: None,
         read_slot: None,
         read_input_slot: None,
@@ -2740,6 +2802,7 @@ mod tests {
         read_input: no_read,
         resolve_input: Some(resolve_release_slot),
         write_slot: Some(accept_release_slot),
+        initial_expression: None,
         resolve_output: None,
         read_slot: None,
         read_input_slot: None,
@@ -2754,6 +2817,7 @@ mod tests {
         read_input: no_read,
         resolve_input: Some(resolve_release_slot),
         write_slot: Some(accept_release_slot),
+        initial_expression: None,
         resolve_output: None,
         read_slot: None,
         read_input_slot: None,
@@ -2768,6 +2832,7 @@ mod tests {
         read_input: no_read,
         resolve_input: Some(resolve_release_slot),
         write_slot: Some(accept_release_slot),
+        initial_expression: None,
         resolve_output: None,
         read_slot: None,
         read_input_slot: None,
@@ -2828,6 +2893,7 @@ mod tests {
                     .then(|| world.get::<StatePort>(entity).map(|state| state.0))
                     .flatten()
             },
+            initial_expression: None,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -2849,6 +2915,7 @@ mod tests {
                     .then(|| world.get::<ShadowedInput>(entity).map(|input| input.0))
                     .flatten()
             },
+            initial_expression: None,
             resolve_output: None,
             resolve_input: Some(|world, entity, name| {
                 (name == "shared" && world.get::<ShadowedInput>(entity).is_some()).then_some(0)
@@ -2995,6 +3062,7 @@ mod tests {
                 },
                 read_output: no_read,
                 read_input: no_read,
+                initial_expression: None,
                 resolve_output: None,
                 resolve_input: Some(|world, entity, name| {
                     world
@@ -3306,6 +3374,7 @@ mod tests {
                     .then(|| world.get::<ProbeInput>(entity).map(|input| input.0))
                     .flatten()
             },
+            initial_expression: None,
             resolve_output: None,
             resolve_input: Some(|world, entity, name| {
                 (name == "shared" && world.get::<ProbeInput>(entity).is_some()).then_some(0)
@@ -3342,6 +3411,7 @@ mod tests {
             metadata: read_only_test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: Some(|_, _, name| (name == "signal").then_some(0)),
             resolve_input: Some(|_, _, name| (name == "signal").then_some(0)),
             read_slot: Some(|_, _, _| None),
@@ -3370,6 +3440,7 @@ mod tests {
             metadata: test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: Some(|world, entity, name| {
                 (name == "signal" && world.get::<DeclaredOutput>(entity).is_some()).then_some(7)
             }),
@@ -3394,6 +3465,7 @@ mod tests {
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(1.0),
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -3407,6 +3479,7 @@ mod tests {
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(2.0),
             read_input: |_, _, _| None,
+            initial_expression: None,
             resolve_output: Some(|_, _, name| (name == "signal").then_some(8)),
             resolve_input: None,
             read_slot: Some(|_, _, slot| (slot == 8).then_some(2.0)),
@@ -3441,6 +3514,7 @@ mod tests {
             metadata: read_only_test_metadata,
             read_output: no_read,
             read_input: no_read,
+            initial_expression: None,
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
@@ -3546,6 +3620,7 @@ mod tests {
             read_input: no_read,
             resolve_input: Some(resolve_release_slot),
             write_slot: None,
+            initial_expression: None,
             resolve_output: None,
             read_slot: None,
             read_input_slot: None,
@@ -3559,6 +3634,7 @@ mod tests {
             read_input: |_, _, name| (name == "release").then_some(0.75),
             resolve_input: Some(resolve_release_slot),
             write_slot: Some(trace_release_slot),
+            initial_expression: None,
             resolve_output: None,
             read_slot: None,
             read_input_slot: None,
@@ -3585,5 +3661,27 @@ mod tests {
             "a refusing authoritative owner must not fall through to a shadow writer"
         );
         assert_eq!(world.resource::<ShadowWriteTrace>().0, 0);
+    }
+    #[test]
+    fn pending_initial_relation_retains_its_owner_despite_a_current_sample() {
+        use super::{INPUT_PORTS_BACKEND, PortInitialSource};
+        let mut world = World::new();
+        let mut ports = InputPorts::new(&["measurement"]);
+        ports.values.insert("measurement".into(), 42.0);
+        let entity = world.spawn(ports).id();
+        let registry = PortRegistry {
+            backends: Arc::new(vec![PortBackend {
+                initial_expression: Some(|_, _, _, _| Ok(PortInitialSource::Pending)),
+                ..INPUT_PORTS_BACKEND
+            }]),
+        };
+        assert_eq!(
+            registry.read_owned_input_port(&world, entity, "measurement"),
+            Some(42.0)
+        );
+        assert!(matches!(
+            registry.initial_expression(&world, entity, "measurement", PortDirection::In),
+            Ok(PortInitialSource::Pending)
+        ));
     }
 }

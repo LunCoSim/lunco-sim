@@ -22,6 +22,7 @@ lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc", optional = true }
 lunco-environment = { path = "../lunco-environment" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-modelica-document = { path = "../lunco-modelica-document" }

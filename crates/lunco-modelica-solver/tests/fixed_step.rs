@@ -42,8 +42,8 @@ fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
     let mut session = FixedStepSession::new(&compiled.dae, options()).unwrap();
     assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
     assert_eq!(session.state().unwrap().values.get("y").copied(), Some(6.0));
-    assert!(session.set_input("u", f64::NAN).is_err());
-    assert!(session.set_input("missing", 1.0).is_err());
+    assert!(session.set_inputs(&[("u", f64::NAN)]).is_err());
+    assert!(session.set_inputs(&[("u", 9.0), ("missing", 1.0)]).is_err());
     assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
     session.step(0.01).unwrap();
     let x = session.state().unwrap().values.get("x").copied().unwrap();
@@ -173,9 +173,10 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
 
     for step in 0..512 {
         let input = ((step % 11) as f64 - 5.0) * 0.125;
-        left.set_input("u", input).expect("left input is accepted");
+        left.set_inputs(&[("u", input)])
+            .expect("left input is accepted");
         right
-            .set_input("u", input)
+            .set_inputs(&[("u", input)])
             .expect("right input is accepted");
         assert_eq!(left.state().unwrap().values.get("u").copied(), Some(input));
         left.step(0.01).expect("left fixed step");

@@ -86,13 +86,22 @@ impl PhysicsJointDetachSet {
 /// admission boundary yet.
 ///
 /// This remains present while USD is resolving the endpoints and while Avian is
-/// parking the typed constraint. It is removed only when the native joint is
-/// installed together with its collision policy. Terrain placement must wait
+/// preparing the seated disabled definition. It is removed only when endpoint
+/// solver nodes admit native activation and its collision policy. Terrain placement must wait
 /// for that complete topology phase: moving only the root while an authored
 /// child body is still waiting to resolve leaves a real joint violation for the
 /// solver to repair on its first step.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PhysicsJointPending;
+
+/// Validated and seated joint definition whose native activation is held for
+/// consistent initialization. Its mechanical topology is already authoritative.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct PhysicsJointPrepared {
+    /// Whether admission releases the preparation-owned native disable marker.
+    pub activate: bool,
+}
 
 /// Marks an authored joint whose USD endpoints have not yet been projected into
 /// the runtime joint graph.

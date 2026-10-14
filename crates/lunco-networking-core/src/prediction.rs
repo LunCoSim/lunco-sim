@@ -2653,6 +2653,7 @@ mod tests {
                 },
                 read_output: |_, _, _| None,
                 read_input: |_, _, _| None,
+                initial_expression: None,
                 resolve_output: None,
                 resolve_input: Some(|world, entity, name| {
                     (name == "frame" && world.get::<lunco_core::GlobalEntityId>(entity).is_some())

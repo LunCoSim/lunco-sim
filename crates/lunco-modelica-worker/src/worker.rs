@@ -21,15 +21,13 @@ use lunco_modelica_compiler::{ModelicaCompiler, PreparedSourceRoot};
 use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
     ModelicaCacheLimits, ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot,
-    ModelicaModel, ModelicaNotice, ModelicaResult, ModelicaRuntimeProfile,
+    ModelicaModel, ModelicaNotice, ModelicaResult, ModelicaRuntimeProfile, ModelicaSessionStarted,
     ModelicaSolverCapabilities, ModelicaSolverParameters, ModelicaVariables, NoticeLevel,
-    SimSampleBatch, SimSampleStream,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
-use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 12;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 13;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -586,7 +584,7 @@ impl ModelicaWorkerPools {
         let session_id = work.session_id;
         let runtime_tx = runtime_tx.clone();
         let admitted_library_revision = work.plan.admitted_library_revision;
-        let disk_cache = admitted_library_revision.is_some();
+        let disk_cache = admitted_library_revision.is_some() && key.compiler_identity.is_some();
         let tx = self.tx.clone();
         let disk_limits = self.disk_limits;
         let cache_key = work.plan.key.clone();
@@ -605,6 +603,7 @@ impl ModelicaWorkerPools {
                 solver_id = %cache_key.solver_id,
                 parameter_overrides = ?cache_key.parameter_overrides,
                 cache_version = PREPARED_SOLVE_CACHE_VERSION,
+                compiler_identity = ?cache_key.compiler_identity,
                 disk_enabled = disk_cache,
             )
             .entered();
@@ -2181,12 +2180,22 @@ fn advance_checked_step(
     dt: f64,
     stop_time: f64,
 ) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
-    for (name, value) in inputs {
-        stepper.set_input(name, *value)?;
+    {
+        let _span =
+            bevy::log::info_span!("modelica_admit_step_inputs", count = inputs.len()).entered();
+        let inputs: Vec<_> = inputs
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
+            .collect();
+        stepper.set_inputs(&inputs)?;
     }
-    integrate_macro_step(stepper, dt)?;
+    {
+        let _span = bevy::log::info_span!("modelica_integrate_macro_step").entered();
+        integrate_macro_step(stepper, dt)?;
+    }
     validate_step_completion(stepper.time(), stop_time)
         .map_err(rumoca_sim::SimulationDiagnosticError::Solver)?;
+    let _span = bevy::log::info_span!("modelica_collect_step_observables").entered();
     collect_stepper_observables(stepper)
 }
 
@@ -2541,7 +2550,7 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
 /// a separate compiler actor owns the mutable Rumoca session and DAE cache.
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
-/// `ModelicaPlugin::build`) and persists cache entries through the storage
+/// `ModelicaExecutionPlugin::build`) and persists cache entries through the storage
 /// boundary. The browser dispatches the *same* commands through
 /// [`process_worker_command`] in the `lunica_worker` Web Worker bundle with the
 /// source carried in the message.
@@ -2592,12 +2601,6 @@ pub fn modelica_worker(
                 return;
             }
         };
-    // Lock-free publish stream per entity (Phase A of the multi-sim
-    // refactor — see `sim_stream.rs`). The UI side holds a clone of
-    // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
-    // publishes a new snapshot so plots render without locking or
-    // involving the main thread in per-sample work.
-    let mut sim_streams: HashMap<Entity, SimStream> = HashMap::default();
     // M3: cached compiled artifacts are valid only for the library set they
     // were compiled against — every LoadSourceRoot bumps this and thereby
     // invalidates all of them (see `CachedModel::library_gen`).
@@ -3196,7 +3199,6 @@ pub fn modelica_worker(
                         extra_sources,
                         parameter_overrides,
                         initial_inputs,
-                        stream,
                         realtime_safe,
                     } => {
                         current_sessions.insert(entity, session_id);
@@ -3207,14 +3209,6 @@ pub fn modelica_worker(
                             realtime_models.insert(entity);
                         } else {
                             realtime_models.remove(&entity);
-                        }
-                        if let Some(stream) = stream {
-                            // Register the new lock-free publish target
-                            // AND reset the previous snapshot so stale
-                            // history from a prior compile doesn't bleed
-                            // into the new model's horizon.
-                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
-                            sim_streams.insert(entity, stream);
                         }
 
                         // Keep the raw sibling docs for cache-invalidating
@@ -3401,16 +3395,6 @@ pub fn modelica_worker(
                                     let outputs = step_outcome
                                         .expect("successful step outcome checked above");
                                     let new_time = stepper.time();
-                                    // Publish the immutable stream projection
-                                    // for same-address-space readers. The
-                                    // result still carries `outputs` because
-                                    // it is the transport boundary for the
-                                    // main thread and wasm worker contexts.
-                                    if let Some(stream) = sim_streams.get(&entity) {
-                                        let prev = stream.load();
-                                        let next = SimSnapshot::advance(&prev, new_time, &outputs);
-                                        stream.store(Arc::new(next));
-                                    }
                                     let _ = tx_inner.send(ModelicaResult {
                                         entity,
                                         session_id,
@@ -3448,7 +3432,6 @@ pub fn modelica_worker(
                     ModelicaCommand::Despawn { entity } => {
                         steppers.remove(&entity);
                         cached_models.remove(&entity);
-                        sim_streams.remove(&entity);
                         for work in pending_compile_works.values_mut() {
                             if work.entity == entity {
                                 work.cancelled = true;
@@ -3516,7 +3499,6 @@ pub fn modelica_worker(
                 if let Some(entity) = panic_entity {
                     steppers.remove(&entity);
                     cached_models.remove(&entity);
-                    sim_streams.remove(&entity);
                     current_sessions.remove(&entity);
                     realtime_models.remove(&entity);
                 }
@@ -3638,7 +3620,6 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 #[cfg(target_arch = "wasm32")]
 pub struct ModelicaWorkerState {
     steppers: HashMap<Entity, (u64, String, LiveStepper)>,
-    sim_streams: HashMap<Entity, SimStream>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiled_artifacts: CompiledArtifactCache,
@@ -3661,7 +3642,6 @@ impl ModelicaWorkerState {
         let (compiled_capacity, prepared_capacity) = limits.validate()?;
         Ok(Self {
             steppers: HashMap::new(),
-            sim_streams: HashMap::new(),
             current_sessions: HashMap::new(),
             cached_models: HashMap::new(),
             compiled_artifacts: CompiledArtifactCache::new(compiled_capacity),
@@ -3676,7 +3656,6 @@ impl ModelicaWorkerState {
     /// Drop inconsistent runtime state after a panic, retaining admitted limits.
     pub fn reset(&mut self) {
         self.steppers.clear();
-        self.sim_streams.clear();
         self.current_sessions.clear();
         self.cached_models.clear();
         self.compiled_artifacts.clear();
@@ -3828,11 +3807,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         w.steppers.remove(&entity);
                     } else {
                         let outputs = step_outcome.expect("successful step outcome checked above");
-                        if let Some(stream) = w.sim_streams.get(&entity) {
-                            let prev = stream.load();
-                            let next = SimSnapshot::advance(&prev, stepper.time(), &outputs);
-                            stream.store(Arc::new(next));
-                        }
                         send(ModelicaResult {
                             entity,
                             session_id,
@@ -3890,17 +3864,12 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             extra_sources,
             parameter_overrides,
             initial_inputs,
-            stream,
             realtime_safe,
         } => {
             if realtime_safe {
                 w.realtime_models.insert(entity);
             } else {
                 w.realtime_models.remove(&entity);
-            }
-            if let Some(stream) = stream {
-                stream.store(Arc::new(SimSnapshot::empty_at_zero()));
-                w.sim_streams.insert(entity, stream);
             }
             w.current_sessions.insert(entity, session_id);
             // Raw sibling docs for the cache — see the native Compile arm.
@@ -4086,9 +4055,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         let input_names: Vec<String> = stepper.input_names().to_vec();
                         w.steppers
                             .insert(entity, (session_id, rb.model_name.clone(), stepper));
-                        if let Some(stream) = w.sim_streams.get(&entity) {
-                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
-                        }
                         if let Some(cached) = w.cached_models.get_mut(&entity) {
                             cached.live_solver_snapshot = live_solver_snapshot.clone();
                             cached.pending_variable_metadata = None;
@@ -4270,7 +4236,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
         ModelicaCommand::Despawn { entity } => {
             w.steppers.remove(&entity);
             w.cached_models.remove(&entity);
-            w.sim_streams.remove(&entity);
         }
         ModelicaCommand::LoadSourceRoot {
             id,
@@ -4743,7 +4708,6 @@ mod macro_step_tests {
                 extra_sources: Vec::new(),
                 parameter_overrides: Vec::new(),
                 initial_inputs: Vec::new(),
-                stream: None,
             },
             "panic",
         );

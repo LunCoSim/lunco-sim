@@ -127,6 +127,7 @@ fn scene_still_loading(stage_loading: bool) -> bool {
 /// or program-name special case. A standalone program with no rigid-body
 /// ancestor holds its own entity, preserving the original participant scope.
 fn track_model_compiles(
+    initializing: Query<(), With<lunco_cosim_core::initialization::CoupledInitializationPending>>,
     models: Query<
         (
             Entity,
@@ -143,7 +144,11 @@ fn track_model_compiles(
     mut commands: Commands,
 ) {
     for (entity, model, variables, component) in &models {
-        let kind = modelica_wait_kind(model, variables, component);
+        let kind = if initializing.contains(entity) {
+            Some(kinds::PARTICIPANT_INIT)
+        } else {
+            modelica_wait_kind(model, variables, component)
+        };
         let wait = waits.get(entity).ok();
         let owner = owning_physics_entity(entity, &parents, &rigid_bodies);
         match (kind, wait) {

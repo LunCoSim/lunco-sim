@@ -1,9 +1,12 @@
 # Rumoca source admission
 
-LunCoSim consumes Rumoca 0.10.2 at
-`e0ac51cf94f4687b7a7ab1ae3613c4b7ed21fd74` for all compiler and solver packages.
+LunCoSim consumes Rumoca 0.10.2 from the maintained `main` branch.
+`Cargo.lock` retains the exact compiler/solver revision
+`e3da928cce08b794c6ec78ef85d2db0bd521547f`; locked builds therefore use one
+reproducible source snapshot. Dependency updates advance this lock explicitly.
 The maintained dependency owns lexical/import-aware namespace dependencies,
-base-class lookup context, and immutable cached class interfaces. Hosts consume
+base-class lookup context, immutable cached class interfaces, and comprehension
+analysis of continuous and initial structured equation templates. Hosts consume
 `rumoca_compile::compile::source_root_dependencies` directly and map those facts
 to the common library registry. Namespace placement through `within` does not
 itself require a library. Import aliases have no host-specific handling.

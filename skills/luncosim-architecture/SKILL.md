@@ -44,8 +44,8 @@ parameter map. The hook returns a map with `modelica_entities: [ids]`,
 when empty. The owner resolves all declared ids once per
 source/parameter revision. `modelica_entities` ids must identify live Modelica
 participants and grant both directions of access. Directional read/write ids
-may identify any live entity; a Modelica entity in either set also joins the
-shared causal barrier. Unresolved ids fail that source revision with a visible
+may identify any live entity. All active Modelica participants already share
+the fixed-step clock; declarations grant access independently of membership. Unresolved ids fail that source revision with a visible
 diagnostic.
 Every simulation-clock Modelica port access must be covered by the calling
 scenario's own plan, including `get`, `port`, and
@@ -58,8 +58,8 @@ Generic reflected reads and direct mutations also require the matching
 command materializes an entity whose id was not available during plan
 preparation, `track_entity_read(id)` or `track_entity_write(id)` adds the
 directional access in serialized simulation order before the entity is used.
-Tracked Modelica entities join the same barrier when they enter the current
-Modelica projection.
+Tracked Modelica entities retain the shared clock; tracking authorizes access
+and does not select a different timing policy.
 Entity-targeted API query providers report their live target ids through
 `simulation_entity_reads`; the scripting bridge checks them against the
 scenario's read plan before execution. Broad spatial/world queries use an

@@ -10,7 +10,10 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::{ComputedMass, JointDisabled, RigidBody};
 use bevy::prelude::*;
 
-use crate::{PhysicsJointLink, PhysicsJointPending, PhysicsJointTopologyPending};
+use crate::{
+    PhysicsJointLink, PhysicsJointPending, PhysicsJointPrepared, PhysicsJointTopologyPending,
+    PhysicsOrderKey,
+};
 
 /// Total mass of one live dynamic joint island, repeated for each member body.
 ///
@@ -38,6 +41,7 @@ impl DynamicJointIslandMass {
 pub struct DynamicJointIslandMasses {
     entries: HashMap<Entity, DynamicJointIslandMass>,
     topology_dirty: bool,
+    initial_members: HashMap<Entity, std::sync::Arc<[Entity]>>,
 }
 
 impl Default for DynamicJointIslandMasses {
@@ -45,6 +49,7 @@ impl Default for DynamicJointIslandMasses {
         Self {
             entries: HashMap::new(),
             topology_dirty: true,
+            initial_members: HashMap::new(),
         }
     }
 }
@@ -53,6 +58,14 @@ impl DynamicJointIslandMasses {
     /// Read the current island mass for a body.
     pub fn get(&self, body: Entity) -> Option<DynamicJointIslandMass> {
         self.entries.get(&body).copied()
+    }
+
+    /// Complete mechanical topology at the prepared initial coordinate.
+    /// Mass dependencies remain equation-owned until all members are solved.
+    pub fn initial_members(&self, body: Entity) -> Option<&[Entity]> {
+        self.initial_members
+            .get(&body)
+            .map(|members| members.as_ref())
     }
 }
 
@@ -90,6 +103,8 @@ impl Plugin for DynamicJointIslandMassPlugin {
         track!(JointDisabled);
         track!(PhysicsJointPending);
         track!(PhysicsJointTopologyPending);
+        track!(PhysicsJointPrepared);
+        track!(PhysicsOrderKey);
     }
 }
 
@@ -189,7 +204,12 @@ pub fn dynamic_joint_islands(
 /// Install [`DynamicJointIslandMassPlugin`] to retain lifecycle invalidation;
 /// refresh stays at the consumer's existing normal/rollback exchange boundary.
 pub fn refresh_dynamic_joint_island_masses(
-    bodies: Query<(Entity, &RigidBody, Option<&ComputedMass>)>,
+    bodies: Query<(
+        Entity,
+        &RigidBody,
+        Option<&ComputedMass>,
+        Option<&PhysicsOrderKey>,
+    )>,
     links: Query<
         &PhysicsJointLink,
         (
@@ -200,6 +220,13 @@ pub fn refresh_dynamic_joint_island_masses(
     >,
     changed_bodies: Query<(), (With<RigidBody>, Changed<ComputedMass>)>,
     changed_links: Query<(), Changed<PhysicsJointLink>>,
+    all_links: Query<(
+        &PhysicsJointLink,
+        Has<JointDisabled>,
+        Has<PhysicsJointPending>,
+        Has<PhysicsJointTopologyPending>,
+        Option<&PhysicsJointPrepared>,
+    )>,
     mut cache: ResMut<DynamicJointIslandMasses>,
 ) {
     if !cache.topology_dirty && changed_bodies.is_empty() && changed_links.is_empty() {
@@ -208,8 +235,8 @@ pub fn refresh_dynamic_joint_island_masses(
     let _span = bevy::log::info_span!("dynamic_joint_island_mass_rebuild").entered();
     let dynamic_bodies = bodies
         .iter()
-        .filter(|(_, mode, _)| **mode == RigidBody::Dynamic)
-        .map(|(entity, _, computed)| (entity, computed.map(|mass| mass.value())))
+        .filter(|(_, mode, _, _)| **mode == RigidBody::Dynamic)
+        .map(|(entity, _, computed, _)| (entity, computed.map(|mass| mass.value())))
         .collect::<Vec<_>>();
     let dynamic_entities = dynamic_bodies
         .iter()
@@ -223,6 +250,48 @@ pub fn refresh_dynamic_joint_island_masses(
         .map(|link| (link.body0, link.body1))
         .collect::<Vec<_>>();
     cache.entries = aggregate_dynamic_joint_island_masses(dynamic_bodies, active_links);
+    let mut preparing = HashSet::new();
+    let initial_links = all_links
+        .iter()
+        .filter_map(|(link, disabled, pending, topology_pending, prepared)| {
+            if prepared.is_some_and(|prepared| !prepared.activate) {
+                return None;
+            }
+            let prepared = prepared.is_some_and(|prepared| prepared.activate);
+            if disabled && !prepared && !pending && !topology_pending {
+                return None;
+            }
+            if (pending || topology_pending) && !prepared {
+                preparing.insert(link.body0);
+                preparing.insert(link.body1);
+            }
+            Some((link.body0, link.body1))
+        })
+        .collect::<Vec<_>>();
+    cache.initial_members.clear();
+    for mut members in dynamic_joint_islands(dynamic_entities, initial_links) {
+        if members.iter().any(|member| {
+            preparing.contains(member)
+                || !bodies
+                    .get(*member)
+                    .is_ok_and(|(_, _, _, key)| key.is_some())
+        }) {
+            continue;
+        }
+        members.sort_by(|a, b| {
+            bodies
+                .get(*a)
+                .unwrap()
+                .3
+                .unwrap()
+                .0
+                .cmp(&bodies.get(*b).unwrap().3.unwrap().0)
+        });
+        let shared: std::sync::Arc<[Entity]> = members.clone().into();
+        cache
+            .initial_members
+            .extend(members.into_iter().map(|member| (member, shared.clone())));
+    }
     cache.topology_dirty = false;
 }
 

@@ -17,10 +17,6 @@ mod native_library;
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
 use lunco_modelica_ast::pretty;
-#[cfg(feature = "ui")]
-use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
-#[cfg(feature = "ui")]
-use lunco_modelica_execution::ModelicaExecutionPlugin;
 
 #[cfg(feature = "ui")]
 /// UI configuration for the Modelica workbench.
@@ -40,20 +36,14 @@ impl Default for ModelicaUiConfig {
 }
 
 #[cfg(feature = "ui")]
-/// The Modelica workbench integration: core runtime, source-root admission,
-/// UI panels, document presentation, and the shared visualization plugin.
+/// Modelica panels, document presentation, and shared visualization. The host
+/// installs ModelicaCorePlugin and ModelicaExecutionPlugin before this plugin.
 #[derive(Default)]
 pub struct ModelicaPlugin;
 
 #[cfg(feature = "ui")]
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<CoreModelicaPlugin>() {
-            app.add_plugins(CoreModelicaPlugin);
-        }
-        if !app.is_plugin_added::<ModelicaExecutionPlugin>() {
-            app.add_plugins(ModelicaExecutionPlugin);
-        }
         #[cfg(not(target_arch = "wasm32"))]
         if !app.is_plugin_added::<native_library::NativeLibraryIndexerPlugin>() {
             app.add_plugins(native_library::NativeLibraryIndexerPlugin);

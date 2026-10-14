@@ -56,13 +56,19 @@ model PressureFedEngine
     commanded_flow_kgs = fuel_commanded_flow_kgs,
     nominal_pressure_drop_pa = nominal_pressure_drop_pa,
     opening_time_constant_s = opening_time_constant_s,
-    availability_transition_mass_kg = availability_transition_mass_kg);
+    availability_transition_mass_kg = availability_transition_mass_kg,
+    flow_fraction_command = flow_fraction_command
+    * noEvent(max(0.0, min(1.0, enabled))),
+    available_mass_kg = available_fuel_mass_kg);
   PressureFedValve oxidizer_valve(
     maximum_flow_kgs = oxidizer_maximum_flow_kgs,
     commanded_flow_kgs = oxidizer_commanded_flow_kgs,
     nominal_pressure_drop_pa = nominal_pressure_drop_pa,
     opening_time_constant_s = opening_time_constant_s,
-    availability_transition_mass_kg = availability_transition_mass_kg);
+    availability_transition_mass_kg = availability_transition_mass_kg,
+    flow_fraction_command = flow_fraction_command
+    * noEvent(max(0.0, min(1.0, enabled))),
+    available_mass_kg = available_oxidizer_mass_kg);
   PressureFedCombustionChamber chamber(
     oxidizer_to_fuel_ratio = oxidizer_to_fuel_ratio,
     characteristic_velocity_mps = characteristic_velocity_mps,
@@ -70,19 +76,13 @@ model PressureFedEngine
     combustion_efficiency = combustion_efficiency,
     nominal_flow_kgs = nominal_flow_kgs,
     chamber_temperature_full_k = chamber_temperature_full_k,
-    fuel_energy_j_kg = fuel_energy_j_kg);
+    fuel_energy_j_kg = fuel_energy_j_kg,
+    effective_exhaust_velocity_mps = effective_exhaust_velocity_mps);
 
 equation
   // A failed engine is a health input on the command path, so its valves
   // close through their own opening dynamics and the shared tanks see the
   // reduced demand through the acausal feed.
-  fuel_valve.flow_fraction_command = flow_fraction_command
-    * noEvent(max(0.0, min(1.0, enabled)));
-  oxidizer_valve.flow_fraction_command = flow_fraction_command
-    * noEvent(max(0.0, min(1.0, enabled)));
-  fuel_valve.available_mass_kg = available_fuel_mass_kg;
-  oxidizer_valve.available_mass_kg = available_oxidizer_mass_kg;
-  chamber.effective_exhaust_velocity_mps = effective_exhaust_velocity_mps;
   connect(fuel_in, fuel_valve.inlet);
   connect(oxidizer_in, oxidizer_valve.inlet);
   connect(fuel_valve.outlet, chamber.fuel_in);

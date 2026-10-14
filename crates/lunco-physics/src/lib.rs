@@ -83,9 +83,9 @@ pub use support::{
     PhysicsInitializationExternalValidator, PhysicsInitializationInvalid,
     PhysicsInitializationPaused, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
-    PhysicsJointLink, PhysicsJointPending, PhysicsJointTopologyPending, PhysicsSupportContact,
-    PhysicsSupportFootprint, PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact,
-    PhysicsWheelRaycastFilter, STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PhysicsJointLink, PhysicsJointPending, PhysicsJointPrepared, PhysicsJointTopologyPending,
+    PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet, PhysicsSupportState,
+    PhysicsWheelContact, PhysicsWheelRaycastFilter, STRICT_AUTHORED_INITIALIZATION_POLICY,
     evaluate_initialization_policy, physics_initialization_context, physics_initialization_facts,
 };
 

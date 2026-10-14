@@ -31,6 +31,7 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-time = { path = "../lunco-time" }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 rumoca-compile.workspace = true
+rumoca-core.workspace = true
 rumoca-ir-solve.workspace = true
 rumoca-sim.workspace = true
 serde.workspace = true

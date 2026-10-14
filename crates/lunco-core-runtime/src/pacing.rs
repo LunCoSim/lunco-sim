@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_dependencies_join_the_barrier_and_replace_per_owner() {
+    fn scenario_access_plans_replace_per_owner_without_changing_clock_membership() {
         let scenario_a = Entity::from_raw_u32(1).unwrap();
         let scenario_b = Entity::from_raw_u32(2).unwrap();
         let modelica_a = Entity::from_raw_u32(11).unwrap();
@@ -248,6 +248,7 @@ mod tests {
         let independent = Entity::from_raw_u32(13).unwrap();
         let mut participants = SimulationBarrierParticipants::default();
         participants.replace([modelica_a]);
+        participants.replace_modelica_entities([modelica_a, modelica_b]);
 
         participants.replace_scenario_plan(
             scenario_a,
@@ -278,11 +279,12 @@ mod tests {
         assert!(!participants.scenario_declares_query_read(scenario_a, "EntitiesInRadius"));
 
         participants.remove_scenario_dependencies(scenario_b);
-        assert!(!participants.requires_barrier(modelica_b));
+        assert!(participants.requires_barrier(modelica_b));
+        assert!(!participants.scenario_declares_dependency(scenario_b, modelica_b));
     }
 
     #[test]
-    fn scenario_runtime_discovered_modelica_access_joins_its_barrier() {
+    fn scenario_runtime_discovered_modelica_access_preserves_shared_clock() {
         let scenario = Entity::from_raw_u32(1).unwrap();
         let modelica = Entity::from_raw_u32(11).unwrap();
         let spawned_modelica = Entity::from_raw_u32(12).unwrap();
@@ -298,7 +300,7 @@ mod tests {
         );
 
         assert!(participants.requires_barrier(modelica));
-        assert!(!participants.requires_barrier(spawned_modelica));
+        assert!(participants.requires_barrier(spawned_modelica));
         assert_eq!(
             participants.add_scenario_read(scenario, spawned_modelica),
             Some(true)
@@ -312,12 +314,12 @@ mod tests {
         assert!(participants.requires_barrier(spawned_modelica));
 
         participants.remove_scenario_dependencies(scenario);
-        assert!(!participants.requires_barrier(modelica));
-        assert!(!participants.requires_barrier(spawned_modelica));
+        assert!(participants.requires_barrier(modelica));
+        assert!(participants.requires_barrier(spawned_modelica));
     }
 
     #[test]
-    fn unresolved_scenario_plan_holds_all_participants_until_commit() {
+    fn participant_clock_membership_does_not_require_a_scenario_plan() {
         let scenario = Entity::from_raw_u32(1).unwrap();
         let modelica_a = Entity::from_raw_u32(11).unwrap();
         let modelica_b = Entity::from_raw_u32(12).unwrap();
@@ -325,7 +327,6 @@ mod tests {
         participants.replace(std::iter::empty());
         participants.replace_modelica_entities([modelica_a, modelica_b]);
 
-        participants.mark_scenario_plan_pending(scenario);
         assert!(participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
 
@@ -336,7 +337,7 @@ mod tests {
             [],
             std::iter::empty::<String>(),
         );
-        assert!(!participants.requires_barrier(modelica_a));
+        assert!(participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
     }
 
@@ -421,23 +422,20 @@ mod tests {
 /// shared simulation must not advance while the result for its next
 /// communication point is in flight. The participant bridge raises `held`
 /// before dispatching a step and clears it when the result lands. The time
-/// spine projects this state onto `Time<Virtual>`, so SimTick, Rhai,
-/// controllers, co-simulation propagation, and Avian share one barrier.
+/// spine gates the next complete fixed cycle, so SimTick, Rhai, controllers,
+/// co-simulation propagation, and Avian share one barrier.
 ///
-/// Barrier membership is supplied by the composed simulation topology. The
-/// resource starts unresolved, which is deliberately fail-closed while a scene
-/// is still being projected. Once the wiring projection has sealed a topology,
-/// only participants in the reverse causal closure of a stateful engine sink
-/// hold this barrier. A model that has no such path is still stepped and its
-/// outputs are held at communication points, but it cannot stall the shared
-/// physics clock.
+/// Every active projected participant synchronizes at its declared communication
+/// points. The topology starts unresolved and fails closed during projection.
+/// The time spine gates fixed execution while retaining elapsed pacing demand;
+/// user pause separately freezes that demand.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct SimulationBarrier {
     /// Whether the next shared simulation step must wait for a participant result.
     pub held: bool,
     /// Number of live compiled participants measured on the last fixed tick.
     pub active_participants: usize,
-    /// Number of live participants whose causal path requires this barrier.
+    /// Number of live participants synchronized on the shared clock.
     pub shared_clock_participants: usize,
     /// Largest target/current clock gap on the last fixed tick.
     pub worst_lag_secs: f64,
@@ -448,11 +446,10 @@ pub struct SimulationBarrier {
 /// The authoritative set of participants that must synchronize with the
 /// shared fixed-step world.
 ///
-/// This is a projection of the resolved simulation graph, not a property of a
-/// solver implementation. The USD/co-simulation projection computes the
-/// reverse causal closure from stateful sinks (Avian forces, wheel actuators,
-/// and joint drives) to their upstream producers. Modelica uses this resource
-/// only to decide whether a pending worker result is a shared-clock barrier.
+/// Every projected Modelica participant synchronizes at its communication
+/// points. The reverse causal closure is retained for topology diagnostics;
+/// an absent force consumer does not make a participant asynchronous. Scenario
+/// access plans authorize reads and writes independently of synchronization.
 ///
 /// `topology_ready == false` means the graph is not trustworthy yet. Consumers
 /// must then treat every live Modelica participant as coupled. This avoids
@@ -461,21 +458,16 @@ pub struct SimulationBarrier {
 #[derive(Resource, Debug, Clone, Default)]
 pub struct SimulationBarrierParticipants {
     pub topology_ready: bool,
+    /// Reverse causal closure of native state sinks, for topology diagnostics.
     pub entities: EntityHashSet,
     /// Live Modelica participants, projected by the co-simulation owner. This
-    /// lets generic scripting validate that a declared dependency is covered
-    /// by the shared fixed-step barrier without depending on Modelica types.
+    /// lets generic scripting validate a declared dependency without depending
+    /// on Modelica types. All members share the fixed-step barrier.
     pub modelica_entities: EntityHashSet,
     /// Modelica and generic entity access sets named by each active scenario's
     /// simulation_dependencies hook. The scenario owner replaces the full plan
     /// on recompile, detach, or despawn.
     scenario_plans: HashMap<Entity, ScenarioEntityAccess>,
-    /// Flattened membership for the per-step barrier read path.
-    scenario_participants: EntityHashSet,
-    /// A scenario whose source revision is compiling or resolving its
-    /// dependency plan. Until the plan is committed, all Modelica participants
-    /// are synchronized conservatively.
-    pending_scenario_plans: EntityHashSet,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -695,16 +687,12 @@ impl SimulationProgress {
 impl SimulationBarrierParticipants {
     #[inline]
     pub fn requires_barrier(&self, entity: Entity) -> bool {
-        !self.topology_ready
-            || (!self.pending_scenario_plans.is_empty() && self.modelica_entities.contains(&entity))
-            || self.entities.contains(&entity)
-            || self.scenario_participants.contains(&entity)
+        !self.topology_ready || self.modelica_entities.contains(&entity)
     }
 
     /// Whether `scenario` declares `participant` in its committed Rhai plan.
     ///
-    /// `entities` and `scenario_participants` are aggregate solver-barrier
-    /// membership; neither identifies which scenario reads a participant.
+    /// Solver synchronization does not grant a scenario access to a participant.
     pub fn scenario_declares_dependency(&self, scenario: Entity, participant: Entity) -> bool {
         self.scenario_plans.get(&scenario).is_some_and(|plan| {
             plan.modelica.contains(&participant) || plan.reads.contains(&participant)
@@ -750,23 +738,15 @@ impl SimulationBarrierParticipants {
         self.topology_ready = true;
     }
 
-    /// Replace the current Modelica population while preserving the independent
-    /// causal graph and scenario dependency contributions.
+    /// Replace the current Modelica population while preserving topology
+    /// diagnostics and scenario access plans.
     pub fn replace_modelica_entities(&mut self, entities: impl IntoIterator<Item = Entity>) {
         self.modelica_entities.clear();
         self.modelica_entities.extend(entities);
-        self.rebuild_scenario_participants();
     }
 
-    /// Hold all Modelica participants while one scenario source revision is
-    /// being compiled and its dependency hook is resolved.
-    pub fn mark_scenario_plan_pending(&mut self, scenario: Entity) {
-        self.pending_scenario_plans.insert(scenario);
-    }
-
-    /// Commit one scenario's resolved access plan and release its admission
-    /// hold. Directional entries join the barrier when they are Modelica
-    /// participants in the current projection.
+    /// Commit one scenario's resolved access plan. Scenario preparation owns
+    /// its separate progress hold until initialization completes.
     pub fn replace_scenario_plan(
         &mut self,
         scenario: Entity,
@@ -784,8 +764,6 @@ impl SimulationBarrierParticipants {
                 query_reads: query_reads.into_iter().collect(),
             },
         );
-        self.pending_scenario_plans.remove(&scenario);
-        self.rebuild_scenario_participants();
     }
 
     /// Add one runtime-discovered read to a committed scenario plan.
@@ -794,7 +772,6 @@ impl SimulationBarrierParticipants {
     /// command after the static dependency plan was resolved.
     pub fn add_scenario_read(&mut self, scenario: Entity, entity: Entity) -> Option<bool> {
         let inserted = self.scenario_plans.get_mut(&scenario)?.reads.insert(entity);
-        self.rebuild_scenario_participants();
         Some(inserted)
     }
 
@@ -805,48 +782,23 @@ impl SimulationBarrierParticipants {
             .get_mut(&scenario)?
             .writes
             .insert(entity);
-        self.rebuild_scenario_participants();
         Some(inserted)
     }
 
-    /// Remove one scenario's dependency contribution and pending-plan hold.
+    /// Remove one scenario's access plan.
     pub fn remove_scenario_dependencies(&mut self, scenario: Entity) {
         self.scenario_plans.remove(&scenario);
-        self.pending_scenario_plans.remove(&scenario);
-        self.rebuild_scenario_participants();
     }
 
     /// Clear all scenario contributions after a shared scripting contract is
     /// replaced. The next lifecycle pass will rebuild them from current source.
     pub fn clear_scenario_dependencies(&mut self) {
         self.scenario_plans.clear();
-        self.scenario_participants.clear();
-        self.pending_scenario_plans.clear();
     }
 
     /// Whether this entity is a live Modelica participant in the latest
     /// co-simulation projection.
     pub fn is_modelica_participant(&self, entity: Entity) -> bool {
         self.modelica_entities.contains(&entity)
-    }
-
-    fn rebuild_scenario_participants(&mut self) {
-        self.scenario_participants.clear();
-        for plan in self.scenario_plans.values() {
-            self.scenario_participants
-                .extend(plan.modelica.iter().copied());
-            self.scenario_participants.extend(
-                plan.reads
-                    .iter()
-                    .filter(|entity| self.modelica_entities.contains(*entity))
-                    .copied(),
-            );
-            self.scenario_participants.extend(
-                plan.writes
-                    .iter()
-                    .filter(|entity| self.modelica_entities.contains(*entity))
-                    .copied(),
-            );
-        }
     }
 }

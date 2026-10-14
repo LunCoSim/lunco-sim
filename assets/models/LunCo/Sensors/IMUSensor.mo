@@ -75,19 +75,53 @@ model IMUSensor
   Real sensor_accel_y;
   Real sensor_accel_z;
   FrameVectorTransform offset_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = raw_quat_w,
+    quaternion_x = raw_quat_x,
+    quaternion_y = raw_quat_y,
+    quaternion_z = raw_quat_z,
+    vector_x = mount_offset_x,
+    vector_y = mount_offset_y,
+    vector_z = mount_offset_z);
   FrameVectorTransform force_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = raw_quat_w,
+    quaternion_x = raw_quat_x,
+    quaternion_y = raw_quat_y,
+    quaternion_z = raw_quat_z,
+    vector_x = total_accel_x,
+    vector_y = total_accel_y,
+    vector_z = total_accel_z);
   FrameVectorTransform gravity_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = raw_quat_w,
+    quaternion_x = raw_quat_x,
+    quaternion_y = raw_quat_y,
+    quaternion_z = raw_quat_z,
+    vector_x = gravity_world_x,
+    vector_y = gravity_world_y,
+    vector_z = gravity_world_z);
   FrameVectorTransform gyro_transform(
-    quaternion_epsilon = quaternion_epsilon);
+    quaternion_epsilon = quaternion_epsilon,
+    quaternion_w = raw_quat_w,
+    quaternion_x = raw_quat_x,
+    quaternion_y = raw_quat_y,
+    quaternion_z = raw_quat_z,
+    vector_x = raw_angvel_x,
+    vector_y = raw_angvel_y,
+    vector_z = raw_angvel_z);
   FilteredDerivative angular_velocity_filter_x(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    u = raw_angvel_x,
+    sample_valid = raw_sample_valid);
   FilteredDerivative angular_velocity_filter_y(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    u = raw_angvel_y,
+    sample_valid = raw_sample_valid);
   FilteredDerivative angular_velocity_filter_z(
-    time_constant_s = angular_accel_filter_time_constant_s);
+    time_constant_s = angular_accel_filter_time_constant_s,
+    u = raw_angvel_z,
+    sample_valid = raw_sample_valid);
 
 equation
 
@@ -96,12 +130,6 @@ equation
   // contacts, and joints are in the solved state. Do not differentiate or
   // delay a co-simulation signal here; that would manufacture a startup
   // transient when the Modelica instance is admitted after the first sample.
-  angular_velocity_filter_x.u = raw_angvel_x;
-  angular_velocity_filter_y.u = raw_angvel_y;
-  angular_velocity_filter_z.u = raw_angvel_z;
-  angular_velocity_filter_x.sample_valid = raw_sample_valid;
-  angular_velocity_filter_y.sample_valid = raw_sample_valid;
-  angular_velocity_filter_z.sample_valid = raw_sample_valid;
   world_accel_x = raw_acceleration_x;
   world_accel_y = raw_acceleration_y;
   world_accel_z = raw_acceleration_z;
@@ -109,13 +137,6 @@ equation
   angular_accel_y = angular_velocity_filter_y.y;
   angular_accel_z = angular_velocity_filter_z.y;
 
-  offset_transform.quaternion_w = raw_quat_w;
-  offset_transform.quaternion_x = raw_quat_x;
-  offset_transform.quaternion_y = raw_quat_y;
-  offset_transform.quaternion_z = raw_quat_z;
-  offset_transform.vector_x = mount_offset_x;
-  offset_transform.vector_y = mount_offset_y;
-  offset_transform.vector_z = mount_offset_z;
   offset_world_x = offset_transform.world_frame_x;
   offset_world_y = offset_transform.world_frame_y;
   offset_world_z = offset_transform.world_frame_z;
@@ -142,20 +163,6 @@ equation
   // navigation/world-frame vectors. Convert each through the same shared
   // transform before subtracting them. This is the specific-force equation
   // used by a real accelerometer: f_body = a_body - g_body.
-  force_transform.quaternion_w = raw_quat_w;
-  force_transform.quaternion_x = raw_quat_x;
-  force_transform.quaternion_y = raw_quat_y;
-  force_transform.quaternion_z = raw_quat_z;
-  force_transform.vector_x = total_accel_x;
-  force_transform.vector_y = total_accel_y;
-  force_transform.vector_z = total_accel_z;
-  gravity_transform.quaternion_w = raw_quat_w;
-  gravity_transform.quaternion_x = raw_quat_x;
-  gravity_transform.quaternion_y = raw_quat_y;
-  gravity_transform.quaternion_z = raw_quat_z;
-  gravity_transform.vector_x = gravity_world_x;
-  gravity_transform.vector_y = gravity_world_y;
-  gravity_transform.vector_z = gravity_world_z;
   sensor_accel_x = force_transform.body_frame_x - gravity_transform.body_frame_x;
   sensor_accel_y = force_transform.body_frame_y - gravity_transform.body_frame_y;
   sensor_accel_z = force_transform.body_frame_z - gravity_transform.body_frame_z;
@@ -168,13 +175,6 @@ equation
   specific_force_z = coordinate_accel_local_z;
 
   // The same shared conversion produces body-frame gyroscope rates.
-  gyro_transform.quaternion_w = raw_quat_w;
-  gyro_transform.quaternion_x = raw_quat_x;
-  gyro_transform.quaternion_y = raw_quat_y;
-  gyro_transform.quaternion_z = raw_quat_z;
-  gyro_transform.vector_x = raw_angvel_x;
-  gyro_transform.vector_y = raw_angvel_y;
-  gyro_transform.vector_z = raw_angvel_z;
   gyro_x = gyro_transform.body_frame_x + gyro_bias_x;
   gyro_y = gyro_transform.body_frame_y + gyro_bias_y;
   gyro_z = gyro_transform.body_frame_z + gyro_bias_z;

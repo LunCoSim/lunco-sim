@@ -270,6 +270,19 @@ the simulation even when its rate is scaled. A terminal runtime fault holds the
 shared fixed clock, so Rhai and co-simulation cannot advance from invalid
 causal state.
 
+A coupling hold gates complete fixed ticks while the pacing clock retains
+running demand in `Time<Fixed>::overstep`. User pause and scene preparation
+freeze pacing. Native headless waiting ends on solver response readiness or
+the next fixed deadline; only the shared completion-admission system consumes
+and validates receipts. Mission timeline waits and telemetry deadlines remain
+on their declared simulation clocks, independent of that host wait. They do
+not acquire a wall-clock timer to compensate for slow simulation.
+
+UI exposure refresh uses `Time<Real>` at its bounded presentation cadence.
+Its dirty-state gate coalesces unchanged facts; simulation pause and transport
+rate do not change that timer. Physics service time, coupled response latency,
+and rendered frame time are separate observations.
+
 The fixed-step catch-up budget lives in `lunco-time`; consumers must not add a
 second rate path or drain an unbounded burst. Celestial recomputation may use
 its shared geometric error budget, but that cadence selects when derived

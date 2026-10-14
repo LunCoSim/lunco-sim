@@ -660,6 +660,7 @@ mod tests {
                         .is_some_and(|model| model.inputs.contains_key(name)))
                 .then_some(0)
             }),
+            initial_expression: None,
             resolve_output: None,
             read_slot: None,
             read_input_slot: None,

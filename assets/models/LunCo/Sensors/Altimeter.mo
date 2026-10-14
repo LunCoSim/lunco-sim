@@ -53,7 +53,9 @@ model Altimeter
   output Real ray_direction_nav_y "Measured ray direction in navigation Y";
 
   FilteredDerivative range_filter(
-    time_constant_s = range_filter_time_constant_s);
+    time_constant_s = range_filter_time_constant_s,
+    u = max(0.0, ray_distance_m),
+    sample_valid = max(0.0, min(1.0, ray_hit_valid)));
 
   Real ray_direction_norm;
   Real ray_direction_normalized_x;
@@ -68,9 +70,30 @@ model Altimeter
   Real projected_range_m;
   Real vertical_validity;
   Real range_validity;
-  FrameVectorTransform ray_transform;
-  FrameVectorTransform mount_transform;
-  FrameVectorTransform angular_velocity_transform;
+  FrameVectorTransform ray_transform(
+    quaternion_w = attitude_quat_w,
+    quaternion_x = attitude_quat_x,
+    quaternion_y = attitude_quat_y,
+    quaternion_z = attitude_quat_z,
+    vector_x = ray_direction_normalized_x,
+    vector_y = ray_direction_normalized_y,
+    vector_z = ray_direction_normalized_z);
+  FrameVectorTransform mount_transform(
+    quaternion_w = attitude_quat_w,
+    quaternion_x = attitude_quat_x,
+    quaternion_y = attitude_quat_y,
+    quaternion_z = attitude_quat_z,
+    vector_x = ray_origin_body_local_x,
+    vector_y = ray_origin_body_local_y,
+    vector_z = ray_origin_body_local_z);
+  FrameVectorTransform angular_velocity_transform(
+    quaternion_w = attitude_quat_w,
+    quaternion_x = attitude_quat_x,
+    quaternion_y = attitude_quat_y,
+    quaternion_z = attitude_quat_z,
+    vector_x = angular_velocity_local_x,
+    vector_y = angular_velocity_local_y,
+    vector_z = angular_velocity_local_z);
 
 equation
   // The raw query composes the authored ray axis with the complete sensor
@@ -83,13 +106,6 @@ equation
   ray_direction_normalized_x = ray_direction_body_local_x / ray_direction_norm;
   ray_direction_normalized_y = ray_direction_body_local_y / ray_direction_norm;
   ray_direction_normalized_z = ray_direction_body_local_z / ray_direction_norm;
-  ray_transform.quaternion_w = attitude_quat_w;
-  ray_transform.quaternion_x = attitude_quat_x;
-  ray_transform.quaternion_y = attitude_quat_y;
-  ray_transform.quaternion_z = attitude_quat_z;
-  ray_transform.vector_x = ray_direction_normalized_x;
-  ray_transform.vector_y = ray_direction_normalized_y;
-  ray_transform.vector_z = ray_direction_normalized_z;
   ray_direction_nav_x = ray_transform.world_frame_x;
   ray_direction_nav_y = ray_transform.world_frame_y;
   ray_direction_nav_z = ray_transform.world_frame_z;
@@ -98,24 +114,10 @@ equation
   // recover the ray origin, then remove the effective body-local ray mount in
   // the same measured attitude. This is a geometric altimeter observation,
   // not a read of the rigid body's simulator pose.
-  mount_transform.quaternion_w = attitude_quat_w;
-  mount_transform.quaternion_x = attitude_quat_x;
-  mount_transform.quaternion_y = attitude_quat_y;
-  mount_transform.quaternion_z = attitude_quat_z;
-  mount_transform.vector_x = ray_origin_body_local_x;
-  mount_transform.vector_y = ray_origin_body_local_y;
-  mount_transform.vector_z = ray_origin_body_local_z;
   // The range is projected onto navigation vertical.  When the vehicle is
   // rotating, the projection itself changes even if the vehicle has no
   // vertical motion.  Use the measured body rate to remove that geometric
   // term instead of presenting attitude recovery as a climb or descent.
-  angular_velocity_transform.quaternion_w = attitude_quat_w;
-  angular_velocity_transform.quaternion_x = attitude_quat_x;
-  angular_velocity_transform.quaternion_y = attitude_quat_y;
-  angular_velocity_transform.quaternion_z = attitude_quat_z;
-  angular_velocity_transform.vector_x = angular_velocity_local_x;
-  angular_velocity_transform.vector_y = angular_velocity_local_y;
-  angular_velocity_transform.vector_z = angular_velocity_local_z;
   angular_velocity_world_x = angular_velocity_transform.world_frame_x;
   angular_velocity_world_y = angular_velocity_transform.world_frame_y;
   angular_velocity_world_z = angular_velocity_transform.world_frame_z;
@@ -150,8 +152,6 @@ equation
   // presentation value.  The latter intentionally ramps from zero when the
   // ray reacquires after an attitude recovery; feeding that ramp into the
   // differentiator would turn confidence growth into a fictitious climb.
-  range_filter.u = max(0.0, ray_distance_m);
-  range_filter.sample_valid = max(0.0, min(1.0, ray_hit_valid));
   range_rate_mps = range_valid * (range_filter.y * vertical_projection
     - max(0.0, ray_distance_m) * ray_direction_rate_nav_y);
   range_rate_valid = range_confidence;

@@ -536,6 +536,7 @@ mod tests {
                 })
                 .flatten()
         },
+        initial_expression: None,
         resolve_output: Some(|_world, _entity, name| match name {
             "measured" => Some(1),
             "rate" => Some(2),

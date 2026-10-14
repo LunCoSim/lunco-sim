@@ -18,6 +18,8 @@ fn prepared(doc, class) {
 }
 fn defaults(snapshot, expected_a) {
     let failures = [];
+    failures.push(t_true(snapshot.variables.wired_value == 9.0,
+        "an instance modifier replaces the nested input default"));
     for pair in [["enabled", 9.0], ["a.enabled", expected_a], ["again.enabled", 1.0],
                  ["b.enabled", 0.0], ["d.enabled", 5.0], ["expression.value", 6.0]] {
         let actual = snapshot.inputs[pair[0]];
@@ -42,13 +44,15 @@ model Derived extends Base; end Derived;
 model Expression parameter Real offset=3.0; input Real value=offset*2.0+scale()-6.0; output Real y; equation y=value; end Expression;
 input Real enabled=9.0; input On a; input On again;
 input Off b; input Derived d; input Expression expression;
-input Real gains[2]={3.0,4.0}; On local;
-output Real y; Real x(start=0.0, fixed=true);
-equation y=enabled+a.y+again.y+b.y+d.y+expression.y+sum(gains)+local.y; der(x)=y;
+input Real gains[2]={3.0,4.0}; On local; On wired(enabled=enabled);
+output Real y; output Real wired_value; Real x(start=0.0, fixed=true);
+equation y=enabled+a.y+again.y+b.y+d.y+expression.y+sum(gains)+local.y; der(x)=y; wired_value=wired.y;
 end ScopedProbe;`, "Scoped defaults positive");
     let bad = editor::new_scratch("model InvalidDefault input Real enabled=missing; output Real y; equation y=enabled; end InvalidDefault;", "Scoped defaults invalid binding");
-    if good.ok != true || bad.ok != true { this = finish(this, ["scratch admission failed"]); return; }
-    this.good = good.doc_id; this.bad = bad.doc_id; this.docs = [this.good, this.bad];
+    let duplicate = editor::new_scratch("model DuplicateBinding model Part input Real u=1.0; output Real y; equation y=u; end Part; Part part; output Real y; equation part.u=2.0; y=part.y; end DuplicateBinding;", "Duplicate nested input equation");
+    if good.ok != true || bad.ok != true || duplicate.ok != true { this = finish(this, ["scratch admission failed"]); return; }
+    this.good = good.doc_id; this.bad = bad.doc_id; this.duplicate = duplicate.doc_id;
+    this.docs = [this.good, this.bad, this.duplicate];
 }
 fn on_tick(me, params) {
     if this.done { return; }
@@ -90,6 +94,14 @@ fn on_tick(me, params) {
         if s.state != "error" { return; }
         this.failures.push(t_true(s.error_message != () && s.error_message.contains("missing"),
             "invalid default fails visibly without a fabricated value: " + s.to_string()));
+        cmd("CompileModel", #{doc_id: this.duplicate, class: "DuplicateBinding"});
+        this.phase = "duplicate"; return;
+    }
+    if this.phase == "duplicate" {
+        let s = query("CompileStatus", #{doc_id: this.duplicate});
+        if s.state != "error" { return; }
+        this.failures.push(t_true(s.error_message != () && s.error_message.contains("unbalanced"),
+            "a separate equation does not replace a nested default binding: " + s.to_string()));
         this.ack = cmd("RunExperiment", #{doc_id: this.good, class: "ScopedProbe", t_end: 0.1, n_intervals: 10});
         this.phase = "batch_ack"; return;
     }
