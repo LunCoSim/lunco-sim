@@ -623,6 +623,34 @@ pub(crate) fn on_shader_parameters_requested(
 pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        let Some(prim) = world.get::<UsdPrimPath>(request.part).cloned() else {
+            return;
+        };
+        let shader_path = match bound_shader_prim(world, &prim) {
+            Ok(shader) => shader,
+            Err(error) => {
+                report_inspector_error(world, &error);
+                return;
+            }
+        };
+        let Some((doc, edit_target, generation)) = authoring_context(world, request.part) else {
+            report_inspector_error(world, "Selected material target is not document-backed");
+            return;
+        };
+        let (mut ops, shader) = match &shader_path {
+            Some(path) => (Vec::new(), path.clone()),
+            None => {
+                let schemas = geom_api_schemas(world, &prim);
+                let Some((ops, shader)) = lunco_usd_core::material::ensure_preview_surface_ops(
+                    edit_target.clone(),
+                    &prim.path,
+                    &schemas,
+                ) else {
+                    return;
+                };
+                (ops, shader)
+            }
+        };
         for entity in &request.parts {
             let Some(mut look) = world.get_mut::<PbrLook>(*entity) else {
                 continue;
@@ -650,28 +678,6 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
             };
         }
 
-        let Some(prim) = world.get::<UsdPrimPath>(request.part).cloned() else {
-            return;
-        };
-        let shader_path = bound_shader_prim(world, &prim);
-        let Some((doc, edit_target, generation)) = authoring_context(world, request.part) else {
-            report_inspector_error(world, "Selected material target is not document-backed");
-            return;
-        };
-        let (mut ops, shader) = match &shader_path {
-            Some(path) => (Vec::new(), path.clone()),
-            None => {
-                let schemas = geom_api_schemas(world, &prim);
-                let Some((ops, shader)) = lunco_usd_core::material::ensure_preview_surface_ops(
-                    edit_target.clone(),
-                    &prim.path,
-                    &schemas,
-                ) else {
-                    return;
-                };
-                (ops, shader)
-            }
-        };
         let fresh = shader_path.is_none();
         let root = edit_target;
         let mut set = |name: &str, type_name: &str, value: String| {
@@ -3012,12 +3018,19 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         report_inspector_error(world, "Selected shader target has no USD prim path");
         return;
     };
-    let Some(shader_prim) = bound_shader_prim(world, &prim) else {
-        report_inspector_error(
-            world,
-            "This prim has no bound Material with a Shader child; the shader was not changed",
-        );
-        return;
+    let shader_prim = match bound_shader_prim(world, &prim) {
+        Ok(Some(shader)) => shader,
+        Ok(None) => {
+            report_inspector_error(
+                world,
+                "This prim has no bound surface Shader; the shader was not changed",
+            );
+            return;
+        }
+        Err(error) => {
+            report_inspector_error(world, &error);
+            return;
+        }
     };
     let Some((doc, edit_target, generation)) = authoring_context(world, part) else {
         report_inspector_error(world, "Selected shader target is not document-backed");

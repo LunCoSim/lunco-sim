@@ -27,9 +27,7 @@ pub use asset::{UsdLoader, UsdStageAsset};
 pub use authoring::{DefaultPrim, layer_default_prim};
 pub use canonical::UsdWiringDirty;
 pub use instance::{UsdInstanceMember, UsdInstanceRoot, UsdReferenceSnapshot};
-pub use material_binding::{
-    MaterialPurpose, parent_prim_path, resolve_bound_material, resolve_bound_shader,
-};
+pub use material_binding::{MaterialPurpose, parent_prim_path};
 pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
 pub use purpose::{is_descendant_or_self, resolve_stage_prim_path, stage_default_prim};
 pub use read::{UsdRead, UsdReadObject, UsdReadPrimFacts, UsdReadSource};

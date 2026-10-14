@@ -79,8 +79,7 @@ use lunco_usd_bevy_stage::{
 };
 use lunco_usd_bevy_stage::{
     UsdRead, UsdReadObject, canonical::CanonicalStages, grid_translation_d_at, local_transform_at,
-    parent_prim_path, read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path,
-    stage_convention,
+    parent_prim_path, read_transform_from_usd, resolve_stage_prim_path, stage_convention,
 };
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -775,6 +774,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 reader
                     .resets_xform_stack(&sdf_path)
                     .map(|resets| (animated, resets))
+                    .map_err(|error| error.to_string())
             }) {
                 Ok(facts) => facts,
                 Err(error) => {
@@ -3011,7 +3011,13 @@ fn read_standard_material(
     // authors them. Channels the shader omits — or whose texture connection
     // fails to resolve — keep the geometry baseline above rather than reverting
     // to a flat-white default.
-    if let Some(shader_path) = resolve_bound_shader(reader, sdf_path) {
+    if let Some(shader_path) = reader.bound_shader(sdf_path).map_err(|error| {
+        error!(
+            "[usd-bevy] {} surface resolution failed: {error}",
+            sdf_path.as_str()
+        );
+        MaterialReadError::new("material:binding")
+    })? {
         use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 
         // Resolve a shader input's connected `UsdUVTexture` to a loadable image
@@ -3228,11 +3234,20 @@ fn read_standard_material(
     // mutates in place.
     let animated = read::attr_has_time_samples(reader, sdf_path, "primvars:displayColor")
         || attr_has_time_samples(reader, sdf_path, "primvars:displayOpacity")
-        || resolve_bound_shader(reader, sdf_path).is_some_and(|shader| {
-            ANIMATED_SHADER_INPUTS
-                .iter()
-                .any(|i| attr_has_time_samples(reader, &shader, i))
-        });
+        || reader
+            .bound_shader(sdf_path)
+            .map_err(|error| {
+                error!(
+                    "[usd-bevy] {} surface resolution failed: {error}",
+                    sdf_path.as_str()
+                );
+                MaterialReadError::new("material:binding")
+            })?
+            .is_some_and(|shader| {
+                ANIMATED_SHADER_INPUTS
+                    .iter()
+                    .any(|i| attr_has_time_samples(reader, &shader, i))
+            });
 
     Ok(PbrLook {
         base_color: base_color.with_alpha(alpha).to_linear(),
@@ -3345,40 +3360,28 @@ fn refresh_standard_surface_material_intents(
     looks: Query<&PbrLook>,
     mut commands: Commands,
 ) {
-    let mut edited_materials = std::collections::HashMap::new();
+    let mut edited_stages = std::collections::HashSet::new();
     for change in changes.read() {
         let Some(stage_asset) = stages.get(change.stage_id) else {
             continue;
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
-        let materials = edited_materials
-            .entry(change.stage_id)
-            .or_insert_with(std::collections::HashSet::new);
-        for prim_path in &change.info_prim_paths {
-            let Ok(shader_path) = SdfPath::new(prim_path) else {
-                continue;
-            };
-            if UsdRead::type_name(&reader, &shader_path).as_deref() != Some("Shader")
-                || UsdRead::text(&reader, &shader_path, "info:id").as_deref()
-                    != Some("UsdPreviewSurface")
-            {
-                continue;
-            }
-            let mut ancestor = shader_path.parent();
-            while let Some(path) = ancestor {
-                if UsdRead::type_name(&reader, &path).as_deref() == Some("Material") {
-                    materials.insert(path.to_string());
-                    break;
-                }
-                ancestor = path.parent();
-            }
+        if change.info_prim_paths.iter().any(|path| {
+            SdfPath::new(path).ok().is_some_and(|path| {
+                matches!(
+                    UsdRead::type_name(&reader, &path).as_deref(),
+                    Some("Shader" | "NodeGraph" | "Material")
+                )
+            })
+        }) {
+            edited_stages.insert(change.stage_id);
         }
     }
 
-    for (stage_id, materials) in edited_materials {
-        if materials.is_empty() {
-            continue;
-        }
+    // Shade producers can live outside the bound Material's namespace. A
+    // graph edit invalidates this stage's material intents; native UsdShade
+    // resolves each terminal rather than an application reverse graph.
+    for stage_id in edited_stages {
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
@@ -3390,16 +3393,6 @@ fn refresh_standard_surface_material_intents(
                 continue;
             };
             let (reader, _) = canonical.reader_for(stage_id, stage_asset);
-            let Some(material_path) = UsdRead::bound_material(
-                &reader,
-                &sdf_path,
-                lunco_usd_bevy_stage::MaterialPurpose::Render,
-            ) else {
-                continue;
-            };
-            if !materials.contains(&material_path) {
-                continue;
-            }
             let target = visual_target
                 .map(|target| target.0)
                 .filter(|target| looks.get(*target).is_ok())
@@ -3407,6 +3400,14 @@ fn refresh_standard_surface_material_intents(
             let Some(target) = target else {
                 continue;
             };
+            if let Err(message) = UsdRead::bound_shader(&reader, &sdf_path) {
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+                continue;
+            }
             match read_standard_material(
                 &reader,
                 &sdf_path,

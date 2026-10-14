@@ -57,6 +57,7 @@ pub struct UsdPrimProjectionPlan {
     purpose: openusd_schemas::geom::Purpose,
     effective_visibility: openusd_schemas::geom::PurposeVisibility,
     bound_materials: HashMap<MaterialPurpose, String>,
+    bound_shader: Option<SdfPath>,
 }
 
 impl UsdPrimProjectionPlan {
@@ -263,14 +264,15 @@ impl UsdStageProjectionPlan {
                     (!targets.is_empty()).then_some((name, targets))
                 })
                 .collect();
-            let bound_materials = [MaterialPurpose::Render, MaterialPurpose::Physics]
-                .into_iter()
-                .filter_map(|purpose| {
-                    reader
-                        .bound_material(&path, purpose)
-                        .map(|material| (purpose, material))
-                })
-                .collect();
+            let mut bound_materials = HashMap::new();
+            for purpose in [MaterialPurpose::Render, MaterialPurpose::Physics] {
+                if let Some(material) = reader
+                    .bound_material(&path, purpose)
+                    .map_err(|error| anyhow!(error))?
+                {
+                    bound_materials.insert(purpose, material);
+                }
+            }
             let collection_names: std::collections::BTreeSet<String> = api_schemas
                 .iter()
                 .filter_map(|schema: &String| {
@@ -352,6 +354,7 @@ impl UsdStageProjectionPlan {
                     .effective_visibility(&path)
                     .map_err(|error| anyhow!(error))?,
                 bound_materials,
+                bound_shader: reader.bound_shader(&path).map_err(|error| anyhow!(error))?,
             };
             let index = data.prims.len();
             data.prim_indices.insert(path_string.clone(), index);
@@ -756,10 +759,20 @@ impl UsdRead for UsdStageProjectionPlan {
             .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
     }
 
-    fn bound_material(&self, prim: &SdfPath, purpose: MaterialPurpose) -> Option<String> {
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String> {
         self.prim(prim)
-            .and_then(|prim| prim.bound_materials.get(&purpose))
-            .cloned()
+            .map(|prim| prim.bound_shader.clone())
+            .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
+    }
+
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: MaterialPurpose,
+    ) -> Result<Option<String>, String> {
+        self.prim(prim)
+            .map(|prim| prim.bound_materials.get(&purpose).cloned())
+            .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
     }
 
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
@@ -807,6 +820,63 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_surface_terminals_survive_prepared_admission() {
+        let source = r#"#usda 1.0
+def Cube "Shape" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    rel material:binding = </Mat>
+}
+def Cube "Unbound" {}
+def Material "Mat" {
+    token outputs:surface.connect = </Mat/Graph.outputs:surface>
+    def NodeGraph "Graph" {
+        token outputs:surface.connect = </Mat/Preview.outputs:surface>
+    }
+    def Shader "Preview" {
+        uniform token info:id = "UsdPreviewSurface"
+        token outputs:surface
+    }
+}
+"#;
+        let (stage, _) = crate::compose::build_stage_with_resolver(&StageRecipe::from_source(
+            "scene.usda",
+            source,
+        ))
+        .unwrap();
+        let live = StageView::new(&stage);
+        let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for reader in [&live as &dyn crate::UsdReadObject, &plan] {
+            assert_eq!(
+                reader
+                    .bound_shader(&SdfPath::new("/Shape").unwrap())
+                    .unwrap(),
+                Some(SdfPath::new("/Mat/Preview").unwrap())
+            );
+            assert!(
+                reader
+                    .bound_shader(&SdfPath::new("/Unbound").unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                reader
+                    .bound_shader(&SdfPath::new("/Missing").unwrap())
+                    .is_err()
+            );
+        }
+        let cycle = source.replace("</Mat/Preview.outputs:surface>", "</Mat.outputs:surface>");
+        let (stage, _) = crate::compose::build_stage_with_resolver(&StageRecipe::from_source(
+            "scene.usda",
+            &cycle,
+        ))
+        .unwrap();
+        let error = StageView::new(&stage)
+            .bound_shader(&SdfPath::new("/Shape").unwrap())
+            .unwrap_err();
+        assert!(error.contains("no producing shader"), "{error}");
+        assert!(UsdStageProjectionPlan::from_stage(&stage).is_err());
+    }
 
     #[test]
     fn native_reset_facts_survive_prepared_admission() {
@@ -1275,8 +1345,8 @@ def Xform "Test"
                     );
                 }
                 assert_eq!(
-                    crate::resolve_bound_shader(&live, &path),
-                    crate::resolve_bound_shader(&plan, &path),
+                    live.bound_shader(&path),
+                    plan.bound_shader(&path),
                     "prepared shader binding differs at {path}"
                 );
                 let live_attrs = live.attr_names(&path);

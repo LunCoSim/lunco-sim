@@ -912,6 +912,8 @@ Render-free USD animation adapter built on `lunco-usd-bevy-stage` and
 `lunco-usd-bevy-core` and
 `lunco-usd-bevy-scene`. It owns time-domain binding, animation topology plans,
 and per-frame sampling of authored transform, visibility, and material intent.
+Native material-terminal failures retire the animation marker, hide the affected
+projection, and emit the shared `lunco-core::RuntimeError` contract.
 It is installed separately from the visual adapter so headless/document
 consumers do not compile animation systems unless they need them.
 

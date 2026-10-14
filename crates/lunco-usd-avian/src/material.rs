@@ -78,7 +78,7 @@ pub(super) struct PhysicsMaterial {
 ///
 /// Binding resolution — namespace inheritance, and the purpose→all-purpose
 /// fallback that lets ONE `Material` drive both look and friction — is SHARED
-/// with the renderer ([`lunco_usd_bevy_stage::resolve_bound_material`]). A physical and
+/// with the renderer ([`lunco_usd_bevy_stage::UsdRead::bound_material`]). A physical and
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +109,11 @@ pub(super) fn read_physics_material(
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
     use openusd_schemas::physics::tokens as ptok;
 
-    let Some(mat_path) =
-        reader.bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Physics)
+    let Some(mat_path) = reader
+        .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Physics)
+        .map_err(|detail| {
+            PhysicsMaterialReadError::new(&format!("material:binding:physics: {detail}"))
+        })?
     else {
         return Ok(None);
     };

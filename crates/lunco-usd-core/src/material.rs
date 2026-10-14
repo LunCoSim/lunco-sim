@@ -53,7 +53,7 @@ const PHYSICS_MATERIALS: &str = "PhysicsMaterials";
 /// Idempotent: every op is a define-or-overwrite, so calling this for a prim
 /// that already has this exact network re-authors the same values and changes
 /// nothing. Callers should still prefer the existing binding when one is present
-/// (`resolve_bound_shader`) — this is the "there is no material yet" path.
+/// (`UsdRead::bound_shader`) — this is the "there is no material yet" path.
 ///
 /// Returns `None` if `geom_path` is not an absolute prim path with a parent.
 ///
@@ -130,7 +130,7 @@ pub fn ensure_preview_surface_ops(
             value: "\"UsdPreviewSurface\"".into(),
         },
         // The Material's surface terminal ← the Shader's surface output. This is
-        // the edge `resolve_bound_shader` walks; without it the Material is bound
+        // the edge `UsdRead::bound_shader` walks; without it the Material is bound
         // but empty, and the geometry renders with the default look.
         UsdOp::SetConnection {
             edit_target: root_layer.clone(),
@@ -178,7 +178,7 @@ pub fn ensure_preview_surface_ops(
 ///
 /// What IS shared is the part that should never diverge: binding *resolution* —
 /// namespace inheritance and the purpose fallback — which lives once in
-/// [`lunco_usd_bevy_stage::resolve_bound_material`] and serves both. A scene that DOES
+/// [`lunco_usd_bevy_stage::UsdRead::bound_material`] and serves both. A scene that DOES
 /// merge them still resolves correctly through that fallback, so we read the
 /// legal form even though we don't author it.
 ///

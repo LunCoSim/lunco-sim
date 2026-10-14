@@ -18,8 +18,7 @@ use lunco_usd_bevy_stage::read::{
     stage_time_codes_per_second,
 };
 use lunco_usd_bevy_stage::{
-    UsdReadObject, UsdStageAsset, grid_translation_d_at, local_transform_at, resolve_bound_shader,
-    stage_convention,
+    UsdReadObject, UsdStageAsset, grid_translation_d_at, local_transform_at, stage_convention,
 };
 
 /// Install the USD animation planner and samplers.
@@ -137,7 +136,20 @@ pub fn plan_usd_animation(
         } else {
             XformDrive::None
         };
-        let shader = resolve_bound_shader(reader, &path);
+        let shader = match reader.bound_shader(&path) {
+            Ok(shader) => shader,
+            Err(message) => {
+                commands
+                    .entity(entity)
+                    .try_insert((
+                        lunco_usd_bevy_scene::UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ))
+                    .remove::<UsdAnimated>();
+                lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+                continue;
+            }
+        };
         let diffuse = shader
             .as_ref()
             .is_some_and(|shader| attr_has_time_samples(reader, shader, "inputs:diffuseColor"));

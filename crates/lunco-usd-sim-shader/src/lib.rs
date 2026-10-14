@@ -197,8 +197,19 @@ fn apply_usd_shader_material_read(
     // `info:mdl:sourceAsset`. So usdview, Blender and Omniverse all see a material
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
-    let Some(shader_prim) = lunco_usd_bevy_stage::resolve_bound_shader(reader, sdf_path) else {
-        return None;
+    let shader_prim = match reader.bound_shader(sdf_path) {
+        Ok(Some(shader)) => shader,
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "surface-terminal",
+                error,
+            ));
+        }
     };
     let shader_path = match resolved_shader_asset(
         reader,

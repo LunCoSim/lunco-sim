@@ -559,7 +559,10 @@ USD already defines it — a scene that leaves this app must still mean what it
 said.
 
 - `inputs:*` is the **UsdShade** namespace: it lives on a `Shader` prim, reached
-  by `material:binding` → `outputs:surface`. A `float inputs:metallic` on a
+  through native `UsdRead::bound_shader`, which follows the universal surface
+  terminal through NodeGraphs. Both live and prepared readers retain native
+  material-binding and terminal errors; a connected graph without a producing
+  Shader rejects projection and material editing. A `float inputs:metallic` on a
   Sphere is not valid USD, and no DCC will read it back. Use
   `lunco_usd_core::material::ensure_preview_surface_ops()` — it builds the
   Material+Shader+binding for you, and it is deliberately in `lunco-usd-core` so

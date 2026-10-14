@@ -1,14 +1,8 @@
 //! Which document backs this entity, and where does its look live — the two
 //! questions every authoring path has to answer before it can write a USD op.
 //!
-//! Both helpers used to sit in `ui::inspector` because a panel happened to be the
-//! first caller. That made them `ui`-only, while `commands.rs` — declared
-//! headless-safe, and the module a `--no-ui` server depends on for
-//! `SpawnCommandPlugin` — reached into `crate::ui::inspector` for them anyway. The
-//! server build therefore did not compile at all (`cannot find `ui` in `crate``).
-//! Neither function is UI: one matches a stage asset to its open document, the other
-//! walks `material:binding` on the composed stage. They belong here, where the
-//! command layer and the Inspector can share them.
+//! Document and native surface-terminal ownership is shared by command and
+//! Inspector authoring paths.
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
@@ -16,7 +10,7 @@ use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, resolve_bound_shader};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::Path as SdfPath;
 
@@ -44,7 +38,7 @@ pub fn resolve_shader_parameter_usd_target(
     name: &str,
     value: &ParamValue,
 ) -> Result<ShaderParameterUsdTarget, String> {
-    let shader_path = bound_shader_prim(world, prim).ok_or_else(|| {
+    let shader_path = bound_shader_prim(world, prim)?.ok_or_else(|| {
         format!(
             "{} has no bound USD Shader prim; shader parameter cannot be authored",
             prim.path
@@ -135,15 +129,15 @@ fn usd_numeric_component_count(type_name: &str) -> Option<usize> {
 /// The `UsdPreviewSurface` Shader prim bound to `prim`'s geometry, or `None` when it
 /// has no material yet.
 ///
-/// Walks `material:binding` → the Material's `outputs:surface` connection → the
-/// Shader, on the LIVE canonical stage (building it from the asset's recipe if it has
+/// Resolves the native universal surface producer through UsdShade NodeGraphs
+/// on the live canonical stage (building it from the asset's recipe if it has
 /// not been built yet). Shared, because the two places that edit a look — the
 /// Inspector panel and the `SetObjectProperty` command — must agree on WHERE the look
 /// lives, or one of them will scribble `inputs:*` somewhere no other DCC reads it
 /// back from.
-pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String> {
+pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Result<Option<String>, String> {
     let id = prim.stage_handle.id();
-    let mesh_sdf = SdfPath::new(&prim.path).ok()?;
+    let mesh_sdf = SdfPath::new(&prim.path).map_err(|error| error.to_string())?;
 
     let recipe = world
         .get_resource::<Assets<UsdStageAsset>>()
@@ -158,9 +152,15 @@ pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String
             }
         }
     }
-    let canonical = world.get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()?;
-    let view = canonical.get(id)?.view();
-    resolve_bound_shader(&view, &mesh_sdf).map(|p| p.to_string())
+    let canonical = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .ok_or_else(|| "native USD stages are unavailable for material authoring".to_string())?;
+    let view = canonical
+        .get(id)
+        .ok_or_else(|| format!("{} has no native stage for material authoring", prim.path))?
+        .view();
+    view.bound_shader(&mesh_sdf)
+        .map(|path| path.map(|path| path.to_string()))
 }
 
 /// The composed `apiSchemas` applied to `prim`, as owned strings — what
