@@ -653,6 +653,9 @@ pub trait UsdRead {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
 
+    /// Native reset-stack fact, independent of the sentinel's position.
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError>;
+
     /// Native ordered-stack variation, including suffixed transform ops.
     fn transform_might_be_time_varying(
         &self,
@@ -675,10 +678,18 @@ pub trait UsdRead {
         prim: &SdfPath,
     ) -> Result<openusd_schemas::geom::PurposeVisibility, String>;
 
+    /// The native universal surface's first producing Shader, when bound.
+    /// Native failures and connected graphs without a producer remain errors.
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String>;
+
     /// Resolve the standard UsdShade material binding for a purpose. The
     /// returned path is owned so a worker-produced reader can cross the asset
     /// boundary without OpenUSD handles.
-    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: crate::MaterialPurpose,
+    ) -> Result<Option<String>, String>;
 
     /// Typed timeSamples-or-default read — the `_at` sibling of [`scalar`](Self::scalar).
     fn scalar_at<T>(&self, prim: &SdfPath, name: &str, time: f64) -> Option<T>
@@ -842,6 +853,8 @@ pub trait UsdReadObject {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError>;
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -857,7 +870,13 @@ pub trait UsdReadObject {
         &self,
         prim: &SdfPath,
     ) -> Result<openusd_schemas::geom::PurposeVisibility, String>;
-    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String>;
+
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: crate::MaterialPurpose,
+    ) -> Result<Option<String>, String>;
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
     fn is_active(&self, prim: &SdfPath) -> Result<bool, String>;
     fn has_prim(&self, prim: &SdfPath) -> bool;
@@ -1478,6 +1497,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::local_transform_matrix_d_at(self, prim, time)
     }
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        UsdRead::resets_xform_stack(self, prim)
+    }
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -1504,7 +1527,15 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::purpose(self, prim)
     }
 
-    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String> {
+        UsdRead::bound_shader(self, prim)
+    }
+
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: crate::MaterialPurpose,
+    ) -> Result<Option<String>, String> {
         UsdRead::bound_material(self, prim, purpose)
     }
 
@@ -1644,6 +1675,18 @@ impl UsdRead for StageView<'_> {
         crate::local_transform_matrix_d_at(self, prim, time)
     }
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        use openusd_schemas::geom::{Xformable, XformableExt};
+        crate::transform::validated_live_xform_op_order(self, prim)?;
+        let failure = || crate::TransformReadError {
+            prim: prim.to_string(),
+        };
+        let native = self.stage().prim(prim.clone()).map_err(|_| failure())?;
+        Xformable::from_prim_unchecked(native)
+            .resets_xform_stack()
+            .map_err(|_| failure())
+    }
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -1698,8 +1741,17 @@ impl UsdRead for StageView<'_> {
             .map_err(|error| format!("{prim}: {error}"))
     }
 
-    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
-        crate::resolve_bound_material(self, prim, purpose).map(|path| path.to_string())
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String> {
+        crate::material_binding::resolve_surface_shader(self, prim)
+    }
+
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: crate::MaterialPurpose,
+    ) -> Result<Option<String>, String> {
+        crate::material_binding::resolve_bound_material(self, prim, purpose)
+            .map(|path| path.map(|path| path.to_string()))
     }
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
@@ -2238,6 +2290,13 @@ impl UsdRead for UsdReadSource<'_> {
         }
     }
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        match self {
+            Self::Prepared(reader) => UsdRead::resets_xform_stack(*reader, prim),
+            Self::Live(reader) => UsdRead::resets_xform_stack(reader, prim),
+        }
+    }
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -2276,7 +2335,18 @@ impl UsdRead for UsdReadSource<'_> {
         }
     }
 
-    fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
+    fn bound_shader(&self, prim: &SdfPath) -> Result<Option<SdfPath>, String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::bound_shader(*reader, prim),
+            Self::Live(reader) => UsdRead::bound_shader(reader, prim),
+        }
+    }
+
+    fn bound_material(
+        &self,
+        prim: &SdfPath,
+        purpose: crate::MaterialPurpose,
+    ) -> Result<Option<String>, String> {
         match self {
             Self::Prepared(reader) => UsdRead::bound_material(*reader, prim, purpose),
             Self::Live(reader) => UsdRead::bound_material(reader, prim, purpose),

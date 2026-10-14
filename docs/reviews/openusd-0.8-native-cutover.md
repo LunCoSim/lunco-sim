@@ -461,6 +461,58 @@ order admission. The production binary built successfully. Checkout/binary/PID
 identity, API Exit, and port release were verified. Evidence is in
 `/tmp/luncosim-native-xform-animation-*.log`.
 
+## Native reset-stack facts and frame lifecycle
+
+Native `UsdRead::resets_xform_stack` supplies the reset fact to prepared/live
+readers, double world-geometry composition, and visual frame projection. Native
+USD accepts the sentinel after other operations and discards those preceding
+operations. The application does not inspect its position or maintain a copied
+reset token. Visual applied state retains the authored parent, restores it when
+reset retires, and re-expresses a changed reset pose once. Stage ancestry is
+traversed completely; cycles and retired parents produce terminal projection
+diagnostics. These are native geometry facts and generic projection invariants,
+with no scenario selection policy added in Rust.
+
+The production baseline failed four of ten reset/order assertions. The final
+scenario passed twelve checks on owned port 4224, adding a 70-level hierarchy
+and covering live reset removal/restoration, ordinary parent-relative poses,
+and malformed-order rejection without document mutation. The native prepared
+reset/math seam passed, and the production binary built. The visual Rust test
+build was stopped for disk recovery; no pass is claimed for it. Package cleanup
+preserved source and shared caches. Checkout/binary/PID identity, API Exit, and
+port release were verified. Evidence is in `/tmp/luncosim-native-reset-stack-*.log`.
+
+## Native UsdShade surface terminals
+
+`UsdRead::bound_shader` resolves the universal surface through native
+`Material::compute_surface_source`, including NodeGraphs. Native material
+binding reads preserve errors and validate the bound Material schema. The
+preparation worker captures the Shader path and rejects malformed connected
+graphs; live consumers use the same contract. Rendering, animation, WGSL
+projection, physics binding reads, topology inspection, and material authoring
+consume these fallible reader methods. The one-hop surface lookup and its
+public exports are removed.
+
+Material editing resolves the native producer before changing PBR intent.
+Malformed graph edits return a terminal command rejection and a warning;
+Inspector editing reports the native failure before changing selected parts.
+The native graph resolution and projection validation are engine mechanisms,
+with no additional render-context selection policy or Rhai hook required.
+
+Live Shade edits invalidate material intents at the stage event boundary.
+Producer namespaces do not determine dependency: native resolution refreshes
+bound consumers after Material, NodeGraph, or Shader changes. This bounded
+change-event pass avoids a second application graph traversal or reverse index.
+
+The old binary failed all three terminal/PBR baseline assertions. The native
+snapshot seam and production build passed. Eleven authored production checks
+passed on owned port 4225, including NodeGraph edits, exact Shader input
+persistence, unchanged NodeGraph inputs, cyclic graph diagnostics, hidden
+projection, terminal edit rejection, and preserved PBR intent. API Exit and
+port release were verified. Evidence is in
+`/tmp/luncosim-native-material-*.log`. The UI capture was blank; these verdicts
+validate runtime material intent and do not establish GPU appearance.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

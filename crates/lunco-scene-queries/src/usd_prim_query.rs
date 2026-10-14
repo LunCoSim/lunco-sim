@@ -102,7 +102,7 @@ use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
     MaterialPurpose, UsdStageAsset,
     canonical::{CanonicalStage, CanonicalStages},
-    is_descendant_or_self, resolve_bound_shader, stage_convention,
+    is_descendant_or_self, stage_convention,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
@@ -481,9 +481,11 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> Result<ApiVal
             "world_frame": "canonical_stage",
             "world": world.clone(),
         }));
-        let render_material = view.bound_material(candidate, MaterialPurpose::Render);
-        let physics_material = view.bound_material(candidate, MaterialPurpose::Physics);
-        let shader = resolve_bound_shader(view, candidate).map(|path| path.as_str().to_string());
+        let render_material = view.bound_material(candidate, MaterialPurpose::Render)?;
+        let physics_material = view.bound_material(candidate, MaterialPurpose::Physics)?;
+        let shader = view
+            .bound_shader(candidate)?
+            .map(|path| path.as_str().to_string());
 
         let purpose = match view.purpose(candidate) {
             Ok(purpose) => ApiValue::str(purpose.as_token()),

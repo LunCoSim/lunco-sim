@@ -6,24 +6,23 @@
 
 use openusd::sdf::Path as SdfPath;
 
+use lunco_usd_bevy_stage::UsdRead;
 use lunco_usd_bevy_stage::read::attr_has_time_samples;
-use lunco_usd_bevy_stage::{UsdRead, resolve_bound_shader};
 
 /// The bound-shader inputs the USD animation adapter can sample.
 pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:opacity"];
 
 /// True iff a prim carries any channel consumed by the USD animation adapter.
-pub fn prim_is_animated<R: UsdRead>(
-    reader: &R,
-    path: &SdfPath,
-) -> Result<bool, lunco_usd_bevy_stage::TransformReadError> {
-    if reader.transform_might_be_time_varying(path)?
+pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> Result<bool, String> {
+    if reader
+        .transform_might_be_time_varying(path)
+        .map_err(|error| error.to_string())?
         || attr_has_time_samples(reader, path, "visibility")
         || attr_has_time_samples(reader, path, "primvars:displayColor")
     {
         return Ok(true);
     }
-    Ok(resolve_bound_shader(reader, path).is_some_and(|shader| {
+    Ok(reader.bound_shader(path)?.is_some_and(|shader| {
         ANIMATED_SHADER_INPUTS
             .iter()
             .any(|input| attr_has_time_samples(reader, &shader, input))

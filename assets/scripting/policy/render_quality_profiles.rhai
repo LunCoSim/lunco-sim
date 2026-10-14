@@ -166,7 +166,7 @@ fn render_quality_profile(id) {
             shadow_maximum_distance: 3000.0,
             shadow_cascade_overlap: 0.1,
             shadow_depth_bias: 0.03,
-            shadow_normal_bias: 1.5,
+            shadow_normal_bias: 4.0,
             camera_tone_map: "agx",
             camera_msaa: "x2",
             camera_exposure_ev100: 16.0,

@@ -27,16 +27,14 @@ pub use asset::{UsdLoader, UsdStageAsset};
 pub use authoring::{DefaultPrim, layer_default_prim};
 pub use canonical::UsdWiringDirty;
 pub use instance::{UsdInstanceMember, UsdInstanceRoot, UsdReferenceSnapshot};
-pub use material_binding::{
-    MaterialPurpose, parent_prim_path, resolve_bound_material, resolve_bound_shader,
-};
+pub use material_binding::{MaterialPurpose, parent_prim_path};
 pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
 pub use purpose::{is_descendant_or_self, resolve_stage_prim_path, stage_default_prim};
 pub use read::{UsdRead, UsdReadObject, UsdReadPrimFacts, UsdReadSource};
 pub(crate) use transform::compose_live_xform_order_at;
 pub use transform::{
-    RESET_XFORM_STACK, TransformReadError, euler_xyz_deg_to_quat, grid_translation_d_at,
-    local_transform_at, local_transform_matrix_d_at, read_transform_from_usd, read_xform_op_order,
+    TransformReadError, euler_xyz_deg_to_quat, grid_translation_d_at, local_transform_at,
+    local_transform_matrix_d_at, read_transform_from_usd, read_xform_op_order,
     transform_in_body_frame, world_transform, world_transform_matrix_d_at,
 };
 pub use units::stage_convention;

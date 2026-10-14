@@ -49,6 +49,12 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    `kind = "map"`, hillshade, slope, elevation colour, and mineral diagnostics
    are not direct albedo substitutes. Keep role-aware filtering and mip
    generation intact.
+   For regular grain ripples, verify that DEM UVs and their derivatives use
+   `terrain_half_extent`, independently of the shadow heightfield's `hf_size`.
+   Compare settled frames with procedural relief and native shadow reception
+   isolated separately. The High Gaussian filter uses normal bias 4.0,
+   scaled by cascade texel size; keep its metre-valued depth bias and the
+   physical Sun unchanged.
 3. Check the authored light and shadow contract, GPU shadow-resource status,
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
