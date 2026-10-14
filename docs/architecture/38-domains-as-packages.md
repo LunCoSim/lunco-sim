@@ -702,44 +702,28 @@ The per-tick exchange is already isolated from *how wiring is described*:
 (`SimConnection` → `CompiledWiring` → resolved-slot loop) is untouched — performance is preserved by
 construction.**
 
-### 13.3 The one real prerequisite: flatten must carry `connectionPaths` (current GAP)
+### 13.3 Native composed connections
 
-`flatten_stage` (`compose.rs:135`) today copies attribute `default` + `timeSamples` and relationship
-`targetPaths` — but **never** attribute `connectionPaths` (grep: zero `connect` in the file). Since the
-ECS projection reads *flattened* `sdf::Data`, authored connections on referenced components are **dropped**.
-The reader side is already ready — `UsdRead::rel_target` in
-`lunco-usd-bevy-core` probes both `targetPaths` *and* `connectionPaths` — so
-**only the flatten emitter is missing**. Add a copy+translate branch mirroring the
-`targetPaths` one. Bonus: connections are `PathListOp` **list-ops**, which *compose across references*
-natively — this actually **removes** the reason the current CSV hack exists (`cosim.rs:18-21`: "`string[]`
-arrays don't compose across references"). The USD-native form is *more* composable, not less.
+`UsdRead::connections` resolves native USD attribute `connectionPaths` through
+`Attribute::connections`, including list operations and reference namespaces.
+Prepared projection plans capture those composed values on the loader worker;
+live document edits read the canonical stage. Relationship targets use their
+separate standard owner and are not accepted as attribute connections.
 
-### 13.4 Concrete refactor (ordered; each step shippable)
+### 13.4 Runtime projection and binding
 
-1. **openusd/flatten carries connections** *(prerequisite, pure plumbing, no behavior change)*: add
-   `connectionPaths` copy + path-translation to `flatten_stage`; test that a connection authored on a
-   referenced component survives `compose`. Unblocks everything; risk ≈ nil (nothing authors connections
-   yet).
-2. **Ports become `inputs:`/`outputs:` attributes** on component prims (openusd `Connectable`
-   `create_input`/`create_output`, or plain namespaced attrs). The attr base name = the `PortRegistry`
-   port name (one name, two planes: USD identity + runtime value).
-3. **One connection→`SimConnection` projector** replaces the two parsers (`process_usd_cosim_prims`
-   simWires + `process_usd_cosim_wires` wire-prims): read connections (from the composed stage via
-   `openusd`'s `ConnectionGraph::from_stage`, or from flattened `connectionPaths` now that step 1 carries
-   them) → emit one `SimConnection` per edge, `scale`/`offset` from `lunco:factor`/`lunco:offset`; multi-source
-   → multiple `SimConnection`s into one input (sum already supported). Same load-time / change-driven
-   cadence as today (mark-and-skip once per prim).
-4. **Runtime: no change.** Spawned `SimConnection`s flip the existing `RebuildOnChange` guard → one
-   recompile → resolved-slot steady state. `propagate.rs` is not touched.
-5. **Delete** `simWires` CSV parser, wire-prim schema, `parse_wire`, the CSV-composition workaround,
-   legacy relationship handling, and `PortType`/`classify`.
-6. **Canvas** (later): read connections → `Scene` edges; `EdgeCreated` → `openusd` `add_connection` via
-   `ApplyUsdOp`; positions via `NodeGraphNodeAPI`.
+`lunco-usd-sim-cosim/src/wiring.rs::rewire_usd_connections` derives the
+`SimConnection` cache from composed `inputs:*` connections after participant
+projection. Stage changes invalidate this cache. The binding owner resolves
+ports into `BoundConnection` handles, and
+`lunco-cosim/src/systems/propagate.rs::CompiledWiring` rebuilds its dense exchange
+plan when those bindings change. The steady-state exchange consumes that plan;
+it does not parse scene topology.
 
-Under "no legacy" the migration is a **cutover with a verify**: land step 1, re-author one scene
-(`sun_tracker.usda`) to use connections in parallel with the old parser, assert the *same*
-`SimConnection`s and identical hot-path behavior, then flip the remaining assets and delete. Net: a
-plumbing add (flatten) + a projector swap + deletions — the 60 Hz exchange loop is never in the diff.
+Connection authoring belongs to typed document operations and their journal.
+Connection-canvas readers consume the same composed topology. Verification
+must cover namespace mapping through references, a committed connection edit,
+and terminal diagnostics for invalid endpoints through the production API.
 
 ---
 

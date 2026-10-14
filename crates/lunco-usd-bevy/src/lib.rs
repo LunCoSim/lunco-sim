@@ -334,7 +334,7 @@ struct PointInstanceMeshBinding(AssetId<Mesh>);
 /// alone — the ancestor chain is not part of it.
 ///
 /// Composition of the prim's local transform already honours the sentinel
-/// ([`compose_xform_order_at`]); the marker is what carries that fact into the
+/// ([`local_transform_at`]); the marker is what carries that fact into the
 /// ECS, where "world" is an accumulated `GlobalTransform` and the only way to
 /// ignore ancestors is to stop being their descendant.
 /// [`detach_reset_xform_stack_prims`] does the reparent.
@@ -3422,7 +3422,7 @@ struct ResetXformStackApplied;
 ///
 /// Position matters: UsdGeomXformable gives the sentinel meaning only as the
 /// first entry — anywhere else it is a malformed stack, which
-/// [`lunco_usd_bevy_stage::compose_xform_order_at`] already rejects with
+/// [`lunco_usd_bevy_stage::local_transform_at`] already rejects with
 /// [`TransformReadError`].
 fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     lunco_usd_bevy_stage::read_xform_op_order(reader, path).is_some_and(|order| {

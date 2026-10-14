@@ -18,8 +18,8 @@ use lunco_usd_bevy_stage::read::{
     stage_time_codes_per_second,
 };
 use lunco_usd_bevy_stage::{
-    UsdReadObject, UsdStageAsset, compose_xform_order_at, grid_translation_d_at,
-    resolve_bound_shader, stage_convention,
+    UsdReadObject, UsdStageAsset, grid_translation_d_at, local_transform_at, resolve_bound_shader,
+    stage_convention,
 };
 
 /// Install the USD animation planner and samplers.
@@ -228,7 +228,7 @@ pub fn sample_usd_animation(
             continue;
         };
         if matches!(plan.xform, XformDrive::OpOrder) {
-            if let Ok(Some(local)) = compose_xform_order_at(reader, &plan.path, time) {
+            if let Ok(Some(local)) = local_transform_at(reader, &plan.path, time) {
                 let grid_pose = parent
                     .and_then(|parent| grids.get(parent.parent()).ok())
                     .and_then(

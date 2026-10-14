@@ -73,6 +73,13 @@ lathe construction calls `KnotVec::uniform_knot` directly; imported NURBS curves
 must supply their authored knots and reject insufficient data. Do not infer
 knots during import or add an application knot generator.
 
+Native `UsdGeomXformable` owns transform evaluation. Static projection and
+animation use the shared `local_transform_at` reader, including matrix,
+quaternion, Euler, inverse, and reset-stack operations. Do not add a rotation
+decoder or select an unordered transform attribute as an alternate pose.
+Animation topology helpers identify sampled channels; they do not evaluate
+their transforms or define an unconsumed clip-range policy.
+
 Trim controls are standard `double3[]` homogeneous coordinates. Keep them in
 `f64` through loop assembly and Truck's rational 2D evaluation; narrowing before
 parameter-space normalization can collapse a valid hole. The production gate

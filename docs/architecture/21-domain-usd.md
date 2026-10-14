@@ -1212,34 +1212,25 @@ even though the replacement's change sink is empty. Generation zero identifies
 the initial asset snapshot; an edited replacement must remain on the live
 composed reader path.
 
-One shared stage stack (`lunco-usd-bevy-stage`, `local_transform_at`) decodes a prim's local
-`Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
-instantiate path) and the per-frame animation sampler, so a static pose and its animated
-pose always agree. Precedence:
+The shared stage reader (`lunco-usd-bevy-stage`, `local_transform_at`) evaluates
+a prim's ordered local transform through native `UsdGeomXformable`. Both static
+projection and the production animation sampler use this contract. Native USD
+owns matrix operations, all six Euler orders, quaternion orientation, single-axis
+rotations, inverse operations, and reset-stack semantics. The adapter exposes
+the double matrix in the stage's canonical frame for geometry consumers, and
+converts it to a Bevy `Transform` at the rendering boundary.
 
-1. **`xformOpOrder`** (when authored) — honored exactly by `compose_xform_order_at`,
-   including op order and `!invert!`. USD is row-vector (`M = S·R·T`, openusd's
-   `Matrix4d::from_trs`): the **last** listed op is applied first to the geometry. Op
-   matrices are built in glam's column form and right-multiplied, so the standard
-   `["translate","rotateXYZ","scale"]` decodes to exactly `Transform{t,r,s}`.
-2. **`xformOp:transform`** — a full `matrix4d` decomposed via `read_matrix_transform_at`.
-3. **No piecewise fallback.** An `xformOp:*` attribute contributes only when
-   `xformOpOrder` names it. A prim with no authored transform stack is the USD
-   identity; a malformed authored stack is rejected. This keeps the runtime
-   transform exactly aligned with `UsdGeomXformable` rather than accepting a
-   second, non-USD transform dialect.
-
-Rotation (`local_rotation_at`) covers every USD channel: the six Euler orders
-`rotateXYZ`…`rotateZYX`, the quaternion `xformOp:orient` (`quatf`/`quatd`/`quath`), and
-single-axis `rotateX/Y/Z`.
+An `xformOp:*` attribute contributes only when `xformOpOrder` names it. A prim
+with no authored transform stack has the USD identity; a malformed ordered stack
+is rejected. There is no separate per-channel transform decoder.
 
 ### Animation
 
 Authored `timeSamples` drive entities at the physical presentation time
-(architecture doc 19 — the unified time spine). At composition (`flatten_stage`) each attribute's composed
-`timeSamples` and the stage `timeCodesPerSecond` are carried onto the flattened scene
-(sublayer/reference `LayerOffset`s are baked in by PCP), so animation works on referenced
-assets, not just single-layer files. A prim with any animated channel is tagged
+(architecture doc 19 — the unified time spine). The live native stage resolves
+each attribute's composed samples and sublayer/reference offsets at the requested
+time code. `timeCodesPerSecond` maps presentation seconds to that stage's time
+codes. A prim with any animated channel is tagged
 `UsdAnimated`; the per-frame samplers then drive:
 
 - **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection.

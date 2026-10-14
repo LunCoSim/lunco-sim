@@ -314,10 +314,12 @@ Deterministic-given-inputs, currently recomputed **every load**. Rank by payoff:
    (DEM hash, quadtree node) → instant terrain on revisit.
 3. **DEM crop/upscale working grid** — `bake.rs:28/53` `crop_centered`/`resample`,
    deterministic transform, recomputed each load.
-4. **Composed USD stages** — `lunco-usd-bevy-stage/src/compose.rs` resolver-backed stage preparation
-   runs full PCP compose + `flatten_stage` inside the AssetLoader on every load.
-   Cache the flattened `HashMap<SdfPath,SpecData>` keyed by transitive-closure
-   content hash. (In-session reuse exists via `loaded_stages.rs`; disk does not.)
+4. **Prepared USD projection plans** — `lunco-usd-bevy-stage/src/projection_plan.rs`
+   captures composed read facts on the loader worker from the native stage.
+   A persistent cache would need the complete root/session layer content
+   identity and native schema version. Keep admitted source bytes and native
+   composition separate from this derived plan; runtime edits invalidate its
+   captured revision.
 5. **Obstacle field** — `lunco-obstacle-field` is fully deterministic from
    `(spec, seed)` (ChaCha8, no entropy) but rebuilt synchronously each load.
    Currently replication-first by design (ship the seed, not the geometry) — so

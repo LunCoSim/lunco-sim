@@ -2,8 +2,8 @@ use bevy::math::{DMat4, DVec3};
 use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
+use crate::read::UsdReadObject;
 use crate::read::read_vec3_f64_at;
-use crate::read::{UsdRead, UsdReadObject};
 use crate::units::stage_convention;
 use crate::view::StageView;
 
@@ -39,15 +39,6 @@ fn malformed_transform(path: &SdfPath) -> TransformReadError {
     TransformReadError {
         prim: path.as_str().to_owned(),
     }
-}
-
-/// Compose a reader's local USD transform at `time`.
-pub fn compose_xform_order_at<R: UsdRead>(
-    reader: &R,
-    path: &SdfPath,
-    time: f64,
-) -> Result<Option<Transform>, TransformReadError> {
-    reader.local_transform_at(path, time)
 }
 
 /// Read a grid-direct USD translation without narrowing its `double3` value.

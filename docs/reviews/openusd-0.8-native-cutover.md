@@ -429,6 +429,19 @@ accessors expose authored opinions only; runtime activation belongs to the
 fallible native composed-stage reader. A repository-wide caller search found no
 consumers, and the `lunco-usd-data` package check passes after removal.
 
+## Native animation transform ownership
+
+Production animation and static projection call the same `local_transform_at`
+contract, backed by native `UsdGeomXformable`. Animation topology contains only
+channel detection; it does not decode rotations, matrices, or interpolation.
+Unused sampling and clip-range APIs, their unconsumed policy, and the authored
+API-schema probe are removed. The native transform seam tests require explicit
+operation order, including half-precision and animated quaternion orientation.
+Thirteen focused animation checks and the application compile check pass.
+Evidence is in `/tmp/luncosim-native-animation-owner-*.log`. No runtime behavior
+was changed by deleting unused mechanisms and the forwarding alias; this check
+does not claim fresh production animation acceptance.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
