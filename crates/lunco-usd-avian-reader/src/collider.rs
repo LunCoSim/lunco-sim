@@ -357,8 +357,7 @@ pub fn collect_child_colliders_from_usd(
     // each prim's transform composed in the root's frame; recursion stops at a
     // nested-body boundary (see `gather_compound_candidates`).
     let mut candidates = Vec::new();
-    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)
-        .map_err(ColliderProjectionError::Transform)?;
+    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
     // `PhysicsCollisionAPI` is valid on the rigid-body prim itself. When that
     // body also has descendants, its own shape must become the identity member
     // of the compound; otherwise the presence of any child silently discards
@@ -571,12 +570,18 @@ fn gather_compound_candidates(
     path: &SdfPath,
     acc: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
-) -> Result<(), TransformReadError> {
+) -> Result<(), ColliderProjectionError> {
     for child in reader.children(path) {
         // Child enumeration retains inactive prims for authoring. Deactivation
         // removes the entire subtree from the physical composition, including
         // any proxy that would otherwise suppress active render colliders.
-        if !reader.is_active(&child) {
+        if !reader
+            .is_active(&child)
+            .map_err(|detail| ColliderProjectionError::Backend {
+                prim: child.to_string(),
+                detail,
+            })?
+        {
             continue;
         }
         if reader.has_api_schema(&child, ptok::PHYSICS_RIGID_BODY_API) {
@@ -590,7 +595,9 @@ fn gather_compound_candidates(
         }
         // Local transform in the canonical decoder shared with usd-bevy, folded
         // into the accumulated root-relative frame.
-        let local = local_transform_at(reader, &child, 0.0)?.unwrap_or(Transform::IDENTITY);
+        let local = local_transform_at(reader, &child, 0.0)
+            .map_err(ColliderProjectionError::Transform)?
+            .unwrap_or(Transform::IDENTITY);
         let tf = acc.mul_transform(local);
         out.push((child.clone(), tf));
         gather_compound_candidates(reader, &child, tf, out)?;

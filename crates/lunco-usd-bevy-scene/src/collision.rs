@@ -68,6 +68,10 @@ pub enum CollisionAabbError {
         prim: String,
         detail: String,
     },
+    Activity {
+        prim: String,
+        detail: String,
+    },
     MalformedTransform {
         prim: String,
     },
@@ -92,7 +96,9 @@ impl std::fmt::Display for CollisionAabbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidRootPath(path) => write!(f, "invalid collision root path {path}"),
-            Self::Purpose { prim, detail } => write!(f, "{prim}: {detail}"),
+            Self::Purpose { prim, detail } | Self::Activity { prim, detail } => {
+                write!(f, "{prim}: {detail}")
+            }
             Self::MalformedTransform { prim } => {
                 write!(f, "malformed authored transform at {prim}")
             }
@@ -318,7 +324,12 @@ fn gather_collision_aabb_candidates(
     out: &mut Vec<(SdfPath, DMat4)>,
 ) -> Result<(), CollisionAabbError> {
     for child in UsdReadObject::children(reader, path) {
-        if !UsdReadObject::is_active(reader, &child) {
+        if !UsdReadObject::is_active(reader, &child).map_err(|detail| {
+            CollisionAabbError::Activity {
+                prim: child.to_string(),
+                detail,
+            }
+        })? {
             continue;
         }
         let local = collision_local_matrix(reader, &child)?;

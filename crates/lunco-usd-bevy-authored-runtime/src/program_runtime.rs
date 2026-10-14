@@ -133,12 +133,13 @@ pub(crate) fn resolve_program_owner(
     owner: &SdfPath,
     owner_children: &[SdfPath],
     network_members: &HashSet<String>,
-) -> Option<PreparedProgramOwner> {
-    let mut candidates: Vec<_> = owner_children
-        .iter()
-        .filter(|child| view.is_active(child))
-        .filter(|child| view.has_api_schema(child, "LunCoProgramAPI"))
-        .collect();
+) -> Result<Option<PreparedProgramOwner>, String> {
+    let mut candidates = Vec::new();
+    for child in owner_children {
+        if view.is_active(child)? && view.has_api_schema(child, "LunCoProgramAPI") {
+            candidates.push(child);
+        }
+    }
     if view.type_name(owner).as_deref() != Some("Scope")
         && view.has_api_schema(owner, "LunCoProgramAPI")
     {
@@ -179,16 +180,16 @@ pub(crate) fn resolve_program_owner(
             owner.as_str(),
             programs.len()
         );
-        return None;
+        return Ok(None);
     }
-    programs
+    Ok(programs
         .into_iter()
         .next()
         .map(|(program_path, resolved, params)| PreparedProgramOwner {
             program_path,
             resolved,
             params,
-        })
+        }))
 }
 
 /// Commit one owner's prepared generic program resolution to ECS.
@@ -196,8 +197,32 @@ pub(crate) fn apply_program_owner_projection(
     world: &mut World,
     owner: Entity,
     stage_id: AssetId<UsdStageAsset>,
-    prepared: Option<PreparedProgramOwner>,
+    prepared: Result<Option<PreparedProgramOwner>, String>,
 ) {
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(message) => {
+            if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+                faults.raise(
+                    "usd-program-activation-failed",
+                    Some(owner),
+                    owner.to_string(),
+                    message.clone(),
+                );
+            }
+            world.trigger(lunco_core::RuntimeError {
+                name: "usd-program-activation-failed".into(),
+                message,
+            });
+            let mut entity = world.entity_mut(owner);
+            entity
+                .remove::<lunco_core::ScriptParams>()
+                .remove::<lunco_core::ScenarioProgramPrim>();
+            drop(entity);
+            lunco_usd_bevy_core::program::apply_program_resolution(world, owner, stage_id, None);
+            return;
+        }
+    };
     let Some(prepared) = prepared else {
         let mut entity = world.entity_mut(owner);
         entity

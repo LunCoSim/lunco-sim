@@ -748,7 +748,22 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         }
 
         // Skip inactive prims
-        if !reader.is_active(&sdf_path) {
+        let active = match reader.is_active(&sdf_path) {
+            Ok(active) => active,
+            Err(error) => {
+                let message = format!(
+                    "{} cannot resolve native activity: {error}",
+                    sdf_path.as_str()
+                );
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+        };
+        if !active {
             commands
                 .entity(entity)
                 .try_insert((UsdSceneProjected, Visibility::Hidden));
@@ -1431,6 +1446,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             &sdf_path,
             live_child_keys,
             pending_children,
+            commands,
         );
     }
 }
@@ -1787,6 +1803,7 @@ fn commit_usd_children<R: UsdRead>(
     parent_path: &SdfPath,
     live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
     pending_children: &mut UsdPendingChildAdmissions,
+    commands: &mut Commands,
 ) {
     // Child order is part of the structural admission contract.  Readers may
     // be backed by different composition/index implementations, and their
@@ -1795,8 +1812,28 @@ fn commit_usd_children<R: UsdRead>(
     // enter ECS/Avian in the same order on every load.
     let mut children = reader.children(parent_path);
     children.sort_by_key(|path| path.to_string());
-    for child_path in children {
-        if !reader.is_active(&child_path) {
+    let children = children
+        .into_iter()
+        .map(|path| {
+            reader
+                .is_active(&path)
+                .map(|active| (path.clone(), active))
+                .map_err(|error| format!("{path} cannot resolve native activity: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let children = match children {
+        Ok(children) => children,
+        Err(message) => {
+            commands.entity(parent).try_insert((
+                UsdSceneProjectionFailed(message.clone()),
+                Visibility::Hidden,
+            ));
+            lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
+            return;
+        }
+    };
+    for (child_path, active) in children {
+        if !active {
             continue;
         }
         // A structural sink batch can contain both a newly-added parent and
@@ -2349,7 +2386,19 @@ fn admit_pending_usd_children(
             );
             continue;
         };
-        if !UsdRead::is_active(&reader, &child_path) {
+        let active = match UsdRead::is_active(&reader, &child_path) {
+            Ok(active) => active,
+            Err(error) => {
+                fail_usd_projection(
+                    parent,
+                    format!("{child_path} cannot resolve native activity: {error}"),
+                    &mut pending_children,
+                    &mut commands,
+                );
+                continue;
+            }
+        };
+        if !active {
             finish_pending_usd_child(parent, &mut pending_children, &mut commands);
             continue;
         }

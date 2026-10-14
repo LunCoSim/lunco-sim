@@ -147,7 +147,15 @@ impl UsdStageProjectionPlan {
     /// for explicit authoring; this plan owns no OpenUSD handles.
     pub fn from_stage(stage: &Stage) -> Result<Self> {
         let reader = StageView::new(stage);
-        let paths = reader.prim_paths();
+        let mut paths = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        stage
+            .traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
+                if seen.insert(path.clone()) {
+                    paths.push(path.clone());
+                }
+            })
+            .map_err(|error| anyhow!("native stage traversal failed: {error}"))?;
         let mut data = UsdStageProjectionData {
             default_prim: reader.default_prim(),
             time_codes_per_second: reader.time_codes_per_second(),
@@ -164,7 +172,9 @@ impl UsdStageProjectionPlan {
 
         for path in paths {
             let path_string = path.to_string();
-            let active = reader.is_active(&path);
+            let active = reader
+                .is_active(&path)
+                .map_err(|error| anyhow!("{path_string}: {error}"))?;
             let transform = if active {
                 crate::local_transform_at(&reader, &path, 0.0)
                     .map_err(|error| anyhow!("{path_string}: {error}"))?
@@ -730,8 +740,8 @@ impl UsdRead for UsdStageProjectionPlan {
             .and_then(|prim| prim.binary_asset_uri.clone())
     }
 
-    fn is_active(&self, prim: &SdfPath) -> bool {
-        self.prim(prim).is_some_and(|prim| prim.active)
+    fn is_active(&self, prim: &SdfPath) -> Result<bool, String> {
+        Ok(self.prim(prim).is_some_and(|prim| prim.active))
     }
 
     fn has_prim(&self, prim: &SdfPath) -> bool {
@@ -770,6 +780,49 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_activity_read_errors_are_not_active_defaults() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+def Scope "Good" {}
+def Scope "Inactive" (active = false) { def Scope "Child" {} }
+def Scope "Invalid" {}
+"#,
+        );
+        let mut data = lunco_usd_compose::parse_usda(
+            std::str::from_utf8(&recipe.bytes["scene.usda"]).unwrap(),
+        )
+        .unwrap();
+        data.spec_mut(&SdfPath::new("/Invalid").unwrap())
+            .unwrap()
+            .add("active", openusd::sdf::Value::String("invalid".into()));
+        let bytes = openusd::sdf::LayerRegistry::find_by_extension("usdc")
+            .unwrap()
+            .write_bytes(&data)
+            .unwrap()
+            .bytes
+            .as_ref()
+            .to_vec();
+        let recipe = StageRecipe::new(
+            "scene.usdc",
+            std::collections::HashMap::from([("scene.usdc".to_owned(), bytes)]),
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        assert_eq!(
+            live.is_active(&SdfPath::new("/Good").unwrap()).unwrap(),
+            true
+        );
+        assert_eq!(
+            live.is_active(&SdfPath::new("/Inactive/Child").unwrap())
+                .unwrap(),
+            false
+        );
+        assert!(live.is_active(&SdfPath::new("/Invalid").unwrap()).is_err());
+        assert!(UsdStageProjectionPlan::from_stage(&stage).is_err());
+    }
 
     #[test]
     fn prepared_curve_tokens_use_native_schema_values() {

@@ -395,7 +395,7 @@ fn source_layer_api_value(view: &StageView<'_>, path: &SdfPath) -> ApiValue {
     })
 }
 
-fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
+fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> Result<ApiValue, String> {
     let mut diagnostics = Vec::new();
     let body_owner = nearest_rigid_body(view, selected);
     let root = body_owner.clone().unwrap_or_else(|| selected.clone());
@@ -403,9 +403,13 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
     let mut parts = Vec::new();
     let mut frames = Vec::new();
 
-    for candidate in paths.iter().filter(|candidate| {
-        is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
-    }) {
+    for candidate in paths
+        .iter()
+        .filter(|candidate| is_descendant_or_self(candidate, root.as_str()))
+    {
+        if !view.is_active(candidate)? {
+            continue;
+        }
         let Some(type_name) = view.type_name(candidate) else {
             continue;
         };
@@ -514,9 +518,13 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
     }
 
     let mut joints = Vec::new();
-    for candidate in paths.iter().filter(|candidate| {
-        is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
-    }) {
+    for candidate in paths
+        .iter()
+        .filter(|candidate| is_descendant_or_self(candidate, root.as_str()))
+    {
+        if !view.is_active(candidate)? {
+            continue;
+        }
         let Some(type_name) = view.type_name(candidate) else {
             continue;
         };
@@ -549,7 +557,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
         }));
     }
 
-    api_value!({
+    Ok(api_value!({
         "selection": {
             "path": selected.as_str(),
             "scope": root.as_str(),
@@ -559,7 +567,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
         "frames": frames,
         "joints": joints,
         "diagnostics": diagnostics,
-    })
+    }))
 }
 
 fn runtime_binding_api_value(world: &World, entity: Option<Entity>) -> ApiValue {
@@ -1400,7 +1408,8 @@ fn read_prim_from_reader(
         Vec::new()
     };
     let topology = include_topology
-        .then(|| topology_for_stage(native_view.expect("native view required"), prim));
+        .then(|| topology_for_stage(native_view.expect("native view required"), prim))
+        .transpose()?;
 
     Ok(Some((
         authored_position,
@@ -1410,7 +1419,7 @@ fn read_prim_from_reader(
         connections,
         schemas,
         children,
-        view.is_active(prim),
+        view.is_active(prim)?,
         collision_bounds,
         collision_geometry,
         geometry_bounds,

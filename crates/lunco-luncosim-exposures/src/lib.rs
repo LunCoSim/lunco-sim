@@ -2354,7 +2354,14 @@ fn publish_lunica_schema_exposure(
         if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
             continue;
         }
-        if !reader.is_active(&path) || reader.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
+        let active = match reader.is_active(&path) {
+            Ok(active) => active,
+            Err(error) => {
+                error!("schema projection cannot read native activity for {path}: {error}");
+                return false;
+            }
+        };
+        if !active || reader.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
             continue;
         }
         let title = reader

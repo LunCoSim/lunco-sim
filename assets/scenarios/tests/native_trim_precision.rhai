@@ -23,7 +23,7 @@ fn native_trim_prepare(doc) {
     let ticket = cmd("ApplyUsdOps", #{doc_id: doc, parent_gen: (), label: "Native trim precision", ops: ops});
     if ticket == () || ticket.id == () { throw("trim fixture was not admitted"); }
     if ticket.ok != true || ticket.status != "applied" { throw("trim edit failed: " + ticket.to_string()); }
-    print("TRIM_APPLIED");
+    print("FIXTURE_APPLIED");
 }
 fn plan(doc) {
     query("PlanNurbsCollisionProxy", #{doc_id: doc, path: native_trim_path(),
@@ -61,7 +61,7 @@ fn native_trim_invalidate(doc) {
     let ticket = cmd("ApplyUsdOps", #{doc_id: doc, parent_gen: (), label: "Reject zero trim weight",
         ops: [attr("trimCurve:points", "double3[]", "[(100000000.01,100000000.01,0),(100000000.99,100000000.01,1),(100000000.99,100000000.99,1),(100000000.01,100000000.99,1),(100000000.01,100000000.01,0)]")]});
     if ticket.ok != true || ticket.status != "applied" { throw("trim edit failed: " + ticket.to_string()); }
-    print("TRIM_APPLIED");
+    print("FIXTURE_APPLIED");
 }
 fn native_trim_invalid(doc) {
     let rejected = plan(doc);
@@ -85,5 +85,5 @@ fn native_trim_incomplete(doc) {
         attr("trimCurve:points", "double3[]", "[(100000000.01,100000000.01,1),(100000000.99,100000000.01,1),(100000000.99,100000000.99,1),(100000000.01,100000000.99,1),(100000000.01,100000000.01,1)]")
     ]});
     if ticket.ok != true || ticket.status != "applied" { throw("trim edit failed: " + ticket.to_string()); }
-    print("TRIM_APPLIED");
+    print("FIXTURE_APPLIED");
 }

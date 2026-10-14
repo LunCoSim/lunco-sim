@@ -409,6 +409,21 @@ owned port 4221, exercising the mesh consumer's native orientation opinion.
 API Exit and port release were verified. Evidence is in
 `/tmp/luncosim-native-curve-*.log`.
 
+## Native activation error boundary
+
+Activation reads preserve the native error result. The active-on-error
+substitution is removed. Worker snapshot admission checks native traversal as
+well as per-prim activity before publishing a complete read plan. Collider and
+bounds owners, program projection, visual admission, structural reconciliation,
+and queries consume the fallible contract. A low-level binary fixture proves
+that malformed `active` metadata rejects both the live read and snapshot
+admission instead of becoming active or publishing a partial traversal.
+The application check, production build, and nine authored activity checks pass
+on owned port 4222. The gate covers subtree pruning, terminal malformed-command
+rejection without mutation, and mesh restoration after reactivation. Checkout/
+binary/PID identity, API Exit, and port release were verified. Evidence is under
+`/tmp/luncosim-native-activity-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

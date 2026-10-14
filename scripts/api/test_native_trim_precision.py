@@ -26,7 +26,7 @@ def run(session, code):
 
 def apply_fixture(session, source, function, doc):
     output = run(session, source + f"\n{function}({doc});")
-    if "TRIM_APPLIED" not in output:
+    if "FIXTURE_APPLIED" not in output:
         raise RuntimeError(f"authored fixture did not apply: {output}")
 
 

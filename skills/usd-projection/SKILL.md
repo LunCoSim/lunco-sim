@@ -91,6 +91,13 @@ native composed values, including registered schema opinions. The shared
 value; callers do not supply a duplicate schema default. Camera-path schema
 opinions require the authored `LunCoCameraPathAPI` application.
 
+Read activation through fallible `UsdRead::is_active`. Native read errors reject
+worker snapshot admission, visual hierarchy admission, structural reconciliation,
+physics bounds/collider reads and inspection; they never imply an active prim.
+Program-owner activation errors retire its executable binding and raise the
+runtime fault. `scripts/api/test_native_activity.py --port <free-port>` exercises
+subtree deactivation/reactivation and terminal malformed-command rejection.
+
 Read inherited Imageable purpose through `UsdRead::purpose`, which exposes the
 native SDK type and `ImageableExt::compute_purpose` semantics in both live and
 prepared readers. Preserve its error result at physics, bounds, query, and lint

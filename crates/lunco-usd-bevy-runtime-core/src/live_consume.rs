@@ -492,6 +492,7 @@ fn publish_stage_projected(
 }
 
 pub(crate) fn publish_pending_stage_projections(world: &mut World) {
+    let mut activity_errors = Vec::new();
     let ready = world
         .get_resource::<PendingStageProjections>()
         .map(|pending| {
@@ -518,8 +519,16 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
                             let Ok(prim) = openusd::sdf::Path::new(path) else {
                                 return false;
                             };
-                            let native_active =
-                                stage.view().has_prim(&prim) && stage.view().is_active(&prim);
+                            let native_active = match stage.view().is_active(&prim) {
+                                Ok(active) => active,
+                                Err(error) => {
+                                    activity_errors.push((
+                                        **stage_id,
+                                        format!("{prim} cannot resolve native activity: {error}"),
+                                    ));
+                                    return false;
+                                }
+                            };
                             !native_active
                                 || find_live_entity(world, **stage_id, path).is_some_and(|entity| {
                                     world
@@ -532,6 +541,13 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    for (stage_id, message) in activity_errors {
+        world
+            .resource_mut::<PendingStageProjections>()
+            .stages
+            .remove(&stage_id);
+        crate::twin_projection::report_stage_projection_reset_failure(world, stage_id, message);
+    }
     for stage_id in ready {
         let Some(projection) = world
             .resource_mut::<PendingStageProjections>()
@@ -1305,8 +1321,19 @@ pub(crate) fn reconcile_structural_live(
                 return;
             };
             match stages.get(id) {
-                Some(cs) => cs.view().has_prim(&sp) && cs.view().is_active(&sp),
+                Some(cs) => cs.view().is_active(&sp),
                 None => return,
+            }
+        };
+        let exists = match exists {
+            Ok(exists) => exists,
+            Err(error) => {
+                crate::twin_projection::report_stage_projection_reset_failure(
+                    world,
+                    id,
+                    format!("{sp} cannot resolve native activity: {error}"),
+                );
+                return;
             }
         };
         let live = find_live_entity(world, id, path);

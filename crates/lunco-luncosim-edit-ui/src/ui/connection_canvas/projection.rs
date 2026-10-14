@@ -237,7 +237,14 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
     let Ok(p) = SdfPath::new(path) else {
         return None;
     };
-    if !view.is_active(&p) {
+    let active = match view.is_active(&p) {
+        Ok(active) => active,
+        Err(error) => {
+            bevy::log::error!("connection projection cannot read native activity for {p}: {error}");
+            return None;
+        }
+    };
+    if !active {
         return None;
     }
     let mut wires = Vec::new();

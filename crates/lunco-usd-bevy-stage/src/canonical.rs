@@ -1886,13 +1886,13 @@ mod recipe_tests {
         canonical
             .author_active(&point, false)
             .expect("authored active override");
-        assert!(!canonical.view().is_active(&point));
+        assert!(!canonical.view().is_active(&point).unwrap());
 
         canonical
             .clear_active(&point)
             .expect("clear active opinion through OpenUSD Sdf editing");
 
-        assert!(canonical.view().is_active(&point));
+        assert!(canonical.view().is_active(&point).unwrap());
     }
 }
 
@@ -2535,13 +2535,13 @@ mod authoring_tests {
 
         let chassis = SdfPath::new("/Rig/Chassis").unwrap();
         assert!(
-            cs.view().is_active(&chassis),
+            cs.view().is_active(&chassis).unwrap(),
             "an authored prim starts active"
         );
         cs.author_active(&chassis, false)
             .expect("author active=false");
         assert!(
-            !cs.view().is_active(&chassis),
+            !cs.view().is_active(&chassis).unwrap(),
             "author_active(false) composes on the live stage"
         );
         // The prim is still DEFINED (just inactive), preserving the local USD
@@ -2552,7 +2552,10 @@ mod authoring_tests {
         );
         cs.author_active(&chassis, true)
             .expect("author active=true");
-        assert!(cs.view().is_active(&chassis), "reactivation is symmetric");
+        assert!(
+            cs.view().is_active(&chassis).unwrap(),
+            "reactivation is symmetric"
+        );
     }
 
     // API schema and kind authoring are replayed by the runtime's scoped live
