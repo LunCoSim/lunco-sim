@@ -73,6 +73,18 @@ lathe construction calls `KnotVec::uniform_knot` directly; imported NURBS curves
 must supply their authored knots and reject insufficient data. Do not infer
 knots during import or add an application knot generator.
 
+Trim controls are standard `double3[]` homogeneous coordinates. Keep them in
+`f64` through loop assembly and Truck's rational 2D evaluation; narrowing before
+parameter-space normalization can collapse a valid hole. The production gate
+`scripts/api/test_native_trim_precision.py --port <free-port>` exercises authored
+Rhai verdicts for collision cooking, zero-weight rejection, and rejection of a
+truncated later loop. A malformed curve invalidates the complete trim domain.
+
+`QueryUsdPrim` serializes the native Sdf value directly with the shared typed
+API serializer. Its inspection adapter must preserve precision, integer kinds,
+and empty arrays; render-oriented readers such as `points3` do not belong at
+that boundary. Native serialization errors reject the query visibly.
+
 Read inherited Imageable purpose through `UsdRead::purpose`, which exposes the
 native SDK type and `ImageableExt::compute_purpose` semantics in both live and
 prepared readers. Preserve its error result at physics, bounds, query, and lint

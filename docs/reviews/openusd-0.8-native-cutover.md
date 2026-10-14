@@ -375,6 +375,28 @@ The focused `generated_rings_are_exact_circles_not_polygons` test passes with
 the native knot generator, exercising rational surface evaluation at the
 generated ring boundary.
 
+Trim curves use Truck's rational 2D evaluator; the application de Boor
+implementation is removed. Authored homogeneous `double3[]` controls remain
+`f64` through parameter-space loop assembly. The mesh owner reads the native
+double-vector value and rejects missing or wrongly typed controls. Knot and
+weight validation precedes library construction, preventing knot sorting from
+repairing invalid authored input. Twelve focused trim math tests pass, including
+large parameter-space coordinates, sharp corners, nested holes and malformed
+knots/weights. A malformed later loop rejects the complete trim instead of
+publishing earlier loops. The mesh-owner compile check passes.
+
+The native trim gate exposed a second precision loss in `QueryUsdPrim`.
+Its reader-probing coercion chain is replaced by native Sdf serialization
+directly into `ApiValue`, using `api_value_from_serializable` without a JSON
+intermediate. Native vector/quaternion shapes, integer kinds, and empty arrays
+are retained. Unsupported serialization rejects the query at this API adapter.
+The query-owner compile check and production build pass. Nine authored checks
+pass through `scripts/api/test_native_trim_precision.py` on owned port 4221:
+trimmed collision cooking, no triangles inside the hole, queried double
+coordinates, native integer values, empty arrays, terminal zero-weight and
+truncated-loop rejection, and continued API access. Checkout/binary/PID identity, API Exit, and port release
+were verified. Evidence is under `/tmp/luncosim-native-trim-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

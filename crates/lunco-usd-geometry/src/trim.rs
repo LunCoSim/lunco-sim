@@ -26,38 +26,16 @@
 //! that is subtly the wrong shape and still plausible-looking — the same class
 //! of bug as forgetting to pre-multiply weights on the surface itself.
 //!
-//! # Why this does not need USD's winding rule
+//! Domain classification uses even-odd containment with the patch rectangle as
+//! an implicit outer loop. Nested boundaries alternate holes and retained
+//! islands independently of loop orientation.
 //!
-//! USD never documents which side of a trim loop is kept. Guessing inverts every
-//! hole, and that unknown ([`D2` in HAB1_OPEN_ITEMS]) is what stalled trimming
-//! here for a long time.
-//!
-//! It is avoidable. We classify by **even-odd containment, counting the patch
-//! domain rectangle as an implicit outermost loop**. A point inside the domain
-//! and inside no loop crosses one boundary — odd, keep. Inside the domain and
-//! inside one hole crosses two — even, discard. Inside a hole nested in an outer
-//! trim loop crosses three — odd, keep.
-//!
-//! That rule is orientation-independent, so it produces the same answer whether
-//! a loop was authored clockwise or counter-clockwise. The convention stops
-//! mattering rather than being guessed.
-//!
-//! # Why `add_constraint_and_split`
-//!
-//! `spade`'s `add_constraint_edge` panics when a new constraint crosses an
-//! existing one. The obvious guard — gate on `can_add_constraint` and skip —
-//! is wrong here: skipping an edge silently drops part of a loop and yields a
-//! hole with a missing side. [`ConstrainedDelaunayTriangulation::
-//! add_constraint_and_split`] instead splits both constraints at the
-//! intersection and inserts the crossing point, which is exactly the repair a
-//! trim boundary wants.
-//!
-//! Valid loops should not cross at all — they are closed and non-self-
-//! intersecting by definition. Crossings show up when curved loops are
-//! discretised too coarsely, or when the authored data is malformed. Handling
-//! them is robustness, not the normal path.
+//! Spade owns constrained triangulation. Constraint insertion splits crossing
+//! edges while retaining the complete loop boundary. Vertex insertion failure
+//! rejects the domain instead of producing an incomplete boundary.
 
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
+use truck_geometry::prelude::{BSplineCurve, KnotVec, NurbsCurve, ParametricCurve, Vector3};
 
 /// Closed loops in normalised patch parameter space, `[0, 1]²`.
 ///
@@ -75,77 +53,6 @@ impl TrimLoops {
     }
 }
 
-/// Evaluate a rational B-spline curve in 2D at parameter `t` (de Boor).
-///
-/// `cvs` are homogeneous `(x, y, w)`. Returns the perspective-divided point.
-/// Returns `None` when the parameters are inconsistent — a malformed trim is
-/// skipped, never guessed at.
-fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Option<[f64; 2]> {
-    let n = cvs.len();
-    let degree = order.checked_sub(1)?;
-    let knot_count = n.checked_add(order)?;
-    if n < order || knots.len() != knot_count || degree == 0 {
-        return None;
-    }
-    if cvs
-        .iter()
-        .any(|[x, y, w]| !x.is_finite() || !y.is_finite() || !w.is_finite() || *w <= 0.0)
-        || knots
-            .windows(2)
-            .any(|window| !window[0].is_finite() || window[1] < window[0])
-        || knots.last().is_some_and(|value| !value.is_finite())
-    {
-        return None;
-    }
-
-    // The trim range must already be in the authored knot domain. Clamping it
-    // would silently move a malformed boundary and change the requested hole.
-    let lo = knots[degree];
-    let hi = knots[n];
-    if hi <= lo || !t.is_finite() || t < lo || t > hi {
-        return None;
-    }
-
-    // Find the knot span k such that knots[k] <= t < knots[k+1].
-    let mut k = degree;
-    while k + 1 < n && knots[k + 1] <= t {
-        k += 1;
-    }
-
-    // de Boor on homogeneous coordinates. Working homogeneous throughout is what
-    // makes this correct for weighted control points; dividing early would
-    // linearly interpolate an already-projected point and bow the curve.
-    let mut d: Vec<[f64; 3]> = (0..=degree).map(|j| cvs[k - degree + j]).collect();
-
-    for r in 1..=degree {
-        for j in (r..=degree).rev() {
-            let i = k - degree + j;
-            let den = knots[i + order - r] - knots[i];
-            let a = if den.abs() < f64::EPSILON {
-                0.0
-            } else {
-                (t - knots[i]) / den
-            };
-            let previous = d[j - 1];
-            let current = d[j];
-            for (dst, (previous, current)) in d[j].iter_mut().zip(previous.into_iter().zip(current))
-            {
-                *dst = (1.0 - a) * previous + a * current;
-            }
-        }
-    }
-
-    let [x, y, w] = d[degree];
-    if w.abs() < 1e-12 || !w.is_finite() || !x.is_finite() || !y.is_finite() {
-        return None;
-    }
-    let result = [x / w, y / w];
-    result
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(result)
-}
-
 /// Discretise one trim curve into a polyline.
 ///
 /// Samples at `steps` uniform positions **plus every distinct knot** in range.
@@ -154,19 +61,6 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
 /// an order-2 (linear) curve, the knots are precisely its corners. Sampling only
 /// uniformly cuts every corner that happens to fall between two samples, and
 /// replaces it with a chord.
-///
-/// This is not hypothetical: it is the HAB-1 doorway bug. That loop is one
-/// order-2 curve with 16 control points, knots `0,0,1..15,15`, so its corners
-/// sit at integer `t` over the range `[0, 15]`. Tessellated with the default 24
-/// uniform steps, samples land at `t = 0.625·i`, which is integral only at
-/// `i = 8, 16, 24`. Twelve of the fourteen interior corners were therefore
-/// missed and chamfered off.
-///
-/// The signature was diagnostic: `t = 0` is always sampled, so one bottom corner
-/// of the door came out square while the other — at `t = 1`, straddled by
-/// samples at 0.625 and 1.25 — came out as a diagonal. A stray triangle across
-/// one corner of the opening, stable across every camera angle, which is what
-/// made it look like a triangulation fault rather than a sampling one.
 ///
 /// Deduplicating on `t` matters: knots repeat (clamped ends, and any interior
 /// multiplicity), and a duplicated parameter yields a zero-length segment, which
@@ -196,6 +90,21 @@ fn tessellate_curve(
     if hi <= lo || t0 < lo || t1 > hi {
         return Vec::new();
     }
+    if cvs
+        .iter()
+        .any(|[x, y, w]| !x.is_finite() || !y.is_finite() || !w.is_finite() || *w <= 0.0)
+        || knots
+            .windows(2)
+            .any(|pair| !pair[0].is_finite() || pair[1] < pair[0])
+        || knots.last().is_some_and(|knot| !knot.is_finite())
+    {
+        return Vec::new();
+    }
+    let control_points = cvs.iter().map(|&[x, y, w]| Vector3::new(x, y, w)).collect();
+    let Ok(spline) = BSplineCurve::try_new(KnotVec::from(knots.to_vec()), control_points) else {
+        return Vec::new();
+    };
+    let curve = NurbsCurve::new(spline);
 
     let mut ts: Vec<f64> = (0..=steps)
         .map(|i| t0 + (t1 - t0) * (i as f64 / steps as f64))
@@ -209,7 +118,10 @@ fn tessellate_curve(
     ts.dedup_by(|a, b| (*a - *b).abs() <= eps);
 
     ts.into_iter()
-        .map(|t| eval_rational_2d(cvs, knots, order, t))
+        .map(|t| {
+            let point = curve.subs(t);
+            (point.x.is_finite() && point.y.is_finite()).then_some([point.x, point.y])
+        })
         .collect::<Option<Vec<_>>>()
         .unwrap_or_default()
 }
@@ -227,7 +139,7 @@ pub fn assemble_loops(
     vertex_counts: &[i32],
     knots: &[f64],
     ranges: &[[f64; 2]],
-    points: &[[f32; 3]],
+    points: &[[f64; 3]],
     u_range: [f64; 2],
     v_range: [f64; 2],
     steps_per_curve: usize,
@@ -241,18 +153,18 @@ pub fn assemble_loops(
             .filter(|count| *count > 0)
             .and_then(|count| total.checked_add(count))
     }) else {
-        return out;
+        return TrimLoops::default();
     };
     if orders.len() != curve_count
         || vertex_counts.len() != curve_count
         || (!ranges.is_empty() && ranges.len() != curve_count)
     {
-        return out;
+        return TrimLoops::default();
     }
 
     let (du, dv) = (u_range[1] - u_range[0], v_range[1] - v_range[0]);
     if !(du.is_finite() && dv.is_finite()) || du <= 0.0 || dv <= 0.0 {
-        return out;
+        return TrimLoops::default();
     }
 
     for &n_curves in counts {
@@ -263,10 +175,10 @@ pub fn assemble_loops(
 
         for _ in 0..n_curves {
             let Some(&order) = orders.get(curve_i) else {
-                return out;
+                return TrimLoops::default();
             };
             let Some(&vc) = vertex_counts.get(curve_i) else {
-                return out;
+                return TrimLoops::default();
             };
             let Some(order) = usize::try_from(order).ok().filter(|order| *order >= 2) else {
                 return TrimLoops::default();
@@ -285,13 +197,10 @@ pub fn assemble_loops(
                 return TrimLoops::default();
             };
             if pt_end > points.len() || knot_end > knots.len() {
-                return out;
+                return TrimLoops::default();
             }
 
-            let cvs: Vec<[f64; 3]> = points[pt_i..pt_end]
-                .iter()
-                .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
-                .collect();
+            let cvs = &points[pt_i..pt_end];
             let kn = &knots[knot_i..knot_end];
             let range = if ranges.is_empty() {
                 [kn[order - 1], kn[vc]]
@@ -302,7 +211,7 @@ pub fn assemble_loops(
                 range
             };
 
-            let seg = tessellate_curve(&cvs, kn, order, range, steps_per_curve);
+            let seg = tessellate_curve(cvs, kn, order, range, steps_per_curve);
             if seg.len() < 2 {
                 return TrimLoops::default();
             }
@@ -438,12 +347,8 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
     for l in &loops.loops {
         // Insert every vertex FIRST, and bail on the whole loop if any fails.
         //
-        // Silently dropping one vertex (what `filter_map` used to do) is the
-        // worst outcome available: the loop stays "closed" but short-circuits
-        // across the gap, so the constraint chain cuts a chord through the hole
-        // instead of following its boundary. That is precisely the shape of a
-        // stray triangle spanning an opening. A dropped vertex must invalidate
-        // the loop, not deform it.
+        // A missing vertex invalidates the boundary; skipping it would cut a
+        // chord through the opening instead of retaining the authored loop.
         let mut handles = Vec::with_capacity(l.len());
         let mut ok = true;
         for &[u, v] in l {
@@ -541,13 +446,8 @@ mod tests {
         ]
     }
 
-    /// The HAB-1 main doorway trim loop, copied VERBATIM from
-    /// `hab1/twin/components/shell_can.usda` `OuterSurface`: one order-2 curve,
-    /// 16 control points, sill / jambs / semicircular head.
-    ///
-    /// Kept as literal authored data rather than generated, so the test fails if
-    /// the real asset would fail.
-    fn hab1_door_curve() -> (Vec<[f64; 3]>, Vec<f64>, [f64; 2]) {
+    /// An order-two closed arch with sharp sill and jamb corners.
+    fn arched_opening_curve() -> (Vec<[f64; 3]>, Vec<f64>, [f64; 2]) {
         let cvs: Vec<[f64; 3]> = vec![
             [2.911488, 0.004000, 1.0],
             [3.088512, 0.004000, 1.0],
@@ -573,16 +473,10 @@ mod tests {
         (cvs, knots, [0.0, 15.0])
     }
 
-    /// THE DOORWAY CHAMFER. An order-2 curve is a polyline, so tessellating it
-    /// must reproduce its control points EXACTLY — every one is a corner.
-    ///
-    /// Before the knot-aware fix this failed on 12 of the 14 interior corners:
-    /// with 24 uniform steps over a 15-span range, samples land at t = 0.625·i
-    /// and hit an integer only at i = 8, 16, 24. Each missed corner became a
-    /// chord across it — the stray triangle in the corner of the opening.
+    /// An order-two curve must retain every control-point corner.
     #[test]
     fn order_two_trim_curve_reproduces_every_corner() {
-        let (cvs, knots, range) = hab1_door_curve();
+        let (cvs, knots, range) = arched_opening_curve();
         let poly = tessellate_curve(&cvs, &knots, 2, range, 24);
 
         for (i, cv) in cvs.iter().enumerate() {
@@ -598,17 +492,11 @@ mod tests {
         }
     }
 
-    /// Corners must survive the whole authored pipeline, not just the sampler:
-    /// `assemble_loops` also normalises into [0,1]², and a bug there would undo
-    /// the fix above. Checks the two sill corners, which is where the visible
-    /// artifact was.
+    /// Loop normalization retains the sharp corners of the sampled curve.
     #[test]
-    fn hab1_door_loop_keeps_square_sill_corners() {
-        let (cvs, knots, _) = hab1_door_curve();
-        let points: Vec<[f32; 3]> = cvs
-            .iter()
-            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
-            .collect();
+    fn assembled_loop_preserves_corners() {
+        let (cvs, knots, _) = arched_opening_curve();
+        let points = cvs;
 
         let loops = assemble_loops(
             &[1],
@@ -637,16 +525,11 @@ mod tests {
         }
     }
 
-    /// The whole point of the loop: no surviving triangle may lie inside it.
-    /// Runs the REAL door loop through the REAL grid density (54, as
-    /// `build_usd_nurbs_patch_mesh` computes for this patch).
+    /// Triangles must stay outside the curved opening.
     #[test]
-    fn hab1_door_opening_contains_no_geometry() {
-        let (cvs, knots, _) = hab1_door_curve();
-        let points: Vec<[f32; 3]> = cvs
-            .iter()
-            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
-            .collect();
+    fn arched_opening_contains_no_geometry() {
+        let (cvs, knots, _) = arched_opening_curve();
+        let points = cvs;
         let loops = assemble_loops(
             &[1],
             &[2],
@@ -743,9 +626,8 @@ mod tests {
         assert!((area - 1.0).abs() < 1e-6, "expected unit area, got {area}");
     }
 
-    /// A loop shaped like the HAB-1 doorway — flat sill, vertical jambs,
-    /// semicircular head — sitting near the domain edge. This is the case that
-    /// produced a triangle spanning the opening in the real scene.
+    /// An arched loop — flat sill, vertical jambs,
+    /// semicircular head — sitting near the domain edge.
     #[test]
     fn arch_loop_near_domain_edge_leaves_no_spanning_triangle() {
         let (uc, half, sill, spring, crown) = (0.75, 0.025, 0.004, 0.16, 0.29);
@@ -834,18 +716,91 @@ mod tests {
         let w = std::f64::consts::FRAC_1_SQRT_2;
         let cvs = [[1.0, 0.0, 1.0], [w, w, w], [0.0, 1.0, 1.0]];
         let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        for i in 0..=10 {
-            let t = i as f64 / 10.0;
-            let p = eval_rational_2d(&cvs, &knots, 3, t).expect("evaluates");
+        let points = tessellate_curve(&cvs, &knots, 3, [0.0, 1.0], 10);
+        assert_eq!(points.len(), 11);
+        for p in points {
             let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
-            assert!((r - 1.0).abs() < 1e-9, "t={t} gave radius {r}, expected 1");
+            assert!((r - 1.0).abs() < 1e-9, "{p:?} gave radius {r}, expected 1");
         }
     }
 
     #[test]
+    fn homogeneous_trim_controls_retain_double_precision() {
+        let origin = 100_000_000.0;
+        let points = [
+            [origin + 0.25, origin + 0.25, 1.0],
+            [origin + 0.75, origin + 0.25, 1.0],
+            [origin + 0.75, origin + 0.75, 1.0],
+            [origin + 0.25, origin + 0.75, 1.0],
+            [origin + 0.25, origin + 0.25, 1.0],
+        ];
+        let loops = assemble_loops(
+            &[1],
+            &[2],
+            &[5],
+            &[0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+            &[],
+            &points,
+            [origin, origin + 1.0],
+            [origin, origin + 1.0],
+            4,
+        );
+        assert_eq!(
+            loops.loops,
+            vec![vec![
+                [0.25, 0.25],
+                [0.75, 0.25],
+                [0.75, 0.75],
+                [0.25, 0.75],
+                [0.25, 0.25],
+            ]]
+        );
+    }
+
+    #[test]
     fn malformed_trim_is_skipped_not_guessed() {
-        assert!(eval_rational_2d(&[[0.0, 0.0, 1.0]], &[0.0, 1.0], 3, 0.5).is_none());
-        assert!(eval_rational_2d(&[], &[], 3, 0.5).is_none());
+        assert!(
+            assemble_loops(
+                &[1, 1],
+                &[2, 2],
+                &[5, 5],
+                &[
+                    0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0
+                ],
+                &[[0.0, 4.0], [0.0, 4.0]],
+                &[
+                    [0.25, 0.25, 1.0],
+                    [0.75, 0.25, 1.0],
+                    [0.75, 0.75, 1.0],
+                    [0.25, 0.75, 1.0],
+                    [0.25, 0.25, 1.0],
+                ],
+                [0.0, 1.0],
+                [0.0, 1.0],
+                4
+            )
+            .is_empty()
+        );
+        assert!(tessellate_curve(&[[0.0, 0.0, 1.0]], &[0.0, 1.0], 3, [0.0, 1.0], 4).is_empty());
+        assert!(tessellate_curve(&[], &[], 3, [0.0, 1.0], 4).is_empty());
+        let valid_points = [[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]];
+        for knots in [
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, f64::NAN, 1.0],
+        ] {
+            assert!(tessellate_curve(&valid_points, &knots, 2, [0.0, 1.0], 4).is_empty());
+        }
+        assert!(
+            tessellate_curve(
+                &[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+                &[0.0, 0.0, 1.0, 1.0],
+                2,
+                [0.0, 1.0],
+                4
+            )
+            .is_empty()
+        );
         assert!(
             assemble_loops(
                 &[1],

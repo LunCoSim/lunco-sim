@@ -12858,6 +12858,7 @@ dependencies = [
  "lz4_flex",
  "num-traits",
  "regex-lite",
+ "serde",
  "strum",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",

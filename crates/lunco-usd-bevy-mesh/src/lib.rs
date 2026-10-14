@@ -1230,18 +1230,9 @@ fn build_usd_nurbs_patch_mesh_with_tessellation(
     let u_knots = surface.u_knots.clone();
     let v_knots = surface.v_knots.clone();
 
-    // ── Trim curves ─────────────────────────────────────────────────────────
-    // `trimCurve:*` IS applied — see `lunco_usd_geometry::trim`. A trimmed patch gets an
-    // irregular triangulation of its surviving domain instead of a lattice.
-    //
-    // Two things that used to block this are handled there rather than guessed:
-    // USD never states the keep/discard winding rule, so classification is
-    // even-odd with the domain rectangle as an implicit outer loop
-    // (orientation-independent); and the geometry crate handles constraint
-    // crossings without panicking, so
-    // loops are inserted with `add_constraint_and_split` rather than gated with
-    // `can_add_constraint` — gating would silently drop part of a loop and leave
-    // the hole with a missing side.
+    // Trim loops produce an irregular triangulation of the surviving domain.
+    // The geometry owner uses even-odd containment and Spade's crossing-edge
+    // splitting to retain complete boundaries.
     let trim_authored = has_authored_nurbs_trim(reader, path);
     let trim_loops = if !trim_authored {
         None
@@ -1287,14 +1278,23 @@ fn build_usd_nurbs_patch_mesh_with_tessellation(
                 return None;
             }
         };
-        let tpoints = reader.points3(path, "trimCurve:points");
-        if tpoints.is_empty() {
-            error!(
-                "[usd-bevy-mesh] {} has malformed trimCurve:points; refusing the patch",
-                path.as_str()
-            );
-            return None;
-        }
+        let tpoints = match reader
+            .attr_value(path, "trimCurve:points")
+            .and_then(|value| value.get::<Vec<openusd::gf::Vec3d>>())
+            .filter(|points| !points.is_empty())
+        {
+            Some(points) => points
+                .into_iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect::<Vec<_>>(),
+            None => {
+                error!(
+                    "[usd-bevy-mesh] {} requires non-empty double3[] trimCurve:points; refusing the patch",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
         let ranges = match read::read_double2_array_strict(reader, path, "trimCurve:ranges") {
             Ok(Some(ranges)) => ranges,
             Ok(None) => Vec::new(),

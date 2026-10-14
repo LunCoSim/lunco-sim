@@ -304,7 +304,7 @@ int[] trimCurve:counts = [1]           # curves per loop
 int[] trimCurve:orders = [2]           # 2 = linear = a polyline
 int[] trimCurve:vertexCounts = [16]
 double[] trimCurve:knots = [0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,15]
-point3f[] trimCurve:points = [ (u, v, w), ... ]   # HOMOGENEOUS 2D
+double3[] trimCurve:points = [ (u, v, w), ... ]   # HOMOGENEOUS 2D
 ```
 
 - Points are **homogeneous**: the position is `(x/w, y/w)`. Skipping the divide

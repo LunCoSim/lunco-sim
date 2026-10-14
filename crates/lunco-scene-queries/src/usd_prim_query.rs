@@ -106,95 +106,22 @@ use lunco_usd_bevy_stage::{
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::Path as SdfPath;
 use openusd_schemas::physics::tokens as physics_tokens;
 use std::collections::{HashMap, HashSet};
 
-/// One attribute, converted to a typed API value by probing the USD readers.
-///
-/// USD's value types are distinct `sdf::Value` variants, so there is no single
-/// "get me whatever this is" call — `scalar::<f64>` misses a `float` opinion,
-/// `scalar::<String>` misses a `token`, and an array read that misses yields an
-/// EMPTY vec rather than `None`. The tolerant helpers (`real`, `text`, `reals`,
-/// `points3`) each collapse one of those traps; this walks them scalar-first,
-/// then array, and reports `null` only when every reader declined.
-///
-/// Emptiness is why the array probes are guarded with `is_empty()`: an
-/// unguarded `reals()` would answer `[]` for a `token` attribute and shadow the
-/// text reader below it.
+/// Read one native USD value and serialize it directly into the typed API ABI.
+/// Native serialization preserves precision, array emptiness, and value kinds.
 fn attr_api_value(
     view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     name: &str,
-) -> ApiValue {
-    // Scalars first — an array reader would answer `[]` for these, not `None`.
-    if let Some(v) = view.real(prim, name) {
-        return api_value!(v);
-    }
-    if let Some(v) = view.boolean(prim, name) {
-        return api_value!(v);
-    }
-    if let Some(v) = view.integer(prim, name) {
-        return api_value!(v);
-    }
-    if let Some(v) = view.text(prim, name) {
-        return api_value!(v);
-    }
-    if let Some(v) = view.asset(prim, name) {
-        return api_value!(v);
-    }
-    if let Some(q) = view.quat_d(prim, name) {
-        return api_value!([q.w, q.x, q.y, q.z]);
-    }
-
-    // Arrays. `points3` before `reals` because a `point3f[]` also satisfies no
-    // scalar reader and we want it shaped [[x,y,z], …], not flattened.
-    let pts = view.points3(prim, name);
-    if !pts.is_empty() {
-        return ApiValue::Array(
-            pts.into_iter()
-                .map(|point| api_value!([point[0], point[1], point[2]]))
-                .collect(),
-        );
-    }
-    let reals = match view.attr_value(prim, name) {
-        Some(Value::DoubleVec(values)) => values,
-        Some(Value::FloatVec(values)) => values.into_iter().map(f64::from).collect(),
-        _ => Vec::new(),
+) -> Result<ApiValue, String> {
+    let Some(value) = view.attr_value(prim, name) else {
+        return Ok(ApiValue::Unit);
     };
-    if !reals.is_empty() {
-        return api_value!(reals);
-    }
-    let texts = match view.attr_value(prim, name) {
-        Some(Value::TokenVec(values)) => values.iter().map(ToString::to_string).collect(),
-        Some(Value::StringVec(values)) => values,
-        _ => Vec::new(),
-    };
-    if !texts.is_empty() {
-        return api_value!(texts);
-    }
-    // Scalar vectors and integer arrays require the raw Value variants;
-    // the typed readers above do not cover their shapes.
-    match view.attr_value(prim, name) {
-        // Scalar 2/3/4-vectors as flat JSON arrays — the same shape `points3`
-        // gives each element of a `point3f[]`, so `v[1]` means "y" whether the
-        // caller is reading one translate or one control point.
-        Some(Value::Vec2f(v)) => api_value!([v.x, v.y]),
-        Some(Value::Vec2d(v)) => api_value!([v.x, v.y]),
-        Some(Value::Vec2i(v)) => api_value!([v.x, v.y]),
-        Some(Value::Vec3f(v)) => api_value!([v.x, v.y, v.z]),
-        Some(Value::Vec3d(v)) => api_value!([v.x, v.y, v.z]),
-        Some(Value::Vec3i(v)) => api_value!([v.x, v.y, v.z]),
-        Some(Value::Vec4f(v)) => api_value!([v.x, v.y, v.z, v.w]),
-        Some(Value::Vec4d(v)) => api_value!([v.x, v.y, v.z, v.w]),
-        Some(Value::Vec4i(v)) => api_value!([v.x, v.y, v.z, v.w]),
-
-        Some(Value::IntVec(v)) if !v.is_empty() => api_value!(v.clone()),
-        Some(Value::Int64Vec(v)) if !v.is_empty() => {
-            api_value!(v.to_vec())
-        }
-        _ => ApiValue::Unit,
-    }
+    lunco_api_core::api_value_from_serializable(&value)
+        .map_err(|error| format!("QueryUsdPrim: cannot serialize `{prim}.{name}`: {error}"))
 }
 
 fn is_visual_geometry(type_name: &str) -> bool {
@@ -1429,7 +1356,7 @@ fn read_prim_from_reader(
     let names = requested.clone().unwrap_or_else(|| view.attr_names(prim));
     let mut attrs = Vec::new();
     for name in names {
-        attrs.push((name.clone(), attr_api_value(view, prim, &name)));
+        attrs.push((name.clone(), attr_api_value(view, prim, &name)?));
     }
 
     let mut relationships = Vec::new();
