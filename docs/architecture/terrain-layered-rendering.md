@@ -57,6 +57,14 @@ static mesh is effectively the non-morphing/root LOD of the same appearance
 contract; the streamed ECS quadtree may still manage residency, colliders, and
 LOD selection independently.
 
+DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
+detail coordinates, their pixel footprint, and authored albedo texel size.
+`hf_size` describes the independent shadow heightfield and must not choose
+material scale. The High profile's Gaussian shadow filter uses normal bias
+4.0, scaled by each cascade's shadow texel size, to keep grazing-angle terrain
+from sampling its own surface inside the filter footprint. Depth bias remains
+0.03 metres.
+
 ### USD-authored DEM-to-globe continuation
 
 Exterior smoothing preserves the first native posting and filters only the

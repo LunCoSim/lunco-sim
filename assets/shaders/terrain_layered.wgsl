@@ -247,7 +247,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var detail_p = world_p;
     var detail_n = normalize(in.world_normal);
 #ifdef VERTEX_UVS_A
-    detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
+    detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
     detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
 #endif
     let pw = length(fwidth(detail_p));
@@ -397,7 +397,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (micro_fade > 0.0 && micro_albedo > 0.0) {
         var grain_source_weight = 1.0;
 #ifdef VERTEX_UVS_A
-        let albedo_texel_m = mat.hf_size.x / f32(textureDimensions(albedo_tex).x);
+        let albedo_texel_m = 2.0 * mat.terrain_half_extent / f32(textureDimensions(albedo_tex).x);
         grain_source_weight = mix(1.0,
             smoothstep(1.0, 2.0, micro_scale * albedo_texel_m), authored_albedo_weight);
 #endif
