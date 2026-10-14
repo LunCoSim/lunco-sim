@@ -54,7 +54,16 @@ fn on_tick(me, ctx) {
             add(ROOT, "Panel", "RectLight"),
             add(ROOT, "Authored", "SphereLight"),
             attr(ROOT + "/Authored", "inputs:intensity", "float", "23"),
-            attr(ROOT + "/Authored", "inputs:exposure", "float", "2")
+            attr(ROOT + "/Authored", "inputs:exposure", "float", "2"),
+            attr(ROOT + "/Authored", "inputs:radius", "float", "2"),
+            attr(ROOT + "/Authored", "inputs:normalize", "bool", "true"),
+            attr(ROOT + "/Authored", "inputs:color", "color3f", "(0.25, 0.5, 0.75)"),
+            add(ROOT, "SizedPanel", "RectLight"),
+            attr(ROOT + "/SizedPanel", "inputs:width", "float", "2"),
+            attr(ROOT + "/SizedPanel", "inputs:height", "float", "3"),
+            add(ROOT, "Warm", "SphereLight"),
+            attr(ROOT + "/Warm", "inputs:enableColorTemperature", "bool", "true"),
+            attr(ROOT + "/Warm", "inputs:colorTemperature", "float", "2000")
         ]});
         if queued == () || queued.id == () { throw("light setup was not admitted"); }
         this.pending = queued.id;
@@ -66,8 +75,10 @@ fn on_tick(me, ctx) {
         let bulb = find(ROOT + "/Bulb");
         let panel = find(ROOT + "/Panel");
         let authored = find(ROOT + "/Authored");
-        if sun < 0 || bulb < 0 || panel < 0 || authored < 0 { return; }
-        for id in [sun, bulb, panel, authored] { track_entity_read(id); }
+        let sized = find(ROOT + "/SizedPanel");
+        let warm = find(ROOT + "/Warm");
+        if sun < 0 || bulb < 0 || panel < 0 || authored < 0 || sized < 0 || warm < 0 { return; }
+        for id in [sun, bulb, panel, authored, sized, warm] { track_entity_read(id); }
         this.checks.push(t_true(get(sun, "DirectionalLight.illuminance") == 50000.0,
             "omitted normalized DistantLight intensity resolves from the native schema"));
         this.checks.push(t_true(get(bulb, "PointLight.intensity") == 1.0,
@@ -76,6 +87,23 @@ fn on_tick(me, ctx) {
             "omitted RectLight intensity resolves from the native schema"));
         this.checks.push(t_true(get(authored, "PointLight.intensity") == 92.0,
             "authored intensity and exposure remain authoritative"));
+        this.checks.push(t_true(get(bulb, "PointLight.radius") == 0.5,
+            "omitted SphereLight radius resolves from the native schema"));
+        this.checks.push(t_true(get(panel, "RectLight.width") == 1.0 && get(panel, "RectLight.height") == 1.0,
+            "omitted RectLight dimensions resolve from the native schema"));
+        this.checks.push(t_true(get(authored, "PointLight.radius") == 2.0,
+            "authored radius and normalization preserve emitted power"));
+        this.checks.push(t_true(get(sized, "RectLight.intensity") == 6.0,
+            "native omitted normalization preserves rectangular area scaling"));
+        let white = get(bulb, "PointLight.color.0");
+        let tinted = get(authored, "PointLight.color.0");
+        this.checks.push(t_true(white != () && tinted != () &&
+            white.red == 1.0 && white.green == 1.0 && white.blue == 1.0 &&
+            tinted.red == 0.25 && tinted.green == 0.5 && tinted.blue == 0.75,
+            "native omitted and authored light colour reach the renderer"));
+        let temperature = get(warm, "PointLight.color.0");
+        this.checks.push(t_true(temperature != () && temperature.red == 1.0 && temperature.blue < 0.1,
+            "native enabled temperature colours the light"));
         this.generation = assembly_edit::describe(this.doc).generation;
         let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: this.generation,
             op: attr(ROOT + "/Authored", "inputs:intensity", "float", "invalid-light-value")});

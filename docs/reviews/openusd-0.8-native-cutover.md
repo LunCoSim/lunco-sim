@@ -278,6 +278,22 @@ identity, API Exit, and port release. The focused preview key/fill, render
 recovery, and dome-resolution resource tests pass. Logs are under
 `/tmp/luncosim-native-light-*` and `/tmp/luncosim-native-preview-photometry-test.log`.
 
+The remaining core light reads now use native composed colour, temperature
+controls, SphereLight radius, RectLight dimensions, and normalization. Sphere
+area calibration reads the native concrete schema definition through the
+authoring owner's registered schema registry. There is no copied radius
+default or colour/temperature substitution. The generic renderer blackbody
+conversion remains: no equivalent utility was found in the inspected native
+SDK or Bevy colour package. API-only shadow settings and project renderer
+controls retain their documented omitted-input semantics.
+
+`cargo check -p lunco-usd-bevy-light --lib -j 4` and the production build pass.
+The expanded native light gate passes twelve checks on owned port 4217,
+including omitted shape values, authored colour/radius, normalized power,
+rectangular area scaling, temperature colour, and terminal malformed-input
+rejection without document mutation. API Exit and port release were verified.
+Evidence is in `/tmp/luncosim-native-light-schema-owner-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -305,3 +321,8 @@ recovery, and dome-resolution resource tests pass. Logs are under
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
+4. `purpose::effective_purpose` walks resolved local attribute values, so a
+   child's schema fallback can stop authored purpose inheritance. The native
+   `ImageableExt::compute_purpose` already implements this contract and must
+   replace that walk for both live and prepared readers and their collider/lint
+   consumers.

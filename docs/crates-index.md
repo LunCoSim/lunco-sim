@@ -915,7 +915,8 @@ Production UsdLux adapter for `DistantLight`, `DomeLight`, `SphereLight`, and
 `RectLight`. It owns the authored-light marker, ambient-dome aggregation, the
 CPU HDRI projection used by skybox/environment-map components, and live dome
 refresh after consuming the generic scene info-change boundary. The package
-depends on the composed USD reader and render intent, but not on the visual
+depends on the composed USD reader, the authoring owner's native schema registry
+for area calibration, and render intent, but not on the visual
 hierarchy/mesh projector, so light-reader changes do not rebuild that package.
 
 **`lunco-usd-bevy-diagnostics`**

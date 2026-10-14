@@ -302,43 +302,32 @@ fn read_authored_real(
     }
 }
 
-/// A UsdLux light's effective linear-RGB colour: `inputs:color` (schema
-/// fallback white), multiplied by the blackbody colour for
-/// `inputs:colorTemperature` (fallback 6500 K) when
-/// `inputs:enableColorTemperature` is authored `true` — the `UsdLuxLightAPI`
-/// rule, shared by every light arm here and the dome tint in `dome.rs`.
+/// Native composed colour, multiplied by the blackbody colour when the native
+/// `inputs:enableColorTemperature` value enables it. Shared by all light arms
+/// and the textured dome's tint.
 pub(crate) fn read_light_color(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<Vec3, LightReadError> {
-    let color = if reader.has_authored_attribute(path, ltok::INPUTS_COLOR)
-        || !reader.connections(path, ltok::INPUTS_COLOR).is_empty()
-    {
-        let Some(color) = get_attribute_as_vec3(reader, path, ltok::INPUTS_COLOR) else {
-            error!(
-                "[usd-bevy] {} has authored inputs:color with an unsupported type",
-                path.as_str()
-            );
-            return Err(LightReadError);
-        };
-        if !color.is_finite() || color.min_element() < 0.0 {
-            error!(
-                "[usd-bevy] {} has invalid authored inputs:color = {color:?}",
-                path.as_str()
-            );
-            return Err(LightReadError);
-        }
-        color
-    } else {
-        Vec3::ONE
+    let Some(color) = get_attribute_as_vec3(reader, path, ltok::INPUTS_COLOR) else {
+        error!(
+            "[usd-bevy] {} has missing or malformed inputs:color",
+            path.as_str()
+        );
+        return Err(LightReadError);
     };
-    let enabled =
-        read_authored_bool(reader, path, ltok::INPUTS_ENABLE_COLOR_TEMPERATURE)?.unwrap_or(false);
+    if !color.is_finite() || color.min_element() < 0.0 {
+        error!(
+            "[usd-bevy] {} has invalid inputs:color = {color:?}",
+            path.as_str()
+        );
+        return Err(LightReadError);
+    }
+    let enabled = read_required_bool(reader, path, ltok::INPUTS_ENABLE_COLOR_TEMPERATURE)?;
     if !enabled {
         return Ok(color);
     }
-    let kelvin =
-        read_authored_real(reader, path, ltok::INPUTS_COLOR_TEMPERATURE)?.unwrap_or(6500.0);
+    let kelvin = read_required_real(reader, path, ltok::INPUTS_COLOR_TEMPERATURE)?;
     let Some(temperature) = blackbody_rgb(kelvin) else {
         error!(
             "[usd-bevy] {} has unsupported authored color temperature {kelvin}; expected a finite value in [1667, 25000] K",
@@ -435,18 +424,15 @@ fn read_positive_length(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
-    default: f32,
     convention: lunco_usd_data::units::ConventionTransform,
 ) -> Result<f32, LightReadError> {
-    let value = read_authored_real(reader, path, name)?.unwrap_or(default);
+    let value = read_required_real(reader, path, name)?;
     positive_length(value, convention, path, name)
 }
 
-/// UsdLux area scaling for a `RectLight`: with `inputs:normalize` off (the
-/// schema default) emitted power scales with the emitting area, and the ratio is
-/// taken against the 1×1 m schema-fallback rect so an unauthored size is exactly
-/// neutral — the rect analogue of the SphereLight arm's `(r/r₀)²`. A
-/// non-positive or overflowing area is rejected rather than normalized.
+/// UsdLux emitted-power scaling for the caller's renderer area calibration.
+/// Normalized power is independent of area; otherwise the area ratio must
+/// remain finite and positive.
 fn area_scale(normalize: bool, area_ratio: f32) -> Option<f32> {
     if normalize {
         Some(1.0)
@@ -790,80 +776,40 @@ pub fn instantiate_light_prim(
             true
         }
         Some(ltok::SPHERE_LIGHT) => {
-            // UNITS — this was documented backwards, and the error is a factor of
-            // 4π (≈12.6x) that presents as "the light is authored but does nothing".
-            //
-            // Bevy's `PointLight::intensity` is luminous POWER in **lumens**, not
-            // luminous intensity in candela. For an isotropic emitter the two are
-            // related by `I = Φ / 4π`, so the illuminance a Bevy point light puts on
-            // a surface at distance d is
-            //
-            //     E = Φ / (4π d²)      NOT      E = I / d²
-            //
-            // i.e. authoring the candela figure gives a light 12.6x too DIM. A
-            // 1000 lm value here is roughly a 75 W-equivalent domestic bulb at ~1 m
-            // — a plausible default for a rover work lamp, and it is a lumens-scale
-            // number precisely because Bevy wants lumens.
-            //
-            // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
-            // is lumens — see below. The three are not interchangeable.)
+            // Bevy local lights consume luminous power in lumens. The USD
+            // intensity/exposure scale is converted below using the emitting
+            // area and native normalization setting.
             let Ok(base_lm) = read_intensity_with_exposure(reader, sdf_path) else {
                 return false;
             };
 
-            // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
-            //
-            // The spec (`openusd-schemas::lux`):
-            //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
-            //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
-            //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
-            //     power should be normalized by the surface area of the light. If
-            //     enabled, the light power remains constant if the light's area or
-            //     angular size is changed."
-            //   * `SphereLight.inputs:radius` (default `0.5`) — "the radius of the
-            //     sphere".
-            //
-            // Read the normalize clause in reverse and it defines the DEFAULT case:
-            // if power is only constant-under-area-change when normalize is ON, then
-            // with it OFF `intensity` fixes RADIANCE and total power must scale with
-            // the emitting area. For a sphere, A = 4πr². So:
-            //
-            //     Φ = intensity · 2^exposure · (normalize ? 1 : A(r)/A(r₀))
-            //     A(r)/A(r₀) = (4πr²)/(4πr₀²) = (r/r₀)²
-            //
-            // i.e. the area term is quadratic in radius and the 4π cancels.
-            //
-            // WHY THE RATIO, against the schema-default r₀ = 0.5, rather than a bare
-            // 4πr²: the absolute `intensity`→lumens mapping is a convention this
-            // codebase already chose (see the units comment above), not something the
-            // spec fixes — UsdLux `intensity` is dimensionless. Only the RATIO between
-            // two radii is observable, and expressing it against the schema default
-            // makes an unauthored radius exactly neutral (`(0.5/0.5)² = 1`). Using a
-            // bare 4πr² would instead have silently rescaled every already-calibrated
-            // light in the asset library by π on a change that authored nothing.
-            const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
-            let Ok(default_sphere_radius) = positive_length(
-                DEFAULT_SPHERE_RADIUS,
-                convention,
-                sdf_path,
-                "SphereLight radius",
-            ) else {
+            // With normalization disabled, emitted power scales by the sphere's
+            // area relative to its native schema radius. Convert both lengths
+            // through the same stage convention before taking their ratio.
+            let Some(openusd::sdf::Value::Float(reference_radius)) =
+                lunco_usd_authoring::schema::native_registry()
+                    .concrete_prim_definition(&openusd::tf::Token::new(ltok::SPHERE_LIGHT))
+                    .and_then(|definition| {
+                        definition.attribute_fallback(&openusd::tf::Token::new(ltok::INPUTS_RADIUS))
+                    })
+            else {
+                error!("[usd-bevy] native SphereLight schema has no radius calibration");
                 return false;
             };
-            let Ok(light_radius) = read_positive_length(
-                reader,
-                sdf_path,
-                ltok::INPUTS_RADIUS,
-                DEFAULT_SPHERE_RADIUS,
-                convention,
-            ) else {
+            let Ok(reference_radius_metres) =
+                positive_length(reference_radius, convention, sdf_path, "SphereLight radius")
+            else {
                 return false;
             };
-            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
+            let Ok(light_radius) =
+                read_positive_length(reader, sdf_path, ltok::INPUTS_RADIUS, convention)
+            else {
                 return false;
             };
-            let normalize = normalize.unwrap_or(false);
-            let radius_ratio = light_radius / default_sphere_radius;
+            let Ok(normalize) = read_required_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
+                return false;
+            };
+            let radius_ratio = light_radius / reference_radius_metres;
             let Some(area_scale) = area_scale(normalize, radius_ratio.powi(2)) else {
                 error!(
                     "[usd-bevy] {} has a SphereLight area scale that is not finite",
@@ -1047,27 +993,22 @@ pub fn instantiate_light_prim(
                 return false;
             };
             let color = Color::linear_rgb(c.x, c.y, c.z);
-            // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
-            // own properties; 1 m square is the schema fallback.
-            let Ok(width) =
-                read_positive_length(reader, sdf_path, ltok::INPUTS_WIDTH, 1.0, convention)
+            // Native dimensions are stage-space lengths, converted to canonical
+            // metres at this rendering boundary.
+            let Ok(width) = read_positive_length(reader, sdf_path, ltok::INPUTS_WIDTH, convention)
             else {
                 return false;
             };
             let Ok(height) =
-                read_positive_length(reader, sdf_path, ltok::INPUTS_HEIGHT, 1.0, convention)
+                read_positive_length(reader, sdf_path, ltok::INPUTS_HEIGHT, convention)
             else {
                 return false;
             };
-            // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
-            // implements (see the long derivation there): with normalize OFF (the
-            // schema default) `intensity` fixes radiance, so emitted power scales
-            // with the emitting area. For a rect A = w·h, and the ratio against
-            // the 1×1 m schema fallback makes an unauthored size exactly neutral.
-            let Ok(normalize) = read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
+            // Unnormalized power scales by w·h against the renderer's canonical
+            // 1 m² calibration. Normalization keeps power independent of size.
+            let Ok(normalize) = read_required_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
                 return false;
             };
-            let normalize = normalize.unwrap_or(false);
             let Some(area_scale) = area_scale(normalize, width * height) else {
                 error!(
                     "[usd-bevy] {} has a RectLight area that is not finite",

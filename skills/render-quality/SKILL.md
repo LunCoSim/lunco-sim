@@ -255,7 +255,8 @@ for ownership and sampling.
 Verify omitted and DEM-authored coordinates through the
 [automatic-registration fixture procedure](../geo-assets/SKILL.md#verify-automatic-lunar-dem-registration).
 
-USD intensity/exposure defaults come from native schema resolution. Change
+USD light values, including colour, temperature controls, dimensions, and
+normalization, come from native schema resolution. Change
 scene photometry through authored USD, and use `editor_preview_illuminance`
 only for editor helper lights. Quality updates preserve USD photometry and the
 preview fill/key ratio. The focused production gate is

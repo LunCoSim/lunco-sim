@@ -54,8 +54,9 @@ environmental state that varies by body and location, not a render setting. The 
 Moon's surface is lit by exactly two things — the Sun (hard key) and earthshine (faint
 cool-blue, shadowless fill).
 
-USD light photometry is resolved by the native schema registry. Intensity and
-exposure are required composed reads; malformed or unavailable values reject
+USD light photometry is resolved by the native schema registry. Intensity,
+exposure, colour, temperature controls, dimensions, and normalization are
+required composed reads; malformed or unavailable values reject
 the light. Graphics does not replace omitted USD photometry. Editor preview
 key/fill lights have their own `editor_preview_illuminance` setting and
 `EditorPreviewLight` marker, preserving their relative illumination on live

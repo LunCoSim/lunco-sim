@@ -10592,6 +10592,7 @@ dependencies = [
  "lunco-core",
  "lunco-port-core",
  "lunco-render",
+ "lunco-usd-authoring",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
