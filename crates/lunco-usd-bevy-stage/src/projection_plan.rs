@@ -32,6 +32,7 @@ pub struct UsdPrimProjectionPlan {
     pub transform: Option<Transform>,
     pub transform_matrix_d: Option<bevy::math::DMat4>,
     transform_might_be_time_varying: bool,
+    resets_xform_stack: bool,
     /// Whether the prim is an authored placeable unit.
     pub selectable: bool,
     /// The composed catalog identity, when authored.
@@ -342,6 +343,9 @@ impl UsdStageProjectionPlan {
                 active,
                 transform_might_be_time_varying: reader
                     .transform_might_be_time_varying(&path)
+                    .map_err(|error| anyhow!(error))?,
+                resets_xform_stack: reader
+                    .resets_xform_stack(&path)
                     .map_err(|error| anyhow!(error))?,
                 purpose: reader.purpose(&path).map_err(|error| anyhow!(error))?,
                 effective_visibility: reader
@@ -710,6 +714,14 @@ impl UsdRead for UsdStageProjectionPlan {
         Ok(self.transform_snapshot(prim, time)?.transform_matrix_d)
     }
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        self.prim(prim)
+            .map(|prim| prim.resets_xform_stack)
+            .ok_or_else(|| crate::TransformReadError {
+                prim: prim.to_string(),
+            })
+    }
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -795,6 +807,44 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_reset_facts_survive_prepared_admission() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+(metersPerUnit = 1)
+def Xform "Parent" {
+    double3 xformOp:translate = (10,0,0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Cube "Reset" {
+        double3 xformOp:translate:discarded = (100,0,0)
+        double3 xformOp:translate:after = (2,0,0)
+        uniform token[] xformOpOrder = ["xformOp:translate:discarded","!resetXformStack!","xformOp:translate:after"]
+    }
+}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for (path, reset) in [("/Parent", false), ("/Parent/Reset", true)] {
+            let path = SdfPath::new(path).unwrap();
+            assert_eq!(live.resets_xform_stack(&path).unwrap(), reset);
+            assert_eq!(plan.resets_xform_stack(&path).unwrap(), reset);
+        }
+        let path = SdfPath::new("/Parent/Reset").unwrap();
+        for reader in [&live as &dyn crate::UsdReadObject, &plan] {
+            let matrix = crate::world_transform_matrix_d_at(reader, &path, 0.0).unwrap();
+            assert_eq!(
+                matrix.transform_point3(bevy::math::DVec3::ZERO),
+                bevy::math::DVec3::new(2.0, 0.0, 0.0)
+            );
+        }
+        let missing = SdfPath::new("/Missing").unwrap();
+        assert!(live.resets_xform_stack(&missing).is_err());
+        assert!(plan.resets_xform_stack(&missing).is_err());
+    }
 
     #[test]
     fn native_xform_variation_survives_prepared_admission() {

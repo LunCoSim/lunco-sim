@@ -653,6 +653,9 @@ pub trait UsdRead {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
 
+    /// Native reset-stack fact, independent of the sentinel's position.
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError>;
+
     /// Native ordered-stack variation, including suffixed transform ops.
     fn transform_might_be_time_varying(
         &self,
@@ -841,6 +844,8 @@ pub trait UsdReadObject {
         prim: &SdfPath,
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
+
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError>;
 
     fn transform_might_be_time_varying(
         &self,
@@ -1478,6 +1483,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::local_transform_matrix_d_at(self, prim, time)
     }
 
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        UsdRead::resets_xform_stack(self, prim)
+    }
+
     fn transform_might_be_time_varying(
         &self,
         prim: &SdfPath,
@@ -1642,6 +1651,18 @@ impl UsdRead for StageView<'_> {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
         crate::local_transform_matrix_d_at(self, prim, time)
+    }
+
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        use openusd_schemas::geom::{Xformable, XformableExt};
+        crate::transform::validated_live_xform_op_order(self, prim)?;
+        let failure = || crate::TransformReadError {
+            prim: prim.to_string(),
+        };
+        let native = self.stage().prim(prim.clone()).map_err(|_| failure())?;
+        Xformable::from_prim_unchecked(native)
+            .resets_xform_stack()
+            .map_err(|_| failure())
     }
 
     fn transform_might_be_time_varying(
@@ -2235,6 +2256,13 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::local_transform_matrix_d_at(*reader, prim, time),
             Self::Live(reader) => UsdRead::local_transform_matrix_d_at(reader, prim, time),
+        }
+    }
+
+    fn resets_xform_stack(&self, prim: &SdfPath) -> Result<bool, crate::TransformReadError> {
+        match self {
+            Self::Prepared(reader) => UsdRead::resets_xform_stack(*reader, prim),
+            Self::Live(reader) => UsdRead::resets_xform_stack(reader, prim),
         }
     }
 

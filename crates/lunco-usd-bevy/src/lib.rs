@@ -329,7 +329,7 @@ enum PendingUsdMeshBuild {
 #[derive(Component)]
 struct PointInstanceMeshBinding(AssetId<Mesh>);
 
-/// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
+/// Marker: native USD composition reports a `!resetXformStack!`
 /// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack
 /// alone — the ancestor chain is not part of it.
 ///
@@ -770,18 +770,23 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             return;
         }
 
-        let animated = match prim_is_animated(reader, &sdf_path) {
-            Ok(animated) => animated,
-            Err(error) => {
-                let message = error.to_string();
-                commands.entity(entity).try_insert((
-                    UsdSceneProjectionFailed(message.clone()),
-                    Visibility::Hidden,
-                ));
-                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
-                return;
-            }
-        };
+        let (animated, resets_stack) =
+            match prim_is_animated(reader, &sdf_path).and_then(|animated| {
+                reader
+                    .resets_xform_stack(&sdf_path)
+                    .map(|resets| (animated, resets))
+            }) {
+                Ok(facts) => facts,
+                Err(error) => {
+                    let message = error.to_string();
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
+                    lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
+                    return;
+                }
+            };
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
@@ -1435,8 +1440,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // ancestors" is a statement about parentage, which only
         // `detach_reset_xform_stack_prims` can act on. Tag now, while the reader
         // is in hand — the ancestry it needs may not exist yet this frame.
-        if prim_resets_xform_stack(reader, &sdf_path) {
+        if resets_stack {
             commands.entity(entity).try_insert(UsdResetXformStack);
+        } else {
+            commands.entity(entity).remove::<UsdResetXformStack>();
         }
 
         // Tag a prim authoring `lunco:activeCamera` timeSamples as an editorial
@@ -3424,33 +3431,19 @@ fn refresh_standard_surface_material_intents(
     }
 }
 
-const MAX_USD_ANCESTRY_DEPTH: usize = 64;
-
 /// Internal lifecycle marker for the one-time ECS re-expression performed by
 /// [`detach_reset_xform_stack_prims`]. A reset prim may already be directly
 /// under the stage root, so parent equality alone cannot distinguish "already
 /// corrected" from "still carrying the root's authored transform".
 #[derive(Component)]
-struct ResetXformStackApplied;
-
-/// True iff the prim's `xformOpOrder` **begins** with `!resetXformStack!`.
-///
-/// Position matters: UsdGeomXformable gives the sentinel meaning only as the
-/// first entry — anywhere else it is a malformed stack, which
-/// [`lunco_usd_bevy_stage::local_transform_at`] already rejects with
-/// [`TransformReadError`].
-fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
-    lunco_usd_bevy_stage::read_xform_op_order(reader, path).is_some_and(|order| {
-        order
-            .first()
-            .is_some_and(|op| op == lunco_usd_bevy_stage::RESET_XFORM_STACK)
-    })
+struct ResetXformStackApplied {
+    authored_parent: Entity,
 }
 
 /// Re-anchor every `!resetXformStack!` prim onto its stage's world frame.
 ///
-/// UsdGeomXformable: a prim whose op order opens with the sentinel is
-/// **world-anchored, not parent-relative** — its local-to-world is its own op
+/// Native USD reset semantics discard the ancestor stack and operations
+/// preceding the sentinel. The remaining local-to-world is its own op
 /// stack and nothing else. A projection that leaves it parented under its USD
 /// parent silently multiplies the ancestor chain back in, which is the exact
 /// value the author asked to drop (the canonical use is a prop authored
@@ -3466,22 +3459,75 @@ fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
 /// is everything USD-authored between the prim and that root, which is the whole
 /// of the ancestor chain the stage itself defines.
 ///
-/// Idempotent: the applied marker prevents re-expressing the local matrix on
-/// every frame, while a prim spawned before its ancestry finished materialising
-/// remains unmarked and gets fixed when the root appears.
+/// The applied state retains the authored parent for reset retirement. A
+/// changed reset fact re-expresses a freshly projected local matrix once;
+/// continuous frames retain the corrected pose without applying it again.
 fn detach_reset_xform_stack_prims(
     mut commands: Commands,
     q_reset: Query<
-        (Entity, &UsdPrimPath, &ChildOf, &Transform),
-        (With<UsdResetXformStack>, Without<ResetXformStackApplied>),
+        (
+            Entity,
+            &UsdPrimPath,
+            &ChildOf,
+            &Transform,
+            Option<&ResetXformStackApplied>,
+        ),
+        (
+            With<UsdResetXformStack>,
+            Or<(Without<ResetXformStackApplied>, Changed<UsdResetXformStack>)>,
+        ),
     >,
+    q_restore: Query<(Entity, &UsdPrimPath, &ResetXformStackApplied), Without<UsdResetXformStack>>,
     q_prims: Query<(&UsdPrimPath, Option<&ChildOf>, &Transform)>,
     q_grids: Query<&big_space::prelude::Grid>,
+    q_entities: Query<()>,
 ) {
-    for (entity, prim, child_of, local) in q_reset.iter() {
+    for (entity, prim, applied) in &q_restore {
+        let parent = applied.authored_parent;
+        if !q_entities.contains(parent) {
+            let message = format!(
+                "{} cannot restore its retired authored parent {parent}",
+                prim.path
+            );
+            commands
+                .entity(entity)
+                .try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ))
+                .remove::<ResetXformStackApplied>();
+            lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+            continue;
+        }
+        let mut restored = commands.entity(entity);
+        restored
+            .try_insert(ChildOf(parent))
+            .remove::<ResetXformStackApplied>();
+        if q_grids.get(parent).is_err() {
+            restored.try_remove::<CellCoord>();
+        }
+    }
+    for (entity, prim, child_of, local, applied) in q_reset.iter() {
+        let authored_parent = applied.map_or(child_of.parent(), |applied| applied.authored_parent);
         let mut anchor = None;
-        let mut node = child_of.parent();
-        for _ in 0..MAX_USD_ANCESTRY_DEPTH {
+        let mut node = authored_parent;
+        let mut seen = std::collections::HashSet::new();
+        let mut failed = false;
+        loop {
+            if !seen.insert(node) {
+                let message = format!("{} has a cyclic ECS ancestor chain at {node}", prim.path);
+                commands
+                    .entity(entity)
+                    .try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ))
+                    .remove::<UsdResetXformStack>()
+                    .remove::<ResetXformStackApplied>();
+                lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+                failed = true;
+                break;
+            }
             let Ok((ancestor, ancestor_parent, _)) = q_prims.get(node) else {
                 // Above the stage's own prims — the grid/mount anchor. Whatever
                 // we found last is the stage root.
@@ -3498,9 +3544,14 @@ fn detach_reset_xform_stack_prims(
                 None => break,
             }
         }
+        if failed {
+            continue;
+        }
         let Some(anchor) = anchor else {
-            // Already a child of something that is not a USD prim of this stage
-            // ⇒ nothing of the stage's chain is being applied. Nothing to drop.
+            // No same-stage ancestor contributes a transform at this boundary.
+            commands
+                .entity(entity)
+                .try_insert(ResetXformStackApplied { authored_parent });
             continue;
         };
         let Ok((_, _, stage_root_local)) = q_prims.get(anchor) else {
@@ -3515,10 +3566,8 @@ fn detach_reset_xform_stack_prims(
         let root_inverse = stage_root_local.to_matrix().inverse();
         let reset_local = Transform::from_matrix(root_inverse * local.to_matrix());
         info!(
-            "[usd-bevy] {} opens with {} — detaching from its USD ancestry \
-             onto the stage world frame ({anchor:?})",
+            "[usd-bevy] {} resets its transform stack — projecting onto the stage world frame ({anchor:?})",
             prim.path,
-            lunco_usd_bevy_stage::RESET_XFORM_STACK,
         );
         let mut entity_commands = commands.entity(entity);
         if let Ok(grid) = q_grids.get(anchor) {
@@ -3531,10 +3580,14 @@ fn detach_reset_xform_stack_prims(
                     ..reset_local
                 },
                 cell,
-                ResetXformStackApplied,
+                ResetXformStackApplied { authored_parent },
             ));
         } else {
-            entity_commands.try_insert((ChildOf(anchor), reset_local, ResetXformStackApplied));
+            entity_commands.try_insert((
+                ChildOf(anchor),
+                reset_local,
+                ResetXformStackApplied { authored_parent },
+            ));
             entity_commands.try_remove::<CellCoord>();
         }
     }

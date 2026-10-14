@@ -251,9 +251,7 @@ pub fn world_transform_matrix_d_at(
             continue;
         }
         in_read_surface = true;
-        if read_xform_op_order(reader, prim)
-            .is_some_and(|order| order.iter().any(|op| op == RESET_XFORM_STACK))
-        {
+        if reader.resets_xform_stack(prim)? {
             matrix = DMat4::IDENTITY;
         }
         if let Some(local) = reader.local_transform_matrix_d_at(prim, time)? {
@@ -299,8 +297,6 @@ fn authored_empty_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> 
         _ => false,
     }
 }
-
-pub const RESET_XFORM_STACK: &str = "!resetXformStack!";
 
 #[cfg(test)]
 mod high_precision_grid_translation_tests {

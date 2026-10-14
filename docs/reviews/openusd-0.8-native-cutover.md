@@ -461,6 +461,27 @@ order admission. The production binary built successfully. Checkout/binary/PID
 identity, API Exit, and port release were verified. Evidence is in
 `/tmp/luncosim-native-xform-animation-*.log`.
 
+## Native reset-stack facts and frame lifecycle
+
+Native `UsdRead::resets_xform_stack` supplies the reset fact to prepared/live
+readers, double world-geometry composition, and visual frame projection. Native
+USD accepts the sentinel after other operations and discards those preceding
+operations. The application does not inspect its position or maintain a copied
+reset token. Visual applied state retains the authored parent, restores it when
+reset retires, and re-expresses a changed reset pose once. Stage ancestry is
+traversed completely; cycles and retired parents produce terminal projection
+diagnostics. These are native geometry facts and generic projection invariants,
+with no scenario selection policy added in Rust.
+
+The production baseline failed four of ten reset/order assertions. The final
+scenario passed twelve checks on owned port 4224, adding a 70-level hierarchy
+and covering live reset removal/restoration, ordinary parent-relative poses,
+and malformed-order rejection without document mutation. The native prepared
+reset/math seam passed, and the production binary built. The visual Rust test
+build was stopped for disk recovery; no pass is claimed for it. Package cleanup
+preserved source and shared caches. Checkout/binary/PID identity, API Exit, and
+port release were verified. Evidence is in `/tmp/luncosim-native-reset-stack-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
