@@ -886,9 +886,9 @@ fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
 
 /// Compose a runtime field value onto the base's same-keyed value for the two
 /// composite kinds USD does NOT replace wholesale: dictionaries (`customData`,
-/// `assetInfo`) merge KEY-WISE — the stronger layer wins per key, weaker-only
-/// keys survive — and list-ops (`references`, `apiSchemas`, relationship /
-/// connection targets) compose per the spec's list-op application, the stronger
+/// `assetInfo`) use native recursive composition, and list-ops (`references`,
+/// `apiSchemas`, relationship / connection targets) compose per the spec's
+/// list-op application, the stronger
 /// op applied over the weaker (native `ListOp::combined_with`, its
 /// `SdfListOp::ComposeAndReduce`). An explicit stronger op still replaces the
 /// weaker entirely, exactly as the spec requires. Returns `None` for every
@@ -897,8 +897,8 @@ fn merge_composite(base: Option<&Value>, runtime: &Value) -> Option<Value> {
     use Value as V;
     Some(match (runtime, base?) {
         (V::Dictionary(r), V::Dictionary(b)) => {
-            let mut merged = b.clone();
-            merged.extend(r.iter().map(|(k, v)| (k.clone(), v.clone())));
+            let mut merged = r.clone();
+            sdf::dictionary_over(&mut merged, b.clone());
             V::Dictionary(merged)
         }
         (V::TokenListOp(r), V::TokenListOp(b)) => V::TokenListOp(r.combined_with(b)),
@@ -1401,16 +1401,16 @@ def "Part" { double referenced = 23 }
         );
     }
 
-    /// `customData` (dictionary-valued metadata) merges KEY-WISE: the runtime
-    /// layer wins per key, base-only keys survive.
+    /// Dictionary composition preserves weaker nested keys and respects stronger
+    /// scalar opinions, including a scalar that replaces a dictionary.
     #[test]
     fn compose_layers_merges_custom_data_key_wise() {
         let base = usda_to_data(
-            "#usda 1.0\ndef Xform \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double min = 0\n            double max = 10\n        }\n    )\n}\n",
+            "#usda 1.0\ndef Xform \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double min = 0\n            double max = 10\n            dictionary limits = { double min = 1; double max = 11 }\n            dictionary mode = { token value = \"base\" }\n        }\n    )\n}\n",
         )
         .unwrap();
         let runtime = usda_to_data(
-            "#usda 1.0\nover \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double max = 99\n        }\n    )\n}\n",
+            "#usda 1.0\nover \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double max = 99\n            dictionary limits = { double max = 77 }\n            token mode = \"runtime\"\n        }\n    )\n}\n",
         )
         .unwrap();
         let composed = compose_layers(&base, &runtime);
@@ -1429,6 +1429,12 @@ def "Part" { double referenced = 23 }
             Some(0.0),
             "base-only key survives"
         );
+        let Some(Value::Dictionary(limits)) = dict.get("limits") else {
+            panic!("expected nested limits dictionary");
+        };
+        assert_eq!(limits.get("min"), Some(&Value::Double(1.0)));
+        assert_eq!(limits.get("max"), Some(&Value::Double(77.0)));
+        assert_eq!(dict.get("mode"), Some(&Value::Token("runtime".into())));
     }
 
     /// The composed specifier is the strongest layer's DEFINING opinion: `over`

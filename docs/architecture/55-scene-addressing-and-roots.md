@@ -220,6 +220,11 @@ the document's `Sdf Data` does not retain the package's sibling layers and asset
 Package entry identity and provenance must reach the storage/document owner
 before USDZ can be admitted as an editable source.
 
+Dependent-source authored-layer transport preserves composition arcs and uses
+native recursive dictionary composition (`sdf::dictionary_over`) and list-op
+composition (`ListOp::combined_with`). Full-stage flattening consumes those arcs
+and cannot replace the authored-layer transport.
+
 Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.
 `./x` and `../x` are strictly layer-relative. A search path, a relative
 spelling without a scheme or leading `./`/`../` such as `@terrain/site@`,

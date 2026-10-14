@@ -382,6 +382,10 @@ Evidence is under `/tmp/luncosim-native-input-*.log`.
    stages. The dependent-layer consumer must use its native owner before that
    merge and its tests can be deleted.
    Native `Stage::flatten` resolves and removes composition arcs, so it cannot replace an authored-layer merge or save.
+   Dictionary fields in the remaining transport use native `sdf::dictionary_over`
+   for recursive stronger-over-weaker composition; list operations use native
+   `ListOp::combined_with`. The nested dictionary regression preserves weaker
+   keys and stronger scalar opinions through this pure Sdf-data seam.
    This review does not claim that all reinvention or fallback paths are gone.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.

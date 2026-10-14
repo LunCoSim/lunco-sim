@@ -135,6 +135,12 @@ mount. That plan refresh does not hold simulation progress or reset the live
 scene. Coarse composition edits and updates that span multiple changed source
 layers use the full-stage reset owner.
 
+The remaining dependent-source authored-layer transport delegates dictionary
+composition to native `sdf::dictionary_over` and list operations to native
+`ListOp::combined_with`. Preserve nested metadata and stronger scalar opinions;
+do not implement a shallow map merge or substitute stage flattening, which
+consumes composition arcs.
+
 Source replacement bytes use the native format's editability capability.
 `author::layer_bytes` rejects formats without `FileFormatCaps::EDIT`, including
 USDZ, whose single-layer writer cannot preserve other package members. A fresh
