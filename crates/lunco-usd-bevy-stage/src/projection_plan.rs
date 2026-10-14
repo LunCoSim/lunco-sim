@@ -52,6 +52,7 @@ pub struct UsdPrimProjectionPlan {
     binary_asset_uri: Option<String>,
     documentation: Option<String>,
     active: bool,
+    purpose: openusd_schemas::geom::Purpose,
     invisible_or_guide: bool,
     bound_materials: HashMap<MaterialPurpose, String>,
 }
@@ -328,6 +329,7 @@ impl UsdStageProjectionPlan {
                 binary_asset_uri: reader.binary_asset_uri(&path),
                 documentation: reader.documentation(&path),
                 active,
+                purpose: reader.purpose(&path).map_err(|error| anyhow!(error))?,
                 invisible_or_guide: reader.is_invisible_or_guide(&path),
                 bound_materials,
             };
@@ -704,6 +706,12 @@ impl UsdRead for UsdStageProjectionPlan {
         self.prim(prim).is_some_and(|prim| prim.invisible_or_guide)
     }
 
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
+        self.prim(prim)
+            .map(|prim| prim.purpose)
+            .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
+    }
+
     fn bound_material(&self, prim: &SdfPath, purpose: MaterialPurpose) -> Option<String> {
         self.prim(prim)
             .and_then(|prim| prim.bound_materials.get(&purpose))
@@ -755,6 +763,39 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_purpose_preserves_native_inheritance_and_missing_prim_errors() {
+        let recipe = StageRecipe::from_source(
+            "purpose.usda",
+            r#"#usda 1.0
+def Xform "Root" {
+    uniform token purpose = "guide"
+    def Cube "Inherited" {}
+    def Cube "Override" { uniform token purpose = "default" }
+    def Xform "Proxy" {
+        uniform token purpose = "proxy"
+        def Cube "Shape" {}
+    }
+}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let prepared = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for (path, expected) in [
+            ("/Root/Inherited", openusd_schemas::geom::Purpose::Guide),
+            ("/Root/Override", openusd_schemas::geom::Purpose::Default),
+            ("/Root/Proxy/Shape", openusd_schemas::geom::Purpose::Proxy),
+        ] {
+            let path = SdfPath::new(path).unwrap();
+            assert_eq!(live.purpose(&path), Ok(expected));
+            assert_eq!(prepared.purpose(&path), live.purpose(&path));
+        }
+        let missing = SdfPath::new("/Root/Missing").unwrap();
+        assert!(live.purpose(&missing).is_err());
+        assert!(prepared.purpose(&missing).is_err());
+    }
 
     #[test]
     fn snapshots_composed_hierarchy_and_time_samples() {

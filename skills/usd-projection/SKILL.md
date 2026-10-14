@@ -68,6 +68,15 @@ uses the render-free `lunco-usd-geometry` package, while its existing async
 compute path and only Bevy asset insertion remain on the main thread. After the initial asset generation, explicit live edits use the
 canonical `StageView` and the same extractor contract.
 
+Read inherited Imageable purpose through `UsdRead::purpose`, which exposes the
+native SDK type and `ImageableExt::compute_purpose` semantics in both live and
+prepared readers. Preserve its error result at physics, bounds, query, and lint
+boundaries. The production gate
+`lunco://scenarios/tests/native_purpose_inheritance.rhai`, attached through
+`RunScenarioAsset` to the settled replacement fixture, verifies guide exclusion,
+proxy/render selection, explicit-default overrides, collision bounds, lint,
+live ancestor edits, and terminal malformed-type rejection without mutation.
+
 The scene transaction closes from asset and structural-projection outcomes.
 `UsdSceneProjectionFailed` on the running mount must fail and clear that
 transaction before a generation can commit; preview errors are separately

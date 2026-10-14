@@ -51,8 +51,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim-authoring` reader
 /// that owns that projection. The policy sees one map and one authoritative value for
 /// each subject.
-pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
-    usd_physics_facts_with_control_info(view).0
+pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> Result<H, String> {
+    usd_physics_facts_with_control_info(view).map(|(facts, _)| facts)
 }
 
 fn lint_command_error(
@@ -118,8 +118,8 @@ fn on_usd_document_changed(
 /// projection used by `ValidateAsset`'s JSON report.
 pub(crate) fn usd_physics_facts_with_control_info(
     view: &StageView<'_>,
-) -> (H, Vec<serde_json::Value>) {
-    let mut facts = lunco_usd_avian_lint::physics_facts(view);
+) -> Result<(H, Vec<serde_json::Value>), String> {
+    let mut facts = lunco_usd_avian_lint::physics_facts(view)?;
     append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim_authoring::append_gear_drive_facts(view, &mut facts);
     lunco_usd_sim_authoring::append_wheel_attachment_facts(view, &mut facts);
@@ -131,7 +131,7 @@ pub(crate) fn usd_physics_facts_with_control_info(
         entries.push(("control_bindings".to_string(), H::Array(bindings)));
         entries.push(("shader_interfaces".to_string(), H::Array(Vec::new())));
     }
-    (facts, info)
+    Ok((facts, info))
 }
 
 /// Add the domain owner selected by the same composed-USD classifier used by
@@ -233,10 +233,18 @@ fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
 /// its gear and wheel facts and this module owns synthesizer aggregation. Callers must use this entry point rather than
 /// linting a partial producer's facts.
 pub fn lint_stage(view: &StageView<'_>) -> Vec<Diagnostic> {
-    lunco_lint::run_lint(
-        lunco_usd_avian_lint::USD_LINT_DOMAIN,
-        usd_physics_facts(view),
-    )
+    let facts = match usd_physics_facts(view) {
+        Ok(facts) => facts,
+        Err(error) => {
+            return vec![lint_command_error(
+                "usd",
+                "native-purpose-read-failed",
+                "<stage>",
+                error,
+            )];
+        }
+    };
+    lunco_lint::run_lint(lunco_usd_avian_lint::USD_LINT_DOMAIN, facts)
 }
 
 /// Project already resolved runtime port-owner collisions into USD lint facts.
@@ -480,7 +488,17 @@ fn lint_stage_with_runtime(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     view: &StageView<'_>,
 ) -> Vec<Diagnostic> {
-    let mut facts = usd_physics_facts(view);
+    let mut facts = match usd_physics_facts(view) {
+        Ok(facts) => facts,
+        Err(error) => {
+            return vec![lint_command_error(
+                "usd",
+                "native-purpose-read-failed",
+                "<stage>",
+                error,
+            )];
+        }
+    };
     if let H::Map(entries) = &mut facts {
         let runtime = H::Array(live_runtime_connection_facts(world, stage_id, view));
         if let Some((_, existing)) = entries

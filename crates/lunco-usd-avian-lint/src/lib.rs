@@ -314,7 +314,7 @@ fn body_has_proxy(
     sorted: &[String],
     bodies: &HashSet<String>,
     body: &str,
-) -> bool {
+) -> Result<bool, String> {
     let prefix = body.to_string() + "/";
     let start = sorted.partition_point(|s| s.as_str() < prefix.as_str());
     for s in &sorted[start..] {
@@ -326,13 +326,12 @@ fn body_has_proxy(
         }
         let Ok(p) = SdfPath::new(s) else { continue };
         if is_vehicle_geometry_type(&reader.prim_type_name(&p).unwrap_or_default())
-            && lunco_usd_bevy_stage::effective_purpose(reader, &p)
-                == lunco_usd_bevy_stage::Purpose::Proxy
+            && reader.purpose(&p)? == openusd_schemas::geom::Purpose::Proxy
         {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 /// Composed collision coverage facts for every renderable part below a
@@ -346,124 +345,119 @@ fn vehicle_part_facts(
     vehicle_roots: &HashSet<String>,
     proxy_bodies: &HashSet<String>,
     physical_wheels: &HashSet<String>,
-) -> Vec<H> {
-    paths
-        .iter()
-        .filter_map(|path| {
-            let type_name = reader.prim_type_name(path)?;
-            if !is_vehicle_geometry_type(&type_name) {
-                return None;
+) -> Result<Vec<H>, String> {
+    let mut facts = Vec::new();
+    for path in paths {
+        let Some(type_name) = reader.prim_type_name(path) else {
+            continue;
+        };
+        if !is_vehicle_geometry_type(&type_name) {
+            continue;
+        }
+        let Some(vehicle) = nearest_path_in_set(vehicle_roots, path) else {
+            continue;
+        };
+        let body = nearest_path_in_set(bodies, path).unwrap_or_default();
+        let collision_api = reader.has_api_schema(path, ptok::PHYSICS_COLLISION_API);
+        let wheel_projector = reader.has_api_schema(path, "PhysxVehicleWheelAPI");
+        let physical_wheel = physical_wheels.contains(path.as_str());
+        let rigid_body_api = reader.has_api_schema(path, ptok::PHYSICS_RIGID_BODY_API);
+        let collision_attribute_authored =
+            reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED);
+        let collision_state = if collision_api {
+            match lunco_usd_avian_reader::read_authored_bool_or_default(
+                reader,
+                path,
+                ptok::PHYSICS_COLLISION_ENABLED,
+                true,
+            ) {
+                Ok(true) => "enabled",
+                Ok(false) => "disabled",
+                Err(()) => "malformed",
             }
-            let vehicle = nearest_path_in_set(vehicle_roots, path)?;
-            let body = nearest_path_in_set(bodies, path).unwrap_or_default();
-            let collision_api = reader.has_api_schema(path, ptok::PHYSICS_COLLISION_API);
-            let wheel_projector = reader.has_api_schema(path, "PhysxVehicleWheelAPI");
-            let physical_wheel = physical_wheels.contains(path.as_str());
-            let rigid_body_api = reader.has_api_schema(path, ptok::PHYSICS_RIGID_BODY_API);
-            let collision_attribute_authored =
-                reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED);
-            let collision_state = if collision_api {
-                match lunco_usd_avian_reader::read_authored_bool_or_default(
-                    reader,
-                    path,
-                    ptok::PHYSICS_COLLISION_ENABLED,
-                    true,
-                ) {
-                    Ok(true) => "enabled",
-                    Ok(false) => "disabled",
-                    Err(()) => "malformed",
+        } else {
+            match reader.boolean(path, ptok::PHYSICS_COLLISION_ENABLED) {
+                Some(true) => "enabled_without_api",
+                Some(false) => "disabled",
+                None if reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED) => {
+                    "malformed"
                 }
-            } else {
-                match reader.boolean(path, ptok::PHYSICS_COLLISION_ENABLED) {
-                    Some(true) => "enabled_without_api",
-                    Some(false) => "disabled",
-                    None if reader.has_authored_attribute(path, ptok::PHYSICS_COLLISION_ENABLED) => {
-                        "malformed"
-                    }
-                    None => "missing",
-                }
-            };
-            let purpose = lunco_usd_bevy_stage::effective_purpose(reader, path);
-            let render_excluded_by_proxy =
-                purpose == lunco_usd_bevy_stage::Purpose::Render && proxy_bodies.contains(&body);
-            let visual_only = purpose == lunco_usd_bevy_stage::Purpose::Guide
-                || collision_state == "disabled"
-                || render_excluded_by_proxy;
-            let covered =
-                wheel_projector || (collision_api && collision_state == "enabled" && !visual_only);
-            let shape_valid = if covered && collision_api {
-                matches!(
-                    lunco_usd_avian_reader::collider::build_collider_from_usd(reader, path),
-                    Ok(
-                        lunco_usd_avian_reader::collider::ColliderBuildOutcome::Built(_)
-                            | lunco_usd_avian_reader::collider::ColliderBuildOutcome::DeferredMeshAsset
-                    )
+                None => "missing",
+            }
+        };
+        let purpose = reader.purpose(path)?;
+        let render_excluded_by_proxy =
+            purpose == openusd_schemas::geom::Purpose::Render && proxy_bodies.contains(&body);
+        let visual_only = purpose == openusd_schemas::geom::Purpose::Guide
+            || collision_state == "disabled"
+            || render_excluded_by_proxy;
+        let covered =
+            wheel_projector || (collision_api && collision_state == "enabled" && !visual_only);
+        let shape_valid = if covered && collision_api {
+            matches!(
+                lunco_usd_avian_reader::collider::build_collider_from_usd(reader, path),
+                Ok(
+                    lunco_usd_avian_reader::collider::ColliderBuildOutcome::Built(_)
+                        | lunco_usd_avian_reader::collider::ColliderBuildOutcome::DeferredMeshAsset
                 )
-            } else {
-                true
-            };
-            let contract = if physical_wheel {
-                if !rigid_body_api {
-                    "physical-missing-rigid-body"
-                } else if !collision_api {
-                    "physical-missing-collider-api"
-                } else if collision_state != "enabled" {
-                    "physical-invalid-collision"
-                } else if !shape_valid {
-                    "physical-unsupported-collider"
-                } else {
-                    "physical-collider"
-                }
-            } else if wheel_projector && rigid_body_api {
-                "raycast-rigid-body"
-            } else if wheel_projector && (collision_api || collision_attribute_authored) {
-                "raycast-collider"
-            } else if wheel_projector {
-                "projector"
-            } else if visual_only {
-                "visual-only"
+            )
+        } else {
+            true
+        };
+        let contract = if physical_wheel {
+            if !rigid_body_api {
+                "physical-missing-rigid-body"
             } else if !collision_api {
-                "missing-collider-api"
+                "physical-missing-collider-api"
             } else if collision_state != "enabled" {
-                "malformed-collision-enabled"
+                "physical-invalid-collision"
             } else if !shape_valid {
-                "unsupported-collider"
+                "physical-unsupported-collider"
             } else {
-                "collider"
-            };
-            Some(H::map([
-                ("path", H::str(path.to_string())),
-                ("type", H::str(type_name)),
-                ("vehicle", H::str(vehicle)),
-                ("body", H::str(body)),
-                (
-                    "purpose",
-                    H::str(match purpose {
-                        lunco_usd_bevy_stage::Purpose::Default => "default",
-                        lunco_usd_bevy_stage::Purpose::Render => "render",
-                        lunco_usd_bevy_stage::Purpose::Proxy => "proxy",
-                        lunco_usd_bevy_stage::Purpose::Guide => "guide",
-                    }),
-                ),
-                ("collision_api", H::Bool(collision_api)),
-                ("collision_state", H::str(collision_state)),
-                ("wheel_projector", H::Bool(wheel_projector)),
-                ("physical_wheel", H::Bool(physical_wheel)),
-                ("rigid_body_api", H::Bool(rigid_body_api)),
-                (
-                    "collision_attribute_authored",
-                    H::Bool(collision_attribute_authored),
-                ),
-                (
-                    "render_excluded_by_proxy",
-                    H::Bool(render_excluded_by_proxy),
-                ),
-                ("visual_only", H::Bool(visual_only)),
-                ("shape_valid", H::Bool(shape_valid)),
-                ("contract", H::str(contract)),
-            ]))
-        })
-        .collect()
+                "physical-collider"
+            }
+        } else if wheel_projector && rigid_body_api {
+            "raycast-rigid-body"
+        } else if wheel_projector && (collision_api || collision_attribute_authored) {
+            "raycast-collider"
+        } else if wheel_projector {
+            "projector"
+        } else if visual_only {
+            "visual-only"
+        } else if !collision_api {
+            "missing-collider-api"
+        } else if collision_state != "enabled" {
+            "malformed-collision-enabled"
+        } else if !shape_valid {
+            "unsupported-collider"
+        } else {
+            "collider"
+        };
+        facts.push(H::map([
+            ("path", H::str(path.to_string())),
+            ("type", H::str(type_name)),
+            ("vehicle", H::str(vehicle)),
+            ("body", H::str(body)),
+            ("purpose", H::str(purpose.as_token())),
+            ("collision_api", H::Bool(collision_api)),
+            ("collision_state", H::str(collision_state)),
+            ("wheel_projector", H::Bool(wheel_projector)),
+            ("physical_wheel", H::Bool(physical_wheel)),
+            ("rigid_body_api", H::Bool(rigid_body_api)),
+            (
+                "collision_attribute_authored",
+                H::Bool(collision_attribute_authored),
+            ),
+            (
+                "render_excluded_by_proxy",
+                H::Bool(render_excluded_by_proxy),
+            ),
+            ("visual_only", H::Bool(visual_only)),
+            ("shape_valid", H::Bool(shape_valid)),
+            ("contract", H::str(contract)),
+        ]));
+    }
+    Ok(facts)
 }
 
 /// Generic USD facts for the authored telemetry contract. The runtime accepts
@@ -554,7 +548,7 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
 /// Pure — no ECS, no side effects — so it can be built from a live scene, from
 /// `ValidateAsset`'s pre-flight compose, or from a test fixture, and all three
 /// then get identical findings from identical rules.
-pub fn physics_facts(reader: &StageView<'_>) -> H {
+pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
     let paths: Vec<SdfPath> = reader.prim_paths();
     let telemetry_declarations = telemetry_declaration_facts(reader, &paths);
     let root_spawnable = reader
@@ -796,8 +790,13 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         .collect();
     let proxy_bodies: HashSet<String> = bodies
         .iter()
-        .filter(|body| body_has_proxy(reader, &sorted, &bodies, body))
-        .cloned()
+        .map(|body| {
+            body_has_proxy(reader, &sorted, &bodies, body)
+                .map(|has_proxy| has_proxy.then(|| body.clone()))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
         .collect();
     let vehicle_parts = vehicle_part_facts(
         reader,
@@ -806,7 +805,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         &vehicle_roots,
         &proxy_bodies,
         &physical_wheels,
-    );
+    )?;
 
     let mut body_facts: Vec<H> = Vec::new();
     let mut unsupported_program_prims: Vec<H> = Vec::new();
@@ -1261,7 +1260,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ]));
     }
 
-    H::map([
+    Ok(H::map([
         (
             "stage",
             H::map([
@@ -1314,7 +1313,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ),
         ("connector_programs", H::Array(connector_programs)),
         ("telemetry_declarations", H::Array(telemetry_declarations)),
-    ])
+    ]))
 }
 
 #[cfg(test)]
@@ -1335,7 +1334,7 @@ mod tests {
         lunco_storage::write_file_sync(&f, usda.as_bytes()).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         let view = StageView::new(&stage);
-        physics_facts(&view)
+        physics_facts(&view).expect("valid native physics facts")
     }
 
     fn entries(facts: &H, key: &str) -> Vec<H> {

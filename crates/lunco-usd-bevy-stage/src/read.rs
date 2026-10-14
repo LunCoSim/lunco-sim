@@ -659,6 +659,9 @@ pub trait UsdRead {
         time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError>;
 
+    /// Native Imageable purpose, including nearest authored ancestor opinions.
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String>;
+
     /// USD's inherited Imageable visibility/purpose result used by the visual
     /// projector. The value is prepared with the same composed semantics as
     /// the live stage.
@@ -836,6 +839,7 @@ pub trait UsdReadObject {
         prim: &SdfPath,
         time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError>;
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String>;
     fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool;
     fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
@@ -1464,6 +1468,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::is_invisible_or_guide(self, prim)
     }
 
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
+        UsdRead::purpose(self, prim)
+    }
+
     fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
         UsdRead::bound_material(self, prim, purpose)
     }
@@ -1614,6 +1622,21 @@ impl UsdRead for StageView<'_> {
 
     fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
         crate::stage_prim_is_invisible_or_guide(self, prim)
+    }
+
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
+        use openusd_schemas::geom::{Imageable, ImageableExt};
+        let native_prim = self
+            .stage()
+            .prim(prim.clone())
+            .map_err(|error| error.to_string())?;
+        if !native_prim.is_valid().map_err(|error| error.to_string())? {
+            return Err(format!("{prim}: prim is absent from the live stage"));
+        }
+        let imageable = Imageable::from_prim_unchecked(native_prim);
+        imageable
+            .compute_purpose()
+            .map_err(|error| format!("{prim}: {error}"))
     }
 
     fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String> {
@@ -2171,6 +2194,13 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::is_invisible_or_guide(*reader, prim),
             Self::Live(reader) => UsdRead::is_invisible_or_guide(reader, prim),
+        }
+    }
+
+    fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::purpose(*reader, prim),
+            Self::Live(reader) => UsdRead::purpose(reader, prim),
         }
     }
 

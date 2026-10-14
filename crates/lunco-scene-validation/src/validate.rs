@@ -596,7 +596,10 @@ fn validate_usd_stage(mut report: ValidationReport, stage: &CanonicalStage) -> V
     // the live lint command hands them, including USD-sim gear drives, so a rule
     // cannot pass here and fire at load, or the reverse.
     let (lint_facts, control_binding_info) =
-        crate::lint_command::usd_physics_facts_with_control_info(&view);
+        match crate::lint_command::usd_physics_facts_with_control_info(&view) {
+            Ok(facts) => facts,
+            Err(error) => return report.error(format!("native USD purpose read failed: {error}")),
+        };
     report.lint_facts = Some(lint_facts);
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn

@@ -419,6 +419,15 @@ wake render-layer reconciliation. Text-layer and mode changes use typed intents.
 
 ### Authored/view layers ⊕ the composed stage
 
+`UsdRead::purpose` returns the native `openusd_schemas::geom::Purpose` result.
+Live reads use `ImageableExt::compute_purpose`; worker projection plans retain
+that result for the same admitted revision. The nearest authored Imageable
+ancestor supplies purpose, and an explicit `default` overrides inherited guide,
+proxy, or render. Collision cooking, aggregate bounds, topology inspection,
+and lint facts consume this typed result. Missing prims and native read failures
+remain errors: physics faults and holds failed projection, while lint and
+inspection expose diagnostics.
+
 A running scene has three document layers and one composed stage. Each layer
 has a distinct lifetime and write path:
 

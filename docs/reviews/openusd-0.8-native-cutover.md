@@ -294,6 +294,27 @@ rectangular area scaling, temperature colour, and terminal malformed-input
 rejection without document mutation. API Exit and port release were verified.
 Evidence is in `/tmp/luncosim-native-light-schema-owner-*.log`.
 
+## Native inherited purpose
+
+`UsdRead::purpose` delegates live reads to `ImageableExt::compute_purpose` and
+retains the SDK enum in prepared projection plans. Collider cooking, standalone
+physics projection, collision bounds, topology queries, and lint facts all
+consume that native result. No application ancestor walk, purpose enum, or
+token conversion remains. Physics read failures use the existing runtime-fault
+and hold boundary; lint fact preparation rejects failed reads with a diagnostic
+instead of reporting incomplete facts as a valid stage. This is a shared schema
+mechanism; existing Rhai policy still owns lint selection and severity.
+
+The affected-owner/application all-target check and production build passed.
+The focused snapshot test verifies live/prepared parity and missing-prim errors.
+The production baseline failed three of five checks, with guide/render geometry
+incorrectly included in the body. The repaired windowed gate passes ten checks
+on owned port 4218: inherited guide exclusion, proxy/render selection, explicit
+default overrides, matching bounds, topology inspection, lint positive/negative
+cases, a live ancestor edit, and terminal malformed-type rejection without
+mutation. Checkout/binary identity, API Exit, and port release were verified.
+Evidence is in `/tmp/luncosim-native-purpose-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -321,8 +342,7 @@ Evidence is in `/tmp/luncosim-native-light-schema-owner-*.log`.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
-4. `purpose::effective_purpose` walks resolved local attribute values, so a
-   child's schema fallback can stop authored purpose inheritance. The native
-   `ImageableExt::compute_purpose` already implements this contract and must
-   replace that walk for both live and prepared readers and their collider/lint
-   consumers.
+4. The visual Imageable predicate still folds native visibility/purpose errors
+   into `false`. Its boolean contract must be replaced by a checked native read
+   consumed by both prepared and live visual projection, without a fabricated
+   visible result on failure.

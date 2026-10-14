@@ -31,9 +31,7 @@ pub use material_binding::{
     MaterialPurpose, parent_prim_path, resolve_bound_material, resolve_bound_shader,
 };
 pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
-pub use purpose::{
-    Purpose, effective_purpose, is_descendant_or_self, resolve_stage_prim_path, stage_default_prim,
-};
+pub use purpose::{is_descendant_or_self, resolve_stage_prim_path, stage_default_prim};
 pub use read::{UsdRead, UsdReadObject, UsdReadPrimFacts, UsdReadSource};
 pub use transform::{
     RESET_XFORM_STACK, TransformReadError, compose_xform_order_at, euler_xyz_deg_to_quat,

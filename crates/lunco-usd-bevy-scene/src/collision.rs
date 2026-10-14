@@ -9,10 +9,9 @@
 
 use bevy::math::{DMat4, DQuat, DVec3};
 use lunco_usd_avian_contracts::AvianMeshApproximation;
-use lunco_usd_bevy_stage::{
-    Purpose, StageView, UsdReadObject, effective_purpose, stage_convention,
-};
+use lunco_usd_bevy_stage::{StageView, UsdReadObject, stage_convention};
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::geom::Purpose;
 use openusd_schemas::physics::CollisionApprox;
 
 use crate::{
@@ -65,6 +64,10 @@ pub enum CollisionBoundsFidelity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CollisionAabbError {
     InvalidRootPath(String),
+    Purpose {
+        prim: String,
+        detail: String,
+    },
     MalformedTransform {
         prim: String,
     },
@@ -89,6 +92,7 @@ impl std::fmt::Display for CollisionAabbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidRootPath(path) => write!(f, "invalid collision root path {path}"),
+            Self::Purpose { prim, detail } => write!(f, "{prim}: {detail}"),
             Self::MalformedTransform { prim } => {
                 write!(f, "malformed authored transform at {prim}")
             }
@@ -144,16 +148,27 @@ pub fn collision_aabb(
     let root_tf = collision_local_matrix(reader, &root)?;
     let mut candidates = vec![(root.clone(), root_tf)];
     gather_collision_aabb_candidates(reader, &root, root_tf, &mut candidates)?;
+    let candidates = candidates
+        .into_iter()
+        .map(|(path, transform)| {
+            let purpose = UsdReadObject::purpose(reader, &path).map_err(|detail| {
+                CollisionAabbError::Purpose {
+                    prim: path.to_string(),
+                    detail,
+                }
+            })?;
+            Ok((path, transform, purpose))
+        })
+        .collect::<Result<Vec<_>, CollisionAabbError>>()?;
     let has_proxy = candidates
         .iter()
-        .any(|(path, _)| effective_purpose(reader, path) == Purpose::Proxy);
+        .any(|(_, _, purpose)| *purpose == Purpose::Proxy);
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
     let mut fidelity = CollisionBoundsFidelity::Exact;
-    for (path, world_tf) in candidates {
+    for (path, world_tf, purpose) in candidates {
         if UsdReadObject::has_api_schema(reader, &path, "LunCoTriggerZoneAPI") {
             continue;
         }
-        let purpose = effective_purpose(reader, &path);
         if purpose == Purpose::Guide || (has_proxy && purpose == Purpose::Render) {
             continue;
         }

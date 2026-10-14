@@ -8,8 +8,9 @@ use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
     read_usd_mesh_indexed, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
 };
-use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
+use lunco_usd_bevy_stage::{TransformReadError, local_transform_at};
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
+use openusd_schemas::geom::Purpose;
 use openusd_schemas::physics::CollisionApprox;
 use openusd_schemas::physics::tokens as ptok;
 
@@ -377,11 +378,24 @@ pub fn collect_child_colliders_from_usd(
     // collide, that mesh is what you look at", and it is why a proxy exists at
     // all: `proxy` wins over `render` for physics, exactly as `render` wins over
     // `proxy` for drawing.
+    let candidates = candidates
+        .into_iter()
+        .map(|(path, transform)| {
+            let purpose =
+                reader
+                    .purpose(&path)
+                    .map_err(|detail| ColliderProjectionError::Backend {
+                        prim: path.to_string(),
+                        detail,
+                    })?;
+            Ok((path, transform, purpose))
+        })
+        .collect::<Result<Vec<_>, ColliderProjectionError>>()?;
     let has_proxy = candidates
         .iter()
-        .any(|(c, _)| effective_purpose(reader, c) == Purpose::Proxy);
+        .any(|(_, _, purpose)| *purpose == Purpose::Proxy);
 
-    for (child_path, mut child_tf) in candidates {
+    for (child_path, mut child_tf, purpose) in candidates {
         // A typed trigger zone owns an overlap sensor entity of its own.  It is
         // deliberately not part of an ancestor body's compound collider: doing
         // both would create a second, solid copy attached to the rigid body and
@@ -393,7 +407,6 @@ pub fn collect_child_colliders_from_usd(
         }
         // `guide` is annotation — a debug axis, a sensor cone, a planned path. It
         // is never physical, whatever geometry it happens to be made of.
-        let purpose = effective_purpose(reader, &child_path);
         if purpose == Purpose::Guide {
             continue;
         }

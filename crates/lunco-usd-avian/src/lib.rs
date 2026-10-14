@@ -59,10 +59,10 @@ use lunco_usd_bevy_scene::{
     UsdVisualProjectionSet, instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::{
-    Purpose, TransformReadError, UsdInstanceMember, UsdInstanceRoot, UsdRead, UsdStageAsset,
-    effective_purpose, world_transform,
+    TransformReadError, UsdInstanceMember, UsdInstanceRoot, UsdRead, UsdStageAsset, world_transform,
 };
 use openusd::sdf::Path as SdfPath;
+use openusd_schemas::geom::Purpose;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
 // module. Hand-written `"physics:…"` string literals are how `physics:friction`
 // (an attribute UsdPhysics does not define) got invented and lived here for
@@ -1141,7 +1141,24 @@ fn extract_avian_prim(
     // `guide` geometry is annotation — a debug axis, a planned path, a sensor
     // cone. It is never physical, whatever schemas happen to be on it, so it is
     // refused a body and a collider both rather than being quietly collided with.
-    if effective_purpose(reader, sdf_path) == Purpose::Guide {
+    let purpose = match reader.purpose(sdf_path) {
+        Ok(purpose) => purpose,
+        Err(detail) => {
+            reject_collider_projection(
+                commands,
+                entity,
+                sdf_path,
+                faults,
+                holds,
+                ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail,
+                },
+            );
+            return;
+        }
+    };
+    if purpose == Purpose::Guide {
         commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
@@ -3654,21 +3671,6 @@ def Xform "Rig"
              guide marker is being collided too",
             pieces.len()
         );
-    }
-
-    /// `purpose` is a uniform token and INHERITS, so authoring it once on a scope
-    /// covers everything inside it — which is how a proxy is normally authored.
-    #[test]
-    fn purpose_is_inherited_from_an_ancestor() {
-        let recipe = StageRecipe::from_source("t.usda", PURPOSES);
-        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let view = cs.view();
-        let marker = SdfPath::new("/Rig/Hull/AxisMarker").unwrap();
-        assert_eq!(effective_purpose(&view, &marker), Purpose::Guide);
-        // Nothing authored anywhere up the chain: the ordinary case, and the one
-        // every asset in this repo is in today.
-        let hull = SdfPath::new("/Rig/Hull").unwrap();
-        assert_eq!(effective_purpose(&view, &hull), Purpose::Default);
     }
 
     /// The regression this exists for: a collider prim with no rigid-body ancestor
