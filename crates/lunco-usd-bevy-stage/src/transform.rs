@@ -108,16 +108,34 @@ pub(crate) fn compose_live_xform_order_at(
     Ok(Some(convention.local_transform(raw)))
 }
 
-fn validated_live_xform_op_order(
+pub(crate) fn validated_live_xform_op_order(
     reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Result<Option<Vec<String>>, TransformReadError> {
+    use openusd::usd::SchemaBase;
     use openusd_schemas::geom::{Xformable, XformableSchema};
-    let xform =
-        Xformable::from_prim_unchecked(reader.stage().prim(path).expect("validated USD path"));
+    let prim = reader
+        .stage()
+        .prim(path)
+        .map_err(|_| malformed_transform(path))?;
+    if !prim.is_valid().map_err(|_| malformed_transform(path))? {
+        return Err(malformed_transform(path));
+    }
+    let xform = Xformable::from_prim_unchecked(prim);
     let order = xform
         .xform_op_order()
         .map_err(|_| malformed_transform(path))?;
+    // An omitted or blocked stack has no authored value. An unreadable
+    // authored value cannot be treated as an identity transform.
+    if order.is_none()
+        && xform
+            .prim()
+            .attribute("xformOpOrder")
+            .has_authored_value()
+            .map_err(|_| malformed_transform(path))?
+    {
+        return Err(malformed_transform(path));
+    }
     Ok(order
         .filter(|order| !order.is_empty())
         .map(|order| order.into_iter().map(|token| token.to_string()).collect()))

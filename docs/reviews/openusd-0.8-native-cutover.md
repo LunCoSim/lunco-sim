@@ -442,6 +442,25 @@ Evidence is in `/tmp/luncosim-native-animation-owner-*.log`. No runtime behavior
 was changed by deleting unused mechanisms and the forwarding alias; this check
 does not claim fresh production animation acceptance.
 
+## Native ordered transform variation
+
+`UsdRead::transform_might_be_time_varying` delegates to native Xformable's
+ordered-stack query. The preparation worker captures that typed fact; initial
+visual admission and PointInstancer prototype validation consume it. Live order
+edits remove `UsdAnimated` when no consumed channel remains. The shared
+transform validator rejects missing prims and unreadable authored order values;
+native omitted/blocked-value semantics remain intact. This is an engine fact
+and projection invariant, with no scenario selection policy added in Rust.
+
+The production baseline failed its three suffix/order/sampling assertions out
+of six checks. After the fix, all eight authored checks passed on owned port
+4223, including live marker retirement, preserved geometry, and terminal
+malformed-order rejection without mutation or runtime fault. The snapshot seam
+passed for ordered suffixes, unordered samples, missing prims, and malformed
+order admission. The production binary built successfully. Checkout/binary/PID
+identity, API Exit, and port release were verified. Evidence is in
+`/tmp/luncosim-native-xform-animation-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

@@ -31,6 +31,7 @@ pub struct UsdPrimProjectionPlan {
     /// preserve an existing ECS spawn pose for that USD identity case.
     pub transform: Option<Transform>,
     pub transform_matrix_d: Option<bevy::math::DMat4>,
+    transform_might_be_time_varying: bool,
     /// Whether the prim is an authored placeable unit.
     pub selectable: bool,
     /// The composed catalog identity, when authored.
@@ -339,6 +340,9 @@ impl UsdStageProjectionPlan {
                 binary_asset_uri: reader.binary_asset_uri(&path),
                 documentation: reader.documentation(&path),
                 active,
+                transform_might_be_time_varying: reader
+                    .transform_might_be_time_varying(&path)
+                    .map_err(|error| anyhow!(error))?,
                 purpose: reader.purpose(&path).map_err(|error| anyhow!(error))?,
                 effective_visibility: reader
                     .effective_visibility(&path)
@@ -706,6 +710,17 @@ impl UsdRead for UsdStageProjectionPlan {
         Ok(self.transform_snapshot(prim, time)?.transform_matrix_d)
     }
 
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError> {
+        self.prim(prim)
+            .map(|prim| prim.transform_might_be_time_varying)
+            .ok_or_else(|| crate::TransformReadError {
+                prim: prim.to_string(),
+            })
+    }
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -780,6 +795,52 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_xform_variation_survives_prepared_admission() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+def Xform "Ordered" {
+    float xformOp:rotateZ:spin.timeSamples = {0: 0, 1: 90}
+    uniform token[] xformOpOrder = ["xformOp:rotateZ:spin"]
+}
+def Xform "Unordered" {
+    float xformOp:rotateZ.timeSamples = {0: 0, 1: 90}
+    uniform token[] xformOpOrder = []
+}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for (path, varying) in [("/Ordered", true), ("/Unordered", false)] {
+            let path = SdfPath::new(path).unwrap();
+            assert_eq!(
+                live.transform_might_be_time_varying(&path).unwrap(),
+                varying
+            );
+            assert_eq!(
+                plan.transform_might_be_time_varying(&path).unwrap(),
+                varying
+            );
+        }
+        let missing = SdfPath::new("/Missing").unwrap();
+        assert!(live.transform_might_be_time_varying(&missing).is_err());
+        assert!(plan.transform_might_be_time_varying(&missing).is_err());
+
+        let malformed = StageRecipe::from_source(
+            "invalid.usda",
+            "#usda 1.0\ndef Xform \"Invalid\" { uniform bool xformOpOrder = true }",
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&malformed).unwrap();
+        assert!(
+            StageView::new(&stage)
+                .transform_might_be_time_varying(&SdfPath::new("/Invalid").unwrap())
+                .is_err()
+        );
+        assert!(UsdStageProjectionPlan::from_stage(&stage).is_err());
+    }
 
     #[test]
     fn native_activity_read_errors_are_not_active_defaults() {

@@ -9,57 +9,33 @@ use openusd::sdf::Path as SdfPath;
 use lunco_usd_bevy_stage::read::attr_has_time_samples;
 use lunco_usd_bevy_stage::{UsdRead, resolve_bound_shader};
 
-/// Rotation channels checked for authored animation samples.
-const ROTATION_OPS: [&str; 10] = [
-    "xformOp:orient",
-    "xformOp:rotateXYZ",
-    "xformOp:rotateXZY",
-    "xformOp:rotateYXZ",
-    "xformOp:rotateYZX",
-    "xformOp:rotateZXY",
-    "xformOp:rotateZYX",
-    "xformOp:rotateX",
-    "xformOp:rotateY",
-    "xformOp:rotateZ",
-];
-
 /// The bound-shader inputs the USD animation adapter can sample.
 pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:opacity"];
 
-/// True iff any xform channel on `path` carries time samples.
-pub fn prim_has_xform_time_samples<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
-    attr_has_time_samples(reader, path, "xformOp:translate")
-        || attr_has_time_samples(reader, path, "xformOp:scale")
-        || attr_has_time_samples(reader, path, "xformOp:transform")
-        || prim_rotation_animated(reader, path)
-}
-
 /// True iff a prim carries any channel consumed by the USD animation adapter.
-pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
-    if prim_has_xform_time_samples(reader, path)
+pub fn prim_is_animated<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+) -> Result<bool, lunco_usd_bevy_stage::TransformReadError> {
+    if reader.transform_might_be_time_varying(path)?
         || attr_has_time_samples(reader, path, "visibility")
         || attr_has_time_samples(reader, path, "primvars:displayColor")
     {
-        return true;
+        return Ok(true);
     }
-    resolve_bound_shader(reader, path).is_some_and(|shader| {
+    Ok(resolve_bound_shader(reader, path).is_some_and(|shader| {
         ANIMATED_SHADER_INPUTS
             .iter()
             .any(|input| attr_has_time_samples(reader, &shader, input))
-    })
-}
-
-fn prim_rotation_animated(reader: &impl UsdRead, path: &SdfPath) -> bool {
-    ROTATION_OPS
-        .iter()
-        .any(|op| attr_has_time_samples(reader, path, op))
+    }))
 }
 
 #[cfg(test)]
 mod animation_tests {
     //! Native composed-stage transform and channel topology seams.
-    use super::{prim_has_xform_time_samples, prim_is_animated};
+    use super::prim_is_animated;
     use bevy::prelude::{Quat, Vec3};
+    use lunco_usd_bevy_stage::UsdRead;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_bevy_stage::read::{
         attr_has_time_samples, read_token_at, read_vec3_f64_at, stage_time_codes_per_second,
@@ -86,6 +62,7 @@ def Xform "Mover"
         2: (20, 0, 0),
     }
     double3 xformOp:rotateXYZ = (0, 90, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 }
 
 def Xform "Static"
@@ -100,8 +77,8 @@ def Xform "Static"
         let reader = __cs.view();
         let mover = SdfPath::new("/Mover").unwrap();
         let stat = SdfPath::new("/Static").unwrap();
-        assert!(prim_has_xform_time_samples(&reader, &mover));
-        assert!(!prim_has_xform_time_samples(&reader, &stat));
+        assert!(reader.transform_might_be_time_varying(&mover).unwrap());
+        assert!(!reader.transform_might_be_time_varying(&stat).unwrap());
         // Per-channel: translate animated, rotateXYZ not.
         assert!(attr_has_time_samples(&reader, &mover, "xformOp:translate"));
         assert!(!attr_has_time_samples(&reader, &mover, "xformOp:rotateXYZ"));
@@ -190,8 +167,8 @@ def Xform "Spinner"
         let reader = __cs.view();
         let spinner = SdfPath::new("/Spinner").unwrap();
         // The quaternion channel marks the prim animated.
-        assert!(prim_has_xform_time_samples(&reader, &spinner));
-        assert!(prim_is_animated(&reader, &spinner));
+        assert!(reader.transform_might_be_time_varying(&spinner).unwrap());
+        assert!(prim_is_animated(&reader, &spinner).unwrap());
         // USD (w,x,y,z) = (1,0,0,0) → Bevy identity at the first key.
         let q0 = local_transform_at(&reader, &spinner, 0.0)
             .unwrap()
@@ -247,7 +224,7 @@ def Xform "Matrixed"
         let reader = __cs.view();
         let hinge = SdfPath::new("/HingeZ").unwrap();
         // A single-axis `rotateZ` time-sample marks the prim animated.
-        assert!(prim_has_xform_time_samples(&reader, &hinge));
+        assert!(reader.transform_might_be_time_varying(&hinge).unwrap());
         // Held start = 0° → identity; midway (code 2) = 45° about Z.
         assert!(
             local_transform_at(&reader, &hinge, 0.0)
@@ -389,22 +366,13 @@ def Xform "Std"
     fn prim_is_animated_covers_visibility_and_xform_but_not_static() {
         let __cs = parse(VIS_SCENE);
         let reader = __cs.view();
-        assert!(prim_is_animated(
-            &reader,
-            &SdfPath::new("/Blinker").unwrap()
-        ));
+        assert!(prim_is_animated(&reader, &SdfPath::new("/Blinker").unwrap()).unwrap());
         // `Solid` keyframes nothing — visibility and translate are both defaults.
-        assert!(!prim_is_animated(&reader, &SdfPath::new("/Solid").unwrap()));
+        assert!(!prim_is_animated(&reader, &SdfPath::new("/Solid").unwrap()).unwrap());
         // The xform-animated `Mover` from SCENE is still caught by the broader gate.
         let __mover = parse(SCENE);
         let mover_reader = __mover.view();
-        assert!(prim_is_animated(
-            &mover_reader,
-            &SdfPath::new("/Mover").unwrap()
-        ));
-        assert!(!prim_is_animated(
-            &mover_reader,
-            &SdfPath::new("/Static").unwrap()
-        ));
+        assert!(prim_is_animated(&mover_reader, &SdfPath::new("/Mover").unwrap()).unwrap());
+        assert!(!prim_is_animated(&mover_reader, &SdfPath::new("/Static").unwrap()).unwrap());
     }
 }

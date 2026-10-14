@@ -1230,7 +1230,7 @@ Authored `timeSamples` drive entities at the physical presentation time
 (architecture doc 19 — the unified time spine). The live native stage resolves
 each attribute's composed samples and sublayer/reference offsets at the requested
 time code. `timeCodesPerSecond` maps presentation seconds to that stage's time
-codes. A prim with any animated channel is tagged
+codes. Native ordered-transform variation and consumed appearance samples determine
 `UsdAnimated`; the per-frame samplers then drive:
 
 - **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection.

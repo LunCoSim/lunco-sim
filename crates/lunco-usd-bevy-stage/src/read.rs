@@ -653,6 +653,12 @@ pub trait UsdRead {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
 
+    /// Native ordered-stack variation, including suffixed transform ops.
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError>;
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -835,6 +841,11 @@ pub trait UsdReadObject {
         prim: &SdfPath,
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError>;
+
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError>;
 
     fn local_transform_at(
         &self,
@@ -1467,6 +1478,13 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::local_transform_matrix_d_at(self, prim, time)
     }
 
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError> {
+        UsdRead::transform_might_be_time_varying(self, prim)
+    }
+
     fn local_transform_at(
         &self,
         prim: &SdfPath,
@@ -1624,6 +1642,21 @@ impl UsdRead for StageView<'_> {
         time: f64,
     ) -> Result<Option<bevy::math::DMat4>, crate::TransformReadError> {
         crate::local_transform_matrix_d_at(self, prim, time)
+    }
+
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError> {
+        use openusd_schemas::geom::{Xformable, XformableExt};
+        crate::transform::validated_live_xform_op_order(self, prim)?;
+        let failure = || crate::TransformReadError {
+            prim: prim.to_string(),
+        };
+        let native = self.stage().prim(prim.clone()).map_err(|_| failure())?;
+        Xformable::from_prim_unchecked(native)
+            .transform_might_be_time_varying()
+            .map_err(|_| failure())
     }
 
     fn local_transform_at(
@@ -2202,6 +2235,16 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::local_transform_matrix_d_at(*reader, prim, time),
             Self::Live(reader) => UsdRead::local_transform_matrix_d_at(reader, prim, time),
+        }
+    }
+
+    fn transform_might_be_time_varying(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<bool, crate::TransformReadError> {
+        match self {
+            Self::Prepared(reader) => UsdRead::transform_might_be_time_varying(*reader, prim),
+            Self::Live(reader) => UsdRead::transform_might_be_time_varying(reader, prim),
         }
     }
 

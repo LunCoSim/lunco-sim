@@ -79,6 +79,14 @@ quaternion, Euler, inverse, and reset-stack operations. Do not add a rotation
 decoder or select an unordered transform attribute as an alternate pose.
 Animation topology helpers identify sampled channels; they do not evaluate
 their transforms or define an unconsumed clip-range policy.
+Use fallible `UsdRead::transform_might_be_time_varying` for transform admission.
+The worker plan captures the native ordered-stack result, including suffixed
+operations. Samples outside `xformOpOrder` do not admit transform animation;
+live order edits must remove `UsdAnimated` when no consumed channel remains.
+Unreadable authored order values fail at the shared transform validator. The
+production scenario `lunco://scenarios/tests/native_xform_animation.rhai`
+checks suffix sampling, unordered inputs, marker retirement, and rejected
+malformed-order commands on the settled replacement fixture.
 
 Trim controls are standard `double3[]` homogeneous coordinates. Keep them in
 `f64` through loop assembly and Truck's rational 2D evaluation; narrowing before

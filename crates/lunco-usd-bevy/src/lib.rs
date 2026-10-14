@@ -770,6 +770,19 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             return;
         }
 
+        let animated = match prim_is_animated(reader, &sdf_path) {
+            Ok(animated) => animated,
+            Err(error) => {
+                let message = error.to_string();
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+        };
+
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
 
@@ -1411,8 +1424,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // or a bound-shader/displayColor material input) for the animation adapter.
         // Unbound scene animation samples the interpolated physical timeline; an
         // explicit TimeBinding remains available to editor-owned playback.
-        if prim_is_animated(reader, &sdf_path) {
+        if animated {
             commands.entity(entity).try_insert(UsdAnimated);
+        } else {
+            commands.entity(entity).remove::<UsdAnimated>();
         }
 
         // UsdGeomXformable's `!resetXformStack!`: composition above already
@@ -1516,7 +1531,7 @@ fn project_point_instancer<R: UsdRead>(
                 "prototype {prototype} has type `{prototype_type}`; only direct renderable Gprims are currently supported"
             ));
         }
-        if prim_is_animated(reader, &prototype_path) {
+        if prim_is_animated(reader, &prototype_path).map_err(|error| error.to_string())? {
             return Err(format!(
                 "prototype {prototype} is animated; animated PointInstancer prototypes are not yet supported by the visual projection"
             ));
