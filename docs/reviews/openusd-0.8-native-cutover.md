@@ -397,6 +397,18 @@ coordinates, native integer values, empty arrays, terminal zero-weight and
 truncated-loop rejection, and continued API access. Checkout/binary/PID identity, API Exit, and port release
 were verified. Evidence is under `/tmp/luncosim-native-trim-*.log`.
 
+## Native curve token opinions
+
+Curve token readers no longer accept a caller-supplied schema default. Native
+composition supplies BasisCurves type/basis/wrap, NurbsPatch orientation, and
+the applied camera-path clock opinion in both live and prepared readers. A
+missing native value rejects rather than fabricating a curve or clock token.
+The focused prepared-reader seam test covers these opinions and missing-state
+rejection. The production build and nine authored native trim checks pass on
+owned port 4221, exercising the mesh consumer's native orientation opinion.
+API Exit and port release were verified. Evidence is in
+`/tmp/luncosim-native-curve-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

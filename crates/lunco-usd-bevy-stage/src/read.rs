@@ -1139,14 +1139,13 @@ pub fn read_curve_token_array(
     }
 }
 
-/// Read one standard USD token with its schema fallback. An authored token
+/// Read one native composed token, including its registered schema opinion. A token
 /// outside the allowed set is malformed and is rejected rather than
 /// interpreted as a different curve basis or wrap mode.
 pub fn read_curve_token(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
-    schema_default: &str,
     allowed: &[&str],
 ) -> Result<String, CurveAttributeError> {
     match reader.attr_value(path, attr) {
@@ -1180,7 +1179,14 @@ pub fn read_curve_token(
             );
             Err(CurveAttributeError::InvalidValue)
         }
-        None => Ok(schema_default.to_string()),
+        None => {
+            error!(
+                "[usd-read] {} has no native value for required token {}",
+                path.as_str(),
+                attr
+            );
+            Err(CurveAttributeError::InvalidValue)
+        }
     }
 }
 

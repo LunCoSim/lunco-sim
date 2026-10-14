@@ -640,7 +640,6 @@ pub fn build_usd_curve_mesh(
             reader,
             path,
             openusd_schemas::geom::tokens::TYPE,
-            "cubic",
             &["linear", "cubic"],
         ) {
             Ok(token) => token,
@@ -653,7 +652,6 @@ pub fn build_usd_curve_mesh(
                 reader,
                 path,
                 openusd_schemas::geom::tokens::BASIS,
-                "bezier",
                 &["bezier", "catmullRom"],
             ) {
                 Ok(token) if token == "bezier" => CurveBasis::Bezier,
@@ -665,7 +663,6 @@ pub fn build_usd_curve_mesh(
             reader,
             path,
             openusd_schemas::geom::tokens::WRAP,
-            "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {
             Ok(wrap) => wrap,
@@ -992,16 +989,11 @@ pub fn read_nurbs_patch_surface(
             return None;
         }
     };
-    let orientation = match read::read_curve_token(
-        reader,
-        path,
-        "orientation",
-        "rightHanded",
-        &["rightHanded", "leftHanded"],
-    ) {
-        Ok(orientation) => orientation == "leftHanded",
-        Err(_) => return None,
-    };
+    let orientation =
+        match read::read_curve_token(reader, path, "orientation", &["rightHanded", "leftHanded"]) {
+            Ok(orientation) => orientation == "leftHanded",
+            Err(_) => return None,
+        };
 
     Some((
         lathe::NurbsSurface {

@@ -85,6 +85,12 @@ API serializer. Its inspection adapter must preserve precision, integer kinds,
 and empty arrays; render-oriented readers such as `points3` do not belong at
 that boundary. Native serialization errors reject the query visibly.
 
+Curve type, basis, wrap, orientation, and camera-path clock tokens come from
+native composed values, including registered schema opinions. The shared
+`read_curve_token` validates the consumer's supported set and rejects a missing
+value; callers do not supply a duplicate schema default. Camera-path schema
+opinions require the authored `LunCoCameraPathAPI` application.
+
 Read inherited Imageable purpose through `UsdRead::purpose`, which exposes the
 native SDK type and `ImageableExt::compute_purpose` semantics in both live and
 prepared readers. Preserve its error result at physics, bounds, query, and lint

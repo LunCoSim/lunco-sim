@@ -772,6 +772,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepared_curve_tokens_use_native_schema_values() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+def BasisCurves "Curve" {}
+def BasisCurves "CameraPath" (prepend apiSchemas = ["LunCoCameraPathAPI"]) {}
+def NurbsPatch "Surface" {}
+def Scope "NonCurve" {}
+"#,
+        );
+        let plan = UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        for reader in [&live as &dyn crate::read::UsdReadObject, &plan] {
+            for (path, name, expected, allowed) in [
+                ("/Curve", "type", "cubic", &["linear", "cubic"][..]),
+                ("/Curve", "basis", "bezier", &["bezier", "catmullRom"][..]),
+                (
+                    "/Curve",
+                    "wrap",
+                    "nonperiodic",
+                    &["nonperiodic", "periodic", "pinned"][..],
+                ),
+                (
+                    "/Surface",
+                    "orientation",
+                    "rightHanded",
+                    &["rightHanded", "leftHanded"][..],
+                ),
+                (
+                    "/CameraPath",
+                    "lunco:path:clock",
+                    "sim",
+                    &["sim", "real"][..],
+                ),
+            ] {
+                assert_eq!(
+                    crate::read::read_curve_token(
+                        reader,
+                        &SdfPath::new(path).unwrap(),
+                        name,
+                        allowed
+                    )
+                    .unwrap(),
+                    expected
+                );
+            }
+            assert!(
+                crate::read::read_curve_token(
+                    reader,
+                    &SdfPath::new("/NonCurve").unwrap(),
+                    "basis",
+                    &["bezier", "catmullRom"]
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn prepared_visibility_preserves_native_opinions_and_read_errors() {
         use openusd_schemas::geom::PurposeVisibility as V;
         let recipe = StageRecipe::from_source(

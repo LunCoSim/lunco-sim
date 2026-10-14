@@ -15,7 +15,7 @@ Spatial paths do not use `xformOp:translate.timeSamples`: USD attribute splines
 a curve through space and can be inspected by other USD tools.
 
 ```usda
-def BasisCurves "ShotPath"
+def BasisCurves "ShotPath" (prepend apiSchemas = ["LunCoCameraPathAPI"])
 {
     uniform token type  = "cubic"
     uniform token basis = "catmullRom"    # "bezier" or "catmullRom"
@@ -59,6 +59,10 @@ and asynchronous scene admission.
 `Rewind`. It is available through the HTTP/API/MCP command surface and Rhai. `Play`
 releases the gate; `Pause` changes user playback state; `Rewind` seeks to the
 authored range start. Do not use `Playback.mode` as an implicit startup gate.
+
+The applied camera-path schema supplies its omitted clock opinion through native
+USD composition. Curve type, basis, wrap and orientation follow the same native
+read boundary; missing native token values reject rather than using Rust defaults.
 
 The path clock is selected by `lunco:path:clock`:
 

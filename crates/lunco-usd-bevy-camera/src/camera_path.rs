@@ -1,7 +1,7 @@
 //! Camera paths: a `UsdGeomBasisCurves` prim drives a camera along its curve.
 //!
 //! ```usda
-//! def BasisCurves "CraterPath" {
+//! def BasisCurves "CraterPath" (prepend apiSchemas = ["LunCoCameraPathAPI"]) {
 //!     uniform token type = "cubic"
 //!     uniform token basis = "catmullRom"      # passes THROUGH its points
 //!     uniform token wrap = "periodic"         # closed loop, no seam case
@@ -823,7 +823,6 @@ pub(super) fn resolve_camera_paths(
             reader,
             &path,
             openusd_schemas::geom::tokens::TYPE,
-            "cubic",
             &["linear", "cubic"],
         ) {
             Ok(value) => value,
@@ -836,7 +835,6 @@ pub(super) fn resolve_camera_paths(
                 reader,
                 &path,
                 openusd_schemas::geom::tokens::BASIS,
-                "bezier",
                 &["bezier", "catmullRom"],
             ) {
                 Ok(value) if value == "bezier" => CurveBasis::Bezier,
@@ -848,7 +846,6 @@ pub(super) fn resolve_camera_paths(
             reader,
             &path,
             openusd_schemas::geom::tokens::WRAP,
-            "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {
             Ok(value) => value,
@@ -919,7 +916,6 @@ pub(super) fn resolve_camera_paths(
             reader,
             &path,
             "lunco:path:clock",
-            "sim",
             &["sim", "real"],
         ) {
             Ok(value) => value == "real",
