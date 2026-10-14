@@ -937,7 +937,8 @@ definition as reflected ECS components and regenerates the Bevy mesh only when
 the definition or graphics quality changes. Its geometry and tests are isolated
 from the USD hierarchy loader, so a lathe edit does not recompile the main
 visual projection package. It depends on the render-free geometry and intent
-packages and has no dependency back into `lunco-usd-bevy`.
+packages and uses Truck's `KnotVec::uniform_knot` for generated profile knots.
+It has no dependency back into `lunco-usd-bevy`.
 
 **`lunco-usd-bevy-mesh`**
 Render-free visual geometry projection for USD built-in primitives, native

@@ -10581,6 +10581,7 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-geometry",
  "openusd",
+ "truck-geometry",
 ]
 
 [[package]]

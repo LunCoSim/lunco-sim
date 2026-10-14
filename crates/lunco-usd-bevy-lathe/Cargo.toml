@@ -12,6 +12,7 @@ bevy_mesh = { workspace = true }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 openusd = { workspace = true }
+truck-geometry = { workspace = true }
 
 [lints]
 workspace = true

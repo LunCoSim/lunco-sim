@@ -382,6 +382,7 @@ smallvec = "1.13"
 # Exact versions keep the pre-1.0 core and schema APIs aligned.
 openusd = "=0.8.0"
 openusd-schemas = { version = "=0.8.0", features = ["physics", "geom", "shade", "lux"] }
+truck-geometry = "0.5.0"
 # The version and the feature set SHARED by both wire targets. `lunco-networking`
 # builds lightyear twice — a native client+server block and a wasm client-only one
 # — and holding the version in two places meant a bump could land on one target

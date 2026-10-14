@@ -68,6 +68,11 @@ uses the render-free `lunco-usd-geometry` package, while its existing async
 compute path and only Bevy asset insertion remain on the main thread. After the initial asset generation, explicit live edits use the
 canonical `StageView` and the same extractor contract.
 
+Truck owns NURBS evaluation and generated clamped uniform knots. Parametric
+lathe construction calls `KnotVec::uniform_knot` directly; imported NURBS curves
+must supply their authored knots and reject insufficient data. Do not infer
+knots during import or add an application knot generator.
+
 Read inherited Imageable purpose through `UsdRead::purpose`, which exposes the
 native SDK type and `ImageableExt::compute_purpose` semantics in both live and
 prepared readers. Preserve its error result at physics, bounds, query, and lint

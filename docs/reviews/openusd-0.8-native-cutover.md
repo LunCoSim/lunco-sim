@@ -161,10 +161,13 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   `cargo check -p lunco-usd-bevy-stage --lib -j 4`; owned recipes move their bytes
   into the resolver without another whole-closure copy.
 - The native SDK writer fix is committed locally in the owned adjacent
-  `openusd-native` checkout as `d794244d092a1ee7fcf8a61c23fd07862663c3d4`.
-  Its focused round-trip check passed for all five inheritance list operators.
-  Pixar OpenUSD 26.08 opened the native writer's schema output and matched all
-  55 root prim names and 54 inheritance opinions. Cargo still uses published
+  `openusd-native` checkout as `c2590f277932615a712c71274c57daefc46598a8`,
+  based on upstream `3659932e5d7ebf4ff4422ad5eeff582fe182dc1a`.
+  The rebased commit passes `cargo test -p openusd --features serde --test
+  text_writer_roundtrip inheritance_list_ops_use_the_standard_usda_keyword -j 4`,
+  covering all five inheritance list operators. The writer mapping's Pixar
+  OpenUSD 26.08 schema check matched all 55 root prim names and 54 inheritance
+  opinions. Cargo still uses published
   0.8.0; publication of the SDK commit is awaiting explicit user authorization.
 - The canonical snapshot codec/session/captured-edit mechanism check passed.
   The production binary rebuilt after fast-forwarding the checkout to main's
@@ -362,12 +365,22 @@ Four authored checks pass on owned port 4220. Checkout/binary identity, API Exit
 and port release were verified.
 Evidence is under `/tmp/luncosim-native-input-*.log`.
 
+## Native geometry library ownership
+
+Parametric lathe construction delegates clamped uniform knot generation to
+Truck's `KnotVec::uniform_knot`; the application generator and its missing-knot
+fallback guidance are removed. Imported curves already reject insufficient
+authored knots. Rational surface evaluation remains owned by Truck.
+The focused `generated_rings_are_exact_circles_not_polygons` test passes with
+the native knot generator, exercising rational surface evaluation at the
+generated ring boundary.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
    of the standard `inherits` keyword. Pixar OpenUSD 26.08 rejects its output.
    The same mapping remains in the inspected upstream head
-   `00451e46421a99ddf448d414ab77705a1999e02d`. The authoring owner rejects this
+   `3659932e5d7ebf4ff4422ad5eeff582fe182dc1a`. The authoring owner rejects this
    serialization before publishing/writing it. There is no output-rewriting
    shim or alternate text writer. The canonical schema source was restored
    exactly through the document API and remains Pixar-readable. Its obsolete

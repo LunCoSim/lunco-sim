@@ -1,27 +1,8 @@
 //! `UsdGeomNurbsCurves` → sampled polyline, via `truck-geometry`.
 //!
-//! ## Why a library and not a hand-written evaluator
-//!
-//! An earlier version of this module hand-rolled Cox-de Boor plus the rational
-//! quotient. It worked and was tested — and it was still the wrong call:
-//!
-//! - **It covered curves only.** `NurbsPatch` is coming (261 lathe objects plus
-//!   the dome), and hand-writing that too would leave the project with *two*
-//!   evaluators that can disagree numerically. One library, one numeric core.
-//! - **`truck-geometry` brings more than the basis function.** `RevolvedCurve`
-//!   turns a profile into a surface of revolution — which is **80.4% of HAB-1's
-//!   vertices** — and `Circle`/`Torus`/`Sphere` specifieds cover the seals,
-//!   O-rings and chain links exactly.
-//! - **The objections to it did not survive checking.** It is cgmath-based, so
-//!   the `nalgebra` conflict belongs to `curvo`, not here; and `truck-geotrait`
-//!   already declares `getrandom 0.2 + ["js"]` for wasm32 — the very pin this
-//!   workspace uses.
-//!
-//! What is NOT delegated is the **sweep**: no crate implements
-//! rotation-minimizing frames (`curvo` ships a `FrenetFrame`, which degenerates
-//! on exactly the straight runs a habitat is full of), so the hand-written
-//! `curve_sweep` module stays separate. That is the honest split — buy the
-//! solved problem, write the unsolved one.
+//! Truck owns rational curve and surface evaluation. The application adapts
+//! authored USD control data and returns sampled mesh data; curve sweeps use
+//! the separate rotation-minimizing frame mechanism in `curve_sweep`.
 //!
 //! ## USD → truck
 //!
@@ -404,22 +385,6 @@ pub fn sample_nurbs_patch_at(
     out
 }
 
-/// The default clamped, uniform knot vector for `cv` control points of `order`.
-///
-/// USD requires `knots`, but assets omit it often enough that reconstructing the
-/// standard clamped vector beats dropping the curve. Clamped ⇒ the curve starts at
-/// the first control point and ends at the last, which is what every DCC writes.
-pub fn default_clamped_knots(cv: usize, order: usize) -> Vec<f64> {
-    let mut k = Vec::with_capacity(cv + order);
-    k.extend(std::iter::repeat_n(0.0, order));
-    let interior = cv.saturating_sub(order);
-    for i in 1..=interior {
-        k.push(i as f64 / (interior + 1) as f64);
-    }
-    k.extend(std::iter::repeat_n(1.0, order));
-    k
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,8 +443,7 @@ mod tests {
         }
     }
 
-    /// A clamped curve interpolates its endpoints — the property that makes
-    /// [`default_clamped_knots`] a safe fallback for assets missing `knots`.
+    /// A curve with authored clamped knots interpolates its control endpoints.
     #[test]
     fn clamped_curve_interpolates_its_endpoints() {
         let pts = [
@@ -488,7 +452,7 @@ mod tests {
             [3.0, 2.0, 0.0],
             [4.0, 0.0, 0.0],
         ];
-        let knots = default_clamped_knots(pts.len(), 4);
+        let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
         let poly = sample_nurbs_curve(&pts, &[], 4, &knots, 16);
         assert!(!poly.is_empty());
         for k in 0..3 {

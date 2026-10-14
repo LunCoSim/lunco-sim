@@ -417,10 +417,11 @@ impl UsdLathe {
             u_order: 3,
             v_order,
             u_knots: CIRCLE_U_KNOTS.to_vec(),
-            v_knots: lunco_usd_geometry::nurbs::default_clamped_knots(
-                rings as usize,
-                v_order as usize,
-            ),
+            v_knots: truck_geometry::prelude::KnotVec::uniform_knot(
+                (v_order - 1) as usize,
+                (rings - v_order + 1) as usize,
+            )
+            .into(),
             left_handed: self.left_handed,
         })
     }
