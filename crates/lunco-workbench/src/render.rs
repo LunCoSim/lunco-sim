@@ -2647,37 +2647,19 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
             });
-            ui.collapsing("Light defaults", |ui| {
+            ui.collapsing("Preview lighting and dome resolution", |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "These values apply only when a USD light omits its intensity; authored USD intensity remains authoritative.",
+                        "Preview illumination applies to editor helper lights. USD light intensity and exposure come from the composed scene.",
                     )
                     .weak()
                     .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 ui.add(
-                    egui::DragValue::new(&mut settings.distant_light_default_illuminance)
+                    egui::DragValue::new(&mut settings.editor_preview_illuminance)
                         .speed(1_000.0)
-                        .prefix("Distant-light default: ")
+                        .prefix("Editor preview illumination: ")
                         .suffix(" lx"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut settings.local_light_default_intensity)
-                        .speed(100.0)
-                        .prefix("Sphere-light default: ")
-                        .suffix(" lm"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut settings.rect_light_default_intensity)
-                        .speed(100.0)
-                        .prefix("Rect-light default: ")
-                        .suffix(" lm"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut settings.dome_default_intensity)
-                        .speed(100.0)
-                        .prefix("Textured-dome default: ")
-                        .suffix(" cd/m²"),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.dome_cubemap_face_size)

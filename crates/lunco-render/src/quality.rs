@@ -35,7 +35,7 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-const PROFILE_FIELD_NAMES: [&str; 70] = [
+const PROFILE_FIELD_NAMES: [&str; 67] = [
     "directional_shadow_map_size",
     "point_shadow_map_size",
     "directional_cascades",
@@ -62,10 +62,7 @@ const PROFILE_FIELD_NAMES: [&str; 70] = [
     "editor_camera_bloom_enabled",
     "camera_bloom_intensity",
     "camera_bloom_low_frequency_boost",
-    "distant_light_default_illuminance",
-    "local_light_default_intensity",
-    "rect_light_default_intensity",
-    "dome_default_intensity",
+    "editor_preview_illuminance",
     "local_light_default_range",
     "local_shadow_map_near_z",
     "dome_cubemap_face_size",
@@ -236,16 +233,8 @@ pub struct RenderQualityProfile {
     pub camera_bloom_intensity: f32,
     /// Bloom low-frequency boost used when the USD environment omits bloom.
     pub camera_bloom_low_frequency_boost: f32,
-    /// Illuminance used when a DistantLight omits `inputs:intensity`.
-    pub distant_light_default_illuminance: f32,
-    /// Luminous power used when a local SphereLight omits `inputs:intensity`.
-    pub local_light_default_intensity: f32,
-    /// Luminous power used when a RectLight omits `inputs:intensity`.
-    pub rect_light_default_intensity: f32,
-    /// Luminance used when a textured DomeLight omits `inputs:intensity`, in
-    /// cd/m². This replaces UsdLux's 1.0 schema default because it is invisible
-    /// at the calibrated scene exposure; authors can override it in USD.
-    pub dome_default_intensity: f32,
+    /// Illuminance of the editor preview key light; USD lights own their photometry.
+    pub editor_preview_illuminance: f32,
     /// Range used when a local light leaves `lunco:light:range` at its schema
     /// default of zero (the explicit USD meaning is engine default).
     pub local_light_default_range: f32,
@@ -441,13 +430,7 @@ impl RenderQualityProfile {
                 entries,
                 "camera_bloom_low_frequency_boost",
             )?,
-            distant_light_default_illuminance: profile_f32(
-                entries,
-                "distant_light_default_illuminance",
-            )?,
-            local_light_default_intensity: profile_f32(entries, "local_light_default_intensity")?,
-            rect_light_default_intensity: profile_f32(entries, "rect_light_default_intensity")?,
-            dome_default_intensity: profile_f32(entries, "dome_default_intensity")?,
+            editor_preview_illuminance: profile_f32(entries, "editor_preview_illuminance")?,
             local_light_default_range: profile_f32(entries, "local_light_default_range")?,
             local_shadow_map_near_z: profile_f32(entries, "local_shadow_map_near_z")?,
             dome_cubemap_face_size: unsigned!(dome_cubemap_face_size, u32),
@@ -632,10 +615,7 @@ pub struct RenderingQualitySettings {
     pub editor_camera_bloom_enabled: bool,
     pub camera_bloom_intensity: f32,
     pub camera_bloom_low_frequency_boost: f32,
-    pub distant_light_default_illuminance: f32,
-    pub local_light_default_intensity: f32,
-    pub rect_light_default_intensity: f32,
-    pub dome_default_intensity: f32,
+    pub editor_preview_illuminance: f32,
     pub local_light_default_range: f32,
     pub local_shadow_map_near_z: f32,
     pub dome_cubemap_face_size: u32,
@@ -784,10 +764,7 @@ impl RenderingQualitySettings {
             editor_camera_bloom_enabled: self.editor_camera_bloom_enabled,
             camera_bloom_intensity: self.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: self.camera_bloom_low_frequency_boost,
-            distant_light_default_illuminance: self.distant_light_default_illuminance,
-            local_light_default_intensity: self.local_light_default_intensity,
-            rect_light_default_intensity: self.rect_light_default_intensity,
-            dome_default_intensity: self.dome_default_intensity,
+            editor_preview_illuminance: self.editor_preview_illuminance,
             local_light_default_range: self.local_light_default_range,
             local_shadow_map_near_z: self.local_shadow_map_near_z,
             dome_cubemap_face_size: self.dome_cubemap_face_size,
@@ -881,10 +858,7 @@ impl RenderingQualitySettings {
         self.editor_camera_bloom_enabled = profile.editor_camera_bloom_enabled;
         self.camera_bloom_intensity = profile.camera_bloom_intensity;
         self.camera_bloom_low_frequency_boost = profile.camera_bloom_low_frequency_boost;
-        self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
-        self.local_light_default_intensity = profile.local_light_default_intensity;
-        self.rect_light_default_intensity = profile.rect_light_default_intensity;
-        self.dome_default_intensity = profile.dome_default_intensity;
+        self.editor_preview_illuminance = profile.editor_preview_illuminance;
         self.local_light_default_range = profile.local_light_default_range;
         self.local_shadow_map_near_z = profile.local_shadow_map_near_z;
         self.dome_cubemap_face_size = profile.dome_cubemap_face_size;
@@ -1060,20 +1034,10 @@ impl RenderingQualitySettings {
         {
             return Err("camera bloom boost must be finite and non-negative");
         }
-        if !profile.distant_light_default_illuminance.is_finite()
-            || profile.distant_light_default_illuminance <= 0.0
+        if !profile.editor_preview_illuminance.is_finite()
+            || profile.editor_preview_illuminance <= 0.0
         {
-            return Err("distant-light default illuminance must be finite and greater than zero");
-        }
-        if !profile.local_light_default_intensity.is_finite()
-            || profile.local_light_default_intensity <= 0.0
-        {
-            return Err("local-light default intensity must be finite and greater than zero");
-        }
-        if !profile.rect_light_default_intensity.is_finite()
-            || profile.rect_light_default_intensity <= 0.0
-        {
-            return Err("rect-light default intensity must be finite and greater than zero");
+            return Err("editor preview illuminance must be finite and greater than zero");
         }
         if !profile.local_light_default_range.is_finite()
             || profile.local_light_default_range <= 0.0
@@ -1082,9 +1046,6 @@ impl RenderingQualitySettings {
         }
         if !profile.local_shadow_map_near_z.is_finite() || profile.local_shadow_map_near_z < 0.0 {
             return Err("local shadow-map near Z must be finite and non-negative");
-        }
-        if !profile.dome_default_intensity.is_finite() || profile.dome_default_intensity < 0.0 {
-            return Err("dome default intensity must be finite and non-negative");
         }
         if profile.dome_cubemap_face_size == 0
             || !profile.dome_cubemap_face_size.is_power_of_two()
@@ -1281,10 +1242,7 @@ impl Default for RenderingQualitySettings {
             editor_camera_bloom_enabled: profile.editor_camera_bloom_enabled,
             camera_bloom_intensity: profile.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: profile.camera_bloom_low_frequency_boost,
-            distant_light_default_illuminance: profile.distant_light_default_illuminance,
-            local_light_default_intensity: profile.local_light_default_intensity,
-            rect_light_default_intensity: profile.rect_light_default_intensity,
-            dome_default_intensity: profile.dome_default_intensity,
+            editor_preview_illuminance: profile.editor_preview_illuminance,
             local_light_default_range: profile.local_light_default_range,
             local_shadow_map_near_z: profile.local_shadow_map_near_z,
             dome_cubemap_face_size: profile.dome_cubemap_face_size,
@@ -1351,17 +1309,16 @@ pub struct ShadowRangeAuthorship {
     pub maximum_distance: bool,
 }
 
-/// Records which photometric values came from Graphics defaults when a USD
-/// light was projected. Live Graphics edits may update only those values;
-/// authored USD intensity and range remain authoritative.
-///
-/// `intensity_scale` includes authored exposure and any UsdLux area-size
-/// scale, so changing a default preserves the light's authored interpretation.
+/// Whether a projected local light range follows the Graphics setting.
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct LightGraphicsDefaults {
-    pub intensity_uses_graphics_default: bool,
-    pub intensity_scale: f32,
+pub struct LightRangeAuthorship {
     pub range_uses_graphics_default: bool,
+}
+
+/// Editor-owned preview illumination, independent of USD schema photometry.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct EditorPreviewLight {
+    pub illuminance_scale: f32,
 }
 
 /// Conservative estimate for directional shadow textures and their views.
@@ -1453,10 +1410,7 @@ mod tests {
             editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
-            distant_light_default_illuminance: 128_000.0,
-            local_light_default_intensity: 1_000.0,
-            rect_light_default_intensity: 10_000.0,
-            dome_default_intensity: 1_000.0,
+            editor_preview_illuminance: 128_000.0,
             local_light_default_range: 20.0,
             local_shadow_map_near_z: 0.2,
             dome_cubemap_face_size: 512,

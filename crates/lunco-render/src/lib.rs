@@ -30,10 +30,10 @@ pub use camera::{
     ToneMap, WorldLabel, scene_camera_look_with_profile, usd_default_perspective_projection,
 };
 pub use quality::{
-    LightGraphicsDefaults, RENDER_DEFAULT_QUALITY_PROFILE_HOOK, RENDER_QUALITY_PROFILE_HOOK,
-    RenderQualityProfile, RenderingQuality, RenderingQualityProfiles, RenderingQualitySettings,
-    ShadowFilteringQuality, ShadowRangeAuthorship, estimate_directional_shadow_bytes,
-    estimate_shadow_allocation_bytes,
+    EditorPreviewLight, LightRangeAuthorship, RENDER_DEFAULT_QUALITY_PROFILE_HOOK,
+    RENDER_QUALITY_PROFILE_HOOK, RenderQualityProfile, RenderingQuality, RenderingQualityProfiles,
+    RenderingQualitySettings, ShadowFilteringQuality, ShadowRangeAuthorship,
+    estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes,
 };
 pub use quality_policy::{RenderQualityPolicyPlugin, RenderQualityPolicySet};
 pub use sun::LunarSunShadow;

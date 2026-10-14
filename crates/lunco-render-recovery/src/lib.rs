@@ -62,7 +62,7 @@ use bevy::render::{
 };
 use bevy_egui::{EguiContexts, egui};
 use lunco_render::{
-    LightGraphicsDefaults, RenderingQualitySettings, ShadowRangeAuthorship,
+    EditorPreviewLight, LightRangeAuthorship, RenderingQualitySettings, ShadowRangeAuthorship,
     estimate_shadow_allocation_bytes,
 };
 
@@ -720,11 +720,11 @@ fn apply_render_quality(
         &mut bevy::light::DirectionalLight,
         &mut bevy::light::CascadeShadowConfig,
         Option<&ShadowRangeAuthorship>,
-        Option<&LightGraphicsDefaults>,
+        Option<&EditorPreviewLight>,
     )>,
-    mut point_lights: Query<(&mut bevy::light::PointLight, Option<&LightGraphicsDefaults>)>,
-    mut spot_lights: Query<(&mut bevy::light::SpotLight, Option<&LightGraphicsDefaults>)>,
-    mut rect_lights: Query<(&mut bevy::light::RectLight, Option<&LightGraphicsDefaults>)>,
+    mut point_lights: Query<(&mut bevy::light::PointLight, Option<&LightRangeAuthorship>)>,
+    mut spot_lights: Query<(&mut bevy::light::SpotLight, Option<&LightRangeAuthorship>)>,
+    mut rect_lights: Query<(&mut bevy::light::RectLight, Option<&LightRangeAuthorship>)>,
     mut ladder: ResMut<Ladder>,
     health: Option<Res<RenderHealthHandle>>,
     warning: Option<Res<RenderWarning>>,
@@ -777,12 +777,9 @@ fn apply_render_quality(
         point_map.size = profile.point_shadow_map_size as usize;
     }
 
-    for (mut light, mut config, authored_ranges, defaults) in &mut directional_lights {
-        if let Some(defaults) = defaults {
-            if defaults.intensity_uses_graphics_default {
-                light.illuminance =
-                    profile.distant_light_default_illuminance * defaults.intensity_scale;
-            }
+    for (mut light, mut config, authored_ranges, preview_light) in &mut directional_lights {
+        if let Some(preview) = preview_light {
+            light.illuminance = profile.editor_preview_illuminance * preview.illuminance_scale;
         }
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
@@ -832,9 +829,6 @@ fn apply_render_quality(
 
     for (mut light, defaults) in &mut point_lights {
         if let Some(defaults) = defaults {
-            if defaults.intensity_uses_graphics_default {
-                light.intensity = profile.local_light_default_intensity * defaults.intensity_scale;
-            }
             if defaults.range_uses_graphics_default {
                 light.range = profile.local_light_default_range;
             }
@@ -846,9 +840,6 @@ fn apply_render_quality(
 
     for (mut light, defaults) in &mut spot_lights {
         if let Some(defaults) = defaults {
-            if defaults.intensity_uses_graphics_default {
-                light.intensity = profile.local_light_default_intensity * defaults.intensity_scale;
-            }
             if defaults.range_uses_graphics_default {
                 light.range = profile.local_light_default_range;
             }
@@ -860,9 +851,6 @@ fn apply_render_quality(
 
     for (mut light, defaults) in &mut rect_lights {
         if let Some(defaults) = defaults {
-            if defaults.intensity_uses_graphics_default {
-                light.intensity = profile.rect_light_default_intensity * defaults.intensity_scale;
-            }
             if defaults.range_uses_graphics_default {
                 light.range = profile.local_light_default_range;
             }
@@ -1475,10 +1463,7 @@ mod tests {
             editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
-            distant_light_default_illuminance: 128_000.0,
-            local_light_default_intensity: 1_000.0,
-            rect_light_default_intensity: 10_000.0,
-            dome_default_intensity: 1_000.0,
+            editor_preview_illuminance: 128_000.0,
             local_light_default_range: 30.0,
             local_shadow_map_near_z: 0.2,
             dome_cubemap_face_size: 512,
@@ -1770,9 +1755,7 @@ mod tests {
             .world_mut()
             .spawn((
                 bevy::light::RectLight::default(),
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: true,
-                    intensity_scale: 1.0,
+                LightRangeAuthorship {
                     range_uses_graphics_default: true,
                 },
             ))
@@ -1814,7 +1797,7 @@ mod tests {
     }
 
     #[test]
-    fn graphics_light_defaults_update_live_without_overwriting_authored_values() {
+    fn preview_illumination_and_local_range_updates_preserve_scene_photometry() {
         let mut app = App::new();
         app.insert_resource(test_settings());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
@@ -1830,10 +1813,8 @@ mod tests {
                     ..default()
                 },
                 bevy::light::CascadeShadowConfig::default(),
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: true,
-                    intensity_scale: 2.0,
-                    range_uses_graphics_default: false,
+                EditorPreviewLight {
+                    illuminance_scale: 2.0,
                 },
             ))
             .id();
@@ -1845,9 +1826,7 @@ mod tests {
                     ..default()
                 },
                 bevy::light::CascadeShadowConfig::default(),
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: false,
-                    intensity_scale: 1.0,
+                LightRangeAuthorship {
                     range_uses_graphics_default: false,
                 },
             ))
@@ -1860,9 +1839,7 @@ mod tests {
                     range: 99.0,
                     ..default()
                 },
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: true,
-                    intensity_scale: 1.5,
+                LightRangeAuthorship {
                     range_uses_graphics_default: true,
                 },
             ))
@@ -1875,9 +1852,7 @@ mod tests {
                     range: 88.0,
                     ..default()
                 },
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: false,
-                    intensity_scale: 1.0,
+                LightRangeAuthorship {
                     range_uses_graphics_default: false,
                 },
             ))
@@ -1890,9 +1865,7 @@ mod tests {
                     range: 99.0,
                     ..default()
                 },
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: true,
-                    intensity_scale: 2.0,
+                LightRangeAuthorship {
                     range_uses_graphics_default: true,
                 },
             ))
@@ -1905,9 +1878,7 @@ mod tests {
                     range: 99.0,
                     ..default()
                 },
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default: true,
-                    intensity_scale: 0.5,
+                LightRangeAuthorship {
                     range_uses_graphics_default: true,
                 },
             ))
@@ -1915,9 +1886,7 @@ mod tests {
 
         app.update();
         let mut settings = app.world_mut().resource_mut::<RenderingQualitySettings>();
-        settings.distant_light_default_illuminance = 42_000.0;
-        settings.local_light_default_intensity = 10.0;
-        settings.rect_light_default_intensity = 20.0;
+        settings.editor_preview_illuminance = 42_000.0;
         settings.local_light_default_range = 7.0;
         app.update();
 
@@ -1936,7 +1905,7 @@ mod tests {
             777.0
         );
         let point_light = app.world().get::<bevy::light::PointLight>(point).unwrap();
-        assert_eq!(point_light.intensity, 15.0);
+        assert_eq!(point_light.intensity, 999.0);
         assert_eq!(point_light.range, 7.0);
         let authored_point_light = app
             .world()
@@ -1945,10 +1914,10 @@ mod tests {
         assert_eq!(authored_point_light.intensity, 777.0);
         assert_eq!(authored_point_light.range, 88.0);
         let spot_light = app.world().get::<bevy::light::SpotLight>(spot).unwrap();
-        assert_eq!(spot_light.intensity, 20.0);
+        assert_eq!(spot_light.intensity, 999.0);
         assert_eq!(spot_light.range, 7.0);
         let rect_light = app.world().get::<bevy::light::RectLight>(rect).unwrap();
-        assert_eq!(rect_light.intensity, 10.0);
+        assert_eq!(rect_light.intensity, 999.0);
         assert_eq!(rect_light.range, 7.0);
     }
 

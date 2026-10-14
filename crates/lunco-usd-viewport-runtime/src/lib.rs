@@ -66,7 +66,7 @@ use lunco_core::{ActiveCommandId, on_command, register_commands};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 use lunco_render::{
-    GraphicsCameraDefaults, LightGraphicsDefaults, RenderQualityProfile, RenderingQualitySettings,
+    EditorPreviewLight, GraphicsCameraDefaults, RenderQualityProfile, RenderingQualitySettings,
     scene_camera_look_with_profile,
 };
 use lunco_settings::AppSettingsExt;
@@ -1051,14 +1051,12 @@ fn create_preview_view(
     let light = commands
         .spawn((
             DirectionalLight {
-                illuminance: profile.distant_light_default_illuminance,
+                illuminance: profile.editor_preview_illuminance,
                 shadow_maps_enabled: false,
                 ..default()
             },
-            LightGraphicsDefaults {
-                intensity_uses_graphics_default: true,
-                intensity_scale: 1.0,
-                range_uses_graphics_default: false,
+            EditorPreviewLight {
+                illuminance_scale: 1.0,
             },
             Transform::from_xyz(5.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             preview_layers,
@@ -1073,14 +1071,12 @@ fn create_preview_view(
         .spawn((
             DirectionalLight {
                 color: Color::linear_rgb(0.55, 0.62, 0.75),
-                illuminance: profile.distant_light_default_illuminance * 0.12,
+                illuminance: profile.editor_preview_illuminance * 0.12,
                 shadow_maps_enabled: false,
                 ..default()
             },
-            LightGraphicsDefaults {
-                intensity_uses_graphics_default: true,
-                intensity_scale: 1.0,
-                range_uses_graphics_default: false,
+            EditorPreviewLight {
+                illuminance_scale: 0.12,
             },
             Transform::from_xyz(-5.0, 6.0, -5.0).looking_at(Vec3::ZERO, Vec3::Y),
             RenderLayers::layer(render_layer),
@@ -3482,10 +3478,7 @@ mod tests {
             editor_camera_bloom_enabled: false,
             camera_bloom_intensity: 0.0,
             camera_bloom_low_frequency_boost: 0.0,
-            distant_light_default_illuminance: 128_000.0,
-            local_light_default_intensity: 1_000.0,
-            rect_light_default_intensity: 10_000.0,
-            dome_default_intensity: 1_000.0,
+            editor_preview_illuminance: 128_000.0,
             local_light_default_range: 30.0,
             local_shadow_map_near_z: 0.2,
             dome_cubemap_face_size: 512,
@@ -4389,12 +4382,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_light_uses_graphics_distant_light_default() {
+    fn preview_light_uses_its_owned_graphics_illuminance() {
         let mut app = App::new();
         app.init_resource::<Assets<Image>>();
         let mut settings = RenderingQualitySettings::default();
         settings.apply_profile(preview_quality());
-        settings.distant_light_default_illuminance = 42_000.0;
+        settings.editor_preview_illuminance = 42_000.0;
         app.insert_resource(settings);
 
         let profile = validated_preview_profile(app.world()).expect("quality is valid");
@@ -4419,14 +4412,13 @@ mod tests {
 
         let mut lights = app
             .world_mut()
-            .query::<(&DirectionalLight, &LightGraphicsDefaults)>();
-        let (light, defaults) = lights
+            .query::<(&DirectionalLight, &EditorPreviewLight)>();
+        let mut illumination = lights
             .iter(app.world())
-            .next()
-            .expect("preview session creates its Graphics-owned sun");
-        assert_eq!(light.illuminance, 42_000.0);
-        assert!(defaults.intensity_uses_graphics_default);
-        assert_eq!(defaults.intensity_scale, 1.0);
+            .map(|(light, preview)| (preview.illuminance_scale, light.illuminance))
+            .collect::<Vec<_>>();
+        illumination.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(illumination, vec![(0.12, 42_000.0 * 0.12), (1.0, 42_000.0)]);
         let camera = app
             .world()
             .get_entity(view.camera())

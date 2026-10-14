@@ -258,6 +258,26 @@ exit and release their ports. The preview generation/coalescing lifecycle test
 passes. Evidence is under `/tmp/luncosim-native-direct-*` and
 `/tmp/luncosim-native-direct-source-isolation-verdict.log`.
 
+## Native light photometry
+
+USD light intensity and exposure resolve through the native composed reader.
+The Graphics intensity overrides, their provenance fields, and their recovery
+writers are removed. DistantLight angle and normalization also require native
+schema resolution. Missing or malformed values reject projection. Editor helper
+lights retain the separate `editor_preview_illuminance` setting and typed
+`EditorPreviewLight` marker; their key/fill scales remain 1.0/0.12 during live
+quality changes. Local range and dome resolution remain renderer-owned choices.
+The light plugin registers RectLight for the existing reflection consumer.
+No lifecycle or selection policy hook is introduced by this owner cutover.
+
+The production build and affected-owner all-target check passed. The windowed
+native light defaults gate passes six authored checks on owned port 4215,
+including malformed-input rejection without document mutation. Native ambient
+authoring passes four checks on 4216. Both sessions verified checkout/binary
+identity, API Exit, and port release. The focused preview key/fill, render
+recovery, and dome-resolution resource tests pass. Logs are under
+`/tmp/luncosim-native-light-*` and `/tmp/luncosim-native-preview-photometry-test.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead

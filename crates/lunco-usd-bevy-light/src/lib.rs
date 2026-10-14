@@ -15,7 +15,8 @@ pub struct UsdLightPlugin;
 
 impl Plugin for UsdLightPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(light::on_usd_light_added)
+        app.register_type::<RectLight>()
+            .add_observer(light::on_usd_light_added)
             .add_plugins(dome::DomePlugin);
     }
 }

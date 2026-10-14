@@ -54,9 +54,7 @@
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use lunco_render::{
-    LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
-};
+use lunco_render::{LightRangeAuthorship, LunarSunShadow, ShadowRangeAuthorship};
 use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::lux::tokens as ltok;
@@ -105,8 +103,6 @@ pub struct UsdAuthoredLight;
 #[derive(Component)]
 pub(crate) struct UsdDomeAmbient {
     pub(crate) value: f32,
-    pub(crate) uses_graphics_default: bool,
-    pub(crate) exposure_scale: f32,
 }
 
 /// Sum the native composed untextured DomeLight contributions, excluding the
@@ -217,42 +213,18 @@ pub fn ambient_fill_saturates(requested_total: f64, other_domes_total: f64) -> b
     other_domes_total > requested_total
 }
 
-/// Read a UsdLux light's resolved intensity scaled by its exposure stops:
-/// `inputs:intensity` × 2^`inputs:exposure`. The composed USD schema fallback
-/// wins when the scene omits intensity; `default_intensity` is retained only
-/// for hosts whose schema registry does not provide that property's fallback.
-/// `Err` means an authored value could not be interpreted safely.
+/// Read native USD intensity and exposure at the rendering boundary.
+/// Schema defaults come from the composed reader; missing, malformed or
+/// non-finite values reject the light instead of fabricating photometry.
 pub fn read_intensity_with_exposure(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
-    default_intensity: f32,
 ) -> Result<f32, LightReadError> {
-    Ok(resolve_intensity_with_exposure(reader, path, default_intensity)?.0)
-}
-
-fn resolve_intensity_with_exposure(
-    reader: &impl lunco_usd_bevy_stage::UsdRead,
-    path: &SdfPath,
-    default_intensity: f32,
-) -> Result<(f32, bool, f32), LightReadError> {
-    let authored_intensity = read_authored_real(reader, path, ltok::INPUTS_INTENSITY)?;
-    let schema_intensity = if authored_intensity.is_none() {
-        reader.real_f32(path, ltok::INPUTS_INTENSITY)
-    } else {
-        None
-    };
-    let intensity = authored_intensity
-        .or(schema_intensity)
-        .unwrap_or(default_intensity);
-    let exposure = read_authored_real(reader, path, ltok::INPUTS_EXPOSURE)?.unwrap_or(0.0);
-    let exposure_scale = exposure.exp2();
-    let scaled = intensity * exposure_scale;
-    if scaled.is_finite() && scaled >= 0.0 {
-        Ok((
-            scaled,
-            authored_intensity.is_none() && schema_intensity.is_none(),
-            exposure_scale,
-        ))
+    let intensity = read_required_real(reader, path, ltok::INPUTS_INTENSITY)?;
+    let exposure = read_required_real(reader, path, ltok::INPUTS_EXPOSURE)?;
+    let value = intensity * exposure.exp2();
+    if value.is_finite() && value >= 0.0 {
+        Ok(value)
     } else {
         error!(
             "[usd-bevy] {} has non-finite or negative light intensity after exposure",
@@ -262,31 +234,36 @@ fn resolve_intensity_with_exposure(
     }
 }
 
-/// The resolved intensity parts shared by scalar and textured dome paths.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DomeIntensity {
-    /// Effective `inputs:intensity` × 2^`inputs:exposure`.
-    pub value: f32,
-    /// Whether the base intensity came from Graphics because USD omitted it.
-    pub uses_graphics_default: bool,
-    /// The exposure multiplier retained for a live Graphics-default update.
-    pub exposure_scale: f32,
-}
-
-/// Read the effective intensity of a `DomeLight`, using the Graphics setting
-/// only when USD omits `inputs:intensity` and preserving authored intensity and
-/// exposure exactly.
-pub fn read_dome_intensity(
+fn read_required_real(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
-    quality: RenderQualityProfile,
-) -> Result<DomeIntensity, LightReadError> {
-    let (value, uses_graphics_default, exposure_scale) =
-        resolve_intensity_with_exposure(reader, path, quality.dome_default_intensity)?;
-    Ok(DomeIntensity {
-        value,
-        uses_graphics_default,
-        exposure_scale,
+    name: &str,
+) -> Result<f32, LightReadError> {
+    match reader.real_f32(path, name) {
+        Some(value) if value.is_finite() => Ok(value),
+        _ => {
+            error!(
+                "[usd-bevy] {} has missing, malformed or non-finite light attribute {}",
+                path.as_str(),
+                name
+            );
+            Err(LightReadError)
+        }
+    }
+}
+
+fn read_required_bool(
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
+    path: &SdfPath,
+    name: &str,
+) -> Result<bool, LightReadError> {
+    reader.boolean(path, name).ok_or_else(|| {
+        error!(
+            "[usd-bevy] {} has missing or malformed light boolean {}",
+            path.as_str(),
+            name
+        );
+        LightReadError
     })
 }
 
@@ -642,13 +619,7 @@ pub fn instantiate_light_prim(
             // Resolve the current USD DistantLight schema fallback (50,000) if
             // intensity is omitted. This is scene data resolved by USD, not a
             // value selected by the render-quality profile.
-            let Ok((illuminance_lux, intensity_uses_graphics_default, intensity_scale)) =
-                resolve_intensity_with_exposure(
-                    reader,
-                    sdf_path,
-                    quality.distant_light_default_illuminance,
-                )
-            else {
+            let Ok(illuminance_lux) = read_intensity_with_exposure(reader, sdf_path) else {
                 return false;
             };
             let Ok(c) = read_light_color(reader, sdf_path) else {
@@ -670,33 +641,24 @@ pub fn instantiate_light_prim(
             let d = LunarSunShadow::for_profile(quality);
             // Physical identity (illuminance + apparent size) follows USD's
             // `normalize`, `intensity`, `exposure`, and `angle` semantics. USD
-            // schema fallbacks resolve through the composed reader; the solar
-            // angle constant is only a guard for hosts without core schemas.
-            let authored_angle = match read_authored_real(reader, sdf_path, ltok::INPUTS_ANGLE) {
-                Ok(angle) => angle,
-                Err(_) => return false,
+            // schema fallbacks resolve through the composed reader.
+            let Ok(angle) = read_required_real(reader, sdf_path, ltok::INPUTS_ANGLE) else {
+                return false;
             };
-            let angle = authored_angle
-                .or_else(|| reader.real_f32(sdf_path, ltok::INPUTS_ANGLE))
-                .unwrap_or(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG);
-            if !angle.is_finite() {
+            if !(0.0..=360.0).contains(&angle) {
                 error!(
-                    "[usd-bevy] {} has non-finite DistantLight inputs:angle = {angle}",
+                    "[usd-bevy] {} has out-of-range DistantLight inputs:angle = {angle}",
                     sdf_path.as_str()
                 );
                 return false;
             }
-            let angular_diameter_deg = angle.clamp(0.0, 360.0);
-            let normalize = match read_authored_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) {
-                Ok(value) => value
-                    .or_else(|| reader.boolean(sdf_path, ltok::INPUTS_NORMALIZE))
-                    .unwrap_or(false),
-                Err(_) => return false,
+            let angular_diameter_deg = angle;
+            let Ok(normalize) = read_required_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
+                return false;
             };
             let usd_illuminance_scale =
                 distant_light_illuminance(1.0, normalize, angular_diameter_deg);
             let illuminance_lux = illuminance_lux * usd_illuminance_scale;
-            let intensity_scale = intensity_scale * usd_illuminance_scale;
             // Renderer settings supply defaults. Authored content overrides
             // only the two range attributes below, and the provenance marker
             // preserves that distinction for live Graphics edits.
@@ -763,11 +725,6 @@ pub fn instantiate_light_prim(
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
                 sun.directional_light(color, illuminance_lux, casts_shadows),
                 cascade_config,
-                LightGraphicsDefaults {
-                    intensity_uses_graphics_default,
-                    intensity_scale,
-                    range_uses_graphics_default: false,
-                },
                 ShadowRangeAuthorship {
                     first_cascade_far_bound: first_cascade_authored,
                     maximum_distance: maximum_authored,
@@ -807,21 +764,16 @@ pub fn instantiate_light_prim(
             ) {
                 Ok(Some(env)) => env,
                 Ok(None) => {
-                    let Ok(intensity) = read_dome_intensity(reader, sdf_path, quality) else {
+                    let Ok(intensity) = read_intensity_with_exposure(reader, sdf_path) else {
                         return false;
                     };
-                    commands.entity(entity).try_insert((
-                        UsdDomeAmbient {
-                            value: intensity.value,
-                            uses_graphics_default: intensity.uses_graphics_default,
-                            exposure_scale: intensity.exposure_scale,
-                        },
-                        UsdAuthoredLight,
-                    ));
+                    commands
+                        .entity(entity)
+                        .try_insert((UsdDomeAmbient { value: intensity }, UsdAuthoredLight));
                     debug!(
                         "[usd-bevy] {} DomeLight ambient={}",
                         sdf_path.as_str(),
-                        intensity.value
+                        intensity
                     );
                     return true;
                 }
@@ -855,13 +807,7 @@ pub fn instantiate_light_prim(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let Ok((base_lm, intensity_uses_graphics_default, exposure_scale)) =
-                resolve_intensity_with_exposure(
-                    reader,
-                    sdf_path,
-                    quality.local_light_default_intensity,
-                )
-            else {
+            let Ok(base_lm) = read_intensity_with_exposure(reader, sdf_path) else {
                 return false;
             };
 
@@ -1028,9 +974,7 @@ pub fn instantiate_light_prim(
                         outer_angle,
                         ..default()
                     },
-                    LightGraphicsDefaults {
-                        intensity_uses_graphics_default,
-                        intensity_scale: exposure_scale * area_scale,
+                    LightRangeAuthorship {
                         range_uses_graphics_default,
                     },
                     lunco_port_core::PortSurfaceReady,
@@ -1068,9 +1012,7 @@ pub fn instantiate_light_prim(
                         shadow_map_near_z: quality.local_shadow_map_near_z,
                         ..default()
                     },
-                    LightGraphicsDefaults {
-                        intensity_uses_graphics_default,
-                        intensity_scale: exposure_scale * area_scale,
+                    LightRangeAuthorship {
                         range_uses_graphics_default,
                     },
                     lunco_port_core::PortSurfaceReady,
@@ -1095,19 +1037,10 @@ pub fn instantiate_light_prim(
             // shared transform path in `instantiate_usd_prim` already places it,
             // the same deal `DistantLight` gets.
             //
-            // Luminous POWER in lumens, the same unit `PointLight`/`SpotLight`
-            // take (see the SphereLight arm above — that comment used to claim
-            // candela, and it was wrong). UsdLux `inputs:intensity` is a
-            // dimensionless scale, so it is read as lumens here; the larger
-            // default simply reflects that an area light stands in for a panel
-            // rather than a bulb.
-            let Ok((base_lm, intensity_uses_graphics_default, exposure_scale)) =
-                resolve_intensity_with_exposure(
-                    reader,
-                    sdf_path,
-                    quality.rect_light_default_intensity,
-                )
-            else {
+            // Luminous power in lumens, the same unit `PointLight`/`SpotLight`
+            // take. UsdLux `inputs:intensity` is a
+            // dimensionless scale resolved by the native USD schema.
+            let Ok(base_lm) = read_intensity_with_exposure(reader, sdf_path) else {
                 return false;
             };
             let Ok(c) = read_light_color(reader, sdf_path) else {
@@ -1191,9 +1124,7 @@ pub fn instantiate_light_prim(
                 width,
                 height,
             });
-            commands.entity(entity).try_insert(LightGraphicsDefaults {
-                intensity_uses_graphics_default,
-                intensity_scale: exposure_scale * area_scale,
+            commands.entity(entity).try_insert(LightRangeAuthorship {
                 range_uses_graphics_default,
             });
             debug!(
@@ -1395,7 +1326,7 @@ def DistantLight "Sun"
         let view = stage.view();
         let sun = SdfPath::new("/Sun").unwrap();
 
-        assert!(read_intensity_with_exposure(&view, &sun, 77_000.0).is_err());
+        assert!(read_intensity_with_exposure(&view, &sun).is_err());
         assert!(
             read_shadow_distance(
                 &view,
@@ -1407,82 +1338,5 @@ def DistantLight "Sun"
             .is_err()
         );
         assert!(read_shadow_enable(&view, &sun).is_err());
-    }
-
-    #[test]
-    fn omitted_intensity_uses_renderer_default_and_authored_intensity_wins() {
-        let source = r#"#usda 1.0
-
-def Xform "World"
-{
-    def DistantLight "Sun"
-    {
-    }
-    def SphereLight "Bulb"
-    {
-    }
-    def RectLight "Panel"
-    {
-        float inputs:intensity = 23
-    }
-}
-"#;
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
-            .expect("stage builds");
-        let view = stage.view();
-
-        assert_eq!(
-            read_intensity_with_exposure(&view, &SdfPath::new("/World/Sun").unwrap(), 77_000.0),
-            Ok(77_000.0)
-        );
-        assert_eq!(
-            read_intensity_with_exposure(&view, &SdfPath::new("/World/Bulb").unwrap(), 700.0),
-            Ok(700.0)
-        );
-        assert_eq!(
-            read_intensity_with_exposure(&view, &SdfPath::new("/World/Panel").unwrap(), 10_000.0),
-            Ok(23.0)
-        );
-    }
-
-    #[test]
-    fn omitted_dome_intensity_uses_graphics_default_and_authored_intensity_wins() {
-        let source = r#"#usda 1.0
-
-def Xform "World"
-{
-    def DomeLight "Ambient"
-    {
-    }
-    def DomeLight "Authored"
-    {
-        float inputs:intensity = 23
-    }
-}
-"#;
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
-            .expect("stage builds");
-        let view = stage.view();
-        let quality = lunco_render::RenderQualityProfile {
-            dome_default_intensity: 1_000.0,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            read_dome_intensity(&view, &SdfPath::new("/World/Ambient").unwrap(), quality),
-            Ok(DomeIntensity {
-                value: quality.dome_default_intensity,
-                uses_graphics_default: true,
-                exposure_scale: 1.0,
-            })
-        );
-        assert_eq!(
-            read_dome_intensity(&view, &SdfPath::new("/World/Authored").unwrap(), quality),
-            Ok(DomeIntensity {
-                value: 23.0,
-                uses_graphics_default: false,
-                exposure_scale: 1.0,
-            })
-        );
     }
 }

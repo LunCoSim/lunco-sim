@@ -88,11 +88,6 @@ pub struct UsdDomeEnvironment {
     pub format: DomeFormat,
     /// `inputs:intensity` × 2^`inputs:exposure`.
     pub intensity: f32,
-    /// Whether `intensity` uses the Graphics default and may change when the
-    /// user edits that setting.
-    pub intensity_uses_graphics_default: bool,
-    /// Exposure multiplier retained for a live Graphics-default update.
-    pub intensity_exposure_scale: f32,
     /// `inputs:color` (× the blackbody colour when
     /// `inputs:enableColorTemperature` is on), multiplied into the image.
     pub tint: LinearRgba,
@@ -212,11 +207,7 @@ fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[St
         }
     };
 
-    let domes: Vec<(
-        String,
-        Option<UsdDomeEnvironment>,
-        Option<crate::light::DomeIntensity>,
-    )> = {
+    let domes: Vec<(String, Option<UsdDomeEnvironment>, Option<f32>)> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
@@ -240,7 +231,7 @@ fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[St
                     }
                 };
                 let ambient = if env.is_none() {
-                    match crate::light::read_dome_intensity(&view, &sp, quality) {
+                    match crate::light::read_intensity_with_exposure(&view, &sp) {
                         Ok(intensity) => Some(intensity),
                         Err(_) => {
                             bevy::log::error!(
@@ -274,15 +265,13 @@ fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[St
 
 /// Apply live Graphics changes to dome state that was not authored by USD.
 ///
-/// Intensity is a uniform/camera input and therefore updates without a bake.
-/// Face size is baked into the cubemap, so it marks the dome dirty and lets the
+/// Photometry remains owned by USD. Face size is baked into the cubemap, so
+/// changing it marks the dome dirty and lets the
 /// existing async projection path replace the image. Invalid settings remain
 /// unapplied; they are never converted into a lower preset or a guessed value.
 fn apply_graphics_dome_quality(
     settings: Res<RenderingQualitySettings>,
     mut environments: Query<(Entity, &mut UsdDomeEnvironment)>,
-    mut ambient_domes: Query<&mut crate::light::UsdDomeAmbient>,
-    mut ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
     mut commands: Commands,
 ) {
     let profile = match settings.validated_profile() {
@@ -294,25 +283,9 @@ fn apply_graphics_dome_quality(
     };
 
     for (entity, mut dome) in &mut environments {
-        if dome.intensity_uses_graphics_default {
-            dome.intensity = profile.dome_default_intensity * dome.intensity_exposure_scale;
-        }
         if dome.face_size != profile.dome_cubemap_face_size {
             dome.face_size = profile.dome_cubemap_face_size;
             commands.entity(entity).try_insert(DomeDirty);
-        }
-    }
-
-    let mut ambient_changed = false;
-    for mut dome in &mut ambient_domes {
-        if dome.uses_graphics_default {
-            dome.value = profile.dome_default_intensity * dome.exposure_scale;
-            ambient_changed = true;
-        }
-    }
-    if ambient_changed {
-        if let Some(ambient) = ambient.as_deref_mut() {
-            ambient.brightness = ambient_domes.iter().map(|dome| dome.value).sum();
         }
     }
 }
@@ -400,13 +373,11 @@ pub fn read_dome_environment(
     // carry 6 layers. An authored value with the wrong type is not omission.
     read_dome_format(reader, sdf_path)?;
 
-    let intensity = crate::light::read_dome_intensity(reader, sdf_path, quality)?;
+    let intensity = crate::light::read_intensity_with_exposure(reader, sdf_path)?;
     Ok(Some(UsdDomeEnvironment {
         texture: load_dome_texture(asset_server, texture_path),
         format: DomeFormat::LatLong,
-        intensity: intensity.value,
-        intensity_uses_graphics_default: intensity.uses_graphics_default,
-        intensity_exposure_scale: intensity.exposure_scale,
+        intensity,
         tint: {
             let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)
@@ -549,7 +520,7 @@ pub fn refresh_dome_entity(
     world: &mut World,
     entity: Entity,
     next: Option<UsdDomeEnvironment>,
-    ambient: Option<crate::light::DomeIntensity>,
+    ambient: Option<f32>,
 ) {
     use crate::light::{UsdAuthoredLight, UsdDomeAmbient};
 
@@ -578,11 +549,7 @@ pub fn refresh_dome_entity(
             e.remove::<DomeCubemap>();
             e.remove::<DomeProjection>();
             e.remove::<DomeDirty>();
-            e.insert(UsdDomeAmbient {
-                value: ambient.value,
-                uses_graphics_default: ambient.uses_graphics_default,
-                exposure_scale: ambient.exposure_scale,
-            });
+            e.insert(UsdDomeAmbient { value: ambient });
         }
     }
     // `on_usd_light_added` recomputes `GlobalAmbientLight` from the authored
@@ -857,10 +824,7 @@ mod tests {
             camera_exposure_ev100: 16.0,
             render_failure_quiet_period_secs: 0.5,
             render_failure_give_up_after_secs: 5.0,
-            distant_light_default_illuminance: 128_000.0,
-            local_light_default_intensity: 1_000.0,
-            rect_light_default_intensity: 10_000.0,
-            dome_default_intensity: 1_000.0,
+            editor_preview_illuminance: 128_000.0,
             local_light_default_range: 30.0,
             local_shadow_map_near_z: 0.2,
             dome_cubemap_face_size: 512,
@@ -1038,8 +1002,6 @@ def DomeLight "Dome"
             texture: Handle::default(),
             format: DomeFormat::LatLong,
             intensity: 1.0,
-            intensity_uses_graphics_default: false,
-            intensity_exposure_scale: 1.0,
             tint: LinearRgba::WHITE,
             face_size: 1,
             skybox: true,
@@ -1066,10 +1028,13 @@ def DomeLight "Dome"
     }
 
     #[test]
-    fn graphics_quality_updates_unauthored_dome_state_without_rewriting_authored_values() {
+    fn graphics_quality_updates_dome_resolution_without_rewriting_photometry() {
         let mut app = App::new();
         app.insert_resource(test_quality_settings());
-        app.insert_resource(bevy::light::GlobalAmbientLight::default());
+        app.insert_resource(bevy::light::GlobalAmbientLight {
+            brightness: 2_000.0,
+            ..default()
+        });
         app.add_systems(Update, apply_graphics_dome_quality);
 
         let default_dome = app
@@ -1078,8 +1043,6 @@ def DomeLight "Dome"
                 texture: Handle::default(),
                 format: DomeFormat::LatLong,
                 intensity: 2_000.0,
-                intensity_uses_graphics_default: true,
-                intensity_exposure_scale: 2.0,
                 tint: LinearRgba::WHITE,
                 face_size: 1024,
                 skybox: true,
@@ -1091,8 +1054,6 @@ def DomeLight "Dome"
                 texture: Handle::default(),
                 format: DomeFormat::LatLong,
                 intensity: 23.0,
-                intensity_uses_graphics_default: false,
-                intensity_exposure_scale: 1.0,
                 tint: LinearRgba::WHITE,
                 face_size: 1024,
                 skybox: true,
@@ -1100,24 +1061,17 @@ def DomeLight "Dome"
             .id();
         let ambient_dome = app
             .world_mut()
-            .spawn(crate::light::UsdDomeAmbient {
-                value: 2_000.0,
-                uses_graphics_default: true,
-                exposure_scale: 2.0,
-            })
+            .spawn(crate::light::UsdDomeAmbient { value: 2_000.0 })
             .id();
 
         app.update();
-        app.world_mut()
-            .resource_mut::<RenderingQualitySettings>()
-            .dome_default_intensity = 2_000.0;
         app.world_mut()
             .resource_mut::<RenderingQualitySettings>()
             .dome_cubemap_face_size = 2048;
         app.update();
 
         let default_dome_state = app.world().get::<UsdDomeEnvironment>(default_dome).unwrap();
-        assert_eq!(default_dome_state.intensity, 4_000.0);
+        assert_eq!(default_dome_state.intensity, 2_000.0);
         assert_eq!(default_dome_state.face_size, 2048);
         assert!(app.world().get::<DomeDirty>(default_dome).is_some());
         let authored_dome_state = app
@@ -1131,13 +1085,13 @@ def DomeLight "Dome"
                 .get::<crate::light::UsdDomeAmbient>(ambient_dome)
                 .unwrap()
                 .value,
-            4_000.0
+            2_000.0
         );
         assert_eq!(
             app.world()
                 .resource::<bevy::light::GlobalAmbientLight>()
                 .brightness,
-            4_000.0
+            2_000.0
         );
     }
 }

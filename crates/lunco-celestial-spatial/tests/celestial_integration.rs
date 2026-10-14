@@ -245,9 +245,7 @@ fn celestial_test_quality_profile() -> lunco_render::RenderQualityProfile {
     profile.shadow_maximum_distance = 2.0;
     profile.render_failure_quiet_period_secs = 1.0;
     profile.render_failure_give_up_after_secs = 2.0;
-    profile.distant_light_default_illuminance = 1.0;
-    profile.local_light_default_intensity = 1.0;
-    profile.rect_light_default_intensity = 1.0;
+    profile.editor_preview_illuminance = 1.0;
     profile.local_light_default_range = 1.0;
     profile.dome_cubemap_face_size = 1;
     profile.primitive_sphere_longitudes = 3;
