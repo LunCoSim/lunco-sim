@@ -3,7 +3,7 @@
 //! [`sdf::Data`] is the `Send`-safe representation used by document authoring,
 //! save, journal, network, and authoring-only UI code. It contains the layer's
 //! own specs and preserves composition arcs as authored. Runtime projection
-//! reads the live composed [`crate::StageView`] through [`crate::UsdRead`]
+//! reads the live composed `lunco_usd_bevy_stage::StageView` through `UsdRead`
 //! instead; this extension must not be used as a runtime-stage substitute.
 
 use openusd::sdf::{self, Path, SpecType, Value};
@@ -33,9 +33,6 @@ pub trait UsdDataExt {
 
     /// The `default` value of the attribute at `attr_path`, typed as `T`.
     fn attribute_value<T: TryFrom<Value>>(&self, attr_path: &Path) -> Option<T>;
-
-    /// Whether the prim is active, including the USD default of true.
-    fn prim_is_active(&self, prim: &Path) -> bool;
 }
 
 /// Whether a prim in an authored layer applies the named API schema.
@@ -91,9 +88,5 @@ impl UsdDataExt for sdf::Data {
 
     fn attribute_value<T: TryFrom<Value>>(&self, attr_path: &Path) -> Option<T> {
         self.field_as::<T>(attr_path, "default")
-    }
-
-    fn prim_is_active(&self, prim: &Path) -> bool {
-        self.field_as::<bool>(prim, "active").unwrap_or(true)
     }
 }

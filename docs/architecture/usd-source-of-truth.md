@@ -149,8 +149,9 @@ namespace.
   (`lunco-usd-bevy-scene`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
   (`lunco-usd-sim-cosim/src/lib.rs`), not a maintained index.
-- Reading composed attrs: `UsdDataExt` (`lunco-usd-data/src/usd_data.rs`) —
-  `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
+- Composed runtime reads use `UsdRead` and `StageView`
+  (`lunco-usd-bevy-stage/src/read.rs`). `UsdDataExt`
+  (`lunco-usd-data/src/usd_data.rs`) reads authored-layer opinions only.
 - Shader projection reads authored `inputs:*` from the composed bound Shader;
   connected inputs remain graph-owned and are not treated as local parameter
   values. The same composed declaration is used by the authoring resolver.
@@ -309,7 +310,8 @@ prim→entity.
 - `lunco-usd-bevy-runtime-core/src/scene_runtime.rs` — scene command admission and Twin-backed loading
 - `lunco-usd-commands/src/lib.rs` — document registration and authoring commands
 - `lunco-usd-bevy-stage/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
-- `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
+- `lunco-usd-bevy-stage/src/read.rs` — `UsdRead` (composed runtime reads)
+- `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (authored-layer reads)
 - `lunco-usd-bevy-runtime-core/src/scene.rs` — `LoadScene` / `spawn_scene_root_with_stage`; scene mount and teardown ownership
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)

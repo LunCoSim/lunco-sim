@@ -424,6 +424,11 @@ rejection without mutation, and mesh restoration after reactivation. Checkout/
 binary/PID identity, API Exit, and port release were verified. Evidence is under
 `/tmp/luncosim-native-activity-*.log`.
 
+The unused authored-layer `prim_is_active` helper is removed. Authored-layer
+accessors expose authored opinions only; runtime activation belongs to the
+fallible native composed-stage reader. A repository-wide caller search found no
+consumers, and the `lunco-usd-data` package check passes after removal.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
