@@ -245,107 +245,109 @@ const PBR_LOOK_KEYS: &[&str] = &[
 /// on the geom prim instead. `unlit` is likewise a gprim property, registered by
 /// `LunCoSurfaceAPI`, because `UsdPreviewSurface` has no standard input for the
 /// render intent.
-fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: &PbrLook) {
-    let look = look.clone();
-    let key = key.to_string();
-    commands.queue(move |world: &mut World| {
-        let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
-            return;
-        };
-        let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
-            return;
-        };
+fn author_look_to_usd(
+    world: &mut World,
+    target: Entity,
+    key: &str,
+    look: &PbrLook,
+) -> Result<(), String> {
+    let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
+        return Ok(());
+    };
+    let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
+        return Ok(());
+    };
 
-        // Geometry-level appearance intents live on the gprim, not the surface.
-        if key == "double_sided" || key == "unlit" {
-            let mut ops = Vec::new();
-            if key == "unlit" {
-                let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
-                if !schemas.iter().any(|schema| schema == "LunCoSurfaceAPI") {
-                    schemas.push("LunCoSurfaceAPI".into());
-                    ops.push(UsdOp::SetApiSchemas {
-                        edit_target: LayerId::root(),
-                        path: prim.path.clone(),
-                        schemas,
-                    });
-                }
+    // Geometry-level appearance intents live on the gprim, not the surface.
+    if key == "double_sided" || key == "unlit" {
+        let mut ops = Vec::new();
+        if key == "unlit" {
+            let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+            if !schemas.iter().any(|schema| schema == "LunCoSurfaceAPI") {
+                schemas.push("LunCoSurfaceAPI".into());
+                ops.push(UsdOp::SetApiSchemas {
+                    edit_target: LayerId::root(),
+                    path: prim.path.clone(),
+                    schemas,
+                });
             }
-            let (name, value) = if key == "double_sided" {
-                ("doubleSided", look.double_sided)
-            } else {
-                ("lunco:surface:unlit", look.unlit)
-            };
-            ops.push(UsdOp::SetAttribute {
-                edit_target: LayerId::root(),
-                path: prim.path.clone(),
-                name: name.into(),
-                type_name: "bool".into(),
-                value: value.to_string(),
-            });
-            world.trigger(ApplyUsdOps {
-                doc_id: doc,
-                parent_gen: None,
-                label: "Update geometry appearance intent".into(),
-                ops,
-            });
-            return;
         }
-        if lunco_usd_core::material::preview_surface_input(&key).is_none() {
-            return;
-        }
-
-        // An existing bound shader, else create the material.
-        let existing = crate::doc_resolve::bound_shader_prim(world, &prim);
-        let (mut ops, shader, fresh) = match existing {
-            Some(sp) => (Vec::new(), sp, false),
-            None => {
-                let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
-                match lunco_usd_core::material::ensure_preview_surface_ops(
-                    LayerId::root(),
-                    &prim.path,
-                    &schemas,
-                ) {
-                    Some((ops, shader)) => (ops, shader, true),
-                    None => return,
-                }
-            }
+        let (name, value) = if key == "double_sided" {
+            ("doubleSided", look.double_sided)
+        } else {
+            ("lunco:surface:unlit", look.unlit)
         };
+        ops.push(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: prim.path.clone(),
+            name: name.into(),
+            type_name: "bool".into(),
+            value: value.to_string(),
+        });
+        world.trigger(ApplyUsdOps {
+            doc_id: doc,
+            parent_gen: None,
+            label: "Update geometry appearance intent".into(),
+            ops,
+        });
+        return Ok(());
+    }
+    if lunco_usd_core::material::preview_surface_input(key).is_none() {
+        return Ok(());
+    }
 
-        let mut set = |attr: &str, ty: &str, value: String| {
-            ops.push(UsdOp::SetAttribute {
-                edit_target: LayerId::root(),
-                path: shader.clone(),
-                name: attr.into(),
-                type_name: ty.into(),
-                value,
-            });
-        };
-        let c = |c: LinearRgba| format!("({}, {}, {})", c.red, c.green, c.blue);
-        for (k, ty, v) in [
-            ("base_color", "color3f", c(look.base_color)),
-            ("emissive", "color3f", c(look.emissive)),
-            ("metallic", "float", look.metallic.to_string()),
-            ("roughness", "float", look.perceptual_roughness.to_string()),
-            ("opacity", "float", look.base_color.alpha.to_string()),
-            ("ior", "float", look.ior.to_string()),
-        ] {
-            // A fresh material seeds every input; an existing one writes only what
-            // changed (so an unrelated authored input is not clobbered).
-            if !fresh && !key_matches(&key, k) {
-                continue;
-            }
-            if let Some((attr, _)) = lunco_usd_core::material::preview_surface_input(k) {
-                set(attr, ty, v);
+    // An existing bound shader, else create the material.
+    let existing = crate::doc_resolve::bound_shader_prim(world, &prim)?;
+    let (mut ops, shader, fresh) = match existing {
+        Some(sp) => (Vec::new(), sp, false),
+        None => {
+            let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+            match lunco_usd_core::material::ensure_preview_surface_ops(
+                LayerId::root(),
+                &prim.path,
+                &schemas,
+            ) {
+                Some((ops, shader)) => (ops, shader, true),
+                None => return Ok(()),
             }
         }
-        for op in ops {
-            world.trigger(ApplyUsdOp {
-                doc_id: doc,
-                parent_gen: None,
-                op: op.clone(),
-            });
+    };
+
+    let mut set = |attr: &str, ty: &str, value: String| {
+        ops.push(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: shader.clone(),
+            name: attr.into(),
+            type_name: ty.into(),
+            value,
+        });
+    };
+    let c = |c: LinearRgba| format!("({}, {}, {})", c.red, c.green, c.blue);
+    for (k, ty, v) in [
+        ("base_color", "color3f", c(look.base_color)),
+        ("emissive", "color3f", c(look.emissive)),
+        ("metallic", "float", look.metallic.to_string()),
+        ("roughness", "float", look.perceptual_roughness.to_string()),
+        ("opacity", "float", look.base_color.alpha.to_string()),
+        ("ior", "float", look.ior.to_string()),
+    ] {
+        // A fresh material seeds every input; an existing one writes only what
+        // changed (so an unrelated authored input is not clobbered).
+        if !fresh && !key_matches(key, k) {
+            continue;
         }
-    });
+        if let Some((attr, _)) = lunco_usd_core::material::preview_surface_input(k) {
+            set(attr, ty, v);
+        }
+    }
+    for op in ops {
+        world.trigger(ApplyUsdOp {
+            doc_id: doc,
+            parent_gen: None,
+            op: op.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
@@ -547,9 +549,8 @@ pub fn on_set_object_property(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     asset_server: Res<AssetServer>,
     shaders: Res<Assets<bevy::shader::Shader>>,
-    mut q_look: Query<&mut PbrLook>,
+    active_command: Res<lunco_core::ActiveCommandId>,
     mut q_shader_look: Query<&mut ShaderLook>,
-    q_mesh: Query<(), With<Mesh3d>>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut q_susp: Query<&mut lunco_mobility::Suspension>,
@@ -655,47 +656,34 @@ pub fn on_set_object_property(
         // it; note that adoption starts from `PbrLook::default()`, so the import's own
         // textures are not carried over.
         key if PBR_LOOK_KEYS.contains(&key) => {
-            if let Ok(mut look) = q_look.get_mut(target) {
-                if apply_pbr_look(&mut look, key, &cmd.value) {
-                    // ALSO author it into USD. Mutating `PbrLook` alone updates the
-                    // screen and nothing else — the edit would never reach the
-                    // document, so it would not save, journal, undo, or replicate.
-                    // Every edit goes through `ApplyUsdOp`; this one was quietly
-                    // exempt.
-                    author_look_to_usd(&mut commands, target, key, &look);
-                    info!(
-                        "SET_PROPERTY: {} look {} = {}",
-                        cmd.entity_id, cmd.property, cmd.value
-                    );
-                } else {
-                    warn!(
-                        "SET_PROPERTY: bad value '{}' for pbr '{}'",
-                        cmd.value, cmd.property
-                    );
+            let key = key.to_string();
+            let value = cmd.value.clone();
+            let command_id = active_command.get();
+            commands.queue(move |world: &mut World| {
+                let result = (|| {
+                    let mut look = match world.get::<PbrLook>(target) {
+                        Some(look) => look.clone(),
+                        None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),
+                        None => return Err("entity has no PbrLook / mesh".to_string()),
+                    };
+                    if !apply_pbr_look(&mut look, &key, &value) {
+                        return Err(format!("bad value '{value}' for pbr '{key}'"));
+                    }
+                    author_look_to_usd(world, target, &key, &look)?;
+                    world.entity_mut(target).insert(look);
+                    Ok(lunco_command_contracts::Ack::default())
+                })();
+                if let Err(message) = &result {
+                    warn!("SET_PROPERTY: {message}");
                 }
-                return;
-            }
-            if q_mesh.get(target).is_err() {
-                warn!(
-                    "SET_PROPERTY: entity {} has no PbrLook / mesh",
-                    cmd.entity_id
+                lunco_api::executor::finish_command_result(
+                    world,
+                    command_id,
+                    None,
+                    result,
+                    lunco_api_core::ApiErrorCode::CommandRejected,
                 );
-                return;
-            }
-            let mut look = PbrLook::default();
-            if apply_pbr_look(&mut look, key, &cmd.value) {
-                author_look_to_usd(&mut commands, target, key, &look);
-                commands.entity(target).try_insert(look);
-                info!(
-                    "SET_PROPERTY: {} adopted a PbrLook, {} = {}",
-                    cmd.entity_id, cmd.property, cmd.value
-                );
-            } else {
-                warn!(
-                    "SET_PROPERTY: bad value '{}' for pbr '{}'",
-                    cmd.value, cmd.property
-                );
-            }
+            });
         }
         key => {
             // param/color → set the named value on the entity's shader look. The

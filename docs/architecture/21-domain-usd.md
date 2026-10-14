@@ -1224,6 +1224,14 @@ An `xformOp:*` attribute contributes only when `xformOpOrder` names it. A prim
 with no authored transform stack has the USD identity; a malformed ordered stack
 is rejected. There is no separate per-channel transform decoder.
 
+The fallible native reset-stack fact is shared by double world-geometry reads
+and visual frame projection. A reset discards operations preceding its sentinel
+and the ancestor stack. The visual adapter expresses that pose in the mounted
+stage frame, retaining its authored parent for live reset retirement. Removing
+reset restores that parent; reintroducing it re-expresses the current native
+local pose. Stage ancestry is traversed completely and cyclic ECS ancestry
+fails visibly instead of choosing a partial root.
+
 ### Animation
 
 Authored `timeSamples` drive entities at the physical presentation time
