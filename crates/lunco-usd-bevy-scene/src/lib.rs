@@ -31,6 +31,7 @@ pub struct UsdScenePlugin;
 
 impl Plugin for UsdScenePlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<UsdSceneProjectionFailed>();
         app.init_resource::<UsdStageRevision>()
             .add_systems(PreUpdate, bump_usd_stage_revision)
             .add_systems(

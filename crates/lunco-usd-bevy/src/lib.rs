@@ -941,35 +941,25 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             }
         }
 
-        // Visibility — honour standard USD `token visibility`.
-        // `invisible` suppresses mesh creation entirely (used for
-        // collider-only Cube prims hidden behind a glTF visual, and
-        // raycast wheel cylinders that have no visible representation).
-        //
-        // `visibility` is INHERITED, exactly like `purpose` below —
-        // `UsdGeomImageable` defines it as such, and the nearest ancestor that
-        // authors `invisible` hides the whole subtree. Reading only the prim's
-        // own path (as this did) means marking one `Xform` invisible leaves every
-        // child drawing, which is both wrong per spec and a surprising way to
-        // lose an afternoon: HAB-1's collider ring stayed on screen because the
-        // `invisible` sat on the group rather than on each box.
-        //
-        // Visibility PRUNES: an `invisible` ancestor hides the subtree outright,
-        // and a descendant cannot re-reveal itself. `inherited` means "take the
-        // parent's answer", NOT "force visible" — so it keeps walking rather
-        // than stopping. Getting that backwards would let a child override a
-        // hidden parent, which USD does not permit.
-        let invisible = reader.is_invisible_or_guide(&sdf_path);
-        // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
-        // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
-        // the boolean CUTTERS that define a shell's openings. Keeping them in the
-        // file is what preserves the parametric intent — a porthole stays a
-        // diameter and a position rather than becoming a hole someone has to
-        // reverse-engineer — but a guide must never render.
-        //
-        // The inherited Imageable visibility/purpose result is resolved once by
-        // the reader. Prepared readers compute it on the loader worker through
-        // the same OpenUSD schema implementation.
+        // Native effective visibility combines overall subtree pruning with
+        // VisibilityAPI opinions for the prim's resolved purpose.
+        let visibility = match reader.effective_visibility(&sdf_path) {
+            Ok(visibility) => visibility,
+            Err(error) => {
+                let message = format!(
+                    "{} cannot resolve native effective visibility: {error}",
+                    sdf_path.as_str()
+                );
+                error!("[usd-bevy] {message}");
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+        };
+        let invisible = visibility == openusd_schemas::geom::PurposeVisibility::Invisible;
 
         // Placeholder for an async-loading glTF payload. Authors set
         // `bool lunco:placeholder = true` on a Cube prim that lives as

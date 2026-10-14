@@ -472,16 +472,13 @@ fn recipe_asset_instantiates_from_prepared_projection_plan() {
         "a NurbsPatch must tessellate to a Mesh3d"
     );
 
-    // (i) `purpose = "guide"` is INHERITED. The cutter Cube authors no purpose of
-    // its own — only its parent `Cutters` Xform does — so this pins the ancestor
-    // walk. Reading the prim alone would render every child of a guide group,
-    // which for HAB-1 means nine boolean cutters appearing as solid boxes
-    // floating through the shell.
+    // (i) Guide purpose inherits from the parent. Without an authored
+    // VisibilityAPI opinion, native effective visibility hides this cutter.
     let cutter_e =
         entity_at(&mut app, "/World/Cutters/PortholeCutter").expect("cutter prim entity");
     assert!(
         app.world().get::<Mesh3d>(cutter_e).is_none(),
-        "a prim under a `purpose = \"guide\"` ancestor must not render"
+        "an inherited guide without a visible VisibilityAPI opinion remains hidden"
     );
 }
 

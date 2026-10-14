@@ -10482,6 +10482,7 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
  "openusd",
+ "openusd-schemas",
  "web-time",
 ]
 

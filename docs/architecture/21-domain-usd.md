@@ -428,6 +428,15 @@ and lint facts consume this typed result. Missing prims and native read failures
 remain errors: physics faults and holds failed projection, while lint and
 inspection expose diagnostics.
 
+`UsdRead::effective_visibility` returns native `PurposeVisibility` for the
+prim's resolved purpose through `ImageableExt::compute_effective_visibility`.
+Overall ancestor invisibility prunes the subtree; standard `VisibilityAPI`
+opinions can show or suppress guide, proxy, and render geometry. Prepared
+plans retain the checked result. A failed live read terminates visual
+projection with `UsdSceneProjectionFailed` and hides the affected parent;
+that reflected marker is available to generic inspection. Topology queries
+report unknown `visual` state alongside the native diagnostic on read failure.
+
 A running scene has three document layers and one composed stage. Each layer
 has a distinct lifetime and write path:
 

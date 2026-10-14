@@ -315,6 +315,31 @@ cases, a live ancestor edit, and terminal malformed-type rejection without
 mutation. Checkout/binary identity, API Exit, and port release were verified.
 Evidence is in `/tmp/luncosim-native-purpose-*.log`.
 
+## Native effective visibility
+
+`UsdRead::effective_visibility` carries the SDK's checked `PurposeVisibility`
+result. Live reads use `ImageableExt::compute_effective_visibility` for the
+resolved purpose; prepared plans preserve that native result and reject failed
+reads before publication. The boolean helper and its error-to-visible
+substitution are removed. Standard `VisibilityAPI` guide opinions can explicitly
+show geometry, while overall ancestor invisibility still prunes the subtree.
+Visual projection terminates failed reads through the existing failure marker,
+hidden visibility, and recoverable runtime error event. The scene owner registers
+that marker for generic reflection. Topology inspection reports unknown visual
+state with a diagnostic instead of a guessed boolean. This consumes native
+schema semantics and an existing failure mechanism; no selection-policy hook
+or parallel visibility reader is introduced.
+
+The application/affected-owner all-target check, focused snapshot test, and
+production build pass. The snapshot test covers native live/prepared parity,
+missing prims, malformed-token errors, and rejected snapshot preparation. The
+baseline failed two of eight authored checks. The final windowed gate passes
+ten checks on owned port 4219, including explicitly visible guides, nearest
+purpose opinions, overall pruning, live ancestor edits, terminal type rejection
+without mutation, hidden terminal renderer failure, and unknown inspection
+visibility with its native diagnostic. Process identity, API Exit, and port
+release were verified. Evidence is in `/tmp/luncosim-native-visibility-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -342,7 +367,3 @@ Evidence is in `/tmp/luncosim-native-purpose-*.log`.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
-4. The visual Imageable predicate still folds native visibility/purpose errors
-   into `false`. Its boolean contract must be replaced by a checked native read
-   consumed by both prepared and live visual projection, without a fabricated
-   visible result on failure.

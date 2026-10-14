@@ -77,6 +77,16 @@ boundaries. The production gate
 proxy/render selection, explicit-default overrides, collision bounds, lint,
 live ancestor edits, and terminal malformed-type rejection without mutation.
 
+Read presentation visibility through `UsdRead::effective_visibility` and keep
+its error result. The SDK applies overall subtree pruning and standard
+`VisibilityAPI` purpose opinions. A failed read terminates and hides visual
+projection; inspect `UsdSceneProjectionFailed` through the shared reflection
+surface and use document topology diagnostics for failed composed reads.
+The focused production gate is `lunco://scenarios/tests/native_visibility.rhai`,
+attached to the settled replacement fixture through `RunScenarioAsset`. Require
+the visible-guide, ancestor-edit, malformed-type rejection, and native-read
+failure checks, including unknown visibility in inspection.
+
 The scene transaction closes from asset and structural-projection outcomes.
 `UsdSceneProjectionFailed` on the running mount must fail and clear that
 transaction before a generation can commit; preview errors are separately

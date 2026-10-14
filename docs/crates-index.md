@@ -888,6 +888,8 @@ Visual OpenUSD bridge built on `lunco-usd-bevy-stage`,
 `lunco-usd-bevy-core`, and
 `lunco-usd-bevy-mesh`. It maps USD prim hierarchies and visual facts into Bevy
 entities/components and orchestrates async mesh and render-intent projection.
+It consumes the native SDK's checked effective-visibility enum through the
+stage reader; the scene contract owns the reflected terminal failure marker.
 Authored controls and generic executable programs belong to
 `lunco-usd-bevy-runtime-core`; scene-property port surfaces belong to
 `lunco-usd-bevy-scene-ports`, not this visual adapter. The

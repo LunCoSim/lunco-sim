@@ -662,10 +662,12 @@ pub trait UsdRead {
     /// Native Imageable purpose, including nearest authored ancestor opinions.
     fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String>;
 
-    /// USD's inherited Imageable visibility/purpose result used by the visual
-    /// projector. The value is prepared with the same composed semantics as
-    /// the live stage.
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool;
+    /// Native effective visibility for this prim's resolved purpose. Missing
+    /// prims and failed native reads remain errors in both reader planes.
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String>;
 
     /// Resolve the standard UsdShade material binding for a purpose. The
     /// returned path is owned so a worker-produced reader can cross the asset
@@ -840,7 +842,10 @@ pub trait UsdReadObject {
         time: f64,
     ) -> Result<Option<Transform>, crate::TransformReadError>;
     fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String>;
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool;
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String>;
     fn bound_material(&self, prim: &SdfPath, purpose: crate::MaterialPurpose) -> Option<String>;
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
     fn is_active(&self, prim: &SdfPath) -> bool;
@@ -1464,8 +1469,11 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::local_transform_at(self, prim, time)
     }
 
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
-        UsdRead::is_invisible_or_guide(self, prim)
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String> {
+        UsdRead::effective_visibility(self, prim)
     }
 
     fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
@@ -1620,8 +1628,20 @@ impl UsdRead for StageView<'_> {
         crate::compose_live_xform_order_at(self, prim, time)
     }
 
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
-        crate::stage_prim_is_invisible_or_guide(self, prim)
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String> {
+        use openusd_schemas::geom::{Imageable, ImageableExt};
+        let purpose = UsdRead::purpose(self, prim)?;
+        let imageable = Imageable::from_prim_unchecked(
+            self.stage()
+                .prim(prim.clone())
+                .map_err(|error| error.to_string())?,
+        );
+        imageable
+            .compute_effective_visibility(purpose, None)
+            .map_err(|error| format!("{prim}: {error}"))
     }
 
     fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
@@ -2190,10 +2210,13 @@ impl UsdRead for UsdReadSource<'_> {
         }
     }
 
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String> {
         match self {
-            Self::Prepared(reader) => UsdRead::is_invisible_or_guide(*reader, prim),
-            Self::Live(reader) => UsdRead::is_invisible_or_guide(reader, prim),
+            Self::Prepared(reader) => UsdRead::effective_visibility(*reader, prim),
+            Self::Live(reader) => UsdRead::effective_visibility(reader, prim),
         }
     }
 

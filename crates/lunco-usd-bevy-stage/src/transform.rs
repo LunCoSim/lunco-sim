@@ -273,25 +273,6 @@ pub fn transform_in_body_frame(
     })
 }
 
-/// Resolve inherited USD Imageable visibility and purpose on a live stage.
-pub(crate) fn stage_prim_is_invisible_or_guide(reader: &StageView<'_>, path: &SdfPath) -> bool {
-    use openusd_schemas::geom::{Imageable, ImageableExt};
-    let imageable = Imageable::from_prim_unchecked(
-        reader
-            .stage()
-            .prim(path.clone())
-            .expect("validated USD path"),
-    );
-    imageable
-        .compute_visibility(None)
-        .map(|value| value == openusd_schemas::geom::Visibility::Invisible)
-        .unwrap_or(false)
-        || imageable
-            .compute_purpose()
-            .map(|value| value == openusd_schemas::geom::Purpose::Guide)
-            .unwrap_or(false)
-}
-
 pub fn read_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<String>> {
     let Value::TokenVec(values) = reader.attr_value(path, "xformOpOrder")? else {
         return None;

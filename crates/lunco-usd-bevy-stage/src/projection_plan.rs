@@ -53,7 +53,7 @@ pub struct UsdPrimProjectionPlan {
     documentation: Option<String>,
     active: bool,
     purpose: openusd_schemas::geom::Purpose,
-    invisible_or_guide: bool,
+    effective_visibility: openusd_schemas::geom::PurposeVisibility,
     bound_materials: HashMap<MaterialPurpose, String>,
 }
 
@@ -330,7 +330,9 @@ impl UsdStageProjectionPlan {
                 documentation: reader.documentation(&path),
                 active,
                 purpose: reader.purpose(&path).map_err(|error| anyhow!(error))?,
-                invisible_or_guide: reader.is_invisible_or_guide(&path),
+                effective_visibility: reader
+                    .effective_visibility(&path)
+                    .map_err(|error| anyhow!(error))?,
                 bound_materials,
             };
             let index = data.prims.len();
@@ -702,8 +704,13 @@ impl UsdRead for UsdStageProjectionPlan {
         Ok(self.transform_snapshot(prim, time)?.transform)
     }
 
-    fn is_invisible_or_guide(&self, prim: &SdfPath) -> bool {
-        self.prim(prim).is_some_and(|prim| prim.invisible_or_guide)
+    fn effective_visibility(
+        &self,
+        prim: &SdfPath,
+    ) -> Result<openusd_schemas::geom::PurposeVisibility, String> {
+        self.prim(prim)
+            .map(|prim| prim.effective_visibility)
+            .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
     }
 
     fn purpose(&self, prim: &SdfPath) -> Result<openusd_schemas::geom::Purpose, String> {
@@ -763,6 +770,66 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_visibility_preserves_native_opinions_and_read_errors() {
+        use openusd_schemas::geom::PurposeVisibility as V;
+        let recipe = StageRecipe::from_source(
+            "visibility.usda",
+            r#"#usda 1.0
+def Xform "Guide" (prepend apiSchemas = ["VisibilityAPI"]) {
+    uniform token purpose = "guide"
+    uniform token guideVisibility = "visible"
+    def Cube "Shown" {}
+    def Cube "Suppressed" (prepend apiSchemas = ["VisibilityAPI"]) {
+        uniform token guideVisibility = "invisible"
+    }
+}
+def Xform "Hidden" {
+    token visibility = "invisible"
+    def Cube "Child" (prepend apiSchemas = ["VisibilityAPI"]) {
+        uniform token purpose = "guide"
+        uniform token guideVisibility = "visible"
+    }
+}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let prepared = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for (path, expected) in [
+            ("/Guide/Shown", V::Visible),
+            ("/Guide/Suppressed", V::Invisible),
+            ("/Hidden/Child", V::Invisible),
+        ] {
+            let path = SdfPath::new(path).unwrap();
+            assert_eq!(live.effective_visibility(&path), Ok(expected));
+            assert_eq!(
+                prepared.effective_visibility(&path),
+                live.effective_visibility(&path)
+            );
+        }
+        let missing = SdfPath::new("/Missing").unwrap();
+        assert!(live.effective_visibility(&missing).is_err());
+        assert!(prepared.effective_visibility(&missing).is_err());
+
+        let invalid = StageRecipe::from_source(
+            "invalid.usda",
+            r#"#usda 1.0
+def Cube "Invalid" (prepend apiSchemas = ["VisibilityAPI"]) {
+    uniform token purpose = "guide"
+    uniform token guideVisibility = "invalid-visibility"
+}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&invalid).unwrap();
+        assert!(
+            StageView::new(&stage)
+                .effective_visibility(&SdfPath::new("/Invalid").unwrap())
+                .is_err()
+        );
+        assert!(UsdStageProjectionPlan::from_stage(&stage).is_err());
+    }
 
     #[test]
     fn prepared_purpose_preserves_native_inheritance_and_missing_prim_errors() {

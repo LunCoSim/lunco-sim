@@ -486,8 +486,20 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
             candidate,
             openusd_schemas::physics::tokens::PHYSICS_COLLISION_API,
         );
-        let visual = is_visual_geometry(&type_name) && !view.is_invisible_or_guide(candidate);
-        if !collider && !visual {
+        let visual = if is_visual_geometry(&type_name) {
+            match view.effective_visibility(candidate) {
+                Ok(visibility) => {
+                    Some(visibility != openusd_schemas::geom::PurposeVisibility::Invisible)
+                }
+                Err(error) => {
+                    diagnostics.push(error);
+                    None
+                }
+            }
+        } else {
+            Some(false)
+        };
+        if !collider && visual == Some(false) {
             continue;
         }
 
