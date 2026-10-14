@@ -218,6 +218,7 @@ struct PreparedDependentStagePatch {
 
 struct DependentStageLayerSource {
     doc: DocumentId,
+    layer_id: String,
     persistent_revision: (u64, u64),
     snapshot: Arc<UsdDocument>,
     data: OnceLock<Result<Arc<openusd::sdf::Data>, Arc<str>>>,
@@ -256,10 +257,10 @@ impl DependentStageLayerSource {
                 .entered();
                 self.persistent_data()
                     .and_then(|data| {
-                        lunco_usd_authoring::author::data_to_usda(&data)
+                        lunco_usd_authoring::author::layer_bytes(&self.layer_id, &data)
                             .map_err(|error| error.to_string())
                     })
-                    .map(|source| Arc::from(source.into_bytes()))
+                    .map(Arc::from)
                     .map_err(|error| Arc::<str>::from(error.to_string()))
             })
             .clone()
@@ -1650,6 +1651,7 @@ fn refresh_dependent_stage_assets(
             let snapshot = Arc::new(host.document().clone());
             Arc::new(DependentStageLayerSource {
                 doc: changed_doc,
+                layer_id: layer_id.to_owned(),
                 persistent_revision: (snapshot.base_revision(), snapshot.runtime_revision()),
                 snapshot,
                 data: OnceLock::new(),
@@ -4317,6 +4319,45 @@ mod tests {
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    #[test]
+    fn dependent_source_serialization_uses_native_binary_codec() {
+        let document = UsdDocument::with_origin(
+            DocumentId::new(990),
+            TINY,
+            lunco_workspace::DocumentOrigin::writable_file("/tmp/dependent-native.usdc"),
+        );
+        let source = DependentStageLayerSource {
+            doc: document.id(),
+            layer_id: "file:///tmp/dependent-native.usdc".to_owned(),
+            persistent_revision: (document.base_revision(), document.runtime_revision()),
+            snapshot: Arc::new(document),
+            data: OnceLock::new(),
+            serialized: OnceLock::new(),
+        };
+        let bytes = source.persistent_bytes().expect("encode dependent source");
+        assert!(
+            bytes.starts_with(b"PXR-USDC"),
+            "binary layer identity requires native USDC bytes"
+        );
+        let recipe = lunco_usd_compose::recipe::StageRecipe::new(
+            source.layer_id.clone(),
+            HashMap::from([(source.layer_id.clone(), bytes.to_vec())]),
+        );
+        let plan =
+            UsdStageProjectionPlan::from_recipe(&recipe).expect("decode binary dependent source");
+        assert_eq!(plan.default_prim_name(), Some("World"));
+        let invalid_format = DependentStageLayerSource {
+            layer_id: "file:///tmp/dependent-native.invalid".to_owned(),
+            data: OnceLock::new(),
+            serialized: OnceLock::new(),
+            ..source
+        };
+        let error = invalid_format
+            .persistent_bytes()
+            .expect_err("unknown native codec must fail");
+        assert!(error.contains("unknown USD layer format"), "{error}");
+    }
 
     #[test]
     fn changed_root_recipe_is_not_scheduled_as_its_own_dependent_stage() {

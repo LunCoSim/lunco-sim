@@ -693,8 +693,7 @@ mod tests {
             "restoring a runtime overlay must not dirty the authored base"
         );
         assert!(
-            reopened
-                .composed_source()
+            lunco_usd_authoring::author::data_to_usda(reopened.runtime_data())
                 .unwrap()
                 .contains("@vessels/rovers/skid_rover.usda@"),
             "restored spawn rides the composed view"

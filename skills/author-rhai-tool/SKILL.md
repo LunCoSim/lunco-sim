@@ -231,7 +231,8 @@ keeps the workflow in Rhai while reusing the existing typed USD owners:
   `inputs:`/`outputs:`/`connectors:` endpoints and composed connections.
   `wiring_plan(doc, edit_target, root, connections, parent_generation)`
   validates direction and type and returns typed `SetConnection` ops.
-- `publish_component(doc, root, edit_target, output, provenance)` validates a
+- `publish_component(doc, root, edit_target, output, provenance)` requires
+  `edit_target = "@root@"` for source publication and validates a
   standalone `kind = "component"` root, `defaultPrim`, schemas, references,
   and provenance, then returns the normal metadata ops and explicit Save-As
   command. Review/apply through `assembly_edit`; provenance remains a

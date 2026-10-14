@@ -942,6 +942,9 @@ fn publish_component(doc, root, edit_target, output, provenance) {
     if doc == () || edit_target == () || root == () || output == () {
         return failure("publish_component", "publish_component requires document, root, edit target, output, and provenance");
     }
+    if edit_target != "@root@" {
+        return failure("publish_component", "component publication writes the root source; choose @root@");
+    }
     let valid_root = absolute_prim(root, "component root");
     if !valid_root.ok { return valid_root; }
     if root == "/" || root.split("/").len() != 2 {

@@ -513,14 +513,14 @@ fn references(doc, edit_target, path, references, list_op, parent_gen) {
     })
 }
 
-/// Set the stage root defaultPrim in one authored layer. Accepts either
-/// "/World" or "World"; pass () to clear only that layer's opinion.
-fn default_prim(doc, edit_target, path, parent_gen) {
+/// Set defaultPrim on its native root-layer owner. Accepts either
+/// "/World" or "World"; pass () to clear the root selection.
+fn default_prim(doc, path, parent_gen) {
     cmd("ApplyUsdOp", #{
         doc_id: doc,
         parent_gen: parent_gen,
         op: #{ SetDefaultPrim: #{
-            edit_target: edit_target,
+            edit_target: "@root@",
             default_prim: path,
         }},
     })

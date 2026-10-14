@@ -1299,3 +1299,9 @@ For attribute and relationship removal, the canonical root patches the resolved
 property from the authoritative document because it combines document layers.
 A removed runtime override reveals the base opinion without resetting unrelated
 simulated objects; native reference/sublayer composition remains intact.
+
+Document inspection and composition use the native stage; authored-layer reads
+remain separate. Invalid source cannot open a composed stage. Dependent-layer
+serialization uses the native codec for its exact layer identifier, including
+USDC; the authored base/runtime merge is limited to that transport boundary.
+Standard root metadata follows the [assembly editor contract](48-assembly-editor.md).

@@ -854,7 +854,7 @@ let metadata = assembly_edit::prim_kind(
     doc, "@root@", "/Rover", "assembly", changed.data.generation,
 );
 let defaulted = assembly_edit::default_prim(
-    doc, "@root@", "/Rover", metadata.data.generation,
+    doc, "/Rover", metadata.data.generation,
 );
 ```
 
@@ -867,9 +867,9 @@ without flattening it. Entries are `#{ asset_path: "lunco://…" or
 `prim.references.composed`; resolve the target before submitting so a
 composed-only prim fails as read-only.
 
-Use `assembly_edit::default_prim(doc, edit_target, path, parent_gen)` to set
-the stage root's `defaultPrim`; it accepts `/Rover` or `Rover` and takes `()` as
-`path` to clear only the selected layer. Use
+Use `assembly_edit::default_prim(doc, path, parent_gen)` to set
+the root layer's `defaultPrim`; it accepts `/Rover` or `Rover` and takes `()` as
+`path` to clear the root selection. Runtime/view defaultPrim requests are rejected. Use
 `assembly_edit::prim_kind(doc, edit_target, path, kind, parent_gen)` for the
 standard USD prim `kind` token, such as `component`, `assembly`, or `group`;
 pass `()` as `kind` to clear that layer's opinion. Both helpers use the typed

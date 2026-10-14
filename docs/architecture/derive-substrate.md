@@ -264,8 +264,8 @@ needs:
    / port = feed.)
 3. **The change signal** — the **USD-doc-op journal + per-layer generation counter** is the
    invalidation stream. A live-asset edit = a journal op = a layer-gen bump = a targeted key
-   invalidation. Gate the expensive composed-hash behind the cheap gen counter — the exact
-   `generation()`-before-`composed()` pattern already used in `sync_twin_overlays`.
+   invalidation. Gate expensive artifact preparation behind the owning revision,
+   then capture the native stage's immutable facts for worker processing.
 4. **Peer convergence** — the key derives from *shared* composed USD state, so two peers get
    the **same key** → the CID tier can ship a baked artifact peer-to-peer instead of everyone
    recooking (the asset-sync plane, binary=CID). Layer scope picks the tier: session-layer

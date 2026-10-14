@@ -263,7 +263,7 @@ passes. Evidence is under `/tmp/luncosim-native-direct-*` and
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
    of the standard `inherits` keyword. Pixar OpenUSD 26.08 rejects its output.
    The same mapping remains in the inspected upstream head
-   `4467984b4f32b9e1569635b8b578deb4cbef8744`. The authoring owner rejects this
+   `00451e46421a99ddf448d414ab77705a1999e02d`. The authoring owner rejects this
    serialization before publishing/writing it. There is no output-rewriting
    shim or alternate text writer. The canonical schema source was restored
    exactly through the document API and remains Pixar-readable. Its obsolete
@@ -271,8 +271,9 @@ passes. Evidence is under `/tmp/luncosim-native-direct-*` and
    native writer defect is fixed; current generation instructions are in the
    runbooks. A fixed native library must replace the guard and its rejection
    assertion with successful interoperability coverage.
-2. `author::compose_layers`, the document's composed-data memo, and its
-   dependent-layer projection consumer remain. Mount validation, deletion
+2. `author::compose_layers` and its dependent-layer projection consumer remain.
+   Document reads and text previews use the native stage. Dependent bytes now use the native
+   codec selected by the exact source identity, including USDC. Mount validation, deletion
    guards, ambient authoring and read-only composed-text previews use native
    stages. The dependent-layer consumer must use its native owner before that
    merge and its tests can be deleted. Loader metadata settings

@@ -699,9 +699,9 @@ Use the smallest existing typed intent that expresses the change:
   (list result and spec sites, source `document_composition`) before editing,
   and resolve the target first so a composed-only prim is reported as
   read-only rather than flattened or guessed.
-- `assembly_edit::default_prim(doc, edit_target, path, parent_gen)` authors the
-  stage root `defaultPrim` in `@root@` or `@runtime@`; use an absolute or
-  root-relative existing prim path, and pass `()` to clear only that layer.
+- `assembly_edit::default_prim(doc, path, parent_gen)` authors the
+  root layer `defaultPrim`; use an absolute or root-relative existing prim
+  path, and pass `()` to clear its selection. Runtime/view targets are rejected.
   `assembly_edit::prim_kind(doc, edit_target, path, kind, parent_gen)` authors
   a USD identifier such as `component`, `assembly`, or `group` on an existing
   prim; pass `()` to clear that layer's opinion. Inspect

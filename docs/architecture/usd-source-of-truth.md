@@ -249,7 +249,7 @@ Add `project_usd_attrs_to_components` — the generic analog of
 each `(prim, attr)`:
 1. find the entity via the reverse index (Step 4);
 2. look up the projector in the registry;
-3. read the new value from the cheap `composed()` base⊕runtime merge and **set the
+3. read the new value through the native canonical-stage reader and **set the
    component field — no reflatten, no respawn** (mirrors `apply_translates`).
 
 This is what keeps a slider drag at frame rate. **Heavy/structural attributes** whose

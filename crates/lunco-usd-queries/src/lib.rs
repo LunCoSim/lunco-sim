@@ -706,13 +706,9 @@ fn metadata_stack_api_value(
             metadata_api_value(value.as_deref(), id, variant_selections),
         ));
     }
-    let value = if path == &SdfPath::abs_root() {
-        stage.stage_metadata(field).map_err(native_query_error)?
-    } else {
-        stage
-            .field::<SdfValue>(path, field)
-            .map_err(native_query_error)?
-    };
+    let value = stage
+        .field::<SdfValue>(path, field)
+        .map_err(native_query_error)?;
     Ok(api_value!({
         "authored": ApiValue::Map(authored),
         "composed": metadata_api_value(value.as_ref(), "document_composition", variant_selections),

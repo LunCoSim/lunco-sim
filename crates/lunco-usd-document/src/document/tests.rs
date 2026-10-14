@@ -7,6 +7,17 @@ use lunco_doc::{DocumentHost, Mutation};
 // composition would resolve references/variants on top and hide precisely
 // the layer-targeting these tests exist to pin.
 
+// Composition assertions snapshot the native stage. Authored-op assertions
+// continue to read the exact base/runtime/view layer that owns the opinion.
+fn native_snapshot(document: &UsdDocument) -> sdf::Data {
+    let layer = document.open_composed_stage().unwrap().flatten().unwrap();
+    let root = SdfPath::new("/").unwrap();
+    let mut snapshot = sdf::Data::new();
+    snapshot.create_spec(root.clone(), sdf::SpecType::PseudoRoot);
+    sdf::copy_spec(layer.data(), &root, &mut snapshot, &root).unwrap();
+    snapshot
+}
+
 const TINY_USDA: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
 
 fn prim_type(doc: &UsdDocument, path: &str) -> Option<String> {
@@ -664,7 +675,7 @@ fn from_file_origin_starts_clean() {
 }
 
 #[test]
-fn forks_isolate_layers_revisions_and_composed_cache() {
+fn forks_isolate_authored_layers_and_native_stage_reads() {
     const SCENE: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
     let source = UsdDocument::with_origin(
         DocumentId::new(10),
@@ -698,26 +709,20 @@ fn forks_isolate_layers_revisions_and_composed_cache() {
 
     assert_eq!(left.generation(), right.generation());
     assert_eq!(
-        left.composed_arc()
-            .prim_attribute_value::<f64>(&ball, "radius"),
+        native_snapshot(&left).prim_attribute_value::<f64>(&ball, "radius"),
         Some(2.0)
     );
     assert_eq!(
-        right
-            .composed_arc()
-            .prim_attribute_value::<f64>(&ball, "radius"),
+        native_snapshot(&right).prim_attribute_value::<f64>(&ball, "radius"),
         Some(3.0)
     );
     assert_eq!(
-        left.composed_arc()
-            .prim_attribute_value::<f64>(&ball, "radius"),
+        native_snapshot(&left).prim_attribute_value::<f64>(&ball, "radius"),
         Some(2.0),
-        "a later equal-generation fork must not replace the first fork's memo"
+        "equal-generation forks retain their own authored layers"
     );
     assert_eq!(
-        source
-            .composed_arc()
-            .prim_attribute_value::<f64>(&ball, "radius"),
+        native_snapshot(&source).prim_attribute_value::<f64>(&ball, "radius"),
         Some(1.0)
     );
 
@@ -751,14 +756,6 @@ fn forks_isolate_layers_revisions_and_composed_cache() {
     left.mark_saved();
     assert!(!left.is_dirty());
     assert!(right.is_dirty());
-    let cached = left.composed_arc();
-    let cached_weak = std::sync::Arc::downgrade(&cached);
-    drop(cached);
-    drop(left);
-    assert!(
-        cached_weak.upgrade().is_none(),
-        "dropping a fork must release its derived cache"
-    );
 }
 
 #[test]
@@ -791,8 +788,8 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
 
     let points = SdfPath::new("/World/RoutePoints").unwrap();
     let ribbon = SdfPath::new("/World/RouteRibbon").unwrap();
-    assert!(document.composed().spec(&points).is_some());
-    assert!(document.composed().spec(&ribbon).is_some());
+    assert!(native_snapshot(&document).spec(&points).is_some());
+    assert!(native_snapshot(&document).spec(&ribbon).is_some());
     assert!(document.runtime_data().spec(&points).is_some());
     assert!(document.view_data().spec(&ribbon).is_some());
     assert_eq!(document.runtime_revision(), 1);
@@ -802,23 +799,27 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
     assert!(persistent_data.spec(&points).is_some());
     assert!(persistent_data.spec(&ribbon).is_none());
 
-    let persistent = usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
-    assert!(persistent.spec(&points).is_some());
-    assert!(persistent.spec(&ribbon).is_none());
-
     let fork = document.fork(DocumentId::new(15), "Route.usda").unwrap();
-    assert!(fork.composed().spec(&points).is_some());
-    assert!(fork.composed().spec(&ribbon).is_none());
+    assert!(native_snapshot(&fork).spec(&points).is_some());
+    assert!(native_snapshot(&fork).spec(&ribbon).is_none());
 
     let generation = document.generation();
     let dirty = document.is_dirty();
-    let authored = document.persistent_composed_source().unwrap();
+    let authored = document
+        .stage_recipe("file:///tmp/view-layer.usda", false)
+        .unwrap();
     document.clear_view();
     assert_eq!(document.generation(), generation + 1);
     assert_eq!(document.is_dirty(), dirty);
-    assert_eq!(document.persistent_composed_source().unwrap(), authored);
-    assert!(document.composed().spec(&ribbon).is_none());
-    assert!(document.composed().spec(&points).is_some());
+    assert_eq!(
+        document
+            .stage_recipe("file:///tmp/view-layer.usda", false)
+            .unwrap()
+            .bytes,
+        authored.bytes
+    );
+    assert!(native_snapshot(&document).spec(&ribbon).is_none());
+    assert!(native_snapshot(&document).spec(&points).is_some());
     assert!(
         document
             .view_ops_since_source_baseline()
@@ -1626,17 +1627,22 @@ prepend references = @base.usda@</Base>\n\
     .expect("runtime reference prepend applies");
 
     let path = SdfPath::new("/World").unwrap();
-    let composed = doc.composed_arc();
+    let composed = doc.runtime_data();
     let Some(sdf::Value::ReferenceListOp(op)) =
         composed.field(&path, sdf::FieldKey::References.as_str())
     else {
         panic!("expected composed reference list");
     };
     let items = op.flatten();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 1);
     assert_eq!(items[0].asset_path, "lunco://components/rover.usda");
     assert_eq!(items[0].prim_path.as_str(), "/Rover");
-    assert_eq!(items[1].asset_path, "base.usda");
+    let Some(sdf::Value::ReferenceListOp(base)) =
+        doc.data().field(&path, sdf::FieldKey::References.as_str())
+    else {
+        panic!("base reference remains authored");
+    };
+    assert_eq!(base.flatten()[0].asset_path, "base.usda");
 
     doc.apply(UsdOp::SetReferenceArcs {
         edit_target: LayerId::runtime(),
@@ -1648,7 +1654,7 @@ prepend references = @base.usda@</Base>\n\
         list_op: UsdReferenceListOp::Delete,
     })
     .expect("reference delete applies");
-    let composed = doc.composed_arc();
+    let composed = doc.runtime_data();
     let Some(sdf::Value::ReferenceListOp(op)) =
         composed.field(&path, sdf::FieldKey::References.as_str())
     else {
@@ -1663,7 +1669,7 @@ prepend references = @base.usda@</Base>\n\
         list_op: UsdReferenceListOp::Explicit,
     })
     .expect("explicit empty reference list applies");
-    let composed = doc.composed_arc();
+    let composed = doc.runtime_data();
     let Some(sdf::Value::ReferenceListOp(op)) =
         composed.field(&path, sdf::FieldKey::References.as_str())
     else {
@@ -1755,7 +1761,7 @@ prepend references = @base.usda@</Base>\n\
 }
 
 #[test]
-fn set_default_prim_authors_layers_and_typed_undo() {
+fn set_default_prim_authors_root_layer_and_typed_undo() {
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\" {}\ndef Xform \"Rover\" {}\n";
     let mut doc = UsdDocument::new(DocumentId::new(52), SCENE);
     let root = SdfPath::abs_root();
@@ -1784,30 +1790,6 @@ fn set_default_prim_authors_layers_and_typed_undo() {
         Some("Rover".into())
     );
     doc.apply(inverse).unwrap();
-    assert_eq!(
-        author::data_to_usda(doc.data()).unwrap(),
-        author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
-    );
-
-    doc.apply(UsdOp::SetDefaultPrim {
-        edit_target: LayerId::runtime(),
-        default_prim: Some("Rover".into()),
-    })
-    .unwrap();
-    assert_eq!(
-        doc.composed_arc()
-            .field(&root, sdf::FieldKey::DefaultPrim.as_str())
-            .and_then(|value| match value {
-                sdf::Value::Token(token) => Some(token.to_string()),
-                _ => None,
-            }),
-        Some("Rover".into())
-    );
-    doc.apply(UsdOp::SetDefaultPrim {
-        edit_target: LayerId::runtime(),
-        default_prim: None,
-    })
-    .unwrap();
     assert_eq!(
         author::data_to_usda(doc.data()).unwrap(),
         author::data_to_usda(&usda_to_data(&before).unwrap()).unwrap()
@@ -1866,7 +1848,7 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
         Some("component".into())
     );
     assert_eq!(
-        doc.composed_arc()
+        native_snapshot(&doc)
             .field(&path, sdf::FieldKey::Kind.as_str())
             .and_then(|value| match value {
                 sdf::Value::Token(token) => Some(token.to_string()),
@@ -2070,7 +2052,7 @@ fn set_translate_then_rotate_lists_both_ops_in_author_order() {
 
     let rig = SdfPath::new("/Rig").unwrap();
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &rig),
+        xform_op_order_tokens(&native_snapshot(&doc), &rig),
         vec![
             "xformOp:translate".to_string(),
             "xformOp:rotateXYZ".to_string()
@@ -2098,7 +2080,7 @@ fn set_translate_then_rotate_lists_both_ops_in_author_order() {
     })
     .unwrap();
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &rig),
+        xform_op_order_tokens(&native_snapshot(&doc), &rig),
         vec![
             "xformOp:translate".to_string(),
             "xformOp:rotateXYZ".to_string()
@@ -2130,7 +2112,7 @@ fn set_scale_authors_standard_op_and_typed_undo() {
         })
         .expect("initial scale applies");
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &rig),
+        xform_op_order_tokens(&native_snapshot(&doc), &rig),
         vec!["xformOp:scale".to_string()]
     );
     assert_eq!(
@@ -2188,7 +2170,7 @@ fn xform_op_order_is_author_order_not_canonical() {
     })
     .unwrap();
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &SdfPath::new("/Rig").unwrap()),
+        xform_op_order_tokens(&native_snapshot(&doc), &SdfPath::new("/Rig").unwrap()),
         vec![
             "xformOp:rotateXYZ".to_string(),
             "xformOp:translate".to_string()
@@ -2219,7 +2201,7 @@ fn set_translate_preserves_preexisting_composed_op_order() {
 
     let part = SdfPath::new("/Part").unwrap();
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &part),
+        xform_op_order_tokens(&native_snapshot(&doc), &part),
         vec![
             "xformOp:rotateXYZ".to_string(),
             "xformOp:scale".to_string(),
@@ -2262,7 +2244,7 @@ fn runtime_layer_rotate_materialises_base_order_plus_new_op() {
 
     let part = SdfPath::new("/Part").unwrap();
     assert_eq!(
-        xform_op_order_tokens(&doc.composed_arc(), &part),
+        xform_op_order_tokens(&native_snapshot(&doc), &part),
         vec![
             "xformOp:translate".to_string(),
             "xformOp:rotateXYZ".to_string()
@@ -2629,6 +2611,15 @@ fn unparseable_source_preserved_and_edits_blocked() {
         DocumentOrigin::writable_file("/tmp/bad.usda"),
     );
     // Raw text preserved for save.
+    assert!(matches!(
+        doc.open_composed_stage(),
+        Err(DocumentError::ValidationFailed(_))
+    ));
+    let recipe = StageRecipe::from_source("inline.usda", TINY_USDA);
+    assert!(matches!(
+        doc.open_composed_stage_with_recipe(&recipe),
+        Err(DocumentError::ValidationFailed(_))
+    ));
     assert_eq!(doc.source().unwrap(), garbage);
     // Structural edits blocked.
     let err = doc
@@ -2754,14 +2745,21 @@ fn composed_view_includes_runtime_but_source_excludes_it() {
     .unwrap();
 
     // The composed view (what the viewport renders) sees the runtime prim.
-    let composed = doc.composed();
+    let composed = native_snapshot(&doc);
     assert_eq!(
         composed
             .prim_type_name(&SdfPath::new("/World/Obstacle").unwrap())
             .as_deref(),
         Some("Sphere")
     );
-    assert!(doc.composed_source().unwrap().contains("Obstacle"));
+    assert!(
+        doc.open_composed_stage()
+            .unwrap()
+            .prim(SdfPath::new("/World/Obstacle").unwrap())
+            .unwrap()
+            .is_valid()
+            .unwrap()
+    );
     // The saved source (base) does not.
     assert!(!doc.source().unwrap().contains("Obstacle"));
 }
@@ -2791,12 +2789,11 @@ fn spawn_op_authors_runtime_reference_excluded_from_save() {
         !prim_exists(host.document(), "/World/rover_1"),
         "spawn must not touch base"
     );
-    // It rides into the composed view (what the viewport renders /
-    // re-instantiates) as a resolvable reference opinion...
-    let composed = host.document().composed_source().unwrap();
+    // The persisted runtime layer retains the authored reference opinion.
+    let composed = author::data_to_usda(host.document().runtime_data()).unwrap();
     assert!(
         composed.contains("@vessels/rovers/skid_rover.usda@"),
-        "composed view must carry the spawn reference:\n{composed}"
+        "runtime layer must carry the spawn reference:\n{composed}"
     );
     // ...and is EXCLUDED from Save (base only).
     assert!(
@@ -2835,16 +2832,11 @@ fn runtime_set_attribute_overrides_nested_base_attr_in_composed() {
         value: "4.0".into(),
     })
     .unwrap();
-    let composed = doc.composed();
+    let composed = native_snapshot(&doc);
     assert_eq!(
         composed.prim_attribute_value::<f32>(&SdfPath::new("/Root/Mid/Leaf").unwrap(), "density"),
         Some(4.0),
-        "runtime override must win in the composed sdf::Data"
-    );
-    assert!(
-        doc.composed_source().unwrap().contains("density = 4"),
-        "composed USDA source must carry the override:\n{}",
-        doc.composed_source().unwrap()
+        "runtime override must win in the native stage"
     );
 }
 
@@ -2962,7 +2954,7 @@ fn runtime_add_prim_under_nested_parent_in_composed() {
         reference_prim_path: None,
     })
     .unwrap();
-    let composed = doc.composed();
+    let composed = native_snapshot(&doc);
     assert_eq!(
         composed
             .prim_type_name(&SdfPath::new("/Root/Mid/Probe").unwrap())

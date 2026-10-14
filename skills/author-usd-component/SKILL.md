@@ -119,7 +119,8 @@ proposal. Do not infer the recipe from child names or add a Rust registry.
 
 When the component is ready to become a reusable asset, call
 `model_authoring::publish_component(doc, root, edit_target, output,
-provenance)`. It checks the top-level component root, standard `kind` and
+provenance)` with `edit_target = "@root@"`. Publication writes the source
+root and rejects runtime/view targets. It checks the top-level component root, standard `kind` and
 `defaultPrim`, applied schemas, reference identities, and caller-supplied
 provenance, then returns ordinary metadata ops and an explicit `save_as`
 command. Review and apply the ops through `assembly_edit`; call

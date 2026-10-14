@@ -653,12 +653,12 @@ journalled, undoable, and treated as a composition resync so the live projection
 rebuilds the affected composition rather than replaying a flattened delta.
 
 Stage and prim metadata use the same typed owner. `UsdOp::SetDefaultPrim` authors
-the stage root's `defaultPrim` in the selected `@root@` or `@runtime@` layer;
-the value may be a root-relative or absolute prim path and must resolve to an
+the root layer's `defaultPrim`; runtime/view targets are rejected.
+The value may be a root-relative or absolute prim path and must resolve to an
 existing non-root prim. `UsdOp::SetPrimKind` authors a USD identifier such as
 `component`, `assembly`, or `group` on an existing prim. Passing `None` to
-either operation clears only that layer's opinion, so weaker metadata remains
-visible through composition. `InspectUsdDocument` reports root/runtime/view
+`SetDefaultPrim` clears the root selection; `SetPrimKind` clears only the selected
+layer's opinion, so weaker kind metadata remains visible through composition. `InspectUsdDocument` reports root/runtime/view
 authored values and native composed values with their source labels. Invalid
 paths, invalid kind identifiers, composed-only prims, and stale
 generations fail before journaling; each metadata edit triggers the required

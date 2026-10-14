@@ -685,13 +685,13 @@ pub enum UsdOp {
         /// (e.g. `/Bus/Node.outputs:v`). Empty clears the connection.
         sources: Vec<String>,
     },
-    /// Author the stage root's `defaultPrim` metadata in the selected layer.
+    /// Author `defaultPrim` on the document's root layer.
     ///
     /// The value is an absolute prim path or root-relative prim path supplied
     /// by the editor; the layer stores the standard root-relative spelling.
-    /// `None` removes this layer's opinion without touching weaker layers.
+    /// `None` clears the root layer's selection. Runtime/view targets are rejected.
     SetDefaultPrim {
-        /// Layer to write to.
+        /// Must identify `@root@`, the standard owner of this metadata.
         edit_target: LayerId,
         /// Prim path selected as the document's default prim, or `None` to
         /// clear this layer's opinion.
@@ -1085,7 +1085,7 @@ pub struct UsdDocument {
     /// produced each generation. The live-stage projection replays these ops
     /// directly (author-once: the op is the single delta description, applied to
     /// both this save layer and the `!Send` projection stage), so it never has to
-    /// re-derive an edit's value by reading it back out of [`composed`](Self::composed).
+    /// re-derive an edit's value from the composed stage.
     /// Non-op state changes are represented by a gap, so [`ops_since`](Self::ops_since)
     /// requests a complete snapshot when a cursor spans one.
     op_log: VecDeque<(u64, std::sync::Arc<UsdOp>)>,
@@ -1095,11 +1095,6 @@ pub struct UsdDocument {
     /// View revision at which the current source snapshot established an empty
     /// view baseline. Projection can replay the retained suffix from this point.
     view_history_start_revision: u64,
-    /// Memoized `base ⊕ runtime ⊕ view` composition. The cache is private to this
-    /// document instance; its key names the document identity and all layer
-    /// revisions, so derived data cannot cross a fork boundary or survive a
-    /// changed layer.
-    composed_cache: std::sync::Mutex<Option<(UsdCompositionKey, std::sync::Arc<sdf::Data>)>>,
 }
 
 /// Worker-prepared document input for native stage loading. The root buffer
@@ -1109,18 +1104,6 @@ pub struct DocumentStageInput {
     pub recipe: StageRecipe,
     /// Codec-correct root buffer published to the asset transport.
     pub root_bytes: std::sync::Arc<Vec<u8>>,
-}
-
-/// Inputs to the document's authored-layer composition memo.
-///
-/// Full USD stage composition remains owned by `lunco-usd-compose` and its
-/// resolver recipe. This key is only for the local layer merge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct UsdCompositionKey {
-    document: DocumentId,
-    base_revision: u64,
-    runtime_revision: u64,
-    view_revision: u64,
 }
 
 impl Clone for UsdDocument {
@@ -1144,7 +1127,6 @@ impl Clone for UsdDocument {
             op_log: self.op_log.clone(),
             view_op_log: self.view_op_log.clone(),
             view_history_start_revision: self.view_history_start_revision,
-            composed_cache: std::sync::Mutex::new(None),
         }
     }
 }
@@ -1220,7 +1202,6 @@ impl UsdDocument {
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             view_op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             view_history_start_revision: 0,
-            composed_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -1273,15 +1254,21 @@ impl UsdDocument {
         author::data_to_usda(&self.base).map_err(author_err)
     }
 
+    /// Require parsed authored state before composition or encoded admission.
+    fn ensure_parsed(&self) -> Result<(), DocumentError> {
+        if let Some(error) = &self.parse_error {
+            return Err(DocumentError::ValidationFailed(format!(
+                "invalid USD document source: {error}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Serialize the authored base using the native format selected by the
     /// destination extension. Invalid source and unsupported formats fail
     /// before persistence can write anything.
     pub fn export_bytes(&self, extension: &str) -> Result<Vec<u8>, DocumentError> {
-        if let Some(error) = &self.parse_error {
-            return Err(DocumentError::ValidationFailed(format!(
-                "invalid USD source: {error}"
-            )));
-        }
+        self.ensure_parsed()?;
         let format = sdf::LayerRegistry::find_by_extension(extension).ok_or_else(|| {
             DocumentError::ValidationFailed(format!("unknown USD file format `{extension}`"))
         })?;
@@ -1299,9 +1286,9 @@ impl UsdDocument {
 
     /// The authored **base** layer data (references intact). Query it with the
     /// [`UsdDataExt`](lunco_usd_data::usd_data::UsdDataExt) helpers. The runtime
-    /// overlay is not folded in here — read it separately via
-    /// [`runtime_data`](Self::runtime_data) until a consumer needs a composed
-    /// view (deferred with the runtime-producer wiring).
+    /// overlay is not folded in here. Read exact opinions through
+    /// [`runtime_data`](Self::runtime_data), and composed facts through
+    /// [`open_composed_stage`](Self::open_composed_stage).
     pub fn data(&self) -> &sdf::Data {
         &self.base
     }
@@ -1317,11 +1304,7 @@ impl UsdDocument {
     /// should use this value directly instead of serializing USDA and parsing
     /// it back into an equivalent layer.
     pub fn persistent_composed_data(&self) -> Result<sdf::Data, DocumentError> {
-        if let Some(raw) = &self.parse_error {
-            return Err(DocumentError::ValidationFailed(format!(
-                "document source is un-parseable: {raw}"
-            )));
-        }
+        self.ensure_parsed()?;
         Ok(author::compose_layers(&self.base, &self.runtime))
     }
 
@@ -1352,11 +1335,7 @@ impl UsdDocument {
         root_id: &str,
         include_view: bool,
     ) -> Result<StageRecipe, DocumentError> {
-        if let Some(error) = &self.parse_error {
-            return Err(DocumentError::ValidationFailed(format!(
-                "invalid USD document source: {error}"
-            )));
-        }
+        self.ensure_parsed()?;
         let context = match self.authoring_recipe() {
             Some(recipe) => recipe.reanchor(root_id).map_err(author_err)?,
             None => StageRecipe::new(root_id.to_owned(), Default::default()),
@@ -1423,9 +1402,8 @@ impl UsdDocument {
     ///
     /// Keep base, runtime, and view as separate USD layers so variant and
     /// reference composition sees the same opinion strength as the document.
-    /// The flattened `composed_arc` remains a local authored-data view and is
-    /// not a substitute for this stage when a loaded dependency closure exists.
     pub fn open_composed_stage(&self) -> Result<Stage, DocumentError> {
+        self.ensure_parsed()?;
         author::open_doc_stage_with_layers(
             &self.base,
             &self.runtime,
@@ -1442,6 +1420,7 @@ impl UsdDocument {
         &self,
         recipe: &StageRecipe,
     ) -> Result<Stage, DocumentError> {
+        self.ensure_parsed()?;
         author::open_doc_stage_with_layers(&self.base, &self.runtime, &self.view, Some(recipe))
             .map_err(author_err)
     }
@@ -1549,50 +1528,6 @@ impl UsdDocument {
         self.parse_error.as_deref()
     }
 
-    /// The **composed** view: runtime edits and disposable presentation merged
-    /// over the base layer, in that strength order. This is what the viewport
-    /// renders — authored content plus runtime and derived view state —
-    /// whereas [`source`](Self::source) (Save) stays base-only. References
-    /// survive as opinions; this is an sdf layer-stack merge, not render-time
-    /// PCP composition.
-    pub fn composed(&self) -> sdf::Data {
-        (*self.composed_arc()).clone()
-    }
-
-    /// The composed view as a shared [`Arc`], memoized by document identity and
-    /// authored-layer revisions. Prefer this over [`composed`](Self::composed) on hot paths
-    /// (the twin projection,
-    /// the doc-backed terrain re-bake) — repeated calls within one edit share the same
-    /// recompose instead of each paying a full O(stage) layer merge.
-    pub fn composed_arc(&self) -> std::sync::Arc<sdf::Data> {
-        let key = UsdCompositionKey {
-            document: self.id,
-            base_revision: self.base_revision,
-            runtime_revision: self.runtime_revision,
-            view_revision: self.view_revision,
-        };
-        // A cache miss is always safe: the value is a derived memo and can be
-        // recomputed from the two authoritative layers.
-        {
-            let cache = self
-                .composed_cache
-                .lock()
-                .expect("USD composition cache mutex poisoned");
-            if let Some((cached_key, data)) = &*cache {
-                if *cached_key == key {
-                    return data.clone();
-                }
-            }
-        }
-        let runtime = author::compose_layers(&self.base, &self.runtime);
-        let data = std::sync::Arc::new(author::compose_layers(&runtime, &self.view));
-        *self
-            .composed_cache
-            .lock()
-            .expect("USD composition cache mutex poisoned") = Some((key, data.clone()));
-        data
-    }
-
     /// Resolve the unit convention from the document's composed authoring
     /// stage. Runtime and view layers are overlays, so opening either target
     /// alone would apply USD's centimetre default when the scene metadata is
@@ -1601,31 +1536,6 @@ impl UsdDocument {
         let stage = self.open_composed_stage()?;
         let metrics = StageMetrics::from_stage(&stage).map_err(author_err)?;
         Ok(ConventionTransform::from_stage_metrics(&metrics))
-    }
-
-    /// The composed view serialized to USDA text — the source the viewport
-    /// re-parses so runtime-layer state becomes visible. Falls back to the raw
-    /// (base) source when the base is un-parseable.
-    pub fn composed_source(&self) -> Result<String, DocumentError> {
-        if let Some(raw) = &self.parse_error {
-            return Ok(raw.to_string());
-        }
-        author::data_to_usda(&self.composed_arc()).map_err(author_err)
-    }
-
-    /// Serialize the base and user-authored runtime layers for a Twin source
-    /// overlay. Disposable presentation is deliberately omitted.
-    pub fn persistent_composed_source(&self) -> Result<String, DocumentError> {
-        if let Some(raw) = &self.parse_error {
-            return Ok(raw.to_string());
-        }
-        let composed = author::compose_layers(&self.base, &self.runtime);
-        author::data_to_usda(&composed).map_err(|error| {
-            DocumentError::Internal(format!(
-                "failed to serialize persistent document {}: {error}",
-                self.id.raw()
-            ))
-        })
     }
 
     /// Retire presentation derived from the outgoing scene. Authored layers,
@@ -3612,6 +3522,11 @@ impl Document for UsdDocument {
             }
 
             UsdOp::SetDefaultPrim { default_prim, .. } => {
+                if target != TargetLayer::Base {
+                    return Err(DocumentError::ValidationFailed(
+                        "SetDefaultPrim requires @root@; native USD selects defaultPrim from the root layer".into(),
+                    ));
+                }
                 let normalized = normalize_default_prim_path(default_prim.as_deref())?;
                 if let Some((path, _)) = &normalized {
                     self.require_prim_anywhere(path.as_str())?;

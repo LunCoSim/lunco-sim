@@ -784,19 +784,11 @@ pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
     openusd::usda::TextWriter::value_to_string(&value).ok()
 }
 
-/// Overlay the `runtime` layer's opinions onto `base` as an **sdf layer-stack
-/// merge** and return the composed [`sdf::Data`]: runtime fields win per spec,
-/// runtime-only specs are added, and `primChildren` lists are unioned so the
-/// merged prim tree lists children authored in either layer.
+/// Prepare authored base/runtime opinions for a dependent-layer patch.
 ///
-/// This is the sdf-level layer composition openusd does **not** expose. What it
-/// does expose is full PCP composition — which resolves
-/// references/payloads/variants, and that is exactly wrong for an *authored*
-/// composed view: a base `references = @asset.usda@` opinion must survive as an
-/// opinion, not be pulled in. References/payloads ride along untouched here
-/// because they are just fields on the base spec. This is NOT a substitute for
-/// render-time PCP composition (the storage-based `build_stage_from_closure`
-/// loader path); it is the document's own two-layer (base + runtime) merge.
+/// The dependent stage retains its native composition arcs, so this transport
+/// combines local Sdf opinions while preserving reference, payload and variant
+/// specs. Runtime stage reads and document inspection use native composition.
 pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     let mut out = base.clone();
     for (path, rspec) in runtime.iter() {
@@ -1260,12 +1252,8 @@ def "Part" { double referenced = 23 }
         );
     }
 
-    /// A runtime sparse `over` (the shape a `SetAttribute` edit authors) must NOT
-    /// downgrade the base `def` — and the composed layer must survive a full
-    /// serialize → reparse round-trip with the override intact. This is the E1b
-    /// twin-overlay path: `composed()` → `data_to_usda` → `UsdLoader` reparse. The
-    /// bug this guards: a downgraded `over` with no underlying `def` defines
-    /// nothing on reparse, so the whole subtree silently vanished.
+    /// A sparse runtime over retains the base definition when a dependent
+    /// source layer is serialized and reparsed with its changed opinions.
     #[test]
     fn compose_layers_keeps_base_def_and_survives_roundtrip() {
         let base = usda_to_data(SCENE).unwrap(); // /World(def)/Box(def, radius=1)/Inner(def)
