@@ -56,14 +56,33 @@ struct TwinSceneRef {
 /// The resource carries workspace Twin leases, editor preview leases, and the
 /// cursors used by the live projection owner. It intentionally contains no UI
 /// viewport type: a preview is represented only by a counted lease.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
     user_owned: HashSet<DocumentId>,
     private_mounts: HashMap<DocumentId, String>,
+    inputs: lunco_usd_bevy_stage::asset::DocumentStageInputs,
+}
+
+impl FromWorld for DocBackedTwinScenes {
+    fn from_world(world: &mut World) -> Self {
+        Self::new(
+            world
+                .get_resource_or_init::<lunco_usd_bevy_stage::asset::DocumentStageInputs>()
+                .clone(),
+        )
+    }
 }
 
 impl DocBackedTwinScenes {
+    pub fn new(inputs: lunco_usd_bevy_stage::asset::DocumentStageInputs) -> Self {
+        Self {
+            map: HashMap::new(),
+            user_owned: HashSet::new(),
+            private_mounts: HashMap::new(),
+            inputs,
+        }
+    }
     /// Publish one native source snapshot under its admitted document lease.
     /// Layer decoding and composition remain owned by the stage asset loader.
     pub fn publish_stage_input(
@@ -83,31 +102,33 @@ impl DocBackedTwinScenes {
                 input.recipe.root_id
             ));
         }
-        roots
-            .set_overlay(&name, &rel, input.root_bytes)
-            .map_err(|error| error.to_string())?;
         if let Some(owner) = self.source_input(doc) {
+            roots
+                .set_overlay(&name, &rel, input.root_bytes)
+                .map_err(|error| error.to_string())?;
             return owner
                 .publish(input.recipe)
                 .map_err(|error| error.to_string());
         }
         let path = lunco_assets_core::asset_path::load_asset_path(&root_id, None, None, None)
             .map_err(|error| error.to_string())?;
-        let owner = lunco_usd_bevy_stage::asset::DocumentStageInputOwner::new(input.recipe);
-        let reader = owner.reader();
-        let handle = server
-            .load_builder()
-            .with_settings(
-                move |settings: &mut lunco_usd_bevy_stage::asset::UsdStageLoadSettings| {
-                    settings.document_input = Some(reader.clone());
-                },
-            )
-            .load::<UsdStageAsset>(path);
+        let already_requested = server.get_handle::<UsdStageAsset>(path.clone()).is_some();
+        let owner = self
+            .inputs
+            .register(input.recipe)
+            .map_err(|error| error.to_string())?;
+        roots
+            .set_overlay(&name, &rel, input.root_bytes)
+            .map_err(|error| error.to_string())?;
+        let handle = server.load::<UsdStageAsset>(path.clone());
+        if already_requested {
+            server.reload(path);
+        }
         self.retain_source_stage(doc, handle, owner)
     }
     /// Retain the stage admitted with this document's explicit native inputs.
     /// Scene roots and source reloads share the same typed asset handle.
-    pub fn retain_source_stage(
+    fn retain_source_stage(
         &mut self,
         doc: DocumentId,
         handle: Handle<UsdStageAsset>,
@@ -502,7 +523,7 @@ mod tests {
         let twin = TwinId::new(1);
         let scene_only = DocumentId::new(1);
         let user_owned = DocumentId::new(2);
-        let mut backed = DocBackedTwinScenes::default();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
         backed.track(scene_only, twin, "moonbase".into(), "scene.usda".into());
         backed.track(user_owned, twin, "moonbase".into(), "edited.usda".into());
         assert!(backed.claim_user(user_owned));
@@ -517,7 +538,7 @@ mod tests {
         let twin_a = TwinId::new(1);
         let twin_b = TwinId::new(2);
         let doc = DocumentId::new(1);
-        let mut backed = DocBackedTwinScenes::default();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
         backed.track(doc, twin_a, "shared".into(), "scene.usda".into());
         backed.track(doc, twin_b, "shared".into(), "scene.usda".into());
 
@@ -530,7 +551,7 @@ mod tests {
     #[test]
     fn closing_one_of_multiple_preview_leases_keeps_the_authority() {
         let doc = DocumentId::new(1);
-        let mut backed = DocBackedTwinScenes::default();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
         backed.track_preview(doc, "assembly".into(), "scene.usda".into());
         backed.track_private_mount(doc, "assembly".into());
         backed.acquire_preview(doc);
@@ -546,7 +567,7 @@ mod tests {
     fn private_mount_retirement_is_independent_of_projection_leases() {
         let doc = DocumentId::new(1);
         let twin = TwinId::new(1);
-        let mut backed = DocBackedTwinScenes::default();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
         backed.track_private_mount(doc, "private".into());
         backed.track(doc, twin, "private".into(), "scene.usda".into());
         assert_eq!(backed.release_twin(twin), vec![doc]);
@@ -568,7 +589,7 @@ mod tests {
     fn standalone_preview_marks_typed_stage_generation_consumed() {
         let doc = DocumentId::new(7);
         let stage: AssetId<UsdStageAsset> = AssetIndex::from_bits(11).into();
-        let mut backed = DocBackedTwinScenes::default();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
         backed.track_preview(doc, "assembly".into(), "component.usda".into());
 
         backed.mark_applied(doc, stage, 4);

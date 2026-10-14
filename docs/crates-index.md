@@ -812,6 +812,9 @@ failed-mount lifecycle systems. `FailedSceneLoad` is consumed by scene
 transactions, so headless simulation does not depend on visual diagnostics.
 
 **`lunco-usd-bevy-twin`**
+Shares the stage owner's `DocumentStageInputs` index with its document source
+leases so cached asset reloads consume current native inputs. The index holds
+weak readers; the document projection lease owns publication and retirement.
 Render-free Twin/document projection state shared by headless runtime,
 authoring, terrain, validation, and UI adapters. It owns the
 `DocBackedTwinScenes` lease map, the `twin://` stage-to-document resolver,

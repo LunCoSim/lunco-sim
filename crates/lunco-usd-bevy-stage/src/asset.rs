@@ -97,42 +97,101 @@ pub fn resolve_stage_asset_path(
 #[derive(TypePath)]
 pub struct UsdLoader {
     roots: Option<lunco_assets_core::TwinRoots>,
+    document_inputs: DocumentStageInputs,
 }
 
-/// Native stage input at Bevy's asset-metadata adapter boundary. Root bytes
-/// remain owned by the asset reader; a captured session participates in the
-/// same bounded layer closure and source-read receipt graph.
+/// Optional native session layer for file-backed loads. Document inputs are
+/// discovered through their current source lease in `DocumentStageInputs`.
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsdStageLoadSettings {
     pub session_layer: Option<String>,
-    /// Live document input is runtime metadata, never a serialized asset setting.
-    #[serde(skip)]
-    pub document_input: Option<DocumentStageInputReader>,
+}
+
+type InputState = std::sync::Mutex<Option<Arc<lunco_usd_compose::recipe::StageRecipe>>>;
+
+/// A weak reader index for currently owned document inputs at exact source URIs.
+/// The loader consults it on every admission, including reloads of cached assets.
+#[derive(bevy::prelude::Resource, Clone, Default)]
+pub struct DocumentStageInputs(
+    Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<InputState>>>>,
+);
+
+impl DocumentStageInputs {
+    pub fn register(
+        &self,
+        recipe: lunco_usd_compose::recipe::StageRecipe,
+    ) -> Result<DocumentStageInputOwner> {
+        anyhow::ensure!(
+            !recipe.root_id.is_empty() && recipe.bytes.contains_key(&recipe.root_id),
+            "document stage input requires its exact root bytes"
+        );
+        let mut entries = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("document input index lock poisoned"))?;
+        anyhow::ensure!(
+            entries
+                .get(&recipe.root_id)
+                .and_then(std::sync::Weak::upgrade)
+                .is_none(),
+            "document stage input already has an owner for {}",
+            recipe.root_id
+        );
+        let root_id = recipe.root_id.clone();
+        let state = Arc::new(std::sync::Mutex::new(Some(Arc::new(recipe))));
+        entries.insert(root_id.clone(), Arc::downgrade(&state));
+        Ok(DocumentStageInputOwner {
+            state,
+            inputs: self.clone(),
+            root_id,
+        })
+    }
+
+    fn reader(&self, root: &str) -> Result<Option<DocumentStageInputReader>> {
+        let entries = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("document input index lock poisoned"))?;
+        Ok(entries
+            .get(root)
+            .and_then(std::sync::Weak::upgrade)
+            .map(DocumentStageInputReader))
+    }
+
+    fn validate_reader(
+        &self,
+        root: &str,
+        captured: Option<&DocumentStageInputReader>,
+    ) -> Result<()> {
+        let current = self.reader(root)?;
+        let unchanged = match (current.as_ref(), captured) {
+            (None, None) => true,
+            (Some(current), Some(captured)) => Arc::ptr_eq(&current.0, &captured.0),
+            _ => false,
+        };
+        anyhow::ensure!(
+            unchanged,
+            "document stage input authority changed during preparation"
+        );
+        Ok(())
+    }
 }
 
 /// The document lease owns publication and retirement of immutable native input.
-pub struct DocumentStageInputOwner(
-    Arc<std::sync::Mutex<Option<Arc<lunco_usd_compose::recipe::StageRecipe>>>>,
-);
+pub struct DocumentStageInputOwner {
+    state: Arc<InputState>,
+    inputs: DocumentStageInputs,
+    root_id: String,
+}
 
 /// A loader may capture input but cannot publish or retain its document lease.
 #[derive(Clone)]
-pub struct DocumentStageInputReader(
-    Arc<std::sync::Mutex<Option<Arc<lunco_usd_compose::recipe::StageRecipe>>>>,
-);
+struct DocumentStageInputReader(Arc<InputState>);
 
 impl DocumentStageInputOwner {
-    pub fn new(recipe: lunco_usd_compose::recipe::StageRecipe) -> Self {
-        Self(Arc::new(std::sync::Mutex::new(Some(Arc::new(recipe)))))
-    }
-
-    pub fn reader(&self) -> DocumentStageInputReader {
-        DocumentStageInputReader(Arc::clone(&self.0))
-    }
-
     pub fn publish(&self, recipe: lunco_usd_compose::recipe::StageRecipe) -> Result<()> {
         let mut current = self
-            .0
+            .state
             .lock()
             .map_err(|_| anyhow::anyhow!("document stage input lock poisoned"))?;
         let previous = current
@@ -142,24 +201,32 @@ impl DocumentStageInputOwner {
             previous.root_id == recipe.root_id,
             "document stage input cannot change its root identity"
         );
-        if previous.as_ref() == &recipe {
-            return Ok(());
+        if previous.as_ref() != &recipe {
+            *current = Some(Arc::new(recipe));
         }
-        *current = Some(Arc::new(recipe));
         Ok(())
     }
 }
 
 impl Drop for DocumentStageInputOwner {
     fn drop(&mut self) {
-        if let Ok(mut current) = self.0.lock() {
+        if let Ok(mut current) = self.state.lock() {
             *current = None;
+        }
+        if let Ok(mut entries) = self.inputs.0.lock() {
+            if entries
+                .get(&self.root_id)
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|state| Arc::ptr_eq(&state, &self.state))
+            {
+                entries.remove(&self.root_id);
+            }
         }
     }
 }
 
 impl DocumentStageInputReader {
-    pub fn capture(&self) -> Result<Arc<lunco_usd_compose::recipe::StageRecipe>> {
+    fn capture(&self) -> Result<Arc<lunco_usd_compose::recipe::StageRecipe>> {
         self.0
             .lock()
             .map_err(|_| anyhow::anyhow!("document stage input lock poisoned"))?
@@ -182,7 +249,9 @@ impl DocumentStageInputReader {
 
 impl bevy::prelude::FromWorld for UsdLoader {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
+        let document_inputs = world.get_resource_or_init::<DocumentStageInputs>().clone();
         Self {
+            document_inputs,
             roots: world
                 .get_resource::<lunco_assets_core::TwinRoots>()
                 .cloned(),
@@ -207,8 +276,8 @@ impl AssetLoader for UsdLoader {
         let origin = load_context.path().clone().into_owned();
         let roots = self.roots.clone();
         let root_asset_path = anchor_of(load_context.path());
-        let captured = settings
-            .document_input
+        let input_reader = self.document_inputs.reader(&root_asset_path)?;
+        let captured = input_reader
             .as_ref()
             .map(DocumentStageInputReader::capture)
             .transpose()?;
@@ -225,7 +294,7 @@ impl AssetLoader for UsdLoader {
                 reader.read_to_end(&mut bytes).await?;
                 let mut input = lunco_usd_compose::recipe::StageRecipe::new(
                     root_asset_path.clone(),
-                    std::collections::HashMap::from([(root_asset_path, bytes)]),
+                    std::collections::HashMap::from([(root_asset_path.clone(), bytes)]),
                 );
                 input.session_layer = settings.session_layer.clone();
                 input
@@ -258,7 +327,9 @@ impl AssetLoader for UsdLoader {
             }
             (recipe, projection_plan)
         };
-        if let (Some(owner), Some(captured)) = (&settings.document_input, &captured) {
+        self.document_inputs
+            .validate_reader(&root_asset_path, input_reader.as_ref())?;
+        if let (Some(owner), Some(captured)) = (&input_reader, &captured) {
             owner.validate_capture(captured)?;
         }
         UsdStageAsset::from_prepared_recipe(recipe, source_dependencies, projection_plan)
@@ -273,14 +344,112 @@ impl AssetLoader for UsdLoader {
 mod document_input_tests {
     use super::*;
 
+    #[test]
+    fn source_input_survives_late_admission_and_reload() {
+        use crate::UsdRead;
+        use bevy::asset::{
+            AssetApp, AssetPlugin, Assets,
+            io::{
+                AssetSourceBuilder, AssetSourceId,
+                memory::{Dir, MemoryAssetReader},
+            },
+        };
+        use bevy::prelude::{App, MinimalPlugins};
+        use std::{
+            path::Path,
+            time::{Duration, Instant},
+        };
+
+        let files = Dir::default();
+        let source =
+            "#usda 1.0\n(defaultPrim = \"Root\")\ndef Xform \"Root\" { double value = 1 }\n";
+        files.insert_asset_text(Path::new("scene.usda"), source);
+        let mut app = App::new();
+        app.register_asset_source(
+            AssetSourceId::Name(lunco_assets_core::LUNCO_SCHEME.into()),
+            AssetSourceBuilder::new(move || {
+                Box::new(MemoryAssetReader {
+                    root: files.clone(),
+                })
+            }),
+        );
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<UsdStageAsset>()
+            .init_asset_loader::<UsdLoader>();
+        app.finish();
+        app.cleanup();
+        let server = app.world().resource::<AssetServer>().clone();
+        let first = server.load::<UsdStageAsset>("lunco://scene.usda");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(&first)
+            .is_none()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "initial source admission timed out"
+            );
+            app.update();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let original = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(&first)
+            .unwrap()
+            .projection_plan
+            .clone();
+        let mut input =
+            lunco_usd_compose::recipe::StageRecipe::from_source("lunco://scene.usda", source);
+        input.session_layer = Some("lunco://session.usda".to_owned());
+        input.bytes.insert(
+            "lunco://session.usda".to_owned(),
+            b"#usda 1.0\nover \"Root\" { double value = 42 }\n".to_vec(),
+        );
+        let inputs = app.world().resource::<DocumentStageInputs>().clone();
+        let _owner = inputs.register(input).unwrap();
+        let late = server.load::<UsdStageAsset>("lunco://scene.usda");
+        assert_eq!(
+            first.id(),
+            late.id(),
+            "document publication retains asset identity"
+        );
+        server.reload("lunco://scene.usda");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            app.update();
+            let assets = app.world().resource::<Assets<UsdStageAsset>>();
+            if let Some(asset) = assets.get(&first) {
+                if !Arc::ptr_eq(&asset.projection_plan, &original) {
+                    assert_eq!(
+                        asset
+                            .projection_plan
+                            .real(&openusd::sdf::Path::new("/Root").unwrap(), "value"),
+                        Some(42.0),
+                        "reload consumes the current native session input"
+                    );
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "source reload timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     fn recipe(root: &str) -> lunco_usd_compose::recipe::StageRecipe {
         lunco_usd_compose::recipe::StageRecipe::from_source(root, "#usda 1.0\n")
     }
 
     #[test]
     fn layered_stage_input_fences_revisions_identity_and_retirement() {
-        let owner = DocumentStageInputOwner::new(recipe("scene.usda"));
-        let reader = owner.reader();
+        let inputs = DocumentStageInputs::default();
+        inputs.validate_reader("scene.usda", None).unwrap();
+        let owner = inputs.register(recipe("scene.usda")).unwrap();
+        assert!(inputs.validate_reader("scene.usda", None).is_err());
+        assert!(inputs.register(recipe("scene.usda")).is_err());
+        let reader = inputs.reader("scene.usda").unwrap().unwrap();
         let first = reader.capture().unwrap();
         reader.validate_capture(&first).unwrap();
         assert!(owner.publish(recipe("other.usda")).is_err());
@@ -297,6 +466,17 @@ mod document_input_tests {
         let second = reader.capture().unwrap();
         reader.validate_capture(&second).unwrap();
         drop(owner);
+        inputs.validate_reader("scene.usda", None).unwrap();
+        assert!(inputs.validate_reader("scene.usda", Some(&reader)).is_err());
+        let replacement = inputs.register(recipe("scene.usda")).unwrap();
+        assert!(inputs.validate_reader("scene.usda", Some(&reader)).is_err());
+        inputs
+            .reader("scene.usda")
+            .unwrap()
+            .unwrap()
+            .capture()
+            .unwrap();
+        drop(replacement);
         assert!(reader.capture().is_err());
         assert!(reader.validate_capture(&second).is_err());
     }

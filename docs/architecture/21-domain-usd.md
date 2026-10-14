@@ -59,7 +59,12 @@ owning a second curve implementation;
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal, document-to-mounted-stage lookup, and native
 source-input publication lease with its strong stage asset handle. The stage
-loader owns decoding and composition; runtime core owns ECS projection;
+loader shares `DocumentStageInputs`, a weak index of document-owned native
+recipes at exact source identities, with that publisher. Every admission and
+reload captures the current lease; authority/revision changes reject an
+in-flight preparation, and retirement unregisters it. A first publication into
+an already requested asset refreshes that same handle through Bevy's reload
+API. The loader owns decoding and composition; runtime core owns ECS projection;
 `lunco-usd-bevy-stage` owns canonical-stage storage and stage readers, while
 `lunco-usd-bevy-core` owns the generic live-edit owner registry and runtime
 projection mechanisms;

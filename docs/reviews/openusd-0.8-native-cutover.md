@@ -340,6 +340,28 @@ without mutation, hidden terminal renderer failure, and unknown inspection
 visibility with its native diagnostic. Process identity, API Exit, and port
 release were verified. Evidence is in `/tmp/luncosim-native-visibility-*.log`.
 
+## Native source input admission and reload
+
+The stage loader captures document input from a shared weak reader index on
+every admission and reload. The document projection lease owns the immutable
+recipe, revision publication, and unregister-on-retirement boundary. A source
+can have one active document owner; duplicate ownership rejects visibly.
+Authority changes, revision changes, and retirement reject stale captures.
+The one-time loader-settings reader is removed. A newly registered document
+source already requested through Bevy keeps its asset handle and requests one
+native reload; the existing source receipt/dependency graph remains in use.
+This is a generic source-ownership seam, not a new composition implementation
+or changeable lifecycle selection policy.
+
+The focused asset baseline reproduced session loss (`1` instead of `42`) after
+late admission and reload. The repaired asset test and ownership/revision/
+retirement test pass. The application/affected-owner all-target check and
+production build pass. The windowed restart driver exercises authored
+`native_input_reload.rhai` verdicts before and after a fresh root projection.
+Four authored checks pass on owned port 4220. Checkout/binary identity, API Exit,
+and port release were verified.
+Evidence is under `/tmp/luncosim-native-input-*.log`.
+
 ## Required remaining work
 
 1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
@@ -358,10 +380,7 @@ release were verified. Evidence is in `/tmp/luncosim-native-visibility-*.log`.
    codec selected by the exact source identity, including USDC. Mount validation, deletion
    guards, ambient authoring and read-only composed-text previews use native
    stages. The dependent-layer consumer must use its native owner before that
-   merge and its tests can be deleted. Loader metadata settings
-   are applied on first asset admission; document publication into an already
-   admitted source asset must preserve its current native input ownership and
-   reload graph. That lifecycle still requires production coverage.
+   merge and its tests can be deleted.
    Native `Stage::flatten` resolves and removes composition arcs, so it cannot replace an authored-layer merge or save.
    This review does not claim that all reinvention or fallback paths are gone.
 3. USDZ exists in the native SDK, but package paths and package-layer provenance

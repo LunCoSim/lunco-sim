@@ -88,6 +88,16 @@ the visible-guide, ancestor-edit, malformed-type rejection, and native-read
 failure checks, including unknown visibility in inspection.
 
 The scene transaction closes from asset and structural-projection outcomes.
+Document-source publication uses the shared `DocumentStageInputs` weak reader
+index and its document-owned lease, not a one-time asset-settings callback.
+Preserve the exact source identity, current native recipe, revision fence, and
+retirement boundary on reload. Use
+`scripts/api/test_native_input_reload.py --port <free-port>` with `LUNCOSIM_BIN`
+to require the authored runtime-only geometry verdict before and after a fresh
+scene restart. The native input asset test covers late admission into an
+already loaded handle and the lease test covers duplicate ownership and stale
+capture rejection.
+
 `UsdSceneProjectionFailed` on the running mount must fail and clear that
 transaction before a generation can commit; preview errors are separately
 owned. Missing default roots and nonexistent or non-prim explicit targets are
