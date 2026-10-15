@@ -4265,7 +4265,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         let args = [Dynamic::from_int(self_gid), st.params.clone()];
         let options = rhai::CallFnOptions::new()
             .eval_ast(eval_ast)
-            .rewind_scope(false)
+            .rewind_scope(true)
             .bind_this_ptr(&mut st.this);
         let value = self
             .engine
@@ -4698,8 +4698,9 @@ pub fn prepare_rhai_scenario_compiles(world: &mut World) {
 
 /// Call a two-arg hook (`fn name(self, ctx)`), binding `this` to the entity's
 /// persistent state map. The caller guarantees the hook exists (via the cached
-/// `ProgramMask`), so this does no presence check. `rewind_scope=false` keeps
-/// the `const` globals available across calls. Logs any error.
+/// `ProgramMask`), so this does no presence check. Invocation constants and
+/// locals are released on return; the initialized scope and bound state remain.
+/// Logs any error.
 ///
 /// `ast`/`eval_ast` come as a pair from [`CompiledProgram::hook_target`]: either
 /// the full program with `eval_ast=false` (the top level already ran at compile
@@ -4722,7 +4723,7 @@ fn call_hook(
     let args = [Dynamic::from_int(self_id), params.clone()];
     let options = rhai::CallFnOptions::new()
         .eval_ast(eval_ast)
-        .rewind_scope(false)
+        .rewind_scope(true)
         .bind_this_ptr(this);
     match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
         Ok(_) => None,
@@ -4752,7 +4753,7 @@ fn call_event_hook(
     let args = [Dynamic::from_int(self_id), evt, params.clone()];
     let options = rhai::CallFnOptions::new()
         .eval_ast(eval_ast)
-        .rewind_scope(false)
+        .rewind_scope(true)
         .bind_this_ptr(this);
     match engine.call_fn_with_options::<Dynamic>(options, scope, ast, "on_event", args) {
         Ok(_) => None,
@@ -4834,7 +4835,7 @@ impl RhaiTaskCtx {
         if f.is_anonymous() {
             let options = rhai::CallFnOptions::new()
                 .eval_ast(eval_ast)
-                .rewind_scope(false)
+                .rewind_scope(true)
                 .in_all_namespaces(true)
                 .bind_this_ptr(&mut self.this);
             return self.engine.call_fn_with_options(
@@ -4854,7 +4855,7 @@ impl RhaiTaskCtx {
         self.engine.call_fn_with_options(
             rhai::CallFnOptions::new()
                 .eval_ast(eval_ast)
-                .rewind_scope(false)
+                .rewind_scope(true)
                 .in_all_namespaces(true)
                 .bind_this_ptr(&mut self.this),
             &mut self.scope,
@@ -5035,7 +5036,7 @@ fn call_prelude_driver(
 ) -> Option<(String, rhai::Position)> {
     let options = rhai::CallFnOptions::new()
         .eval_ast(false)
-        .rewind_scope(false)
+        .rewind_scope(true)
         .bind_this_ptr(this);
     match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
         Ok(_) => None,
@@ -7324,7 +7325,7 @@ mod tests {
             .call_fn_with_options::<rhai::Dynamic>(
                 rhai::CallFnOptions::new()
                     .eval_ast(false)
-                    .rewind_scope(false),
+                    .rewind_scope(true),
                 &mut scope,
                 &full,
                 "on_tick",
@@ -7347,9 +7348,7 @@ mod tests {
         let mut scope = rhai::Scope::new();
         let got = engine
             .call_fn_with_options::<i64>(
-                rhai::CallFnOptions::new()
-                    .eval_ast(true)
-                    .rewind_scope(false),
+                rhai::CallFnOptions::new().eval_ast(true).rewind_scope(true),
                 &mut scope,
                 &imports_ast,
                 "on_tick",
@@ -7403,6 +7402,78 @@ mod tests {
             )
             .expect("native task invoker must preserve imports");
         assert_eq!(result.as_int().unwrap(), 10);
+    }
+
+    #[test]
+    fn hook_evaluation_keeps_scope_bounded() {
+        let engine = super::build_world_engine_base(
+            Default::default(),
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        );
+        let source = r#"
+            const INCREMENT = 3;
+            fn on_tick(me, ctx) {
+                let scratch = [1, 2, 3];
+                this.count += global::INCREMENT + scratch.len();
+            }
+            fn on_stop(me, ctx) {
+                let scratch = [4, 5, 6];
+                this.count += global::INCREMENT;
+                throw("hook rejected");
+            }
+        "#;
+        let full = super::compile_with_script_consts(&engine, source).unwrap();
+        let hoisted = super::build_hoisted_ast(&engine, source, &full, None)
+            .unwrap()
+            .unwrap();
+        let mut scope = rhai::Scope::new();
+        engine.run_ast_with_scope(&mut scope, &full).unwrap();
+        let initial_len = scope.len();
+        let mut state = Dynamic::from_map(Map::from([("count".into(), Dynamic::from_int(0))]));
+        for _ in 0..64 {
+            assert!(
+                super::call_hook(
+                    &engine,
+                    &mut scope,
+                    &hoisted,
+                    true,
+                    "on_tick",
+                    1,
+                    &mut state,
+                    &Dynamic::UNIT
+                )
+                .is_none()
+            );
+        }
+        assert_eq!(
+            scope.len(),
+            initial_len,
+            "each invocation must release its constants and locals"
+        );
+        assert!(
+            super::call_hook(
+                &engine,
+                &mut scope,
+                &hoisted,
+                true,
+                "on_stop",
+                1,
+                &mut state,
+                &Dynamic::UNIT
+            )
+            .unwrap()
+            .0
+            .contains("hook rejected")
+        );
+        assert_eq!(
+            scope.len(),
+            initial_len,
+            "error unwinding must also release invocation locals"
+        );
+        assert_eq!(
+            state.read_lock::<Map>().unwrap()["count"].as_int().unwrap(),
+            64 * 6 + 3
+        );
     }
 
     #[test]

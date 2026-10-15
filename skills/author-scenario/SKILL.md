@@ -311,6 +311,9 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 - Rhai map arguments are value/copy-on-write values. A helper that assigns a
   persistent field must return the updated map, and the lifecycle callback must
   assign it back to `this`; helper-side field assignments alone do not persist.
+- Function locals end with their invocation, including error unwinding. Keep
+  persistent callback state in `this` or captured closures; the interpreter
+  retains only the initialized top-level scope between calls.
 - Hot-reload runs `on_stop` before installing the new program state; initialize
   all required `this` fields in the new run.
 - Scenario initialization and readiness already have distinct owners:

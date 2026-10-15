@@ -20,6 +20,13 @@ Compilation builds only immutable structure. The top-level body runs later, once
 per attached scenario, after dependency planning at the owner boundary. The AST
 is shareable; the scope and `this` state are not.
 
+Each scenario callback uses Rhai's scope-rewinding contract. The initialized
+top-level scope remains owned by the scenario, while invocation-local
+definitions and re-evaluated constants are released on success or error.
+Imports and `global::` constants remain available for the current evaluation.
+Persistent callback state belongs in `this` or a captured closure; function
+locals do not become scenario globals.
+
 ## What's cached
 
 `RhaiScenarioRuntime` holds `compiled: HashMap<u64, CacheEntry>`, keyed by the

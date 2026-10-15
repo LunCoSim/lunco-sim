@@ -127,6 +127,11 @@ Task callbacks borrow the persistent map through Rhai's bound receiver; see
 Preserve captures, imports, state/error semantics and fixed cadence while
 removing copies at that boundary.
 
+For cost or memory that grows with runtime, check interpreter scope lifetime:
+initialized globals persist, while per-call constants and function locals
+must be released on both success and error. Use Rhai's scope-rewinding option
+at every scenario call boundary; do not periodically clear live scenario state.
+
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
 owner records native body and collider identities, poses, mass/inertia and

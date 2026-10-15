@@ -9468,3 +9468,46 @@ uncontended FPS comparison with the earlier viewport. Both owned simulators,
 the collector and the three scene gates exit zero and release their ports.
 The 200 FPS/sub-1 ms physics targets and full simulation/presentation isolation
 remain open.
+
+### Invocation-local Rhai scope lifetime — 2026-10-15
+
+Every scenario callback invocation uses Rhai's scope-rewinding option: lifecycle,
+events, dependencies, task callbacks and prelude drivers. Initialized globals
+and bound/captured state persist; invocation constants and locals are released
+on normal return and error. The canonical contract is in
+[`scenario-program-cache.md`](../architecture/scenario-program-cache.md).
+An inline interpreter regression grows from one scope entry to 129 after 64
+calls before the fix and remains at one afterward, including error unwinding.
+All 49 owner unit tests pass. The rebuilt normal production binary passes the
+42-check task gate, 34-check Modelica initialization/clock gate and 111-check
+windowed route lifecycle gate. Evidence is `target/hook-scope-{baseline,unit}.log`,
+`target/hook-scope-normal-{scripting_task_contract,modelica_initialization_network}.log`
+and `target/hook-scope-route-editor{,-driver}.log`.
+
+The new owned Tracy run at API 4336 (PID 3692406, collector 3692405, connected
+on 8086) closes cleanly and exports 17,845,320 zones over 245.6 seconds from
+126,837,272 saved bytes. Its final sampled tick is 2203, before route startup;
+it does not establish settled route performance. During trace seconds 190–230,
+inclusive fixed-runner, native-physics, render-schedule and script-system means
+are 32.304, 20.179, 18.727 and 4.838 ms respectively. Concurrent builds/runtime
+work and memory/I/O pressure affect the whole measurement. Evidence is
+`target/hook-scope-settled{.tracy,-context.json,-capture.log,-samples.json,-owners.json}`;
+the native CSV export succeeds.
+
+The separate normal run at API 4339 confirms nine active shared-clock
+participants and ready topology but supplies no comparable FPS acceptance
+window. Repeated competing builds remain active; at 06:28:30 UTC, AC reports
+offline, the battery is discharging and GPU telemetry reports 12.27 W at
+787 MHz. The owned sampler is deliberately interrupted and the app exits zero
+through `Exit`; the sampler's 130 status is not an app failure. Evidence is
+`target/hook-scope-normal-{context,status,readiness,samples}.json`,
+`target/hook-scope-normal-monitor.log` and `target/hook-scope-power.json`.
+No power profile, graphics quality or solver cadence is changed. The bounded
+scope lifetime is verified; a product FPS improvement is not established.
+
+After the trace exits and its API listener is gone, package-scoped
+`cargo clean -p lunco-luncosim` removes 8.4 GiB of this checkout's application
+outputs. Source, sibling targets and shared caches remain intact. The normal
+production artifact is rebuilt with regular sccache and `-j 4` before the
+normal gates above. All owned runtime/test ports are released; other checkouts'
+processes are untouched.
