@@ -56,7 +56,8 @@ Evidence is under `.lunco/terrain-lines/sunrise-fix/`,
 `.lunco/terrain-lines/final-pass/`, and `.lunco/terrain-lines/full-review/`.
 Owned API 4286 sessions
 close through Exit or the recorder's normal ExitAfterRecording path. The full
-render wrapper remains blocked by an unrelated missing `twin_search_paths`
-scenario source; direct production fixtures supply the scoped GPU evidence.
+render wrapper consumes the production scene catalogue; Twin search-path
+resolution during discovery shares runtime's admitted asset context. Direct
+production fixtures supply the scoped terrain GPU evidence.
 Browser performance is unverified. A pending angular bake retains its last
 completed presentation sample, not an exact current-Sun visibility claim.

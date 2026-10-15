@@ -17,11 +17,14 @@
 //! declaration means `headless`, which keeps existing scenario tests concise
 //! while making graphics tests an explicit opt-in.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_usd_bevy_core::program;
-use lunco_usd_bevy_stage::{StageView, UsdRead};
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_usd_bevy_stage::{UsdReadObject, UsdStageProjectionPlan};
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -120,13 +123,17 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
 /// program, which is intentionally ignored here. Multiple test observers must
 /// agree on their domain so the runner never has to guess which half of a scene
 /// it should execute.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String> {
     let mut scenes = scene_paths(scenes_dir)?;
     scenes.sort();
 
+    // One isolated admission scope per catalogue. Reuse each owning mount
+    // without rescanning a folder for every scene that it contains.
+    let roots = lunco_assets_core::TwinRoots::default();
     let mut discovered = Vec::with_capacity(scenes.len());
     for scene_path in scenes {
-        if let Some(test) = discover_scene_test(&scene_path)? {
+        if let Some(test) = discover_scene_test(&scene_path, &roots)? {
             discovered.push(test);
         }
     }
@@ -159,14 +166,62 @@ fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn scene_paths(_scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn discover_scene_tests(_scenes_dir: &Path) -> Result<Vec<SceneTest>, String> {
     Err("scene-test discovery requires the native asset catalog".to_string())
 }
 
-fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
-    let stage = lunco_usd_bevy_stage::compose::compose_file_to_stage(scene_path)
-        .map_err(|error| format!("{}: cannot compose scene: {error}", scene_path.display()))?;
-    let view = StageView::new(&stage);
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_scene_test(
+    scene_path: &Path,
+    roots: &lunco_assets_core::TwinRoots,
+) -> Result<Option<SceneTest>, String> {
+    let prepare = || -> anyhow::Result<_> {
+        let absolute = lunco_storage::canonicalize_file_path(scene_path)?;
+        let twin_root = lunco_twin::root_for_file(&absolute);
+        let authority = match roots.name_for_root(&twin_root)? {
+            Some(authority) => authority,
+            None => {
+                let twin = match lunco_twin::TwinMode::open(&twin_root)? {
+                    lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
+                    lunco_twin::TwinMode::Orphan(_) => anyhow::bail!("scene owner is not a folder"),
+                };
+                roots.register_twin(&twin)?
+            }
+        };
+        let origin = bevy::asset::AssetPath::from_path_buf(
+            Path::new(&authority).join(absolute.strip_prefix(&twin_root)?),
+        )
+        .with_source(lunco_assets_core::TWIN_SCHEME);
+        let assets_root = lunco_assets_core::shipped_asset_root(&absolute).map(Path::to_path_buf);
+        let recipe = lunco_usd_compose::recipe_from_bytes_with_roots(
+            &lunco_assets_core::asset_path::anchor_of(&origin),
+            lunco_assets_core::read_asset_file_bytes(&absolute)?,
+            assets_root.as_deref(),
+            Some(&twin_root),
+            Default::default(),
+        )?;
+        let mut view = UsdStageProjectionPlan::from_recipe(&recipe)?;
+        view.prepare_native_asset_paths(Some(origin.clone()), Some(roots));
+        Ok((view, origin, assets_root))
+    };
+    let (view, origin, assets_root) = prepare()
+        .map_err(|error| format!("{}: cannot prepare scene: {error}", scene_path.display()))?;
+    classify_scene_programs(&view, &origin, roots, assets_root.as_deref(), scene_path).map(|kind| {
+        kind.map(|kind| SceneTest {
+            scene_path: scene_path.to_path_buf(),
+            kind,
+        })
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn classify_scene_programs(
+    view: &dyn UsdReadObject,
+    origin: &bevy::asset::AssetPath<'_>,
+    roots: &lunco_assets_core::TwinRoots,
+    assets_root: Option<&Path>,
+    scene_path: &Path,
+) -> Result<Option<SceneTestKind>, String> {
     let mut kinds = BTreeSet::new();
     let mut sources = BTreeSet::new();
 
@@ -174,7 +229,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
         if !view.has_api_schema(&prim, "LunCoProgramAPI") {
             continue;
         }
-        let resolved = match program::resolve_program(&view, &prim) {
+        let resolved = match program::resolve_program(view, &prim) {
             Ok(resolved) => resolved,
             Err(issue) => {
                 return Err(format!(
@@ -193,38 +248,56 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
         else {
             continue;
         };
-        let source_rel = lunco_assets_core::engine_asset_rel(&source_asset);
-        if !lunco_assets_runtime::discovery::is_test_asset(source_rel)
-            || !source_rel.ends_with(".rhai")
+        let source_path = lunco_assets_core::asset_path::load_asset_path(
+            &source_asset,
+            Some(origin),
+            Some(roots),
+            view.native_asset_paths(),
+        )
+        .map_err(|error| format!("{scene_path:?}: invalid test source {source_asset}: {error}"))?;
+        let source_id = lunco_assets_core::asset_path::anchor_of(&source_path);
+        let source_root = lunco_assets_core::parse_twin_uri(&source_id)
+            .map(|(authority, _)| {
+                roots
+                    .root_for(authority)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("test source {source_id} has no owning Twin"))
+            })
+            .transpose()?;
+        // Test classification belongs to the catalogue, not to mount-local
+        // authority spelling. A nested fixture Twin still lives below tests/.
+        // This path is only a classification key; the asset owner reads bytes.
+        let classification_path =
+            match (&source_root, lunco_assets_core::parse_twin_uri(&source_id)) {
+                (Some(root), Some((_, relative))) => {
+                    lunco_assets_path::slashed(&root.join(relative))
+                }
+                _ => lunco_assets_core::engine_asset_rel(&source_id).to_owned(),
+            };
+        if !lunco_assets_runtime::discovery::is_test_asset(&classification_path)
+            || !sources.insert(source_id.clone())
         {
             continue;
         }
-        if !sources.insert(source_asset.clone()) {
-            continue;
-        }
-
-        // Resolve relative to the scene's own shipped-library root rather than
-        // the process CWD. Cargo integration tests run with the package as the
-        // current directory, while the production binary normally runs from
-        // the workspace or beside a packaged `assets/` directory.
-        let source_path = lunco_assets_core::id_to_disk_path(
-            &source_asset,
-            lunco_assets_core::shipped_asset_root(scene_path),
+        let bytes = lunco_assets_core::read_asset_bytes_with_twin_root(
+            &source_id,
+            assets_root,
+            source_root.as_deref(),
         )
-        .map_err(|error| format!("{scene_path:?}: invalid test source {source_asset}: {error}"))?
-        .ok_or_else(|| format!("{scene_path:?}: cannot resolve test source {source_asset}"))?;
-        let source = lunco_assets_core::read_asset_file_string(&source_path).map_err(|error| {
+        .map_err(|error| {
             format!(
                 "{}: cannot read test source {}: {error}",
                 scene_path.display(),
-                source_path.display()
+                source_id
             )
         })?;
+        let source = String::from_utf8(bytes)
+            .map_err(|error| format!("{scene_path:?}: invalid test source {source_id}: {error}"))?;
         let kind = classify_rhai_source(&source).map_err(|error| {
             format!(
                 "{}: invalid test declaration in {}: {error}",
                 scene_path.display(),
-                source_path.display()
+                source_id
             )
         })?;
         kinds.insert(kind);
@@ -241,39 +314,130 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
         }
     };
 
-    Ok(Some(SceneTest {
-        scene_path: scene_path.to_path_buf(),
-        kind,
-    }))
+    Ok(Some(kind))
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
     use std::fs;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::path::Path;
 
     #[cfg(not(target_arch = "wasm32"))]
-    use super::discover_scene_test;
-    use super::{SceneTestKind, classify_rhai_source, scene_paths};
+    use super::scene_paths;
+    use super::{SceneTestKind, classify_rhai_source};
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn invalid_file_uri_test_source_is_a_terminal_discovery_error() {
+    fn composed_test_sources_use_prepared_asset_context() {
+        use lunco_usd_bevy_stage::UsdStageProjectionPlan;
+
         let root = tempfile::tempdir().unwrap();
-        let scene = root.path().join("scene.usda");
+        let twin_root = root.path().join("tests/fixture");
         lunco_storage::write_file_sync(
-            &scene,
-            br#"#usda 1.0
- def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
- {
-     uniform token info:implementationSource = "sourceAsset"
-     uniform asset info:sourceAsset = @file:///tests/invalid%00.rhai@
- }
-"#,
+            &twin_root.join("scripts/probe.rhai"),
+            b"const TEST_KIND = \"graphics\";",
         )
         .unwrap();
-        let error = discover_scene_test(&scene).unwrap_err();
-        assert!(error.contains("invalid test source"), "{error}");
+        lunco_storage::write_file_sync(
+            &twin_root.join("scripts/precedence.rhai"),
+            b"const TEST_KIND = \"editor\";",
+        )
+        .unwrap();
+        lunco_storage::write_file_sync(
+            &twin_root.join("sim/scenes/scripts/precedence.rhai"),
+            b"const TEST_KIND = \"graphics\";",
+        )
+        .unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots.register("fixture", &twin_root).unwrap();
+        let id = lunco_assets_core::twin_uri(&authority, "sim/scenes/root.usda");
+        let origin =
+            lunco_assets_core::asset_path::load_asset_path(&id, None, Some(&roots), None).unwrap();
+        // Inline layers exercise the composed reader/asset boundary without
+        // creating authored USD files or depending on repository assets.
+        let classify = |source: &str| {
+            let layer = format!(
+                r#"#usda 1.0
+def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
+{{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @{source}@
+}}
+"#
+            );
+            let recipe = lunco_usd_compose::recipe::StageRecipe::new(
+                &id,
+                std::collections::HashMap::from([(id.clone(), layer.into_bytes())]),
+            );
+            let mut plan = UsdStageProjectionPlan::from_recipe(&recipe)
+                .map_err(|error| format!("cannot prepare scene: {error}"))?;
+            plan.prepare_native_asset_paths(Some(origin.clone()), Some(&roots));
+            super::classify_scene_programs(&plan, &origin, &roots, None, Path::new("root.usda"))
+        };
+        assert_eq!(
+            classify("scripts/probe.rhai").unwrap(),
+            Some(SceneTestKind::Graphics)
+        );
+        assert_eq!(
+            classify("scripts/precedence.rhai").unwrap(),
+            Some(SceneTestKind::Graphics)
+        );
+        assert_eq!(
+            classify("./scripts/precedence.rhai").unwrap(),
+            Some(SceneTestKind::Graphics)
+        );
+        let error = classify("./scripts/probe.rhai").unwrap_err();
+        assert!(error.contains("cannot read test source"), "{error}");
+        assert!(error.contains("sim/scenes/scripts/probe.rhai"), "{error}");
+        let error = classify("scripts/absent.rhai").unwrap_err();
+        assert!(error.contains("cannot read test source"), "{error}");
+        let error = classify("file:///tests/invalid%00.rhai").unwrap_err();
+        assert!(error.contains("file:///tests/invalid%00.rhai"), "{error}");
         assert!(error.contains("invalid file URI"), "{error}");
+
+        lunco_storage::write_file_sync(
+            &twin_root.join("sim/scenes/parts/scripts/child.rhai"),
+            b"const TEST_KIND = \"graphics\";",
+        )
+        .unwrap();
+        lunco_storage::write_file_sync(
+            &twin_root.join("sim/scenes/scripts/child.rhai"),
+            b"const TEST_KIND = \"editor\";",
+        )
+        .unwrap();
+        let child_id = lunco_assets_core::twin_uri(&authority, "sim/scenes/parts/source.usda");
+        let recipe = lunco_usd_compose::recipe::StageRecipe::new(
+            &id,
+            std::collections::HashMap::from([
+                (
+                    id.clone(),
+                    br#"#usda 1.0
+def Scope "Program" (prepend references = @parts/source.usda@</Program>) {}
+"#
+                    .to_vec(),
+                ),
+                (
+                    child_id,
+                    br#"#usda 1.0
+def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @scripts/child.rhai@
+}
+"#
+                    .to_vec(),
+                ),
+            ]),
+        );
+        let mut plan = UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
+        plan.prepare_native_asset_paths(Some(origin.clone()), Some(&roots));
+        assert_eq!(
+            super::classify_scene_programs(&plan, &origin, &roots, None, Path::new("root.usda"))
+                .unwrap(),
+            Some(SceneTestKind::Graphics)
+        );
     }
 
     #[test]
@@ -340,6 +504,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn scene_paths_include_nested_isolated_scenes() {
         let root = tempfile::tempdir().unwrap();

@@ -9696,6 +9696,7 @@ dependencies = [
 name = "lunco-scene-validation"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "lunco-api",
  "lunco-api-core",
