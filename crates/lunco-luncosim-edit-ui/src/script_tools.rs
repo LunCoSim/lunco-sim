@@ -631,7 +631,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             .and_then(|p| p.image.as_ref())
             .and_then(|image| {
                 world
-                    .get_resource::<lunco_materials::float_texture::FloatTextureUpdates>()
+                    .get_resource::<lunco_render::data_texture::DataTextureUpdates>()
                     .and_then(|updates| updates.uploaded.get(&image.id()))
             });
         Ok(Some(api_value!({

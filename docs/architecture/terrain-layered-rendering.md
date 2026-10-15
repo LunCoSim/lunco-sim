@@ -249,6 +249,29 @@ raw normalized UVs would shift shadow edges by up to half a cache texel. The
 `shadow_cache_sampling` graphics fixture checks nodes, fractional interpolation,
 and borders against independent integer texel loads on a rectangular grid.
 
+The cache binding stays resident across the local horizon. A shared shader gate
+checks the current Sun direction before sampling: at or below the DEM's horizontal
+plane, visibility is zero even inside native cascade range. This finite-site
+point-source gate is separate from whole-body occlusion and from sky visibility.
+Sunrise uses the same angular replacement scheduler as daytime; small direction
+changes use chord distance so f32 cosine rounding cannot suppress a refresh.
+The shared light projector compares its rendered quaternion directly, preserving
+small direction changes through the horizon without an angular dead zone.
+One native worker per terrain retains the last completed angular presentation
+sample until the next bake finishes. It does not delay physics or claim that
+old pixels represent the current Sun exactly. Completed results are fenced by
+heightfield identity and sampling quality. Equal-size R8 updates use the shared
+`lunco-render::data_texture` queue, preserving GPU allocation and material binding.
+`TerrainLodStatus.shadow_caches` exposes sampled direction, pending work, binding,
+and acknowledged upload/allocation counts. The `sunrise_shadow_cache` editor
+fixture exercises repeated crossings and fixed physics cadence.
+
+Procedural sky disc radius and heightfield penumbra use the same authored
+`UsdLuxDistantLight.inputs:angle`. Opaque scene depth clips the disc from the
+viewer's position; terrain shadow visibility never hides the sky globally.
+The `sun_disc_occlusion` graphics fixture checks the authored angular size and
+an opaque half-disc occluder.
+
 Physical illumination is independent of the camera and GPU shadow cache.
 `LunCoEnvironmentProbeAPI.outputs:sun_visibility` is the fraction of explicitly
 authored sampling points with a clear ray to the Sun centre. A point probe is

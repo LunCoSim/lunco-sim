@@ -3,9 +3,9 @@
 //! This crate is the single, render-capable home that sits below every 3D crate
 //! (`lunco-celestial`, `lunco-usd-bevy`, `lunco-environment`, the binaries) so
 //! they can agree on "what the scene's look is" by construction instead of by
-//! copy-paste. It depends only on `lunco-core` + the lightweight `bevy_light`
-//! component types, so it never forms a cycle and never drags the `bevy_pbr`
-//! render pipeline into the slim web/Modelica binaries.
+//! copy-paste. Its image/light component contracts stay render-free and never drag the `bevy_pbr`
+//! render pipeline into the slim web/Modelica binaries. Typed data texture
+//! updates carry completed CPU products to the renderer without owning wgpu.
 //!
 //! It owns [`sun::LunarSunShadow`] (the canonical sun-shadow spec) and the
 //! persisted [`quality::RenderingQualitySettings`] budget consumed by the
@@ -17,6 +17,7 @@ use bevy::ecs::reflect::ReflectComponent;
 
 pub mod appearance;
 pub mod camera;
+pub mod data_texture;
 pub mod quality;
 mod quality_policy;
 pub mod sun;

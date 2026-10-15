@@ -47,6 +47,7 @@ use bevy::shader::Shader;
 use bevy::shader::ShaderDefVal;
 use bevy::utils::default;
 use lunco_environment::SunRenderState;
+use lunco_environment::horizon::{SunQuery, pick_sun};
 use lunco_materials::ParamValue;
 use lunco_render::{ProceduralSkybox, SceneCamera};
 use std::any::TypeId;
@@ -175,8 +176,6 @@ pub(crate) fn build(app: &mut App) {
     render_app.add_render_command::<Opaque3d, DrawProceduralSkyboxCommands>();
 }
 
-const SUN_TAN_ANGULAR_RADIUS: f32 = 0.004_65;
-
 fn sun_direction_in_view(world_direction: Vec3, camera_rotation: Quat) -> Option<Vec3> {
     if !world_direction.is_finite() || world_direction.length_squared() <= 0.0 {
         return None;
@@ -188,6 +187,13 @@ fn sun_direction_in_view(world_direction: Vec3, camera_rotation: Quat) -> Option
 
 fn directional_sun_inputs_changed(
     sun: Option<Res<SunRenderState>>,
+    changed_lights: Query<
+        (),
+        Or<(
+            Changed<DirectionalLight>,
+            Changed<lunco_core::SunAngularDiameter>,
+        )>,
+    >,
     mut material_events: MessageReader<AssetEvent<super::ShaderMaterial>>,
     cameras: Query<
         (),
@@ -213,6 +219,7 @@ fn directional_sun_inputs_changed(
             .any(|skybox| skybox_material_event_matches(event, skybox.material.id()));
     }
     sun.is_some_and(|state| state.is_changed())
+        || !changed_lights.is_empty()
         || !cameras.is_empty()
         || !changed_skyboxes.is_empty()
         || skybox_material_changed
@@ -229,10 +236,11 @@ fn skybox_material_event_matches(
 }
 
 /// Project Bevy's finalized scene-light direction into the active camera for
-/// procedural sky disks. The disk uses a small fixed apparent radius; no solar
-/// position or astronomical-distance value crosses the render boundary.
+/// procedural sky disks. Angular radius comes from the same authored distant
+/// light as terrain shadow softness; no astronomical position is narrowed.
 fn wire_directional_sun_inputs(
     sun: Option<Res<SunRenderState>>,
+    lights: SunQuery,
     cameras: Query<(&Camera, &GlobalTransform), (With<SceneCamera>, With<Camera3d>)>,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
     materials: Option<ResMut<Assets<super::ShaderMaterial>>>,
@@ -257,7 +265,7 @@ fn wire_directional_sun_inputs(
         }
     };
     let tan_radius = if direction.length_squared() > 0.0 {
-        SUN_TAN_ANGULAR_RADIUS
+        pick_sun(&lights).map_or(0.0, |(_, radius, _)| radius)
     } else {
         0.0
     };

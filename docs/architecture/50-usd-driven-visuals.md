@@ -74,6 +74,12 @@ independent curve mesh is hidden on terrain. Pointer context resolves the
 annotation identity only on a foreground terrain hit, preserving occlusion by
 vehicles/props and the curve's authored pointer policy.
 
+The same typed upload owner accepts complete R8Unorm horizon visibility updates.
+Equal-size shadow bakes keep both the Image handle and GPU texture allocation;
+the CPU recovery bytes update without emitting an asset modification. The render
+adapter acknowledges bytes, batches, sequence and observed texture allocations.
+Format/extent violations are reported at that boundary.
+
 `InspectUsdCurveView` reports requested/completed/applied revisions, sparse
 segment count, projection kind, terrain binding count, local mesh visibility
 and terminal errors. `displayed_surface_binding_count` and `surface_texture`
@@ -165,8 +171,8 @@ Unpublished dirty ranges survive a generation fence. Scene teardown cancels
 workers, drops indexes and retires pending uploads.
 
 Workers prepare dirty texels and any capacity-growth bytes. The render-free
-`lunco-materials::float_texture` contract carries typed completed patches to
-`lunco-render-bevy::float_texture`. Its extraction coalesces by texel address;
+`lunco-render::data_texture` contract carries typed completed patches to
+`lunco-render-bevy::data_texture`. Its extraction coalesces by texel address;
 its render preparation queues contiguous row writes into the resident RGBA32Float
 texture before drawing. All patch rows are queued within one render preparation
 boundary. No ordinary patch changes `Assets<Image>`, material bindings or image

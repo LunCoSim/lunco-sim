@@ -45,7 +45,7 @@
     mesh_bindings::mesh,
     mesh_view_bindings::view,
 }
-#import lunco::horizon::sun_visibility_resolved
+#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
 #import lunco::lunar::regolith_factor
 #import lunco::terrain::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
@@ -249,10 +249,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // than multiplying a second terrain-shadow term over the CSM result.
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    var march_blend = 1.0;
-    if (csm_far > 0.0) {
-        march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
-    }
+    let march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
     var sun_vis = 1.0;
     if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(

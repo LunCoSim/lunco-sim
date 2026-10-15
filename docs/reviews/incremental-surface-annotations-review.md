@@ -9,7 +9,7 @@ The canonical contract is in
 
 DRY discovery found the existing annotation owner, shared terrain shader,
 Bevy image lifecycle and renderer texture dependency reader. The change extends
-those owners. `lunco-materials::float_texture` supplies the missing render-free
+those owners. `lunco-render::data_texture` supplies the missing render-free
 typed partial-upload seam; `lunco-render-bevy` consumes it through wgpu row
 writes. Image capacity growth uses the shared descriptor/rebinding path, which emits
 an explicit dependent-material asset modification event. The low-level seam

@@ -1,0 +1,89 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    documentation = "GPU authored Sun angle and opaque half-disc occlusion gate."
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+    kind = "assembly"
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/sun_disc_occlusion.rhai@
+    }
+    def Scope "Looks"
+    {
+        def Material "Normal"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Normal/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/sun_disc_occlusion.wgsl@
+                custom token outputs:surface = ""
+            }
+        }
+        def Material "Blue"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Blue/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
+                custom token outputs:surface = ""
+            }
+        }
+    }
+    def Xform "Sky" (
+        prepend apiSchemas = ["LunCoProceduralSkyAPI", "MaterialBindingAPI"]
+    )
+    {
+        custom rel material:binding = </World/Looks/Normal>
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 128000.0
+        float inputs:angle = 2.0
+        custom double3 xformOp:rotateXYZ = (0.0, 180.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+    def Plane "Occluder" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double width = 10.0
+        double length = 10.0
+        custom double3 xformOp:translate = (-5.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom rel material:binding = </World/Looks/Blue>
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        float focalLength = 18.0
+    }
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera
+        token lunco:activeCamera.timeSamples = {
+            0.0: "Camera",
+        }
+    }
+}

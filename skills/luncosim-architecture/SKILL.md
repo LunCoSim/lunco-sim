@@ -777,8 +777,10 @@ label projection is the only remaining per-frame presentation work.
 
 Terrain strokes use producer-owned segment IDs and the mutable
 `lunco-terrain-surface` index. Ordinary edits publish dirty texels through
-`lunco-materials::float_texture` and the renderer's partial-upload adapter;
+`lunco-render::data_texture` and the renderer's partial-upload adapter;
 capacity growth follows the shared image descriptor and material refresh path.
+The same typed queue carries complete R8 horizon visibility updates without
+reallocating equal-size GPU textures.
 See `docs/architecture/50-usd-driven-visuals.md` for the ownership and lifecycle
 contract.
 

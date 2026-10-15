@@ -27,10 +27,7 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 
 use lunco_core::HorizonShadowTerrain;
-use lunco_environment::SunRenderState;
-use lunco_environment::horizon::{
-    HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache, pick_sun,
-};
+use lunco_environment::horizon::HorizonShadowCacheConfig;
 use lunco_environment::{
     HeightField, HorizonMap, HorizonShadowCache, install_horizon_map_from_field,
 };
@@ -223,57 +220,23 @@ pub(crate) fn mark_streamed_horizon_stale(
 pub(crate) fn wire_tile_shadow_cache(
     mut commands: Commands,
     cfg: Res<HorizonShadowCacheConfig>,
-    render_sun: Option<Res<SunRenderState>>,
     terrains: Query<
         (
             Entity,
-            Ref<GlobalTransform>,
             Option<&HorizonShadowCache>,
             Option<&TileShadowCache>,
         ),
         (With<TerrainLodViz>, With<HorizonShadowTerrain>),
     >,
-    sun: SunQuery,
-    mut sun_projection_cache: Local<TerrainSunProjectionCache>,
-    mut removed_terrains: RemovedComponents<TerrainLodViz>,
 ) {
-    for entity in removed_terrains.read() {
-        sun_projection_cache.remove(entity);
-    }
-    // The same "one sun" rule as the environment's wiring, and the same
-    // STRUCTURAL basis: a body's reflected fill is authored under that body's
-    // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
-    // is left is the scene's sun, so there is nothing to rank.
-    let sun = pick_sun(&sun);
-    let (sun_world, sun_revision) = render_sun.as_deref().map_or((None, 0), |state| {
-        (state.direction_to_sun_world, state.revision)
-    });
     let cache_quality_valid = cfg.quality_is_valid();
 
-    for (entity, terrain_gt, cache, wired) in &terrains {
+    for (entity, cache, wired) in &terrains {
         let (image, on) = match cache {
-            Some(c) => {
-                let on = sun.is_some()
-                    && sun_world.is_some_and(|to_sun_world| {
-                        let sun_local = sun_projection_cache.project_sun_local(
-                            entity,
-                            &terrain_gt,
-                            to_sun_world,
-                            sun_revision,
-                        );
-                        // Freshness is a scheduling input, not a presentation
-                        // input. `c` is the last committed image; dropping it
-                        // while its replacement is being baked re-enables the
-                        // per-pixel march for every streamed tile and toggles
-                        // terrain shadow-caster ownership. At accelerated
-                        // presentation time that becomes a render-quality
-                        // oscillation. Keep the committed image active for the
-                        // whole above-horizon interval and let the environment
-                        // cache scheduler replace it atomically when ready.
-                        cache_quality_valid && cfg.enabled && sun_local.y > 0.0
-                    });
-                (Some(c.image.clone()), if on { 1.0 } else { 0.0 })
-            }
+            Some(c) => (
+                Some(c.image.clone()),
+                f32::from(cache_quality_valid && cfg.enabled),
+            ),
             None => (wired.map(|w| w.image.clone()), 0.0),
         };
         let Some(image) = image else { continue }; // never had a cache → nothing to wire

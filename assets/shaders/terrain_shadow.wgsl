@@ -22,7 +22,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::sun_visibility_resolved
+#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
 #import lunco::lunar::regolith_factor
 #import lunco::terrain::terrain_apply_sun_response
 
@@ -108,11 +108,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    march_blend = 1.0;
-    if (csm_far > 0.0) {
-        let cam_d = distance(view.world_position, in.world_position.xyz);
-        march_blend = smoothstep(csm_far, csm_far * 1.1, cam_d);
-    }
+    march_blend = horizon_shadow_blend(
+        distance(view.world_position, in.world_position.xyz), csm_far, mat.sun_dir, mat.hf_res);
     if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,

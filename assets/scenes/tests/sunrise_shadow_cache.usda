@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    documentation = "Production fixed-Sun cache horizon crossings with stable GPU allocations and fixed physics cadence."
+)
+
+def Xform "World" (
+    prepend references = @lunco://scenes/tests/terrain_shader_appearance.usda@</TerrainShaderAppearance>
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Xform "Terrain" (
+        prepend apiSchemas = ["LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        bool lunco:terrain:horizonShadows = true
+        int lunco:terrain:horizonMapResolution = 128
+    }
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sunrise_shadow_cache.rhai@
+        }
+    }
+}

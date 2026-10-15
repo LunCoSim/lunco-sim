@@ -1,23 +1,12 @@
 //! Heightfield-ray-marched terrain sun shadows — the long-range half of the
 //! two-system shadow design.
 //!
-//! Cascaded shadow maps cannot resolve kilometre-scale terrain shadows: the
-//! atlas texels thin out with range, casters outside the cascade footprint
-//! vanish, and coarse DEM triangles alias into sawtooth edges. A precomputed
-//! horizon-angle map (NASA LOLA style) was tried first and rejected: storing
-//! *angles per grid point* low-pass-filters the casting crests, smearing the
-//! terminator over tens to hundreds of metres.
-//!
-//! The approach that actually delivers crisp, realistic shadow lines is the
-//! terrain-renderer standard: **ray-march the heightfield itself, per pixel,
-//! in the terrain shader** (`assets/shaders/horizon_march.wgsl`). At each
-//! march step the occlusion factor is
-//! `(ray_height − terrain_height) / (distance · tan(sun_radius))`, so the
-//! penumbra is physically scaled — razor-sharp next to the casting crest,
-//! softening linearly with caster distance, with the sun's angular size
-//! taken from the UsdLux light's `inputs:angle`
-//! ([`SunAngularDiameter`](lunco_core::SunAngularDiameter)). Any sun
-//! direction works at any time — no relight pass, no latency.
+//! Native cascades render mesh and object shadows near the viewer. The shared
+//! heightfield march supplies distant terrain self-shadow, with penumbra width
+//! derived from the UsdLux light's `inputs:angle`. Native workers cache angular
+//! samples in an R8 visibility image, keeping the last completed presentation
+//! sample resident while a replacement is prepared. Physical solar queries use
+//! their independent f64 oracle.
 //!
 //! ## What lives here, and what does not
 //!
@@ -55,8 +44,7 @@
 //!    edges never show up close and near pixels skip the march entirely.
 //! 2b. **Shadow cache** (sun-driven, off-thread on native): the per-pixel
 //!     march is expensive — the configured number of steps × the configured cache
-//!     supersample count per fragment
-//!     fragment. Because the sun moves slowly (a lunar day ≈ 29.5 Earth
+//!     supersample count per fragment. Because the sun moves slowly (a lunar day ≈ 29.5 Earth
 //!     days), the march result is cached into an `R8Unorm` visibility
 //!     texture ([`HorizonShadowCache`]) baked from the SAME
 //!     [`HeightField::sun_visibility`] algorithm, refreshed only when the
@@ -70,7 +58,7 @@
 //!    same Sun shadow map carries rover, rock, and equipment shadows onto the
 //!    ground; the DEM horizon cache remains the terrain self-shadow owner.
 //!
-//! ## Limits (v1)
+//! ## Limits
 //!
 //! - Heights are sampled at the entity's ground cell; a hovering object
 //!   uses the ground-level result under it.
@@ -95,11 +83,14 @@ use lunco_core::{HorizonShadowTerrain, SunAngularDiameter};
 // The POD texture descriptors `bevy_image` itself takes from `wgpu-types`.
 // `bevy::render::render_resource` only RE-EXPORTS them, and importing THAT would
 // drag wgpu + naga into this crate. `wgpu-types` is not `wgpu`.
+use lunco_render::data_texture::{DataTexturePatch, DataTextureTexels, DataTextureUpdates};
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 /// Tan of the sun's angular radius for a diameter given in degrees.
 fn tan_sun_radius(diameter_deg: f32) -> f32 {
-    (diameter_deg.to_radians() * 0.5).tan()
+    // Angular projection is the explicit GPU boundary; f64 keeps the 180-degree
+    // schema endpoint on the positive side of the tangent singularity.
+    ((f64::from(diameter_deg).to_radians() * 0.5).tan()) as f32
 }
 
 /// Resolve the standard UsdLux angular-size fallback without turning an
@@ -423,25 +414,36 @@ impl HorizonShadowCacheConfig {
 /// sun moves past the configured threshold.
 #[derive(Component)]
 pub struct HorizonShadowCache {
-    /// The GPU visibility texture (binding 10). Its asset contents are replaced
-    /// in place when a re-bake finishes, so every material keeps one stable
-    /// binding while the renderer uploads the new pixels.
+    /// The GPU visibility texture (binding 10). Equal-size bakes update resident
+    /// texels without an asset modification or material rebinding.
     pub image: Handle<Image>,
     /// Terrain-local to-sun direction the cache was baked for. The cache is
-    /// valid (visually lossless) while the sun stays within `sun_threshold_deg`
-    /// of this; beyond it a re-bake is queued.
+    /// scheduled for replacement when the Sun moves beyond `sun_threshold_deg`.
     last_sun_local: Vec3,
     /// Wall-clock timestamp at which the current replacement was requested.
     /// This is scheduling state, not a freshness claim; `last_sun_local` is
     /// the authoritative angular sample represented by the image.
     last_refresh_real_secs: f64,
+    quality: ShadowCacheQuality,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ShadowCacheQuality {
+    tan_radius: f32,
+    march_steps: usize,
+    samples_per_axis: usize,
 }
 
 impl HorizonShadowCache {
-    /// Whether this cache is fresh enough to request a replacement bake.
+    /// Terrain-local angular sample represented by the committed visibility image.
+    pub fn sampled_sun_local(&self) -> Vec3 {
+        self.last_sun_local
+    }
+
+    /// Whether the current Sun lies within the configured angular sample tolerance.
     ///
     /// The bake is an angular snapshot, not a generic terrain mask. The
-    /// committed image remains a valid presentation value while a replacement
+    /// committed image remains the last completed presentation sample while a replacement
     /// is pending; this freshness decision belongs to the scheduler, not to
     /// material binding.
     pub fn is_valid_for_sun(&self, sun_local: Vec3, threshold_deg: f32) -> bool {
@@ -449,8 +451,10 @@ impl HorizonShadowCache {
             return false;
         }
         let sun_local = sun_local.normalize_or_zero();
-        let threshold = threshold_deg.to_radians();
-        self.last_sun_local.dot(sun_local) >= threshold.cos()
+        // Chord length retains small angular differences without cos(theta)
+        // rounding to one at the rendering precision boundary.
+        let chord = 2.0 * (threshold_deg.to_radians() * 0.5).sin();
+        self.last_sun_local.distance_squared(sun_local) <= chord * chord
     }
 }
 
@@ -530,6 +534,8 @@ struct ShadowCacheResult {
     resolution: u32,
     sun_local: Vec3,
     requested_at_real_secs: f64,
+    source_image: Handle<Image>,
+    quality: ShadowCacheQuality,
     millis: u128,
 }
 
@@ -550,6 +556,7 @@ pub fn start_horizon_bakes(
     #[cfg(not(target_arch = "wasm32"))] meshes: Res<Assets<Mesh>>,
     #[cfg(target_arch = "wasm32")] mut meshes: ResMut<Assets<Mesh>>,
     #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
+    #[cfg(target_arch = "wasm32")] mut uploads: ResMut<DataTextureUpdates>,
     q: Query<
         (
             Entity,
@@ -885,19 +892,20 @@ fn make_shadow_cache_image(bytes: Vec<u8>, res: u32) -> Image {
 /// interval: while a bake is in flight the sun may keep moving, but no second
 /// bake starts. The committed cache stays bound as the presentation value and
 /// keeps its image identity; once the task lands, the completed pixels replace
-/// that asset in place. The next replacement is admitted only after the
+/// its resident texels in place. The next replacement is admitted only after the
 /// minimum refresh interval.
 ///
-/// Below-horizon sun is skipped: the march short-circuits to 0 there (its
-/// first branch), and the render-side `wire_terrain_materials` drops
-/// `shadow_cache_on` to 0 so the shader does not sample an above-horizon cache.
-/// A fresh bake fires when the sun rises past the threshold again.
+/// Below-horizon Sun needs no bake: the shader evaluates its current local
+/// direction before reading the cache and returns zero visibility. The cache
+/// stays bound overnight; sunrise schedules a replacement through the same
+/// angular threshold without changing the material workload.
 // `Instant` is bevy's portable clock (see `bake_heightfield`) — the
 // `disallowed_methods` hit is the documented native-only false positive.
 #[allow(clippy::type_complexity, clippy::disallowed_methods)]
 pub fn start_shadow_cache_bake(
     mut commands: Commands,
     #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
+    #[cfg(target_arch = "wasm32")] mut uploads: ResMut<DataTextureUpdates>,
     cfg: Res<HorizonShadowCacheConfig>,
     real: Option<Res<Time<Real>>>,
     sun: SunQuery,
@@ -936,7 +944,11 @@ pub fn start_shadow_cache_bake(
     let Some(to_sun_world) = render_sun.direction_to_sun_world else {
         return;
     };
-    let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
+    let quality = ShadowCacheQuality {
+        tan_radius: tan_r,
+        march_steps: cfg.march_steps,
+        samples_per_axis: cfg.samples_per_axis,
+    };
     let march_steps = cfg.march_steps;
     let samples_per_axis = cfg.samples_per_axis;
     let now_real_secs = real.as_deref().map_or(0.0, Time::elapsed_secs_f64);
@@ -955,12 +967,12 @@ pub fn start_shadow_cache_bake(
             render_sun.revision,
         );
         // No sun / sun below horizon → the march handles it cheaply; no bake.
-        if sun_local.y <= 1e-4 {
+        if sun_local.y <= 0.0 {
             continue;
         }
         // Within the threshold of the last bake → cache still valid.
         if let Some(c) = cache.as_deref() {
-            if c.last_sun_local.dot(sun_local) >= cos_thresh {
+            if c.quality == quality && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg) {
                 continue;
             }
             if now_real_secs - c.last_refresh_real_secs < f64::from(cfg.min_refresh_interval_secs) {
@@ -979,6 +991,7 @@ pub fn start_shadow_cache_bake(
             // Off-thread: clone the HeightField (cheap — `Arc<Vec<f32>>`)
             // and march every cache texel on a worker. The frame never blocks.
             let field = map.field.clone();
+            let source_image = map.image.clone();
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
                 let bytes = field.bake_visibility_cache(
@@ -993,6 +1006,8 @@ pub fn start_shadow_cache_bake(
                     resolution: target_res,
                     sun_local,
                     requested_at_real_secs: now_real_secs,
+                    source_image,
+                    quality,
                     millis: start.elapsed().as_millis(),
                 }
             });
@@ -1014,12 +1029,14 @@ pub fn start_shadow_cache_bake(
             install_shadow_cache(
                 &mut commands,
                 &mut images,
+                &mut uploads,
                 entity,
                 cache.as_deref().map(|cache| cache.image.clone()),
                 bytes,
                 target_res,
                 sun_local,
                 now_real_secs,
+                quality,
                 millis,
             );
         }
@@ -1028,36 +1045,64 @@ pub fn start_shadow_cache_bake(
 
 /// Collects finished off-thread visibility-cache bakes and installs them
 /// (native). The committed cache keeps one stable image handle for the
-/// terrain's lifetime; a finished bake replaces that image asset in place.
+/// terrain's lifetime; equal-size bakes queue pixels through DataTextureUpdates.
 /// That leaves every tile material binding and shadow-ownership decision
 /// unchanged while the renderer uploads the new pixels. While the bake ran the
 /// old cache stayed bound, so the renderer never enters the expensive live
 /// march merely because a replacement is pending.
 pub fn finish_shadow_cache_bake(
     mut commands: Commands,
+    cfg: Res<HorizonShadowCacheConfig>,
+    sun: SunQuery,
     mut images: ResMut<Assets<Image>>,
+    mut uploads: ResMut<DataTextureUpdates>,
     mut q: Query<(
         Entity,
         &mut ShadowCacheBakeTask,
         Option<&HorizonShadowCache>,
+        Option<&HorizonMap>,
     )>,
 ) {
     use bevy::tasks::futures_lite::future;
-    for (entity, mut task, cache) in &mut q {
+    let quality = pick_sun(&sun).map(|(_, tan_radius, _)| ShadowCacheQuality {
+        tan_radius,
+        march_steps: cfg.march_steps,
+        samples_per_axis: cfg.samples_per_axis,
+    });
+    for (entity, mut task, cache, map) in &mut q {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
+        // A completed visual product belongs to the immutable source it read.
+        // Terrain replacement must never publish a result from the retired map.
+        if map.is_none_or(|map| map.image != result.source_image) || quality != Some(result.quality)
+        {
+            commands.entity(entity).remove::<ShadowCacheBakeTask>();
+            continue;
+        }
         install_shadow_cache(
             &mut commands,
             &mut images,
+            &mut uploads,
             entity,
             cache.map(|cache| cache.image.clone()),
             result.bytes,
             result.resolution,
             result.sun_local,
             result.requested_at_real_secs,
+            result.quality,
             result.millis,
         );
+    }
+}
+
+fn retire_shadow_cache_uploads(
+    event: On<Remove, HorizonShadowCache>,
+    caches: Query<&HorizonShadowCache>,
+    mut uploads: ResMut<DataTextureUpdates>,
+) {
+    if let Ok(cache) = caches.get(event.entity) {
+        uploads.retire(cache.image.id());
     }
 }
 
@@ -1070,25 +1115,46 @@ pub fn finish_shadow_cache_bake(
 fn install_shadow_cache(
     commands: &mut Commands,
     images: &mut Assets<Image>,
+    uploads: &mut DataTextureUpdates,
     entity: Entity,
     existing_image: Option<Handle<Image>>,
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
     requested_at_real_secs: f64,
+    quality: ShadowCacheQuality,
     millis: u128,
 ) {
-    let image = make_shadow_cache_image(bytes, resolution);
     let image_handle = if let Some(existing_image) = existing_image {
-        // The cache handle is held strongly by the committed component. A
-        // missing generation is an internal lifecycle violation, not a state
-        // to hide by allocating an unrelated replacement image.
-        images
-            .insert(existing_image.id(), image)
+        let image = images
+            .get_mut_untracked(existing_image.id())
             .expect("committed horizon cache image handle must remain valid");
+        if image.texture_descriptor.size.width == resolution
+            && image.texture_descriptor.size.height == resolution
+        {
+            // Keep the CPU recovery copy and GPU texture on the same revision.
+            // Only the typed upload owner touches resident GPU texels; no asset
+            // Modified event invalidates materials or allocates another texture.
+            image.data = Some(bytes.clone());
+            let sequence = uploads.reserve_sequence();
+            uploads.submit(DataTexturePatch {
+                image: existing_image.clone(),
+                sequence,
+                size: UVec2::splat(resolution),
+                texels: DataTextureTexels::R8Unorm(bytes),
+            });
+        } else {
+            uploads.retire(existing_image.id());
+            images
+                .insert(
+                    existing_image.id(),
+                    make_shadow_cache_image(bytes, resolution),
+                )
+                .expect("committed horizon cache image handle must remain valid");
+        }
         existing_image
     } else {
-        images.add(image)
+        images.add(make_shadow_cache_image(bytes, resolution))
     };
     debug!("[horizon] shadow cache baked for {entity:?}: {resolution}² in {millis} ms");
     commands
@@ -1098,6 +1164,7 @@ fn install_shadow_cache(
             image: image_handle,
             last_sun_local: sun_local,
             last_refresh_real_secs: requested_at_real_secs,
+            quality,
         });
 }
 
@@ -1205,6 +1272,8 @@ impl Plugin for HorizonShadowPlugin {
         app.register_type::<HorizonShadowTerrain>();
         app.register_type::<HorizonShadowCacheConfig>();
         app.init_resource::<HorizonShadowCacheConfig>();
+        app.init_resource::<DataTextureUpdates>();
+        app.add_observer(retire_shadow_cache_uploads);
         // Every system here needs the asset stores (`Assets<Mesh>`/`Assets<Image>`).
         // Gate the chain on those existing so an app with no AssetPlugin (cosim
         // integration tests) cleanly skips it instead of panicking on a missing
@@ -1400,6 +1469,11 @@ mod tests {
             image: Handle::default(),
             last_sun_local: Vec3::Y,
             last_refresh_real_secs: 0.0,
+            quality: ShadowCacheQuality {
+                tan_radius: 0.0046,
+                march_steps: 48,
+                samples_per_axis: 2,
+            },
         };
 
         assert!(cache.is_valid_for_sun(Vec3::Y, 0.05));
@@ -1408,6 +1482,12 @@ mod tests {
             0.05
         ));
         assert!(!cache.is_valid_for_sun(Vec3::NEG_Y, 0.05));
+        assert!(!cache.is_valid_for_sun(
+            Quat::from_rotation_z(0.0002_f32.to_radians()) * Vec3::Y,
+            0.0001
+        ));
+        assert_eq!(tan_sun_radius(0.0), 0.0);
+        assert!(tan_sun_radius(180.0).is_finite() && tan_sun_radius(180.0) > 0.0);
     }
 
     #[test]

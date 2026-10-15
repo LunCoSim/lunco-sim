@@ -91,6 +91,15 @@ fn sun_visibility(
     return clamp(vis, 0.0, 1.0);
 }
 
+// Shared distance blend for static and streamed heightfield materials.
+fn horizon_shadow_blend(distance: f32, csm_far: f32, sun_local: vec3<f32>, res: f32) -> f32 {
+    // The finite heightfield's point-source night gate applies inside native
+    // cascade range too. It returns before any texture access or march.
+    if (res >= 2.0 && sun_local.y <= 0.0) { return 1.0; }
+    if (csm_far > 0.0) { return smoothstep(csm_far, csm_far * 1.1, distance); }
+    return 1.0;
+}
+
 // Sun visibility resolved from the **pre-baked shadow cache** (a single
 // `textureSampleLevel` lookup) when `use_cache > 0.5`, otherwise the live
 // per-pixel ray-march above. The cache (`shadow_cache`, an `R8Unorm` texture)
@@ -105,6 +114,7 @@ fn sun_visibility(
 // distance-gated `march_blend` branch — unlike `textureSample`, which WebGPU
 // restricts to uniform control flow. The `use_cache` guard is itself a uniform
 // (`mat.shadow_cache_on`), so the whole branch is uniform-stable.
+
 fn sun_visibility_resolved(
     cache: texture_2d<f32>,
     cache_samp: sampler,
@@ -117,6 +127,10 @@ fn sun_visibility_resolved(
     size: vec2<f32>,
     res: f32,
 ) -> f32 {
+    if (res < 2.0) { return 1.0; } // no finite heightfield owner
+    // Night is current geometry, independent of the cache's sampled direction.
+    // Keep the cache bound across this transition instead of entering a march.
+    if (sun_local.y <= 0.0) { return 0.0; }
     if (use_cache > 0.5) {
         // CPU bake nodes span both footprint endpoints: i / (dimensions - 1).
         // Normalized texture sampling addresses texel centres at (i + 0.5) / dimensions.

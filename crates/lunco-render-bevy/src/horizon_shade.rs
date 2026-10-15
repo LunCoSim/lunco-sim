@@ -255,8 +255,6 @@ pub fn wire_terrain_materials(
         ),
         Without<RenderLayers>,
     >,
-    // Hysteresis state for the cache↔march handoff, per terrain (see below).
-    mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
     // The visible tile set is rebuilt from ECS every frame, but its grouping
     // buffers persist so streaming does not allocate a new map/vector set per
     // frame.
@@ -269,7 +267,6 @@ pub fn wire_terrain_materials(
     mut removed_terrains: RemovedComponents<HorizonMap>,
 ) {
     for e in removed_terrains.read() {
-        cache_engaged.remove(&e);
         sun_projection_cache.remove(e);
     }
     let Some(mut shader_mats) = shader_mats else {
@@ -360,34 +357,15 @@ pub fn wire_terrain_materials(
             None => (Vec2::ONE, 0.0, None),
         };
 
-        // Shadow cache binding + the uniform flag that tells the fragment
-        // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
-        // handle is bound whenever a cache exists (it stays allocated on the
-        // `HorizonShadowCache` component regardless). A committed cache is
-        // deliberately kept active while a replacement bake is pending or
-        // while the sun has moved past its sample: the old image is the
-        // double-buffered presentation value. Disabling it for every stale
-        // sample exposed the 48-step live march exactly when a fast clock was
-        // already consuming the bake workers, causing both stalls and an
-        // apparent terrain-texture loss. Below-horizon sun still falls back
-        // to the march, which short-circuits to 0 in its first branch.
+        // Cache residency is independent of the Sun crossing the horizon. The
+        // shader evaluates the current horizon gate before sampling the image,
+        // retaining a constant-cost path and stable bindings through the night.
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
-        let engaged = {
-            let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
-            let now = if prev {
-                sun_local.y > 5.0e-5
-            } else {
-                sun_local.y > 2.0e-4
-            };
-            cache_engaged.insert(entity, now);
-            now
+        let shadow_cache_on: f32 = if cache_quality_valid && cfg.enabled && shadow_cache.is_some() {
+            1.0
+        } else {
+            0.0
         };
-        let shadow_cache_on: f32 =
-            if cache_quality_valid && cfg.enabled && engaged && shadow_cache.is_some() {
-                1.0
-            } else {
-                0.0
-            };
         let horizon_march_steps = cfg.march_steps as f32;
 
         // Named engine uniforms consumed by the terrain shaders (regolith /

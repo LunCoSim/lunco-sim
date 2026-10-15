@@ -217,6 +217,22 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" == "sun_disc_occlusion" ]]; then
+        # Authored angle/direction failures are red. Opaque depth must cover
+        # exactly the left half of the sky disc while the right remains visible.
+        blue=$(convert "$last" -fx 'b > 0.8 && r < 0.2 && g < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        green=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        yellow=$(convert "$last" -fx 'r > 0.8 && g > 0.8 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        red=$(convert "$last" -fx 'r > 0.8 && g < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        left_yellow=$(convert "$last" -crop "$((RENDER_WIDTH / 2))x${RENDER_HEIGHT}+0+0" \
+            -fx 'r > 0.8 && g > 0.8 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        if ! awk -v blue="${blue:-0}" -v green="${green:-0}" -v yellow="${yellow:-0}" \
+            -v red="${red:-1}" -v left="${left_yellow:-1}" \
+            'BEGIN { exit !(blue > 0.49 && blue < 0.51 && green > 0.49 && yellow > 0.00001 && yellow < 0.002 && red < 0.00001 && left < 0.00001) }'; then
+            reason="authored Sun disc or opaque occlusion failed (blue=$blue green=$green yellow=$yellow red=$red left-yellow=$left_yellow)"
+        fi
+    fi
+
     if [[ -z "$reason" && "$name" == "vertex_shadow_alignment" ]]; then
         if ! grep -Fq 'VERTEX PREPASS VARIANTS: PASS' "$log"; then
             reason="authored vertex camera did not enable its native prepasses"

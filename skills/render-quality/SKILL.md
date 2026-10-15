@@ -90,7 +90,11 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    supplies ground self-shadow; cached tiles use `csm_far = 0` to avoid a
    fragment march at every distance. The `shadow_cache_sampling` fixture checks
    the GPU cache's endpoint-inclusive grid, including fractional interpolation
-   and border clamping. Cache UVs must map
+   and border clamping, plus the current below-horizon gate inside CSM range.
+   Keep a committed cache bound across night; run the `sunrise_shadow_cache`
+   editor fixture to verify repeated crossings, upload acknowledgements and one
+   resident GPU allocation. Pending bakes retain a sampled presentation value;
+   they must not block fixed physics. Cache UVs must map
    the CPU bake nodes to texel centres before filtering.
    For panel power, read the wired probe's `sun_visibility`,
    `sun_irradiance_w_m2` and panel `available_power_w`.
@@ -176,7 +180,10 @@ marker into another frame. Modelica and Avian keep their ordinary fixed-step
 cadence while their celestial-derived inputs change from the shared sample.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
-the behavior. The direction is in the active camera's view coordinates, the
+the behavior. Radius comes from the selected light's authored `inputs:angle`,
+shared with terrain penumbra. Opaque scene depth clips the disc independently
+of terrain shadow visibility; run `sun_disc_occlusion` for authored radius and
+half-disc occlusion. The direction is in the active camera's view coordinates, the
 same frame as the shader's view rays. `SunRenderState` comes from the
 generic `sun` direction resolver after the scene light is finalized through
 BigSpace. `SunState` supplies irradiance only. The renderer projects the
