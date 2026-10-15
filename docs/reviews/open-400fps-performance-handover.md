@@ -9692,3 +9692,68 @@ markers are verified in `target/communication-envelope-gates.json` and the two
 scene logs. These cover the stricter validation in production; the preceding
 ordinary Griffin run supplies the performance measurement, not this focused
 protocol check. Full external FMU conformance remains open.
+
+### CCD dispatch attribution and mission verdict — 2026-10-15
+
+`ccd_query_dispatch` records bounded query and worker counts around the existing
+native query kernel and its synchronous join. The default minimum batch remains
+64; no query distribution, solver tolerance, contact tolerance, substep count or
+graphics setting changes in this checkpoint.
+
+An ordinary owned Griffin run at API 4348 (PID 324845) compares batch settings
+64/0/8/0/64 after the route. Native physics medians from the sampled latest
+steps are 2.481/2.112/2.086/2.054/2.212 ms; sweep medians are
+1.236/0.858/0.845/0.843/0.934 ms. Every phase retains 37 bodies, 36 colliders,
+12 joints and eight substeps. Evolving settling/contact work prevents treating
+the first/last difference as a code speedup. Evidence is
+`target/ccd-dispatch-{context,phases,summary}.json` and `.png`.
+
+The owned Tracy run at API 4351 (PID recorded in its context file) saves
+528.22 MiB over 211.5 seconds, with 78,704,690 zones. Native statistics and
+unwrapped dispatch exports succeed. With 29 queries, the two serial interior
+dispatch medians are 0.120/0.138 ms and the two three-worker medians are
+0.065/0.090 ms. These isolate the existing dispatch owner; complete physics
+samples vary more widely and establish no app-level FPS gain. The exporter
+groups unwrapped rows by source location, so chronology is reconstructed only
+after sorting timestamps. Evidence is
+`target/ccd-dispatch-tracy{.tracy,-context.json,-phases.json,-dispatch-summary.json}`.
+
+An experimental striped work distribution passes exact native query parity
+(witnesses, normals, status, diagnostics, errors and retained cache fields).
+Its separate capture at API 4352 saves 493.52 MiB over 211.5 seconds and exports
+successfully. AC is online for its first phase and offline for the remaining
+three; GPU clocks drop from 945 MHz to 517–555 MHz and native tick costs rise
+sharply. It cannot establish the experimental distribution's speed. The change
+is removed; `target/ccd-striped-experiment.patch` retains the experiment beside
+its capture, phase samples and unit log. All three apps and both collectors
+exit zero and release their ports.
+
+The Twin's mission report now consumes the existing historical `route_started`
+fact. Current guidance authority remains `route_engaged` and can be released
+at completion. Local lunar-base-model main commit `bba8667` shares its structured
+phase check with a four-case authored one-shot gate, including false and missing
+evidence. Both fresh Tracy runs pass all 16 full mission checks and that
+four-case gate through the real production API. The continuous-contact baseline
+scene passes all 12 checks. No root or Twin push is performed.
+
+### Verified remaining physics-only stepping defect — 2026-10-15
+
+An owned headless production session at API 4353 passes the 34-check Modelica
+clock gate, then exercises `StepPhysics` through the public API. While its
+cinematic hold is raised, physical step number remains 60 while fixed tick
+advances from 68 to 93. FeedbackA's solver time advances from 0.966667 to
+1.383333 seconds. Requesting one physical step advances physical step number
+to 61 while fixed tick reaches 119 and that solver reaches 1.816667 seconds.
+The app exits zero through `Exit` and releases its port. Evidence is
+`target/physics-hold-audit{.json,-context.json,-driver.log,.log}`.
+
+This active path is owned by `StepPhysics` in `lunco-scene-commands` and
+`PhysicsStepRequest`/`PhysicsHolds::CINEMATIC` in `lunco-physics`. Recording
+prelude helpers and editor dragging consume it. Their clocks must be reviewed
+and migrated to shared simulation admission and explicit whole-simulation
+stepping, preserving the owners of wall/presentation work and independent
+holds. Removing the API requires all callers, docs and tests to migrate in
+the same cutover. The current clock snapshot also reports `clock_contract_ok`
+despite this divergence, so that diagnostic is insufficient as an acceptance
+oracle. This defect, full simulation/presentation isolation, 200 FPS,
+sub-1 ms physics and external FMU interoperability remain open.

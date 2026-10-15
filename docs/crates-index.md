@@ -1565,6 +1565,7 @@ the native swept BVH while retaining prepared pair filtering and ordering.
 Its `ContinuousCollisionSettings.minimum_query_batch_size` bounds scoped
 query work assignment; smaller populations run directly with identical
 ordered results, while larger batches use the native compute pool.
+`ccd_query_dispatch` attributes bounded query and worker counts at that boundary.
 It also certifies finite-triangle minimum translation depths using all three
 edges or an interior ball at a real triangle point, with native supports and
 nearest-boundary point projection.

@@ -36,6 +36,8 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   Check disk space while the owned app is live as well as after it exits.
   Native capture writing can overlap runtime allocations, and the collector
   can report success despite a truncated file.
+  Native unwrapped CSV rows are grouped by source location; sort by
+  `ns_since_start` before reconstructing chronological phases or transitions.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
@@ -169,6 +171,11 @@ For continuous-query dispatch, compare the CCD owner's bounded
 scene and ordered inputs. Small batches execute the same kernel directly;
 larger batches join before authoritative correction. Preserve native query
 results and compare complete physics time, including CCD and joints.
+`ccd_query_dispatch` records bounded query and worker counts around the shared
+kernel and join. Match query population and simulation phase, retain power
+observations throughout each comparison, and separate dispatch duration from
+the enclosing sweep and complete physics tick. A changed worker distribution
+needs measured benefit in addition to numerical parity.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges

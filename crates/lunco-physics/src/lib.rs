@@ -1,36 +1,16 @@
-//! The physics readiness gate: "is the world safe to *integrate* right now?"
+//! Native physics admission, deterministic ordering, continuous contacts and joints.
 //!
-//! # Why this is not a clock
+//! [`PhysicsHolds`] retains independent owner reasons for suspending Avian.
+//! [`apply_physics_holds`] combines those reasons with the co-simulation barrier
+//! and runtime faults, projecting a paused, zero-delta `Time<Physics>` before
+//! force application and solver execution. Each owner releases only its own hold.
 //!
-//! Subsystems routinely need rigid-body integration suspended for a few frames —
-//! the DEM heightfield is still baking, a collider ring has not yet paged in under
-//! a rover, an obstacle field was just regenerated and its colliders need a frame
-//! to re-seat. Step physics during those windows and a `Dynamic` body free-falls
-//! through a collider that does not exist yet, tunnels under the heightfield, and
-//! is gone.
-//!
-//! The old code expressed that wait by writing the **user's transport**
-//! (`lunco_time::TimeTransport.mode = Paused`). That is a category error with three
-//! visible consequences:
-//!
-//! 1. The sandbox *opened paused*. The holds are up during the first frames of
-//!    every scene load, so the user was handed a stopped world and had to press
-//!    play to undo an engine implementation detail.
-//! 2. It froze **everything**, not just physics — the tick, and with it the epoch,
-//!    the ephemeris, the animation sampler, the lighting. A collider that has not
-//!    finished baking is no reason for the planets to stop moving.
-//! 3. Release needed a "did *we* pause it?" flag (`paused_by_us`) to avoid
-//!    un-pausing a pause the user had started themselves — bookkeeping that only
-//!    existed because two unrelated concepts shared one bit.
-//!
-//! So readiness gates **physics**, and nothing else. [`PhysicsHolds`] pauses avian's
-//! `Time<Physics>` clock, which zeroes the physics delta and stops the solver while
-//! `Time<Virtual>`, the `SimTick`, `WorldTime.epoch_jd`, the celestial chain and the
-//! avatar all keep running. The user's transport is never touched, and the world
-//! integrates again on its own the moment the last hold clears.
-//!
-//! Holds are keyed by a `&'static str` reason, so several subsystems can hold
-//! concurrently and each releases only its own; physics runs when the set is empty.
+//! Required scene, terrain and Modelica preparation also participate in the shared
+//! `lunco_core_runtime::SimulationProgress` admission boundary. Their pending work
+//! holds the fixed simulation clock, including co-simulation and scenario timers;
+//! application, interaction and presentation work can continue. The time owner
+//! retains pacing demand and the user's transport state independently of native
+//! physics admission.
 
 use avian3d::prelude::{
     AngularVelocity, ContactGraph, CustomPositionIntegration, LinearVelocity, Position, RigidBody,
@@ -883,12 +863,11 @@ pub fn physics_is_live(
 
 /// Project [`PhysicsHolds`] onto avian's `Time<Physics>`.
 ///
-/// Pausing the physics clock zeroes the physics delta, so the solver does not step
-/// — while `Time<Virtual>` (and therefore the tick, epoch, ephemeris and animation)
-/// keeps advancing. Runs in `PreUpdate`, ahead of the physics schedule, and is
-/// repeated at the admitted fixed-step boundary: an asynchronous solver result
-/// can release the coupling barrier after PreUpdate. Forces and integration
-/// must consume the same admission state rather than a stale paused flag.
+/// The paused flag and zero delta gate native force application and integration.
+/// Shared simulation admission and the time owner retain the global clock and
+/// pacing demand. Projection runs in `PreUpdate` and at the admitted fixed-step
+/// boundary: an asynchronous solver result can release the coupling barrier
+/// after PreUpdate, so forces and integration must consume the same state.
 pub fn apply_physics_holds(
     holds: Res<PhysicsHolds>,
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,

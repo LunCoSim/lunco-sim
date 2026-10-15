@@ -905,6 +905,8 @@ fn query_sweep_jobs(
         .thread_num()
         .max(1)
         .min((jobs.len() / minimum_batch_size.max(1)).max(1));
+    let _span =
+        bevy::log::debug_span!("ccd_query_dispatch", queries = jobs.len(), workers).entered();
     if scratch.len() < workers {
         scratch.resize_with(workers, avian3d::parry::query::epa::EPA::new);
     }
