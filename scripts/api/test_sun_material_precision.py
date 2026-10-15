@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import BINARY, ROOT, ProductionSession, port_is_open
+from runtime import BINARY, ROOT, ProductionSession, assert_render_log_clean, port_is_open
 from run_editor_scene_test import wait_for_scene, wait_for_scene_time_selection
 
 
@@ -115,6 +115,9 @@ def main():
         diagnostics = execute(session, "RuntimeDiagnostics")
     if port_is_open(args.port):
         raise RuntimeError("owned API port was not released")
+    assert_render_log_clean(log)
+    if diagnostics["errors"]:
+        raise RuntimeError(f"production diagnostics contain errors: {diagnostics}")
     (output / "validation.json").write_text(json.dumps({
         "phases": rows, "diagnostics": diagnostics, "pid": pid, "port_released": True
     }, indent=2))

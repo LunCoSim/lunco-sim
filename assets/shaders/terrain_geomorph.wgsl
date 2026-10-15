@@ -25,6 +25,7 @@
     view_transformations::position_world_to_clip,
     mesh_view_bindings::view,
 }
+#import lunco::terrain::terrain_morph_weight
 #ifdef PREPASS_PIPELINE
 #import bevy_pbr::prepass_io::VertexOutput
 #else
@@ -107,22 +108,8 @@ struct GeoVertex {
 // The same morph/stitch law is used by the color, depth, normal, and shadow
 // passes. `eye` is the viewing camera, including in Bevy's shadow views.
 fn morph_weight(vertex: GeoVertex, world_position: vec3<f32>, eye: vec3<f32>) -> f32 {
-    let dist = distance(world_position, eye);
-    // CDLOD morph: 0 near (own LOD) → 1 far (collapse onto parent lattice). Root
-    // tiles pass morph_end <= morph_start → no morph.
-    var morph = 0.0;
-    if (mat.morph_end > mat.morph_start) {
-        morph = smoothstep(mat.morph_start, mat.morph_end, dist);
-    }
-    // Restricted quadtree selection guarantees that a resident neighbour is
-    // either the same depth or one level coarser. On the latter boundary the
-    // fine edge uses its parent lattice immediately, the exact surface sampled
-    // by the coarser tile. Same-depth edges remain untouched.
-    let edge_stitch = max(
-        max(vertex.edge_mask.x * mat.stitch_edges.x, vertex.edge_mask.y * mat.stitch_edges.y),
-        max(vertex.edge_mask.z * mat.stitch_edges.z, vertex.edge_mask.w * mat.stitch_edges.w),
-    );
-    return max(morph, edge_stitch);
+    return terrain_morph_weight(world_position, eye, mat.morph_start, mat.morph_end,
+        vertex.edge_mask, mat.stitch_edges);
 }
 
 @vertex

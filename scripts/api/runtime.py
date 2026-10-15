@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -29,6 +30,18 @@ POLL_INTERVAL_S = float(os.environ.get("LUNCOSIM_API_POLL_INTERVAL_S", "0.25"))
 
 class RuntimeErrorWithLog(RuntimeError):
     """An API lifecycle failure that includes the captured process log path."""
+
+
+def assert_render_log_clean(path: Path) -> None:
+    """GPU callback failures are not part of the domain diagnostics query."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    failure = re.search(
+        r"wgpu validation error|wgpu device lost|failed to process shader|"
+        r"failed to create shader module|Encountered a panic|thread .*panicked",
+        text, re.IGNORECASE,
+    )
+    if failure:
+        raise RuntimeErrorWithLog(f"production render failed: {text[failure.start():failure.start() + 500]}; log={path}")
 
 
 def _json_response(response: Any) -> dict[str, Any]:

@@ -160,8 +160,8 @@ for scene in "${SCENES[@]}"; do
         reason="production luncosim exited $code"
     elif grep -Eqi 'panicked|Encountered a panic|thread .*panicked' "$log"; then
         reason="production render reported a panic"
-    elif grep -Eqi 'failed to process shader|failed to create shader module' "$log"; then
-        reason="production shader compilation failed"
+    elif grep -Eqi 'wgpu validation error|wgpu device lost|failed to process shader|failed to create shader module' "$log"; then
+        reason="production GPU validation or shader compilation failed"
     elif ! grep -Fq "recording drained (${RENDER_FRAMES} frames)" "$log"; then
         reason="recording did not drain exactly ${RENDER_FRAMES} frames"
     elif [[ "$frame_count" -ne "$RENDER_FRAMES" || ! -s "$first" || ! -s "$last" ]]; then
@@ -330,6 +330,14 @@ for scene in "${SCENES[@]}"; do
             --port "$RENDER_API_PORT" --scene "$REPO_ROOT/assets/scenes/tests/${name}.usda" \
             --output "$output/transitions" >"$output/transitions.log" 2>&1; then
             reason="live Sun material GPU transitions failed; see $output/transitions.log"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" == "terrain_shader_appearance" ]]; then
+        if ! python3 scripts/api/test_terrain_overlay_prepasses.py \
+            --port "$RENDER_API_PORT" --quality "$RENDER_QUALITY" \
+            --output "$output/overlays" >"$output/overlays.log" 2>&1; then
+            reason="terrain diagnostic prepass transitions failed; see $output/overlays.log"
         fi
     fi
 

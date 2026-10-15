@@ -68,6 +68,16 @@ Motion-vector definitions also occur on forward pipelines; previous-position
 outputs and previous-view bindings belong only to `PREPASS_PIPELINE`. The terrain
 appearance and vertex-shadow fixtures enable all three native prepasses and
 reject shader compilation failures as well as missing image probes.
+The separate diagnostic vertex stage obeys the same pass interfaces, including
+previous-frame positions for motion vectors. Both vertex stages consume
+`terrain_morph_weight` from the shared surface module so analysis preserves the
+production morph and parent-edge stitching law. The production GPU driver
+`scripts/api/test_terrain_overlay_prepasses.py` switches through production,
+slope, LOD-depth, and restored production views with all prepasses active.
+The render wrapper runs it for each selected quality profile. GPU validation
+callbacks must also be checked in the process log: domain `RuntimeDiagnostics`
+does not include those renderer failures, and a captured PNG can retain stale
+pixels after a failed submission.
 
 Static and streamed terrain therefore differ only in geometry delivery. A
 static mesh is effectively the non-morphing/root LOD of the same appearance

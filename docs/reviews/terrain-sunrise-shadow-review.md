@@ -19,6 +19,10 @@ queue writes are shared rendering math/resource invariants. Their inputs are
 existing light, terrain and quality contracts, and their output is typed
 presentation data. They remain in Rust/WGSL; authored Rhai retains quality policy.
 Native workers prepare visibility without controlling deterministic physics.
+Production and diagnostic terrain vertex stages share the surface module's
+morph weight and use the same forward/prepass, shadow, and previous-frame
+interfaces. GPU acceptance inspects callback errors in the process log as well
+as domain diagnostics and freshly captured pixels.
 
 Production verification on the normal binary:
 
@@ -38,13 +42,19 @@ Production verification on the normal binary:
   terrain uniform feed. The shader compares its horizon side against the native
   light; CPU cache agreement alone is insufficient for this contract.
 - Focused typed-upload coalescing/retirement and angular precision tests pass.
+- The terrain diagnostic GPU driver switches through production, slope,
+  LOD-depth, and restored production with depth, normal, and motion prepasses.
+  Headful High and offscreen Low/Balanced passes have clean GPU logs and the
+  expected diagnostic colours. The log gate rejects the reproduced invalid-pipeline
+  recording even though its domain diagnostics contain zero errors.
 - Six headful Griffin day/night/return views complete. Sampled frame durations
   remain below 15 ms in those windows; this is bounded observation, not a Tracy
   attribution or an exhaustive stall guarantee. Physical transport is paused
   for those directed views; the authored cache gate supplies cadence evidence.
 
-Evidence is under `.lunco/terrain-lines/sunrise-fix/` and
-`.lunco/terrain-lines/final-pass/`. Owned API 4286 sessions
+Evidence is under `.lunco/terrain-lines/sunrise-fix/`,
+`.lunco/terrain-lines/final-pass/`, and `.lunco/terrain-lines/full-review/`.
+Owned API 4286 sessions
 close through Exit or the recorder's normal ExitAfterRecording path. The full
 render wrapper remains blocked by an unrelated missing `twin_search_paths`
 scenario source; direct production fixtures supply the scoped GPU evidence.

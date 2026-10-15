@@ -34,6 +34,21 @@ const AA_CUT_PX: f32 = 2.0;
 const AA_RAMP_PX: f32 = 2.0;
 const BUMP_MAX_SLOPE: f32 = 0.65;
 
+// Production and diagnostic vertices share the same camera-distance morph and
+// parent-edge stitch law in forward, prepass, and shadow views.
+fn terrain_morph_weight(
+    world_position: vec3<f32>, eye: vec3<f32>, start: f32, end: f32,
+    edge_mask: vec4<f32>, stitch_edges: vec4<f32>,
+) -> f32 {
+    var morph = 0.0;
+    if (end > start) {
+        morph = smoothstep(start, end, distance(world_position, eye));
+    }
+    // A fine edge meets its coarser neighbour on their shared parent lattice.
+    let edge = edge_mask * stitch_edges;
+    return max(morph, max(max(edge.x, edge.y), max(edge.z, edge.w)));
+}
+
 /// Linear, clamped remap for authored colour layers. Relief applies its own
 /// smooth height remap in `layer_gradient` so its normal remains continuous.
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {

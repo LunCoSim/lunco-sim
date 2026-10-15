@@ -78,6 +78,14 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    vertex-shadow fixtures exercise these variants; shader compilation errors
    fail the graphics gate. Motion-vector view flags occur on forward pipelines
    too, so previous-position varyings/bindings need the prepass guard as well.
+   Include the separate diagnostic material: run
+   `scripts/api/test_terrain_overlay_prepasses.py --output <evidence-dir>`
+   (add `--windowed` for a desktop view). It exercises slope, LOD-depth, and
+   restored production rendering with all prepasses active. Both vertex stages
+   use the shared `terrain_morph_weight` law and the viewing camera's LOD origin.
+   Reject GPU validation errors in the process log even when domain
+   `RuntimeDiagnostics` is clear; a new screenshot can contain a retained frame
+   after GPU submission fails.
    For scaled terrain lighting, run `terrain_normal_transform`: world-to-local
    normals use the transpose of the local-to-world linear transform, rather
    than the inverse used for positions.
