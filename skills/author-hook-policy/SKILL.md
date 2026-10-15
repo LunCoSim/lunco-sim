@@ -136,6 +136,12 @@ queues no commands; a rejected command is reported while later actions
 continue. `invoke_hook(id, [args])` distinguishes unavailable hooks from
 installed functions that fault.
 
+Keep helper arguments proportional to what the helper reads. A policy may
+receive rich nested facts, but scalar/status helpers should receive the needed
+fields rather than repeatedly passing the complete map. This preserves the
+public hook ABI while avoiding unnecessary Rhai value copies. Measure policy
+evaluation separately from fact construction and verify the real owner output.
+
 Scheduled owner calls supply an immutable `runtime_context` map with their
 route, cycle, phase, clock, and logical sequence. If a policy is valid only in
 one cycle, reject other contexts and verify the real scheduled owner path in

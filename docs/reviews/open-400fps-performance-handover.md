@@ -9352,3 +9352,23 @@ checks after the fix, including live UI projection and route editing. Its
 owned API 4320 process exits zero. Evidence is
 `target/runtime-ui-narrow-route-windowed.log` (failing) and
 `target/usd-removed-prim-route-windowed.log` (passing).
+
+### Runtime UI helper argument scope — 2026-10-15
+
+The default visibility/properties policies pass status, progress blockers and
+input maps directly to helpers. Their public rich fact map, hook ABI, owner
+context, policy decisions and publication cadence are unchanged. Internal
+status/input helpers do not copy unrelated participant/output trees.
+
+In one owned normal production process, alternating baseline and current source
+through `RunRhai` gives identical results for 48 status/blocker combinations.
+A synthetic 2,000-output fact map with 100 helper iterations measures warm
+median HTTP request latency of 50.369 ms before and 7.304 ms after (three warm
+observations each). This includes script preparation, map construction and
+transport; it is not isolated hook CPU time or product FPS. Evidence is
+`target/runtime-ui-helper-{comparison,parity}.json`.
+The windowed route gate passes 111 checks, including actual exposure properties,
+and the production hook suite passes 45 checks with off-cycle rejection, using
+the supported API Rhai test wrapper. Its log is
+`target/runtime-ui-narrow-hook-context.log`. Whole-application performance after
+this policy change still needs measurement.

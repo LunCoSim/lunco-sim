@@ -13,8 +13,7 @@ fn status_label(status) {
     "UNAVAILABLE"
 }
 
-fn progress_owner_active(facts, owner) {
-    let blockers = facts.simulation_progress;
+fn progress_owner_active(blockers, owner) {
     if blockers == () { return false; }
     for blocker in blockers {
         if blocker.owner == owner { return true; }
@@ -22,19 +21,19 @@ fn progress_owner_active(facts, owner) {
     false
 }
 
-fn runtime_status_label(facts) {
-    if facts.status == "error" { return "ERROR"; }
-    if progress_owner_active(facts, "ModelicaPreparation") || facts.status == "compiling" {
+fn runtime_status_label(status, blockers) {
+    if status == "error" { return "ERROR"; }
+    if progress_owner_active(blockers, "ModelicaPreparation") || status == "compiling" {
         return "PHYSICS LOADING";
     }
-    if progress_owner_active(facts, "TerrainPreparation") { return "TERRAIN LOADING"; }
-    if progress_owner_active(facts, "SceneLifecycle")
-        || progress_owner_active(facts, "SceneReferences")
-        || progress_owner_active(facts, "DocumentPreparation") {
+    if progress_owner_active(blockers, "TerrainPreparation") { return "TERRAIN LOADING"; }
+    if progress_owner_active(blockers, "SceneLifecycle")
+        || progress_owner_active(blockers, "SceneReferences")
+        || progress_owner_active(blockers, "DocumentPreparation") {
         return "SCENE PREPARING";
     }
-    if facts.status == "unavailable" { return "SIMULATION PREPARING"; }
-    status_label(facts.status)
+    if status == "unavailable" { return "SIMULATION PREPARING"; }
+    status_label(status)
 }
 
 fn status_color(status) {
@@ -85,8 +84,7 @@ fn participant_text(values) {
     result
 }
 
-fn input_value(facts, name) {
-    let inputs = facts.inputs;
+fn input_value(inputs, name) {
     if inputs == () { return 0.0; }
     let value = inputs[name];
     if value == () { return 0.0; }
@@ -156,7 +154,7 @@ fn runtime_ui_properties(facts) {
     result.vehicle = facts.label;
     result.status = if facts.available { status_label(facts.status) } else { "WAITING" };
     result.status_color = if facts.available { status_color(facts.status) } else { "var(--muted-color)" };
-    result.runtime_status = runtime_status_label(facts);
+    result.runtime_status = runtime_status_label(facts.status, facts.simulation_progress);
     result.owner = facts.control_owner;
     result.speed = vector_text(facts.velocity, 100.0) + " m/s";
     result.position = vector_text(facts.position, 1.0) + " m";
@@ -168,7 +166,7 @@ fn runtime_ui_properties(facts) {
     result.program_count = programs.len().to_string() + " PROGRAMS";
     result.program_empty_display = programs.len() == 0;
     let program_active = programs.len() > 0
-        && input_value(facts, "program_active") > 0.5;
+        && input_value(facts.inputs, "program_active") > 0.5;
     result.program_label = if programs.len() == 0 {
         "PROGRAM UNAVAILABLE"
     } else if program_active {

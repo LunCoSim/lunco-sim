@@ -3,9 +3,8 @@
 // The engine supplies a typed fact map. A Twin may replace this hook with its
 // own policy when a surface should be always visible, gated by a lesson, or
 // shown only after a capability becomes available.
-fn preparation_active(facts) {
-    if facts.status == "compiling" { return true; }
-    let blockers = facts.simulation_progress;
+fn preparation_active(status, blockers) {
+    if status == "compiling" { return true; }
     if blockers == () { return false; }
     for blocker in blockers {
         if blocker.owner == "SceneLifecycle"
@@ -27,7 +26,7 @@ fn runtime_ui_surface(facts) {
         || runtime_context.clock != "application" {
         throw "runtime.ui.visibility requires Application/Ui/Preparation context";
     }
-    let visible = if preparation_active(facts) {
+    let visible = if preparation_active(facts.status, facts.simulation_progress) {
         true
     } else if !facts.available {
         false

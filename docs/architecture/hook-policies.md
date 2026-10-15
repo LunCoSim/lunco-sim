@@ -403,6 +403,9 @@ hook-policy checks reject unowned REPL calls, and the camera exposure owner
 test covers the startup projection. The production `route_lifecycle` gate also
 checks the visible `program-browser` exposure and its typed program collection
 after authored UI metadata is admitted.
+The default runtime UI policies pass only status, progress blockers and input
+maps to their internal helpers. The public typed fact map remains available to
+the policy; helper evaluation does not copy unrelated participant/output trees.
 
 The `synth.acausal-network` and `synth.actuator-wrench` source generators run
 as `Twin/Lifecycle/Preparation` with the active-or-committed scene generation
