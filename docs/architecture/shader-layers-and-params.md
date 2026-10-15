@@ -67,6 +67,18 @@ parameter name is added. USD-driven values use `ShaderLook::live()`, a shared
 resolve those slots once and update them directly; empty slots remain stable until
 the first sample, and live samples do not rehash authored names.
 
+Parameter spelling is owned by `lunco_materials::naming::to_snake_case`, shared
+by USD projection, live authoring, the render binder and shader ports. It returns
+`Cow<str>`: canonical names borrow their input, while changed camel/Pascal-case
+spellings allocate one normalized string. Consumers borrow during lookup and
+call `into_owned` only when storing a name. Shader-port admission checks the
+entity's `ShaderLook` before normalizing a candidate. Keep this conversion at
+its owner rather than adding per-reader normalizers or name caches.
+Scene-property named declarations use their existing slot resolver and check
+native component ownership without sampling field values. Full port inspection
+still enumerates the owner's complete light/transform schema. Value reads and
+write-time metadata/bounds validation keep their own existing boundaries.
+
 ### Authoring a parameter in USD
 
 When a `ShaderLook` is backed by an authored USD material, a parameter edit

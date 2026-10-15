@@ -93,8 +93,8 @@ use lunco_port_core::ports::{
 };
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
-    let key = to_snake_case(name);
     let look = world.get::<ShaderLook>(entity)?;
+    let key = to_snake_case(name);
     // `live` (a landed wire) beats `values` (the authored constant). There is no
     // third fallback to the shader's declared default: that would need the reflected
     // material schema, which only exists in a render build, and reading a port
@@ -102,7 +102,7 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
     // was moved here to remove. An undriven, unauthored parameter reads as absent.
     let v = look
         .live_value(&key)
-        .or_else(|| look.values().get(&key).copied())?;
+        .or_else(|| look.values().get(key.as_ref()).copied())?;
     match v {
         ParamValue::F32(v) => Some(v),
         ParamValue::I32(v) => Some(v as f32),
@@ -114,9 +114,9 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
 }
 
 fn resolve_shader_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
-    let key = to_snake_case(name);
     let look = world.get::<ShaderLook>(entity)?;
-    if !look.driven().contains(&key) {
+    let key = to_snake_case(name);
+    if !look.driven().contains(key.as_ref()) {
         return None;
     }
     look.live().resolve_slot(&key)
@@ -205,16 +205,16 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         }
     },
     metadata: |world, entity, name, direction| {
-        let key = to_snake_case(name);
-        let authored_scalar = world
-            .get::<ShaderLook>(entity)
-            .filter(|look| look.driven().contains(&key))
-            .and_then(|look| {
-                look.values()
-                    .get(&key)
-                    .copied()
-                    .or_else(|| look.live_value(&key))
-            });
+        let authored_scalar = world.get::<ShaderLook>(entity).and_then(|look| {
+            let key = to_snake_case(name);
+            if !look.driven().contains(key.as_ref()) {
+                return None;
+            }
+            look.values()
+                .get(key.as_ref())
+                .copied()
+                .or_else(|| look.live_value(&key))
+        });
         let writable = matches!(authored_scalar, Some(ParamValue::F32(_)));
         PortMetadata::scalar(
             direction,

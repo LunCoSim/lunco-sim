@@ -2,29 +2,32 @@
 //!
 //! USD authors material params in camelCase by convention (`colorA`, `baseColor`,
 //! `morphStart`); WGSL `struct Material` fields are snake_case (`color_a`,
-//! `base_color`, `morph_start`). Both authoring paths (USD → `lunco-usd-sim`, the
+//! `base_color`, `morph_start`). Both authoring paths (USD → `lunco-usd-sim-shader`, the
 //! live `SetObjectProperty` command → `lunco-scene-authoring`) bridge the two through
 //! here, so an authored name actually resolves to a schema field instead of
 //! silently packing to nothing.
 
-/// Converts a camelCase / PascalCase identifier to snake_case. Idempotent for
-/// names that are already snake_case (no uppercase → returned unchanged), so it
-/// is safe to apply on every authored param.
+use std::borrow::Cow;
+
+/// Converts a camelCase / PascalCase identifier to snake_case. Canonical names
+/// borrow their input; only a changed spelling allocates owned storage.
 ///
 /// An underscore is inserted before an uppercase letter that either follows a
 /// lowercase letter/digit (`baseColor` → `base_color`) or begins a new word at
 /// the end of an acronym (`AOStrength` → `ao_strength`).
-pub fn to_snake_case(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
+pub fn to_snake_case(s: &str) -> Cow<'_, str> {
+    if !s.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return Cow::Borrowed(s);
+    }
+    let mut chars = s.chars().peekable();
+    let mut previous: Option<char> = None;
     let mut out = String::with_capacity(s.len() + 4);
-    for (i, &c) in chars.iter().enumerate() {
+    while let Some(c) = chars.next() {
         if c.is_ascii_uppercase() {
-            let prev_lower_or_digit =
-                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
-            let acronym_boundary = i > 0
-                && chars[i - 1].is_ascii_uppercase()
-                && i + 1 < chars.len()
-                && chars[i + 1].is_ascii_lowercase();
+            let prev_lower_or_digit = previous
+                .is_some_and(|previous| previous.is_ascii_lowercase() || previous.is_ascii_digit());
+            let acronym_boundary = previous.is_some_and(|previous| previous.is_ascii_uppercase())
+                && chars.peek().is_some_and(|next| next.is_ascii_lowercase());
             if prev_lower_or_digit || acronym_boundary {
                 out.push('_');
             }
@@ -32,13 +35,26 @@ pub fn to_snake_case(s: &str) -> String {
         } else {
             out.push(c);
         }
+        previous = Some(c);
     }
-    out
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_parameter_names_keep_their_borrowed_storage() {
+        for name in ["", "roughness", "color_a", "uv_scale2", "m²", "éclair"] {
+            assert!(
+                matches!(to_snake_case(name), std::borrow::Cow::Borrowed(value) if value == name)
+            );
+        }
+        assert!(
+            matches!(to_snake_case("AOStrength"), std::borrow::Cow::Owned(value) if value == "ao_strength")
+        );
+    }
 
     #[test]
     fn snake_case_conversion() {

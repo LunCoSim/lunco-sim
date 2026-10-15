@@ -184,6 +184,17 @@ visible rejection of unsupported types. Check the interpreter resource seam
 with `typed_conversion_rejects_nested_native_values_without_cloning_them`, then
 exercise production typed command/query consumers, including a negative case.
 
+For port-exchange cost, inspect `BindingStatus.connections` and join targets to
+`ListPorts` owner metadata. The causal-state sink count is not the number of
+compiled wire targets: scene/shader inputs also participate in the exchange.
+Separate `cosim_exchange_write` from accumulation before changing routing.
+Preserve live metadata, bounds, ownership and stale-slot checks. For shader-name
+cost, use the shared borrowed converter described in
+[shader parameters](../../docs/architecture/shader-layers-and-params.md);
+canonical-name lookup must not allocate, and entities without `ShaderLook` must
+reject before conversion. Allocation probes and kernel timings do not certify
+whole-scene FPS.
+
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
 owner records native body and collider identities, poses, mass/inertia and

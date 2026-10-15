@@ -10064,3 +10064,57 @@ Current Rust source also compiled successfully with Tracy after unused-import
 cleanup; later changes are formatting and documentation only. The build and
 restoration manifest is
 `.lunco/performance-evidence/ui-policy-build-manifest.json`.
+
+
+### Port-owner inventory and borrowed shader names — 2026-10-16
+
+The `5cdecb946` normal baseline's owned headless session (PID 1292437,
+API 4381) passes all 16 Griffin mission checks, then freezes through the shared
+`StepSimulation` boundary for a port inventory. There are 601 bound connections
+and 601 distinct targets; `CosimStatus`'s 74 causal-state sinks are a different
+inventory. Joining unique USD-path targets to `ListPorts` identifies 247 scene
+properties, 190 shader parameters, 132 Modelica inputs, 19 force actuators and
+seven rigid-body fields. Six generated scalar endpoints cannot be joined by
+display name because those names collide; this is a limitation of that join,
+not evidence of missing ports. The current native trace's write phase is
+0.6845 ms median versus 0.0576 ms for accumulation. The generic held-value
+`InputPorts` kernel is about 158 ns per resolved write, which does not attribute
+that whole production cost to registry validation. Evidence is
+`target/port-write-live-audit{.json,-summary.json,.log}`,
+`target/port-exchange-opt1-baseline.log`, and the saved probe source
+`target/port_exchange_bench.rs`.
+
+The shader backend normalized candidate names before checking for `ShaderLook`.
+The shared converter also allocated a character vector and output string for
+canonical names. `lunco-materials::naming::to_snake_case` now borrows unchanged
+input and streams changed spellings into owned output. All projection,
+authoring, renderer and backend callers use that one converter; ownership is
+acquired only at persistence. The authoring setter consumes a borrowed name
+rather than cloning it before its own storage operation. Shader candidates
+without the component reject before conversion. Scene-property named
+queries use the existing slot resolver, whose native component-membership
+check does not sample color values; full inspection retains complete listing.
+No metadata/bounds/ownership validation, solver clock, native substep, rendered
+quality or exchange order is skipped or changed.
+
+The borrowing-contract baseline fails to compile against the owned-only return
+contract; both current naming tests pass. A local differential probe matches
+all 10,000 generated mixed ASCII/Unicode names. The allocation probe reports
+zero allocations for 262,144 canonical-name conversions, versus 1,048,576
+previously. With the probe's allocation counter enabled, `roughness` measures
+75.02 -> 4.76 ns/call and `plume_length_fraction` 130.25 -> 9.83 ns/call;
+`AOStrength` retains its spelling transformation with one allocation per call
+instead of four. These are helper-level observations, not scene FPS gains.
+Caller checks pass for `lunco-usd-sim-shader`, `lunco-render-bevy`, and
+`lunco-scene-authoring`; the separate scene-port check and all eight owner tests
+pass. No new owner warning is introduced; native Parry warnings pre-exist.
+Logs and probes use `target/material-name-*`, `target/material-naming-*` and
+`target/scene-port-declaration-*`.
+
+The candidate has not supplied a fresh full-application build, headful image or
+paired FPS cohort. The headless mission inventory belongs to the pre-change
+normal baseline. Whole-simulation/presentation isolation, 200 FPS, sub-1 ms
+physics and external FMU interoperability remain open. The next audit must
+also reconcile shader port declarations with normalized names and verify exact
+integer-to-f64 reads; their current naming/type resource fixtures need checking
+against the live metadata contract before claiming the full shader suite.

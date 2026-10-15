@@ -700,9 +700,9 @@ pub fn on_set_object_property(
             let schema = shader_schema(&look.shader, &asset_server, &shaders);
             match shader_param_value(schema.as_ref(), &name, &cmd.value) {
                 Some(v) => {
-                    look.set_value(name.clone(), v);
+                    look.set_value(&name, v);
                     drop(look);
-                    author_shader_parameter_to_usd(&mut commands, target, name, v);
+                    author_shader_parameter_to_usd(&mut commands, target, name.into_owned(), v);
                 }
                 None => warn!("SET_PROPERTY: unknown property '{}'", key),
             }
