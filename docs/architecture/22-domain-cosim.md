@@ -242,7 +242,8 @@ Co-simulation exchange and physics run on the shared fixed timestep. Accepted
 Modelica snapshots publish at completion admission, which advances no clock:
 
 ```
-SimulationCompletions (before clock projection and on driver response readiness):
+SimulationCompletions (before clock projection, between pending fixed cycles,
+                       and on driver response readiness):
   ModelicaSet::HandleResponses      — validate async results and release completed causal holds
   validate_usd_modelica_port_contracts → sync_modelica_outputs
                                    — initial/later committed snapshots and status → shared ports
@@ -330,8 +331,11 @@ due set; its last committed output is held between those points.
 `SimulationBarrier` gates `FixedMain`, including SimTick, Rhai, controllers,
 connection propagation, Modelica input sampling, and Avian. Results are consumed
 by the single `SimulationCompletions` schedule before clock projection. The
-native driver also services that schedule on response readiness between app
-updates; readiness never consumes a receipt or advances a clock. The same
+fixed runner also services that schedule before checking a held pending cycle,
+and the native driver services it on response readiness between app updates.
+This admits already completed work without waiting for another render update;
+unfinished work yields to the host. Readiness itself never consumes a receipt
+or advances a clock. The same
 completion boundary validates USD port contracts and publishes accepted Modelica
 outputs/status. Initialized participants expose `Idle` and real initial outputs
 while held; no physics tick is needed to observe readiness. Fixed propagation

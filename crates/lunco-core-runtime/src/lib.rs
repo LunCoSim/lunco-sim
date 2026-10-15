@@ -72,7 +72,8 @@ pub struct SimulationCompletions;
 pub struct SimulationCompletionSet;
 
 /// Run the one completion-admission schedule. Hosts may service it between
-/// application updates; this never runs physics, scripts, or presentation.
+/// application updates or at complete fixed-cycle boundaries; this never runs
+/// physics, scripts, or presentation.
 pub fn admit_simulation_completions(world: &mut World) {
     world.run_schedule(SimulationCompletions);
 }

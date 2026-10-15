@@ -9800,3 +9800,59 @@ the headless realtime transition reuses the same time owner. Evidence is
 `target/shared-clock-handoff-*` and `target/shared-recording-cancel-*`;
 the fresh shared-step gate passes 28 checks headless and windowed. Owned API
 4357 exits successfully through `Exit` and releases its port.
+
+### Ready receipts between shared fixed cycles — 2026-10-15
+
+The owned `833c4a2c5` Tracy run (API 4358) passes all 16 Griffin mission
+checks and the four-check mission-evidence gate. Its 705.41 MiB capture contains
+54,965,227 zones over 188 seconds and exports successfully through the adjacent
+Tracy tools. For 29-query CCD dispatches, the final eight seconds of each
+1/3/1/3-worker cohort have medians 0.201/0.135/0.153/0.120 ms. AC remains online.
+Other-checkout Cargo builds overlap the comparison, so these data do not justify
+a product FPS claim or a default change. The default minimum batch remains 64.
+Evidence is `target/shared-clock-current-tracy-*` and its `.tracy`/`.png`.
+
+The separate unprofiled run (API 4359) also overlaps other-checkout builds.
+Across 18.673 monotonic seconds it completes 917 ticks: 0.8185 realtime, with
+14.864 seconds of retained demand despite a 5.972 ms fixed-tick median.
+Source inspection identifies a frame dependency: the fixed runner checks a
+participant barrier without servicing receipts completed during the preceding
+native cycle. Its deterministic injected-receipt regression stops at one of
+three requested cycles. Both paced and manual cases pass after the shared
+runner invokes the existing `SimulationCompletions` schedule once before
+admitting a held pending cycle. All 58 time-owner tests pass. Unfinished work
+yields to the host; no wait, alternate response reader or change to ordered
+receipt validation is introduced. This is a generic fixed-boundary mechanism,
+owned by `lunco-time`, rather than a changeable scenario policy.
+
+The same unprofiled process passes the extended 25-check recording gate,
+including realtime simulation and presentation-timer progress after closing the
+final take, plus the 28-check shared-step gate. Evidence is
+`target/shared-clock-current-normal-*`; API 4359 exits zero and releases its
+port. The receipt regression and owner suite are recorded in
+`target/shared-cycle-completion-{baseline,time-tests}.log`.
+
+The candidate normal lander run (API 4360) completes 1,116 ticks over 18.645
+monotonic seconds: 0.9976 realtime, with 3.235 ms of retained demand at its last
+sample and no clipped duration. Observed app updates include two through six
+fixed cycles. It passes the same 16 mission checks at tick 5468, followed by the
+28-check shared-step and 25-check recording gates. The inspected Avatar image
+shows the deployed FLIP, route labels, terrain and shadows. Other-checkout
+builds and a simulator overlap portions of this run; the late CCD cohorts are
+not an uncontended product comparison, and neither 200 FPS nor sub-1 ms physics
+is established. See `target/shared-cycle-completion-normal-summary.json` and
+the matching samples, phases, context and image. API 4360 exits zero.
+
+Boundary receipt rejection also cancels queued manual demand before returning
+to the host. Its injected failure initially leaves two steps queued; cleanup at
+the fixed runner's exit satisfies that contract with no tick applied. All 58
+time-owner tests pass, including both paced/manual ready-receipt and rejection
+cases. The final regular Cargo rebuild passes 28 shared-clock and 25 recording
+checks in owned API 4361, with encoded counts 4/1/2. It exits zero and releases
+its port. Six final headless production gates pass: the 34-check default/subrate
+clock gate at 120 Hz update pacing, both declared terminal failure gates, and
+three 24-check exact comparisons against the pre-change build's selected state
+rows (serial, default Compute, 0.25-jitter serial). The historical canonical
+reference discrepancy remains open as described above. Evidence is
+`target/shared-cycle-completion-{fault-baseline,time-tests,final-*,gate-*,gates.json}`.
+Full presentation isolation and external FMU interoperability also remain open.

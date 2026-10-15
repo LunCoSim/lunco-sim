@@ -567,15 +567,27 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// hold. The per-update work budget also retains time rather than clipping the
 /// input delta or discarding pending fixed cycles.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
-    if world.resource::<lunco_core::RuntimeFaults>().active() {
-        world.resource_mut::<SimulationStepControl>().cancel();
-    }
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
     for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
+        if !world.resource::<lunco_core::RuntimeFaults>().active()
+            && world
+                .get_resource::<lunco_core_runtime::SimulationBarrier>()
+                .is_some_and(|barrier| barrier.held)
+        {
+            let fixed = world.resource::<Time<Fixed>>();
+            if world.resource::<SimulationStepControl>().remaining() > 0
+                || fixed.overstep() >= fixed.timestep()
+            {
+                // A participant may finish while the preceding native cycle
+                // runs. Admit its ready receipt at this complete-cycle boundary
+                // instead of requiring another application/render update.
+                lunco_core_runtime::admit_simulation_completions(world);
+            }
+        }
         if !fixed_simulation_is_admitted(world) {
             break;
         }
@@ -617,9 +629,6 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
                 error.to_string(),
             );
         }
-        if world.resource::<lunco_core::RuntimeFaults>().active() {
-            world.resource_mut::<SimulationStepControl>().cancel();
-        }
         if manual_step {
             project_time_transport(world);
             world
@@ -628,6 +637,9 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         }
     }
 
+    if world.resource::<lunco_core::RuntimeFaults>().active() {
+        world.resource_mut::<SimulationStepControl>().cancel();
+    }
     *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
 }
 
@@ -1070,7 +1082,8 @@ impl Plugin for TimePlugin {
             .resource_mut::<Time<Virtual>>()
             .set_max_delta(Duration::MAX);
 
-        app.init_resource::<lunco_core_runtime::SimulationProgress>();
+        app.init_schedule(lunco_core_runtime::SimulationCompletions)
+            .init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<SimTick>()
             .init_resource::<SimulationTimingProfile>()
             .init_resource::<TimeUpdateTimingInput>()
@@ -1276,6 +1289,97 @@ mod tests {
 
     fn count_fixed_runs(mut count: ResMut<FixedRunCount>) {
         count.0 += 1;
+    }
+
+    #[test]
+    fn ready_participant_receipts_release_the_next_cycle_in_the_same_update() {
+        #[derive(Resource, Default)]
+        struct Receipt {
+            ready: bool,
+            admitted: u32,
+            fail: bool,
+        }
+        fn submit(
+            mut runs: ResMut<FixedRunCount>,
+            mut receipt: ResMut<Receipt>,
+            mut barrier: ResMut<lunco_core_runtime::SimulationBarrier>,
+        ) {
+            runs.0 += 1;
+            receipt.ready = true;
+            barrier.held = true;
+        }
+        fn complete(
+            mut receipt: ResMut<Receipt>,
+            mut barrier: ResMut<lunco_core_runtime::SimulationBarrier>,
+            mut faults: ResMut<lunco_core::RuntimeFaults>,
+        ) {
+            if receipt.ready {
+                receipt.ready = false;
+                if receipt.fail {
+                    faults.raise(
+                        "test-receipt-rejected",
+                        None,
+                        "test participant",
+                        "invalid receipt",
+                    );
+                    return;
+                }
+                receipt.admitted += 1;
+                barrier.held = false;
+            }
+        }
+        for manual in [false, true] {
+            let mut app = App::new();
+            app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+                .init_resource::<FixedRunCount>()
+                .init_resource::<Receipt>()
+                .init_resource::<lunco_core_runtime::SimulationBarrier>()
+                .add_systems(FixedUpdate, submit)
+                .add_systems(lunco_core_runtime::SimulationCompletions, complete);
+            app.update();
+            let quantum = app.world().resource::<Time<Fixed>>().timestep();
+            if manual {
+                app.world_mut()
+                    .resource_mut::<SimulationStepControl>()
+                    .request(Some(true), Some(3), true)
+                    .unwrap();
+                app.world_mut()
+                    .resource_mut::<Time<Virtual>>()
+                    .advance_by(Duration::ZERO);
+            } else {
+                app.world_mut()
+                    .resource_mut::<Time<Virtual>>()
+                    .advance_by(quantum * 3);
+            }
+            app.world_mut().run_schedule(RunFixedMainLoop);
+            assert_eq!(
+                app.world().resource::<FixedRunCount>().0,
+                3,
+                "ready receipts must not limit physics to one cycle per application update"
+            );
+            assert_eq!(app.world().resource::<Receipt>().admitted, 2);
+            assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), quantum * 3);
+            assert_eq!(
+                app.world().resource::<Time<Fixed>>().overstep(),
+                Duration::ZERO
+            );
+            app.world_mut().resource_mut::<Receipt>().fail = true;
+            app.world_mut()
+                .resource_mut::<SimulationStepControl>()
+                .request(Some(true), Some(2), true)
+                .unwrap();
+            app.world_mut()
+                .resource_mut::<Time<Virtual>>()
+                .advance_by(Duration::ZERO);
+            app.world_mut().run_schedule(RunFixedMainLoop);
+            assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
+            assert_eq!(
+                app.world().resource::<SimulationStepControl>().remaining(),
+                0,
+                "a rejected boundary receipt cancels pending demand before returning to the host"
+            );
+            assert_eq!(app.world().resource::<FixedRunCount>().0, 3);
+        }
     }
 
     #[test]

@@ -29,7 +29,11 @@ the same update without waiting for a later lifecycle cycle.
 readiness owners publish their current holds. The fixed runner checks admission
 before each complete `FixedMain` cycle; if a hold appears during a cycle, that
 cycle finishes and the remaining fixed time stays in `Time<Fixed>::overstep`
-until admission resumes. Completed fixed elapsed time plus pending overstep
+until admission resumes. When a participant holds pending fixed work, the runner
+services `SimulationCompletions` once before checking the next cycle's admission.
+Ready receipts can release that cycle in the same application update; unfinished
+work returns control to the host without waiting. Completed fixed elapsed time
+plus pending overstep
 equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
@@ -55,7 +59,7 @@ chooses shot sequencing and explicit step requests. Presentation scenarios use
 the existing scenario FSM/task interpreter with `@timing presentation`, so
 recording waits do not require simulation ticks while the world is frozen.
 
-Native update-source changes use `lunco_time::set_time_update_strategy`.
+Native transitions back to automatic sampling use `lunco_time::set_time_update_strategy`.
 Returning from manual duration to automatic sampling reanchors Bevy's native
 wall-time sample without advancing its elapsed time. The next sample admits
 only time since that handoff, preserving fixed debt and timer continuity.

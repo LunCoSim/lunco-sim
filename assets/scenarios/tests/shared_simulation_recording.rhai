@@ -61,7 +61,7 @@ fn check_take(me, count) {
 }
 fn four_complete(me) { this.check_take(me, 4); this.baseline(me); }
 fn one_complete(me) { this.check_take(me, 1); this.baseline(me); }
-fn finished(me) {
+fn release(me) {
     let clock = clock_snapshot();
     let receipt = query("GetOfflineRecordingStatus");
     this.failures += [
@@ -70,6 +70,11 @@ fn finished(me) {
             "a motionless shot freezes physics, Modelica and simulation timers together")
     ];
     cmd("StepSimulation", #{hold: false});
+    this.resume_tick = clock.sim_tick;
+}
+fn finished(me) {
+    this.failures.push(t_true(clock_snapshot().sim_tick > this.resume_tick,
+        "closing the final take restores realtime simulation and presentation waits"));
     report_verdict(this.failures, "SHARED SIMULATION RECORDING", "SHARED_SIMULATION_RECORDING");
 }
 fn task(me, ctx) {
@@ -84,6 +89,6 @@ fn task(me, ctx) {
         once(Fn("one_complete")),
         shots::shot(#{out: "target/shared-simulation-recording", idx: 2,
             fps: 30, frames: 2, frozen: true}),
-        once(Fn("finished"))
+        once(Fn("release")), wait(0.1), once(Fn("finished"))
     ])
 }

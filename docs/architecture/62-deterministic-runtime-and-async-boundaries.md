@@ -207,7 +207,10 @@ publishes path lookups for those identities. `ClockProjectionSet` runs in
 admission uses the core runtime's `SimulationCompletions` schedule, serviced
 after message rotation and before `ClockProjectionSet` in `First`. The native
 driver also services that same schedule on response readiness while waiting for
-the next fixed deadline; partial receipts do not rerun the application update.
+the next fixed deadline. The shared fixed runner services it once before checking
+a held pending cycle, so receipts completed during native integration can release
+the next cycle in the same update. Neither path waits on unfinished work or
+reruns the application update.
 The completion systems retain one state and their existing session, source,
 step, and communication-endpoint fences. Readiness does not consume or apply
 results, advance clocks, or choose commit order. Only a fully

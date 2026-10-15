@@ -112,11 +112,12 @@ a short native physics service time does not certify realtime co-simulation.
 For scene-test diagnostics, `--tick-hz` varies manual update pacing; use the
 runtime's `Time<Fixed>` quantum and elapsed time when interpreting physics cost.
 Completed Modelica receipts have one reader in `SimulationCompletions`, serviced
-before clock projection and by the native driver on response readiness between
-application updates. Windowed completion admission still depends on application
-updates until its simulation owner is isolated. The default
-communication period is one physics tick; longer periods must be authored
-explicitly.
+before clock projection, before admission of a held pending fixed cycle, and by
+the native driver on response readiness between application updates. A ready
+receipt can release another cycle in the same update; unfinished work yields
+without a wait. Full presentation isolation remains a separate requirement.
+The default communication period is one physics tick; longer periods must be
+authored explicitly.
 For deliberately frozen captures use `StepSimulation` and presentation-timed
 sequencing. Manual demand uses the same fixed runner as paced execution and
 still respects preparation and solver barriers. A native hold gates the entire
@@ -1125,7 +1126,8 @@ detects unexpected clipping and should remain zero. Pair this with
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
 response latency. `SimulationCompletions` runs in `First`, after message
 rotation and before `ClockProjectionSet`, and in the native driver's bounded
-completion wait; compile requests remain in
+completion wait. The shared fixed runner also services it once before checking
+admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
 The profile is read on demand and is not a replay or UI-isolation verdict; a

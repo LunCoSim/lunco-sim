@@ -803,11 +803,13 @@ diagnostics; when no successful sample exists, the message says so explicitly.
 
 Co-simulation exchange and stepping use `FixedUpdate` at a shared fixed
 timestep (60 Hz by default). Worker completion admission precedes clock
-projection, independently of the fixed clock. Ordering uses these system sets:
+projection and can release pending work between complete fixed cycles.
+Ordering uses these system sets:
 
 ```
-First:
+SimulationCompletions:
   ModelicaSet::HandleResponses    — validate worker results and release completed causal holds
+First:
   ClockProjectionSet             — project remaining holds before TimeSystems samples time
 
 FixedUpdate:
@@ -932,7 +934,10 @@ Worker lifecycle and simulation time are separate schedule domains. The executio
 host registers `handle_modelica_responses` once in the core runtime's
 `SimulationCompletions` schedule. `First` services that schedule after message
 rotation and before `ClockProjectionSet`; the native simulation driver also
-services it while waiting for the next fixed deadline. The same system state,
+services it while waiting for the next fixed deadline. The shared fixed runner
+services it once before checking admission of a held pending cycle. Ready
+receipts can release that cycle in the same application update; unfinished work
+yields without waiting. The same system state,
 validation, and ordered response reader serve every invocation. No clock or
 simulation tick advances in this schedule. An off-thread compile or step can settle while
 the fixed clock is held, and a completed causal step releases its hold before
