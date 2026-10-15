@@ -86,7 +86,11 @@ struct WheelUpdate {
 /// Re-derive every spawned wheel of `stage` from the live composed stage, in
 /// place. A failed authored read raises a terminal runtime fault and leaves
 /// physics held; stale wheel parameters are never retained.
-pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
+pub(crate) fn resync_wheels_for_stage(
+    world: &mut World,
+    id: AssetId<UsdStageAsset>,
+    _edited_prims: &[SdfPath],
+) {
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
     {
         let mut q = world.query::<(

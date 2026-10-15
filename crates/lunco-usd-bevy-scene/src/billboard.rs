@@ -45,7 +45,8 @@ use bevy::prelude::*;
 /// Data only — the renderer lives with the other viewport overlays, because
 /// drawing needs the camera and an egui painter, and this crate must stay
 /// usable headless.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component)]
 pub struct UsdBillboard {
     /// Template with `{...}` placeholders; see the module docs.
     pub template: String,

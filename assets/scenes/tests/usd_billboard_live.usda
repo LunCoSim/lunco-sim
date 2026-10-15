@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "ModelicaRuntimeContracts" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/usd_billboard_live.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def Xform "Label" (
+        prepend apiSchemas = ["LunCoBillboardAPI"]
+    )
+    {
+        bool lunco:billboard = false
+        string lunco:billboard:text = "Initial"
+        def Xform "Child"
+        {
+        }
+    }
+}

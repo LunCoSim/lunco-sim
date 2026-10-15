@@ -88,11 +88,12 @@ use lunco_usd_sim_core::{
     GroundColliderPending, PendingDifferential, PendingEntityWork, PhysicalWheel, UsdSimProcessed,
     UsdSimSet,
 };
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::Path as SdfPath;
 use openusd_schemas::physics::tokens as ptok;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
+mod billboard_runtime;
 mod wheel_runtime;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
@@ -1057,8 +1058,16 @@ impl Plugin for UsdSimPlugin {
             .register(UsdLiveEditOwner::new(
                 "usd-sim.wheels",
                 wheel_runtime::claims_edit,
-                invalidate_usd_sim_projection,
+                Some(invalidate_usd_sim_projection),
                 wheel_runtime::resync_wheels_for_stage,
+            ));
+        app.world_mut()
+            .resource_mut::<UsdLiveEditRegistry>()
+            .register(UsdLiveEditOwner::new(
+                "usd-sim.billboards",
+                billboard_runtime::claims_edit,
+                None,
+                billboard_runtime::refresh_prims,
             ));
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
@@ -2287,71 +2296,24 @@ fn process_usd_sim_prim_read(
             }
         }
     }
-    // Screen-facing label the PRIM asked for. Opt-in: only a prim that
-    // authors `lunco:billboard = true` gets one, so adding the schema can
-    // never make an existing scene sprout labels.
-    let billboard_enabled = match read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
-        Ok(Some(value)) => value,
-        Ok(None) => false,
-        Err(_) => {
-            push_usd_sim_diagnostic(
-                diagnostics,
-                &prim_path.path,
-                "billboard-attribute",
-                "lunco:billboard must be an authored boolean",
-            );
+    match billboard_runtime::read_billboard(reader, &sdf_path) {
+        Ok(Some(billboard)) => {
+            commands.entity(entity).try_insert(billboard);
+        }
+        Ok(None) => {
+            commands
+                .entity(entity)
+                .try_remove::<lunco_usd_bevy_scene::billboard::UsdBillboard>();
+        }
+        Err((code, message)) => {
+            commands
+                .entity(entity)
+                .try_remove::<lunco_usd_bevy_scene::billboard::UsdBillboard>();
+            push_usd_sim_diagnostic(diagnostics, &prim_path.path, code, message);
             warn!(
-                "USD prim {} has malformed `lunco:billboard`; label ignored",
+                "USD prim {} has invalid billboard attributes: {message}",
                 prim_path.path
             );
-            false
-        }
-    };
-    if billboard_enabled {
-        let default = lunco_usd_bevy_scene::billboard::UsdBillboard::default();
-        let billboard = (|| {
-            let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
-                Some(Value::String(value)) => value,
-                Some(_) if reader.has_authored_attribute(&sdf_path, "lunco:billboard:text") => {
-                    return Err(());
-                }
-                _ => default.template.clone(),
-            };
-            let read_real = |name: &str, default_value: f32| -> Result<f32, ()> {
-                match reader.real_f32(&sdf_path, name) {
-                    Some(value) if value.is_finite() => Ok(value),
-                    Some(_) => Err(()),
-                    None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
-                    None => Ok(default_value),
-                }
-            };
-            let offset_y = read_real("lunco:billboard:offsetY", default.offset_y)?;
-            let fade_end = read_real("lunco:billboard:fadeEnd", default.fade_end)?;
-            if fade_end <= 0.0 {
-                return Err(());
-            }
-            Ok(lunco_usd_bevy_scene::billboard::UsdBillboard {
-                template,
-                offset_y,
-                fade_end,
-            })
-        })();
-        match billboard {
-            Ok(billboard) => {
-                commands.entity(entity).try_insert(billboard);
-            }
-            Err(_) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "billboard-contract",
-                    "billboard attributes are malformed or outside their documented range",
-                );
-                warn!(
-                    "USD prim {} has invalid billboard attributes; label ignored",
-                    prim_path.path
-                );
-            }
         }
     }
     // Pointer behavior is scene intent, not a picking-backend concern.  The

@@ -18,7 +18,7 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::lux::tokens as ltok;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
@@ -679,13 +679,25 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
             connection_paths_changed |= c.connection_paths_changed;
-            resynced.extend(c.resynced.iter().map(|p| p.to_string()));
+            resynced.extend(
+                c.resynced
+                    .iter()
+                    .filter(|path| !path.is_property_path())
+                    .map(|path| path.to_string()),
+            );
+            info_only.extend(
+                c.resynced
+                    .iter()
+                    .filter(|path| path.is_property_path())
+                    .map(|path| path.to_string()),
+            );
             info_only.extend(c.info_only.iter().map(|p| p.to_string()));
         }
         resynced.sort();
         resynced.dedup();
         info_only.sort();
         info_only.dedup();
+        debug!(stage = ?id, ?resynced, ?info_only, "projecting native USD changes");
         let mut info_prim_paths: Vec<String> = info_only
             .iter()
             .map(|path| {
@@ -1049,7 +1061,7 @@ pub(crate) fn refresh_edited_prims_live(
         .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
         .map(|registry| registry.snapshot())
         .unwrap_or_default();
-    let mut claimed_live_edit_owners = HashSet::new();
+    let mut claimed_live_edit_owners: BTreeMap<usize, BTreeSet<SdfPath>> = BTreeMap::new();
     for p in info_only {
         let Some((prim, attr)) = p.split_once('.') else {
             continue;
@@ -1063,9 +1075,13 @@ pub(crate) fn refresh_edited_prims_live(
                     live_edit_owners
                         .iter()
                         .position(|owner| owner.claims_edit(&cs.view(), &sp, attr))
+                        .map(|owner| (owner, sp))
                 });
-            if let Some(owner) = claimed_owner {
-                claimed_live_edit_owners.insert(owner);
+            if let Some((owner, prim)) = claimed_owner {
+                claimed_live_edit_owners
+                    .entry(owner)
+                    .or_default()
+                    .insert(prim);
                 continue;
             }
         }
@@ -1125,14 +1141,15 @@ pub(crate) fn refresh_edited_prims_live(
         }
     }
 
-    for owner in claimed_live_edit_owners {
-        live_edit_owners[owner].refresh_stage(world, id);
+    for (owner, prims) in claimed_live_edit_owners {
+        live_edit_owners[owner].refresh_prims(world, id, &prims.into_iter().collect::<Vec<_>>());
     }
 
     for (owner, resolved) in program_updates {
         lunco_usd_bevy_core::program::apply_program_resolution(world, owner, id, resolved);
     }
 
+    prims.retain(|prim| !edit_confined_to_exempt_subtree(world, id, prim));
     if prims.is_empty() {
         return;
     }
@@ -1155,7 +1172,7 @@ pub(crate) fn refresh_edited_prims_live(
                 // Already handled in place by the light projection.
                 Some(ltok::DOME_LIGHT) => {}
                 // Material network edits fan out to every prim bound to them.
-                Some("Shader") | Some("Material") => scene_wide = true,
+                Some("Shader") | Some("Material") | Some("NodeGraph") | None => scene_wide = true,
                 _ => subtrees.push(prim),
             }
         }
@@ -1168,6 +1185,25 @@ pub(crate) fn refresh_edited_prims_live(
     for prim in subtrees {
         crate::twin_projection::refresh_prim_subtree(world, id, &prim);
     }
+}
+
+/// Whether an edit at `path` lands inside a [`lunco_usd_bevy_twin::LiveRebuildExempt`] prim's subtree of
+/// `scene_id` — a live prim that refreshes its own content in place (the DEM
+/// terrain: it re-bakes off the registry document, so a whole-scene reload would
+/// re-bridge the terrain + re-spawn the avatar camera per edit). Matches the
+/// exempt prim itself or any descendant. Its owning projection consumes the edit.
+fn edit_confined_to_exempt_subtree(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> bool {
+    let mut q =
+        world.query_filtered::<&UsdPrimPath, With<lunco_usd_bevy_twin::LiveRebuildExempt>>();
+    q.iter(world).any(|upp| {
+        upp.stage_handle.id() == scene_id
+            && (upp.path == path
+                || path.starts_with(&format!("{}/", upp.path.trim_end_matches('/'))))
+    })
 }
 
 /// Standard `UsdPreviewSurface` values are re-read by the visual owner from

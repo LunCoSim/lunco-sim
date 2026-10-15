@@ -57,9 +57,7 @@ use lunco_usd_bevy_scene::{
     UsdSceneProjectionReset, UsdSceneRoot,
 };
 use lunco_usd_bevy_stage::{UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceBytes};
-use lunco_usd_bevy_twin::{
-    DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake, scene_document_for,
-};
+use lunco_usd_bevy_twin::{DocBackedTwinScenes, TwinProjectionWake, scene_document_for};
 
 use crate::scene_runtime::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
@@ -3334,7 +3332,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         .map_err(|error| error.to_string())
                 });
             match removed {
-                Some(Ok(())) => refresh_prim_subtree(world, scene_id, path),
+                Some(Ok(())) => {}
                 Some(Err(error)) => report_stage_projection_reset_failure(
                     world,
                     scene_id,
@@ -3380,65 +3378,14 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 },
                 None => false,
             };
-            // Wheel/vehicle dynamics attrs: re-derive the spawned wheel
-            // components IN PLACE from the composed stage instead of the
-            // subtree refresh below — `reinstantiate_entity` on a wheel prim
-            // despawns its synthesized `Port` children and visual child
-            // while `UsdSimProcessed` survives, leaving a dead solved-torque
-            // port and a dangling joint. Checked before the `string`
-            // fast-path: authored scalar/string attributes still resync.
-            if authored {
-                let live_edit_owners = world
-                    .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
-                    .map(|registry| registry.snapshot())
-                    .unwrap_or_default();
-                let claimed_owner = world
-                    .get_non_send::<CanonicalStages>()
-                    .and_then(|s| s.get(scene_id))
-                    .map(|cs| {
-                        live_edit_owners
-                            .iter()
-                            .filter(|owner| owner.claims_edit(&cs.view(), &sp, name))
-                            .copied()
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                if !claimed_owner.is_empty() {
-                    for owner in claimed_owner {
-                        owner.refresh_stage(world, scene_id);
-                    }
-                    return;
-                }
-            }
-            // A `string` attribute is non-visual metadata/behavior (`info:sourceCode`,
-            // descriptions, a policy's `info:sourceCode`) — no geometry/material
-            // consequence, and a refresh would hot-reload a running scenario
-            // (resetting its `this`) on a mere save. So author, don't refresh.
-            if is_string {
-                return;
-            }
-            // Refresh only what the edit can actually change: a material/shader
-            // edit fans out through `material:binding` to meshes anywhere (whole
-            // scene), but a geometry/xform attribute edit is local to its own prim
-            // — so re-instantiate just that subtree and leave unrelated roots
-            // (including live physics bodies) alone.
-            if authored {
-                let prim_ty = world
-                    .get_non_send::<CanonicalStages>()
-                    .and_then(|s| s.get(scene_id))
-                    .and_then(|cs| cs.view().prim_type_name(&sp));
-                if attribute_edit_needs_full_refresh(prim_ty.as_deref()) {
-                    // …unless the edit is confined to a `LiveRebuildExempt` subtree.
-                    // DEM terrain re-bakes its own content from the registry
-                    // document (`refresh_docbacked_terrain_from_doc`), so its
-                    // structural scene refresh would be incorrect and needlessly
-                    // recreate unrelated stage projections.
-                    if !edit_confined_to_exempt_subtree(world, scene_id, path) {
-                        refresh_scene_visuals(world, scene_id);
-                    }
-                } else {
-                    refresh_prim_subtree(world, scene_id, path);
-                }
+            // The native notice consumer projects the complete attribute batch.
+            // Authoring must not publish intermediate ECS state.
+            if !authored {
+                report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("attribute {path}.{name} could not be authored on the live stage"),
+                );
             }
         }
         UsdOp::AddPrim {
@@ -4034,38 +3981,6 @@ pub(crate) fn refresh_prim_subtree(
     if let Some(e) = entity {
         reinstantiate_entity(world, e);
     }
-}
-
-/// Whether a `SetAttribute` on a prim of this type must refresh the **whole**
-/// scene rather than just the edited prim's subtree. A material / shader /
-/// node-graph opinion propagates through `material:binding` to meshes anywhere in
-/// the scene, so the edited prim's own subtree is not where the visual change
-/// lands; an unknown type is treated conservatively as needing the full refresh.
-/// Every other (geometry/xform) attribute edit is local to its prim, so it takes
-/// the cheap [`refresh_prim_subtree`] path.
-fn attribute_edit_needs_full_refresh(prim_type: Option<&str>) -> bool {
-    match prim_type {
-        Some(t) => matches!(t, "Material" | "Shader" | "NodeGraph"),
-        None => true,
-    }
-}
-
-/// Whether an edit at `path` lands inside a [`LiveRebuildExempt`] prim's subtree of
-/// `scene_id` — a live prim that refreshes its own content in place (the DEM
-/// terrain: it re-bakes off the registry document, so a whole-scene reload would
-/// re-bridge the terrain + re-spawn the avatar camera per edit). Matches the
-/// exempt prim itself or any descendant. The missing consumer of `LiveRebuildExempt`.
-fn edit_confined_to_exempt_subtree(
-    world: &mut World,
-    scene_id: AssetId<UsdStageAsset>,
-    path: &str,
-) -> bool {
-    let mut q = world.query_filtered::<&UsdPrimPath, With<LiveRebuildExempt>>();
-    q.iter(world).any(|upp| {
-        upp.stage_handle.id() == scene_id
-            && (upp.path == path
-                || path.starts_with(&format!("{}/", upp.path.trim_end_matches('/'))))
-    })
 }
 
 /// Replace the live stage with the document's exact native authored stack and
@@ -4761,30 +4676,6 @@ mod tests {
             from_path: "/a".into(),
             to_path: "/b".into(),
         }));
-    }
-
-    /// A material/shader/node-graph attribute edit fans out through
-    /// `material:binding` and needs the whole-scene refresh; an unknown type is
-    /// treated conservatively the same way; every other (geometry/xform) edit is
-    /// local and takes the cheap single-prim path.
-    #[test]
-    fn attribute_refresh_scope_is_full_only_for_shading_prims() {
-        for shading in ["Material", "Shader", "NodeGraph"] {
-            assert!(
-                attribute_edit_needs_full_refresh(Some(shading)),
-                "{shading} binding fan-out needs a whole-scene refresh"
-            );
-        }
-        assert!(
-            attribute_edit_needs_full_refresh(None),
-            "unknown prim type is refreshed conservatively (whole scene)"
-        );
-        for local in ["Mesh", "Xform", "Sphere", "Cube", "Camera"] {
-            assert!(
-                !attribute_edit_needs_full_refresh(Some(local)),
-                "{local} attribute edit is local to its own prim subtree"
-            );
-        }
     }
 
     /// A mounted camera is reparented directly beneath the persistent world

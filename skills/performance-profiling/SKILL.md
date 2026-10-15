@@ -98,6 +98,10 @@ authoring stage across an ordered sequence; direct layer changes invalidate it.
 Preserve the private candidate and atomic rejection boundary described in
 [architecture 21](../../docs/architecture/21-domain-usd.md). Measure the actual
 command in a production run; a faster edit still occupies its calling thread.
+Also inspect `usd_native_reference_discovery`: native property resyncs prepare
+only their asset values, while prim resyncs scan the affected subtree. Asset
+types gate provenance and time-sample resolution. Domain live-edit owners consume
+one complete notice batch in place; label changes must preserve live child state.
 
 Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against

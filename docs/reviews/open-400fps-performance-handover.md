@@ -9295,3 +9295,48 @@ The focused production gates use `target/usd-compound-production-gate.log` and
 `target/usd-edit-session-cosim-gate.log`. The baseline and final measurement runs exit zero and release
 their explicit API ports. No other LunCoSim process is present during the latest
 windowed observation; broader workstation contention is not isolated.
+
+### Native property projection and asset scope — 2026-10-15
+
+Attribute authoring updates only the native stage. Its notice consumer owns
+ordered, coalesced ECS application. Registered live-edit owners receive unique
+prim paths once per complete batch; billboard projection uses the same validated
+reader at initial admission and live edits, preserving children and their runtime
+state. Property resyncs retain property identity through both the live projector
+and native asset preparation. Asset discovery reads defaults and time samples
+only for native USD asset types; prim resyncs still discover subtree assets.
+The bounded `usd_native_reference_discovery` span measures that remaining work.
+
+The production billboard gate fails on the preceding implementation because
+enabling a label replaces its child's live pose. The corrected gate passes four
+checks, including component removal and invalid-input rejection. The focused
+asset scope test covers scalar, removed, default asset and sampled asset
+properties, plus actual subtree discovery. The owner registry passes two tests.
+Final normal-production gates pass billboard (4), USD queries (5), Modelica
+initialization/clock (34), terrain authoring (6), and windowed material editing
+including whole-source replacement (1). An earlier material timeout did not
+reproduce in two subsequent runs; its cause remains unestablished.
+
+Normal unattended Griffin preserves engine cutoff at tick 1316, mission touchdown
+confirmation at 1407 and route start at 3104. The interval between route-start
+and projected-document events decreases from 636.163 ms to 231.326 ms. This is
+event-to-event latency, not an isolated CPU span. The final 21.4-second window
+advances at 1.0002 realtime, with 7.253 ms pending demand and zero clipped time.
+Final fixed-cycle p50/p95/max are 6.291/8.019/10.260 ms, and retained native
+physics median is 2.465 ms. The median of 1,469 distinct retained FPS samples
+after simulation second 60 is 70.7. Sampling differs from the earlier sparse
+FPS observations, so these numbers do not establish an FPS improvement.
+The inspected image shows FLIP under autopilot with labels, route, terrain and
+shadows; final terrain state is 256/256 resident with no pending streaming and
+one ready derived map. This checkpoint does not certify continuous visual
+readiness. The owned windowed process exits zero and releases API 4317.
+
+Evidence is `target/usd-native-property-*.log`,
+`target/usd-material-preview-debug.{json,log}`,
+`target/usd-billboard-live-baseline.log`, and
+`target/griffin-native-property-windowed{.log,.png,-samples.json,-terrain.json}`.
+The preceding `target/griffin-owner.tracy` capture exports natively and attributes
+about 5.13 ms per HUD publication to the exposure owner, predominantly Rhai
+visibility/properties policies. It is profiler evidence, not product FPS.
+The 200 FPS, sub-1 ms physics and independent simulation/presentation targets
+remain open; ancestor prim resyncs still cause subtree asset discovery.

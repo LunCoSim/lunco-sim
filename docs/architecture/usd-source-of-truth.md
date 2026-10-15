@@ -235,8 +235,17 @@ Built-in projectors:
 Adding a new specialized live-edit domain means registering one
 `UsdLiveEditOwner` in `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`;
 the generic runtime then invokes the owner without importing that domain crate.
-The owner claims only its authored attributes and performs its validated
-in-place refresh. Owners can also promote a local reset to a full-stage reset
+The owner claims only its authored attributes. The native notice consumer
+calls `refresh_prims` once per completed batch with unique, ordered native prim
+paths; stage authoring does not perform a second ECS refresh. Property resyncs
+use this same attribute path. Initial and live billboard projection share one
+validated reader in `lunco-usd-sim::billboard_runtime`; enable, text, offset, and
+fade edits update the reflected `UsdBillboard` component without replacing
+children. Disabling or invalidating a label removes its component; invalid
+values publish the owner's structured diagnostics. The owner is installed by
+`UsdSimPlugin` in every host and its stage-scoped paths retire with the scene.
+The `usd_billboard_live` production scene checks live child state, actual label
+updates, disable, and invalid-input rejection. Owners can also promote a local reset to a full-stage reset
 when their derived topology crosses the edited subtree, and retire their state
 before the generic projector replaces entities. Failed preparation aborts the
 replacement and faults the mounted simulation. Ordinary transforms, lights,

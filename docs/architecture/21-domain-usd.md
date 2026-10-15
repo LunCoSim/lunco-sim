@@ -223,8 +223,15 @@ admitted root identity and receives native Sdf spec copies; session layer inputs
 use the native binary writer. The native session sublayer stack includes the
 session parent before the view and runtime layers; edit-target selection accounts
 for that ordering so successive overlay edits preserve the same authored layer.
-Structural notices address their owning prim through native `SdfPath::prim_path`;
-property resyncs update that prim and cannot create separate property entities.
+Native prim resyncs reconcile the structural hierarchy. Property resyncs retain
+their native property identity and enter the attribute consumer; they never
+create separate property entities. Attribute authoring only changes the native
+stage. The notice consumer applies each complete batch once, with ordered,
+unique prim paths supplied to registered live-edit owners.
+Native asset preparation uses the same property scope: a property resync reads
+only that property's asset defaults and time samples; prim resyncs traverse the
+affected subtree. USD attribute types gate asset value-resolution work, so scalar
+and presentation fields do not resolve asset provenance.
 Binary source preparation retains parsed data without requiring text export.
 Source display, text snapshots, and USDA export report native writer failures
 at their respective consumer boundaries.

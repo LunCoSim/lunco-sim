@@ -20,7 +20,7 @@ use lunco_usd_bevy_stage::read::UsdReadObject;
 ///
 /// The owner decides whether an attribute is handled in place, can invalidate
 /// its own one-shot projection marker when a composed schema becomes available,
-/// and refreshes the affected stage after a claimed edit. It also promotes local
+/// and refreshes the affected prims after a complete native notice batch. It also promotes local
 /// subtree resets when its topology crosses that boundary and prepares its
 /// derived state before a full stage reset. Reset preparation is synchronous; an
 /// error aborts entity replacement. Keeping handlers as function pointers makes
@@ -31,7 +31,7 @@ pub struct UsdLiveEditOwner {
     id: &'static str,
     claims_edit: Option<fn(&dyn UsdReadObject, &SdfPath, &str) -> bool>,
     invalidates_projection: Option<fn(&mut World, Entity) -> bool>,
-    refresh_stage: Option<fn(&mut World, AssetId<UsdStageAsset>)>,
+    refresh_prims: Option<fn(&mut World, AssetId<UsdStageAsset>, &[SdfPath])>,
     requires_stage_projection_reset: fn(&World, AssetId<UsdStageAsset>, &str) -> bool,
     prepare_stage_projection_reset: fn(&mut World, AssetId<UsdStageAsset>) -> Result<(), String>,
 }
@@ -41,14 +41,14 @@ impl UsdLiveEditOwner {
     pub const fn new(
         id: &'static str,
         claims_edit: fn(&dyn UsdReadObject, &SdfPath, &str) -> bool,
-        invalidates_projection: fn(&mut World, Entity) -> bool,
-        refresh_stage: fn(&mut World, AssetId<UsdStageAsset>),
+        invalidates_projection: Option<fn(&mut World, Entity) -> bool>,
+        refresh_prims: fn(&mut World, AssetId<UsdStageAsset>, &[SdfPath]),
     ) -> Self {
         Self {
             id,
             claims_edit: Some(claims_edit),
-            invalidates_projection: Some(invalidates_projection),
-            refresh_stage: Some(refresh_stage),
+            invalidates_projection,
+            refresh_prims: Some(refresh_prims),
             requires_stage_projection_reset: never_requires_stage_projection_reset,
             prepare_stage_projection_reset: no_stage_projection_reset,
         }
@@ -68,7 +68,7 @@ impl UsdLiveEditOwner {
             id,
             claims_edit: None,
             invalidates_projection: None,
-            refresh_stage: None,
+            refresh_prims: None,
             requires_stage_projection_reset,
             prepare_stage_projection_reset,
         }
@@ -91,10 +91,16 @@ impl UsdLiveEditOwner {
             .is_some_and(|invalidate| invalidate(world, entity))
     }
 
-    /// Refresh the stage after one or more edits claimed by this owner.
-    pub fn refresh_stage(self, world: &mut World, stage: AssetId<UsdStageAsset>) {
-        if let Some(refresh) = self.refresh_stage {
-            refresh(world, stage);
+    /// Refresh affected prims once after the complete stage batch is authored.
+    /// Paths are unique and ordered by native USD identity.
+    pub fn refresh_prims(
+        self,
+        world: &mut World,
+        stage: AssetId<UsdStageAsset>,
+        prims: &[SdfPath],
+    ) {
+        if let Some(refresh) = self.refresh_prims {
+            refresh(world, stage, prims);
         }
     }
 
@@ -170,11 +176,7 @@ mod tests {
         true
     }
 
-    fn never_invalidates(_world: &mut World, _entity: Entity) -> bool {
-        false
-    }
-
-    fn refresh(_world: &mut World, _stage: AssetId<UsdStageAsset>) {}
+    fn refresh(_world: &mut World, _stage: AssetId<UsdStageAsset>, _prims: &[SdfPath]) {}
 
     fn requires_reset(_world: &World, _stage: AssetId<UsdStageAsset>, _path: &str) -> bool {
         true
@@ -186,7 +188,7 @@ mod tests {
 
     #[test]
     fn registry_rejects_duplicate_owner_ids() {
-        let owner = UsdLiveEditOwner::new("test.owner", claims, never_invalidates, refresh);
+        let owner = UsdLiveEditOwner::new("test.owner", claims, None, refresh);
         let mut registry = UsdLiveEditRegistry::default();
 
         assert!(registry.register(owner));

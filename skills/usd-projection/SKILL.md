@@ -612,7 +612,14 @@ the right behaviour is for it to visibly do nothing.
    domain-specific in-place refresh registers a typed `UsdLiveEditOwner` with
    `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`. The owner claims only
    its attributes, invalidates its own projection marker when required, and
-   refreshes from the composed stage. Owners also promote a local subtree reset
+   refreshes from the composed stage. The notice consumer calls `refresh_prims`
+   once with unique, ordered native prim paths after the complete batch has
+   been authored; the writer must not also refresh ECS state. Property resyncs
+   use the same attribute consumer and prepare only that property's asset
+   values. Prim resyncs retain structural subtree preparation; native USD asset
+   types select provenance/time-sample reads. Billboard edits reuse their initial reader
+   and preserve child state; exercise `usd_billboard_live.usda` when changing
+   that boundary. Owners also promote a local subtree reset
    to a stage reset when their runtime topology crosses that subtree. Before a
    full reset, each owner retires its derived state synchronously; a rejection
    leaves the current projection in place and faults the active simulation.
