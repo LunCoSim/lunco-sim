@@ -32,6 +32,11 @@ replacement clears that set before deferred despawns; projection systems use
 the set to reject late work from the outgoing root. Additive preview mounts
 remain explicit and do not become the active running scene.
 
+Camera-path gate and playback clocks are linked descendants of their source
+curve. Retiring the source reclaims both, including on stage re-projection;
+their affine clock-parent references do not establish lifetime ownership.
+The camera-path discovery cache uses the registered scene-resource boundary too.
+
 ## One transition boundary
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
@@ -197,6 +202,13 @@ normal descriptor removals and keeps its catalog revision monotonic. Modelica
 telemetry sessions, physics kinematic cursors, sampler plans, queued delivery,
 focus, browser workers/indexes and transient browser requests use the same
 resource registration. API-created channel entities carry `SceneOwned`.
+
+Independent editor Modelica documents may survive scene reload. The telemetry
+owner requests one projection pass when its scene cache resets, so paused
+sources republish current state without advancing their solvers. Its typed
+document-to-signal attribution outlives live producer removal within the scene;
+`DocumentClosed` retires those exact references, including archived history,
+without clearing channels owned by another document or producer.
 
 Visualization widgets that only receive an egui context store scene-derived
 data through `lunco-viz::scene_state::scene_data`, a single scoped egui

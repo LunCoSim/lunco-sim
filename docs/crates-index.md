@@ -889,6 +889,8 @@ Render-free camera adapter built on `lunco-usd-bevy-stage` and
 handles rover-mounted and cinematic camera poses, and owns camera selection plus
 the single-authority viewport reconciler. It contains no visual projection and
 does not own BasisCurves geometry math.
+Camera-path gate and playback entities are linked descendants of their source
+curve, so source retirement reclaims them while shared clocks survive.
 
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-stage`,
@@ -1426,6 +1428,9 @@ from the generated USD layout. The execution host installs its plugin after
 worker responses; compiler/document hosts do not compile this projection.
 Participant removal retires its producer cache; scene teardown resets the
 registered session resource and shared histories independently of UI presence.
+Reset requests one refresh for surviving paused sources. Typed document-to-signal
+attribution lets `DocumentClosed` retire that document's live and archived
+telemetry without clearing unrelated producers.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source

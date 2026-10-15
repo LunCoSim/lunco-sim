@@ -74,7 +74,7 @@ def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTw
     wait_for(session, source_terminal, "replacement SysML source preparation")
     verdict("verify_twin_source_scope", retired_authority)
     if telemetry:
-        verdict("verify_telemetry_retirement", *telemetry)
+        telemetry_retirement_verdict(session, telemetry)
     return ids
 
 
@@ -95,6 +95,31 @@ def seed_telemetry(session: ProductionSession) -> tuple[list[str], list[str]]:
     channels = wait_for(session, sampled, "outgoing telemetry samples")
     return ([channel["key"] for channel in channels if not channel["name"].startswith("engine.")],
             [channel["key"] for channel in channels if channel["name"].startswith("engine.")])
+
+
+def paused_modelica_probe(session: ProductionSession, name: str) -> tuple[int, str]:
+    doc = execute(session, "CreateScratchModelicaDocument", name=name,
+                  source=f"model {name} Real x(start=37, fixed=true); equation der(x)=0; end {name};")["doc_id"]
+    wait_for(session, lambda: execute(session, "CompileStatus", doc_id=doc).get("ast_parsed"),
+             "paused probe parse")
+    execute(session, "CompileModel", doc_id=doc, **{"class": name, "resume_after_compile": True})
+    def recorded():
+        return [channel for channel in execute(session, "ListTelemetryChannels")["channels"]
+                if channel.get("model_class") == name and channel["samples"] > 0]
+    channels = wait_for(session, recorded, "paused probe samples")
+    execute(session, "PauseActiveModel", doc_id=doc)
+    wait_for(session, lambda: execute(session, "CompileStatus", doc_id=doc).get("paused"),
+             "paused probe solver")
+    return doc, channels[0]["key"]
+
+
+def telemetry_retirement_verdict(session: ProductionSession, telemetry: tuple[list[str], list[str]]) -> None:
+    # Projection readiness can precede the first fixed sample and its delivery.
+    # Rhai owns both the publication prerequisite and the final clock assertion.
+    code = SOURCE.read_text(encoding="utf-8") + "\nprint(application_telemetry_current(" + json.dumps(telemetry[1]) + "));"
+    wait_for(session, lambda: execute(session, "RunRhai", code=code)["stdout"].strip() == "true",
+             "replacement application telemetry publication")
+    verdict("verify_telemetry_retirement", *telemetry)
 
 
 def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:
@@ -123,7 +148,7 @@ def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int
                 and prim.get("doc_id") in {scene["doc_id"] for scene in scenes})
     wait_for(session, projected, f"replacement scene projection for {root.name}")
     wait_for_ready(session.port)
-    return [doc["doc_id"] for doc in documents(session)]
+    return [doc["doc_id"] for doc in documents(session) if doc["kind"] == "usd"]
 
 
 def verdict(function: str, *args) -> None:
@@ -281,7 +306,7 @@ def main() -> None:
                 return data if data and data.get("spawned") and data.get("doc_id") not in ids_final else False
             wait_for(session, scenario_projected, "scenario scene projection")
             wait_for_ready(session.port)
-            verdict("verify_telemetry_retirement", *telemetry)
+            telemetry_retirement_verdict(session, telemetry)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
             before_restart = scenario_projected()
@@ -291,9 +316,29 @@ def main() -> None:
                      != before_restart["topology"]["binding"]["entity"],
                      "restarted scene projection")
             wait_for_ready(session.port)
-            verdict("verify_telemetry_retirement", *telemetry)
+            telemetry_retirement_verdict(session, telemetry)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
+            # Independent editor solvers survive scene reload. A paused source
+            # must republish current state after history retirement without a tick.
+            paused_doc, paused_key = paused_modelica_probe(session, "TwinPausedReloadProbe")
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "paused-source scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_paused_modelica_reload", paused_doc, paused_key, 37.0)
+            survivor_doc, survivor_key = paused_modelica_probe(session, "TwinPausedReloadSurvivor")
+            application_keys = [channel["key"] for channel in execute(session, "ListTelemetryChannels")["channels"]
+                                if channel["name"].startswith("engine.")]
+            execute(session, "CloseDocument", doc_id=paused_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != paused_doc for doc in documents(session)),
+                     "paused probe document closure")
+            verdict("verify_closed_modelica_telemetry", paused_doc, [paused_key], [survivor_key, *application_keys])
+            execute(session, "CloseDocument", doc_id=survivor_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != survivor_doc for doc in documents(session)),
+                     "surviving probe document closure")
+            verdict("verify_closed_modelica_telemetry", survivor_doc, [survivor_key], application_keys)
             retained = [doc["doc_id"] for doc in documents(session)]
             for root, command in [(TWIN_A, "AddTwin"), (FIXTURE / "replacement", "AddFolderToWorkspace")]:
                 print(f"Additive route: {command}, path={root}", flush=True)

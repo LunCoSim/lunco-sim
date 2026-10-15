@@ -47,6 +47,14 @@ creates two domains:
    user pause.
 2. A path playback domain carries the playhead, range, rate, and loop state.
 
+The gate is an ECS child of the source curve, and the playback domain is a child
+of the gate. Source removal, stage re-projection, scene replacement and restart
+therefore reclaim both clocks through Bevy's linked hierarchy. Their
+`TimeDomain.parent` references select the affine clock chain; they do not own
+entity lifetime. Shared application clocks remain outside that scene hierarchy.
+The path discovery queue and stage-generation cursor use a registered scene
+resource, so teardown also drops pending candidates and resets discovery.
+
 Discovery bootstraps once, queues inserted USD prim identities, and follows
 canonical-stage generations and asset lifecycle events. Curves without
 `lunco:path:camera` remain dormant until their stage changes; candidates waiting

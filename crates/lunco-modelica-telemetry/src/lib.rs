@@ -35,6 +35,7 @@ impl Plugin for ModelicaTelemetryPlugin {
         }
         app.init_scene_resource::<RuntimeTelemetrySessions>()
             .add_observer(retire_modelica_runtime_session)
+            .add_observer(retire_closed_document_signals)
             .add_systems(
                 Update,
                 retain_modelica_runtime_state
@@ -44,9 +45,9 @@ impl Plugin for ModelicaTelemetryPlugin {
     }
 }
 
-/// Modelica telemetry changes only when its source sample or metadata contract
-/// changes. Keep that projection off render-only frames while still observing
-/// compiled metadata, projected identity, and settings independently of samples.
+/// Source changes and scene-cache retirement wake the projection. A surviving
+/// paused solver must publish current state once after retirement without
+/// requiring a solver tick or keeping projection active on render-only frames.
 fn modelica_telemetry_inputs_changed(
     models: Query<
         (),
@@ -57,8 +58,11 @@ fn modelica_telemetry_inputs_changed(
         )>,
     >,
     settings: Option<Res<TelemetrySettings>>,
+    sessions: Res<RuntimeTelemetrySessions>,
 ) -> bool {
-    !models.is_empty() || settings.is_some_and(|settings| settings.is_changed())
+    sessions.refresh_pending
+        || !models.is_empty()
+        || settings.is_some_and(|settings| settings.is_changed())
 }
 
 /// Runtime state retained for each Modelica participant.
@@ -70,9 +74,40 @@ fn modelica_telemetry_inputs_changed(
 #[derive(Resource, Default)]
 pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
+    documents: HashMap<SignalRef, lunco_doc::DocumentId>,
+    refresh_pending: bool,
 }
 
-impl SceneResource for RuntimeTelemetrySessions {}
+impl SceneResource for RuntimeTelemetrySessions {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            refresh_pending: true,
+            ..Default::default()
+        };
+    }
+}
+
+fn retire_closed_document_signals(
+    event: On<lunco_doc_bevy::DocumentClosed>,
+    mut state: ResMut<RuntimeTelemetrySessions>,
+    mut signals: ResMut<SignalRegistry>,
+) {
+    let RuntimeTelemetrySessions {
+        sessions,
+        documents,
+        ..
+    } = &mut *state;
+    documents.retain(|signal, document| {
+        if *document != event.doc {
+            return true;
+        }
+        signals.remove_signal(signal);
+        if let Some(session) = sessions.get_mut(&signal.entity) {
+            session.signals.remove(signal.path.as_str());
+        }
+        false
+    });
+}
 
 fn retire_modelica_runtime_session(
     event: On<Remove, ModelicaModel>,
@@ -126,6 +161,7 @@ pub fn retain_modelica_runtime_state(
         Option<&SignalSource>,
     )>,
 ) {
+    sessions.refresh_pending = false;
     let Some(settings) = settings else {
         return;
     };
@@ -148,9 +184,14 @@ pub fn retain_modelica_runtime_state(
     // The registry owns the channel catalog. Snapshot its size once per pass;
     // the registry provides this count without walking every retained history.
     let mut channel_count = signals.scalar_count();
+    let RuntimeTelemetrySessions {
+        sessions,
+        documents,
+        ..
+    } = &mut *sessions;
 
     for (entity, model, variables, layout, global_owner, signal_source) in &models {
-        let session = sessions.sessions.entry(entity).or_default();
+        let session = sessions.entry(entity).or_default();
         if session.session_id != model.session_id {
             for cached in session.signals.values().filter(|cached| cached.retained) {
                 signals.clear_history(&cached.signal);
@@ -205,6 +246,7 @@ pub fn retain_modelica_runtime_state(
                         );
                         continue;
                     }
+                    documents.insert(signal.clone(), model.document);
                     session.signals.insert(
                         name.clone(),
                         RuntimeSignalCache {

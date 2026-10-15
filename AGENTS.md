@@ -173,6 +173,8 @@ package checks after changing skill metadata or packaging.
   including snapshots, async tasks and queued actions; ordinary egui data is for
   application preferences and saved configuration. See
   `docs/architecture/61-scene-lifecycle-and-teardown.md` for ordering and scope.
+  Change-gated producers must wake once when their scene cache resets, including
+  surviving paused sources; do not require a new simulation tick to republish.
 - Tutorial controls use the controller-owned `input_bindings` settings through
   Rhai `input_binding(...)`/`input_hint(...)`; progression uses semantic commands
   or authoritative state, never raw physical key names.

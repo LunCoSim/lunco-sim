@@ -198,10 +198,16 @@ entities and their removal callbacks retire, then registered resources reset. Ta
 scene-owned entities outside the structural scene hierarchy with `SceneOwned`.
 Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
 owners use `run_scene_teardown`. Both share the replacement/reload boundary.
+Derived clock entities follow their scene source through linked ECS ownership;
+`TimeDomain.parent` selects a clock and does not establish entity lifetime.
 Visualization history buffers, async tasks and queued canvas actions use
 `lunco-viz::scene_state::scene_data`; its scoped egui store retires after shutdown
 callbacks even when widgets are hidden. Keep only application preferences and
 saved visualization configuration in ordinary egui data.
+Change-gated producers must consume a one-shot refresh after their scene cache
+resets, including when a surviving source is paused. Explicit document closure
+retires the producer's exact owned signal references through `DocumentClosed`;
+ordinary source removal may archive history only while its document remains open.
 Signal producers default to scene lifetime; only process-owned signals opt into
 `SignalRegistry::retain_across_scenes`. Extend the authored Twin retirement gate
 for observable lifecycle changes, including same-path reload, rejected

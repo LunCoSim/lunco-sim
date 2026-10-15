@@ -171,6 +171,17 @@ inside the same scene marks history inactive; it does not by itself end the
 scene's mission record. The production Twin retirement gate checks catalog and
 history removal on switching, reopening, scene loading and restart, and checks
 preservation after a rejected replacement.
+Its application-channel clock checks wait for post-selection sample delivery;
+scene projection readiness does not require a fixed sample to have landed yet.
+
+Modelica telemetry retains each channel's typed document owner separately from
+its live producer cache. `DocumentClosed` removes exactly that document's signal
+references, including archived sources, while unrelated channels remain. This
+also covers Twin document closure without a global scene transition. Ordinary
+source removal within an open document retains the scene's archived record.
+Scene-cache retirement sets a one-shot refresh request: surviving paused editor
+solvers republish their current sample and metadata without stepping or resuming.
+The refresh request is consumed once, so idle presentation does not poll solvers.
 
 Derived visualization histories and async plot builds live in the viz owner's
 scoped `scene_data` store, together with canvas signal/value snapshots, interests,

@@ -29,6 +29,7 @@ pub struct UsdCameraPlugin;
 
 impl Plugin for UsdCameraPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
@@ -44,7 +45,7 @@ impl Plugin for UsdCameraPlugin {
             .init_resource::<camera_switch::CameraContractStatus>()
             .init_resource::<camera_switch::StandalonePresentationState>()
             .init_resource::<camera_switch::StandalonePresentationSettings>()
-            .init_resource::<camera_path::CameraPathScanState>()
+            .init_scene_resource::<camera_path::CameraPathScanState>()
             .register_type::<lunco_camera_core::CameraPoseMode>()
             .register_type::<camera_track::CameraTrack>()
             .configure_sets(Update, UsdCameraProjectionSet)

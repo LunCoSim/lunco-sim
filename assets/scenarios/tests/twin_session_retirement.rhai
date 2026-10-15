@@ -83,6 +83,22 @@ fn verify_session_preserved(ids) {
     report_verdict(checks, "Rejected Twin replacement", "TWIN_SESSION_PRESERVED")
 }
 
+fn application_telemetry_current(keys) {
+    let channels = query("ListTelemetryChannels").channels;
+    for key in keys {
+        let recorded = false;
+        for channel in channels {
+            if channel.key == key && channel.samples.to_float() > 0.0 { recorded = true; }
+        }
+        if !recorded { return false; }
+        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
+        if history.samples.is_empty() { return false; }
+        let clock = clock_snapshot();
+        if history.samples[-1].t > clock.world_sim_s + 2.0 * clock.fixed_dt_s { return false; }
+    }
+    true
+}
+
 fn verify_telemetry_retirement(retired_keys, application_keys) {
     if retired_keys.is_empty() { throw "telemetry retirement requires sampled outgoing channels"; }
     let channels = query("ListTelemetryChannels").channels;
@@ -98,9 +114,7 @@ fn verify_telemetry_retirement(retired_keys, application_keys) {
         let present = false;
         for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
         checks.push(t_true(present, "application history survives: " + key));
-        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
-        let clock = clock_snapshot();
-        checks.push(t_true(history.samples[-1].t <= clock.world_sim_s + 2.0 * clock.fixed_dt_s,
+        checks.push(t_true(application_telemetry_current([key]),
             "application sampling uses the replacement clock: " + key));
     }
     let browser = query("InspectTelemetryCatalog", #{signal: "lifecycle_retirement_probe"});
@@ -115,6 +129,52 @@ fn verify_modelica_telemetry_recorded(class_name) {
     }
     report_verdict([t_true(recorded, "outgoing solver publishes retained telemetry")],
         "Twin Modelica telemetry baseline", "TWIN_MODELICA_TELEMETRY_BASELINE")
+}
+
+fn verify_paused_modelica_reload(doc, key, value) {
+    let state = query("SnapshotVariables", #{doc_id: doc});
+    let checks = [t_true(document_present(doc), "reload preserves the editable document"),
+        t_true(state.paused && state.compiled, "reload preserves the paused solver"),
+        t_range(state.variables.x, value - 1e-10, value + 1e-10, "paused solver retains its value")];
+    let present = false;
+    for channel in query("ListTelemetryChannels").channels {
+        if channel.key == key {
+            present = true;
+            checks.push(t_true(channel.samples.to_float() == 1.0,
+                "reload retains one fresh paused sample"));
+            let history = query("QueryTelemetryHistory", #{key: key});
+            checks.push(t_true(history.count.to_float() == 1.0, "outgoing history was discarded"));
+            if history.count.to_float() == 1.0 {
+                checks.push(t_range(history.samples[0].t, state.t - 1e-10, state.t + 1e-10,
+                    "fresh history uses the surviving solver clock"));
+                checks.push(t_range(history.samples[0].v, value - 1e-10, value + 1e-10,
+                    "fresh history uses the surviving solver value"));
+            }
+        }
+    }
+    checks.push(t_true(present, "paused telemetry republishes without a solver tick"));
+    report_verdict(checks, "Paused Modelica telemetry reload", "PAUSED_MODELICA_TELEMETRY_RELOAD")
+}
+
+fn verify_closed_modelica_telemetry(doc, keys, retained_keys) {
+    if keys.is_empty() { throw "document closure requires recorded telemetry"; }
+    let checks = [t_true(!document_present(doc), "closed document is absent")];
+    let channels = query("ListTelemetryChannels").channels;
+    for key in keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "closed document channel is absent: " + key));
+        checks.push(t_true(query("QueryTelemetryHistory", #{key: key}).ok == false,
+            "closed document history is absent: " + key));
+    }
+    for key in retained_keys {
+        let present = false;
+        for channel in channels {
+            if channel.key == key && channel.samples.to_float() > 0.0 { present = true; }
+        }
+        checks.push(t_true(present, "unrelated telemetry remains: " + key));
+    }
+    report_verdict(checks, "Closed Modelica telemetry retirement", "CLOSED_MODELICA_TELEMETRY")
 }
 
 fn verify_telemetry_preserved(keys) {

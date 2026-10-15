@@ -9099,6 +9099,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-modelica-runtime",
  "lunco-signal",
  "lunco-telemetry",
