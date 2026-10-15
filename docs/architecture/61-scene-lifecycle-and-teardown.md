@@ -103,6 +103,26 @@ generation, so its final `on_stop` still routes to the outgoing Twin after the
 workspace has switched. Pending asset and compiler work is canceled or fenced
 at that same owner boundary.
 
+USD-authored policies retire through the projector's existing reconciliation
+path during domain shutdown, after projected scripts stop. This restores the
+retained application/Twin hooks and reconciles policy-owned synthesizers before
+another scene can execute them. The projector's source handles, prepared facts
+and previous-source signal are one registered scene resource. Reset requests
+one projection pass even when a surviving source has the same asset identity.
+Environment projection likewise registers its authored opinions and source
+snapshots, releasing retained plans and invalidating its previous-source signal
+at the final reset.
+The synthesizer bridge reconciles whenever the effective policy registry
+changes. Its application-lived bookkeeping records actual registrations, so
+it can remove outgoing names even if Twin closure already removed their policy
+definitions; it retains no source text, compiled hook or scene plan.
+
+Live inline bindings use the policy registry's existing application/Twin layers,
+selected by the caller's typed route. Twin mutation requires the exact active
+Twin and committed scene generation; retired shutdown callbacks cannot recreate
+a binding. Application callers cannot mutate a Twin-owned or USD-authored
+effective policy. Twin closure restores retained application implementations.
+
 The backend registers `ScenarioDriver::retire_removed_model` for attachment
 removal. Interactive/API programs attached to retiring hierarchy entities stop
 during the removal flush, before registered scene resources reset, even though

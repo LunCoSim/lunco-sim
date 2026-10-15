@@ -1714,8 +1714,8 @@ fn build_world_engine_base(
     });
 
     // bind_policy(id, entry, src) -> #{ok, status, id, error} — install a Rhai
-    // implementation into any installable hook seam. The source is supplied by
-    // authored Rhai, while the Rust owner supplies only the reflected contract.
+    // implementation through the caller's application/Twin policy layer. The
+    // policy owner validates its route, seam ownership and reflected contract.
     // Replacing or removing a hook is a policy mutation and uses the same
     // Operator-floor gate as other global script settings. A failed replacement
     // removes the previous implementation, so an invalid policy cannot keep
@@ -1743,70 +1743,30 @@ fn build_world_engine_base(
                     Some("policy mutation denied by script authority"),
                 );
             }
-            let Some(contract) = lunco_hooks::descriptor(id.as_str()) else {
-                let error = format!(
-                    "hook '{}' has no owner declaration; declare it with declare_hook! first",
-                    id
-                );
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            };
-            if !contract.installable {
-                let error = format!("hook '{}' is not installable at runtime", id);
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            }
-            if contract.deterministic {
-                let error = format!(
-                    "hook '{}' requires a deterministic authored policy manifest entry",
-                    id
-                );
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            }
-            match lunco_hooks_rhai::register_rhai_hook(
-                id.as_str(),
-                entry.as_str(),
-                src.as_str(),
-                false,
-            ) {
-                Ok(_) => {
-                    // An inline binding is no longer the file-backed policy
-                    // selected by the application/Twin manifest.
-                    lunco_hooks::unbind_policy(id.as_str());
+            let outcome = bridge_core::with_world(|world| {
+                crate::policy::bind_runtime_policy(
+                    world,
+                    crate::policy::PolicyDef {
+                        seam: id.to_string(),
+                        entry: entry.to_string(),
+                        source: src.to_string(),
+                        deterministic: false,
+                    },
+                )
+            })
+            .unwrap_or_else(|| Err("runtime policy mutation requires a live World".into()));
+            match outcome {
+                Ok(()) => {
                     bevy::log::info!("[rhai] bind_policy: '{id}' → {entry}()");
                     hook_operation_result(id.as_str(), true, "installed", true, Dynamic::UNIT, None)
                 }
                 Err(e) => {
-                    lunco_hooks::unregister(id.as_str());
-                    lunco_hooks::unbind_policy(id.as_str());
-                    bevy::log::warn!("[rhai] bind_policy '{id}' failed to compile: {e}");
+                    bevy::log::warn!("[rhai] bind_policy '{id}' rejected: {e}");
                     hook_operation_result(
                         id.as_str(),
                         false,
                         "rejected",
-                        false,
+                        lunco_hooks::get(id.as_str()).is_some(),
                         Dynamic::UNIT,
                         Some(e.as_str()),
                     )
@@ -1816,7 +1776,7 @@ fn build_world_engine_base(
     );
 
     // unbind_policy(id) -> #{ok, status, id, error} — remove exactly the
-    // installed implementation. It never fabricates or restores another
+    // calling layer's implementation. It never fabricates or restores another
     // implementation; a subsequent policy reload is the explicit way to apply
     // the authored application/Twin manifest again.
     engine.register_fn("unbind_policy", |id: ImmutableString| -> Dynamic {
@@ -1840,9 +1800,23 @@ fn build_world_engine_base(
                 Some("policy mutation denied by script authority"),
             );
         }
-        let existed = lunco_hooks::get(id.as_str()).is_some();
-        lunco_hooks::unregister(id.as_str());
-        lunco_hooks::unbind_policy(id.as_str());
+        let outcome = bridge_core::with_world(|world| {
+            crate::policy::unbind_runtime_policy(world, id.as_str())
+        })
+        .unwrap_or_else(|| Err("runtime policy mutation requires a live World".into()));
+        let existed = match outcome {
+            Ok(existed) => existed,
+            Err(error) => {
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "rejected",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some(&error),
+                );
+            }
+        };
         let status = if existed { "removed" } else { "missing" };
         let error = (!existed).then_some("hook implementation is not installed");
         bevy::log::info!("[rhai] unbind_policy: '{id}' (was installed: {existed})");

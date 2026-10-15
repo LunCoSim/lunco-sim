@@ -1419,6 +1419,145 @@ fn rebuild_active_policy_registry(
     }
 }
 
+#[derive(Clone, Copy)]
+enum RuntimePolicyLayer {
+    Application,
+    Twin,
+}
+
+fn runtime_policy_layer(world: &World, id: &str) -> Result<RuntimePolicyLayer, String> {
+    let route = lunco_scripting_bridge_core::execution_context()
+        .route
+        .ok_or_else(|| "runtime policy mutation requires an execution route".to_owned())?;
+    let registry = world
+        .get_resource::<ScriptedPolicyRegistry>()
+        .ok_or_else(|| "runtime policy registry is unavailable".to_owned())?;
+    if registry.usd_scope_ids.contains(id) {
+        return Err(format!(
+            "hook '{id}' is scene-authored; edit its USD policy at its owner"
+        ));
+    }
+    match route.scope {
+        lunco_core::RuntimeScope::Application if !registry.twin_scope_ids.contains(id) => {
+            Ok(RuntimePolicyLayer::Application)
+        }
+        lunco_core::RuntimeScope::Application => Err(format!(
+            "hook '{id}' belongs to the active Twin policy layer"
+        )),
+        lunco_core::RuntimeScope::Twin => {
+            let twin = route
+                .owner_id
+                .map(lunco_workspace::TwinId::new)
+                .ok_or_else(|| "Twin policy mutation requires an exact Twin owner".to_owned())?;
+            let workspace = world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .ok_or_else(|| "Twin policy mutation requires a workspace".to_owned())?;
+            let coordinator = world
+                .get_resource::<lunco_core::SceneTransitionCoordinator>()
+                .ok_or_else(|| "Twin policy mutation requires a scene coordinator".to_owned())?;
+            if workspace.active_twin != Some(twin)
+                || workspace.twin(twin).is_none()
+                || registry.active_twin != Some(twin)
+                || coordinator.active_id().is_some()
+                || coordinator.completed_generation() != Some(route.generation)
+            {
+                return Err(
+                    "Twin policy mutation belongs to a retired or uncommitted scene".to_owned(),
+                );
+            }
+            Ok(RuntimePolicyLayer::Twin)
+        }
+        _ => Err("runtime policy mutation requires an Application or Twin route".to_owned()),
+    }
+}
+
+/// Replace an inline policy through the calling application or Twin layer.
+/// Failed replacements block that layer's seam; they cannot retain stale code.
+pub(crate) fn bind_runtime_policy(world: &mut World, definition: PolicyDef) -> Result<(), String> {
+    let layer = runtime_policy_layer(world, &definition.seam)?;
+    let validated = validate_policy_definition(&definition)?;
+    if validated.deterministic {
+        return Err(format!(
+            "hook '{}' requires a deterministic authored policy manifest entry",
+            definition.seam
+        ));
+    }
+    let outcome = lunco_hooks_rhai::register_rhai_hook(
+        &definition.seam,
+        &definition.entry,
+        &definition.source,
+        false,
+    )
+    .map(|_| ());
+    let installed = outcome
+        .as_ref()
+        .ok()
+        .and_then(|_| lunco_hooks::get(&definition.seam));
+    let id = definition.seam.clone();
+    replace_runtime_policy(world, layer, &id, installed.map(|hook| (definition, hook)));
+    outcome
+}
+
+/// Remove only the calling layer's effective implementation. A Twin retains
+/// its scope claim until that layer reloads or closes, so unbinding does not
+/// fabricate a lower-layer implementation.
+pub(crate) fn unbind_runtime_policy(world: &mut World, id: &str) -> Result<bool, String> {
+    let layer = runtime_policy_layer(world, id)?;
+    if matches!(layer, RuntimePolicyLayer::Twin)
+        && !world
+            .resource::<ScriptedPolicyRegistry>()
+            .twin_scope_ids
+            .contains(id)
+    {
+        return Err(format!(
+            "hook '{id}' is not owned by the calling Twin layer"
+        ));
+    }
+    Ok(replace_runtime_policy(world, layer, id, None))
+}
+
+fn replace_runtime_policy(
+    world: &mut World,
+    layer: RuntimePolicyLayer,
+    id: &str,
+    replacement: Option<(PolicyDef, Arc<lunco_hooks::RegisteredHook>)>,
+) -> bool {
+    let journal = world.get_resource::<JournalResource>().cloned();
+    let mut registry = world.resource_mut::<ScriptedPolicyRegistry>();
+    let previous = registry.policies.clone();
+    let (definitions, hooks, bindings) = match layer {
+        RuntimePolicyLayer::Application => {
+            let registry = &mut *registry;
+            (
+                &mut registry.application_policies,
+                &mut registry.application_hooks,
+                &mut registry.application_bindings,
+            )
+        }
+        RuntimePolicyLayer::Twin => {
+            registry.twin_scope_ids.insert(id.to_owned());
+            let registry = &mut *registry;
+            (
+                &mut registry.twin_policies,
+                &mut registry.twin_hooks,
+                &mut registry.twin_bindings,
+            )
+        }
+    };
+    let existed = hooks.remove(id).is_some();
+    definitions.retain(|definition| definition.seam != id);
+    bindings.remove(id);
+    if let Some((definition, hook)) = replacement {
+        definitions.push(definition);
+        hooks.insert(id.to_owned(), hook);
+    }
+    rebuild_active_policy_registry(&mut registry, journal.as_ref());
+    if registry.policies != previous {
+        registry.revision = registry.revision.wrapping_add(1);
+    }
+    existed
+}
+
 fn wind_down_twin_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,

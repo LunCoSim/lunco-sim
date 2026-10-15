@@ -202,6 +202,16 @@ Script backends register `ScenarioDriver::retire_removed_model` so interactive
 attachments on retiring entities stop during the removal flush before scene
 resources reset. Independent source-document lifetime does not extend the
 running program's entity lifetime; stable application hosts remain explicit.
+Projection caches and retained source handles are scene resources too. Reset
+their previous-source signal and request one refresh without relying on an
+asset identity or revision change. USD policy retirement reuses the same
+reconciliation path as projection, including synthesizer registrations.
+The synthesizer consumer follows effective-policy changes and tracks actual
+registrations; do not derive its outgoing names from definitions that another
+lifecycle owner may already have cleared.
+Live inline hook mutation uses the existing policy layers and exact caller
+route; Twin mutation rejects retired/uncommitted generations, and an application
+caller cannot overwrite a Twin or USD-owned effective policy.
 Derived clock entities follow their scene source through linked ECS ownership;
 `TimeDomain.parent` selects a clock and does not establish entity lifetime.
 Visualization history buffers, async tasks and queued canvas actions use

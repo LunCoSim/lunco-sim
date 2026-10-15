@@ -3,6 +3,70 @@
 const TEST_KIND = "headless";
 import "lunco://scripting/tools/modelica_editor" as modelica_editor;
 
+fn scene_policy_hook() {
+    policy_hook("runtime.ui.properties")
+}
+
+fn policy_hook(id) {
+    for hook in list_hooks() {
+        if hook.id == id { return hook; }
+    }
+    throw "hook contract is missing: " + id;
+}
+
+fn runtime_policy_ready() {
+    let result = invoke_hook("camera.default_presentation", [#{}]);
+    result.ok && result.value == "none"
+}
+
+fn verify_runtime_policy_applied() {
+    let unbind = unbind_policy("camera.default_presentation");
+    report_verdict([
+        t_true(!unbind.ok && unbind.status == "rejected", "application caller cannot unbind a Twin-owned policy"),
+        t_true(runtime_policy_ready(), "Twin-owned inline policy is callable"),
+        t_true(policy_hook("camera.default_presentation").policy_file == (), "inline policy owns its Twin layer"),
+    ], "Runtime policy binding", "RUNTIME_POLICY_BINDING")
+}
+
+fn verify_runtime_policy_retired(application_file) {
+    let hook = policy_hook("camera.default_presentation");
+    report_verdict([
+        t_true(hook.installed, "application camera policy survives Twin closure"),
+        t_true(hook.policy_file == application_file, "closed Twin cannot retain or recreate its inline policy"),
+    ], "Runtime policy retirement", "RUNTIME_POLICY_RETIREMENT")
+}
+
+fn seed_scene_policy() {
+    cmd("SetRhaiPolicy", #{
+        name: "RetirementProbe", seam: "runtime.ui.properties", entry: "retirement_probe",
+        source: "fn retirement_probe(facts) { #{ retirement_probe: true } }",
+        deterministic: false,
+    });
+}
+
+fn scene_policy_ready() {
+    let result = invoke_hook("runtime.ui.properties", [#{}]);
+    result.ok && result.value.retirement_probe == true
+}
+
+fn verify_scene_policy_applied() {
+    let replacement = bind_policy("runtime.ui.properties", "wrong_owner", "fn wrong_owner(facts) { #{} }");
+    report_verdict([
+        t_true(!replacement.ok && replacement.status == "rejected" && replacement.installed,
+            "inline application mutation cannot replace a scene-authored policy"),
+        t_true(scene_policy_ready(), "mounted scene policy is callable"),
+        t_true(scene_policy_hook().policy_file == (), "scene policy owns the effective hook"),
+    ], "Scene policy projection", "SCENE_POLICY_PROJECTION")
+}
+
+fn verify_scene_policy_retired(application_file) {
+    let hook = scene_policy_hook();
+    report_verdict([
+        t_true(hook.installed, "application policy remains installed after scene retirement"),
+        t_true(hook.policy_file == application_file, "scene retirement restores the retained application binding"),
+    ], "Scene policy retirement", "SCENE_POLICY_RETIREMENT")
+}
+
 fn document_present(id) {
     let docs = query("ListOpenDocuments");
     if docs == () || docs.open_documents == () {

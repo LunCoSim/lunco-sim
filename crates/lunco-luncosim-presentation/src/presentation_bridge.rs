@@ -1,11 +1,11 @@
 //! UI-facing bridges from simulator state to the LunCoSim presentation layer.
 //!
-//! These systems are application integration, not simulation mechanics. Keeping
-//! them in the existing UI package means status, camera, terrain-shadow, and
-//! environment presentation edits do not rebuild the headless composition root.
+//! The application presentation owner keeps status, camera, terrain-shadow,
+//! and environment integration outside the headless composition root.
 
 use crate::terrain_horizon;
 use bevy::prelude::*;
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 
 pub(crate) fn register(app: &mut App) {
@@ -54,8 +54,7 @@ pub(crate) fn register(app: &mut App) {
             .run_if(resource_exists::<lunco_capture::screenshot::OfflineRecordingState>),
     );
     terrain_horizon::register(app);
-    app.init_resource::<AuthoredEnv>();
-    app.add_systems(lunco_core::SceneTeardown, reset_authored_env);
+    install_environment_projection_state(app);
     app.add_systems(
         Update,
         project_env_settings.in_set(lunco_core::RuntimeCycleSet::Visualization),
@@ -68,42 +67,21 @@ pub(crate) fn register(app: &mut App) {
     );
 }
 
-/// **Environment-settings projection** — the read half of persisting
-/// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
-/// onto the `LunCoEnvironment` settings prim (see
-/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). Read that prim's
-/// `lunco:env:*` attrs and apply them **directly** to the live render state —
-/// never by re-triggering `SetEnvironmentLight`, which would re-persist and
-/// loop. So a persisted render tweak round-trips on reload and syncs to peers
-/// (the prim rides the USD journal → each peer recomposes → each peer's
-/// projector applies) with no bespoke broadcast. Authored facts are cached by
-/// stage plan and reused across transform-only changes.
-/// UI-gated: the knobs are render/camera state; the headless server has no
-/// cameras to apply to.
-/// What the scene AUTHORED, held independently of what currently exists to
-/// apply it to.
-///
-/// [`project_env_settings`] is change-gated on stage generation, and cameras do
-/// not exist when a scene's stage first composes. Reading the prim and writing
-/// the camera in one memoised pass therefore lost the value entirely: the pass
-/// ran once against zero cameras, the generation never changed again, and the
-/// authored exposure was never applied — the scene rendered at Bevy's default
-/// EV 9.7 (~6 stops open) no matter what the USD said. Splitting the two makes
-/// the read authoritative and the application idempotent.
+/// Scene-derived environment facts retained independently of camera targets.
+/// Projection reads authored settings when the source changes; added cameras
+/// consume the retained exposure without requiring another USD edit. Teardown
+/// resets these facts together with the source snapshots so surviving sources
+/// can publish again after reload.
 #[derive(Resource, Default, Clone, Copy)]
 pub(crate) struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
 }
 
-/// Clear scene-owned environment opinions before the next composition epoch.
-///
-/// `AuthoredEnv` deliberately outlives individual camera entities so cameras
-/// spawned after stage composition inherit a value authored by that scene. It
-/// must therefore be reset at the same lifecycle boundary as the scene, rather
-/// than relying on camera despawn or on the next scene happening to author a
-/// replacement value.
-fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
-    *authored = AuthoredEnv::default();
+impl SceneResource for AuthoredEnv {}
+
+fn install_environment_projection_state(app: &mut App) {
+    app.init_scene_resource::<AuthoredEnv>()
+        .init_scene_resource::<EnvironmentProjectionCache>();
 }
 
 #[derive(Default)]
@@ -114,6 +92,60 @@ struct CachedEnvironmentProjection {
     environment_paths: std::collections::HashSet<String>,
     exposure_ev100: Option<f32>,
     bloom_intensity: Option<f32>,
+}
+
+#[derive(Resource, Default)]
+struct EnvironmentProjectionCache {
+    cached:
+        std::collections::HashMap<bevy::asset::AssetId<UsdStageAsset>, CachedEnvironmentProjection>,
+    last: Option<Vec<(bevy::asset::AssetId<UsdStageAsset>, Option<usize>, u64)>>,
+}
+
+impl SceneResource for EnvironmentProjectionCache {}
+
+#[cfg(test)]
+mod environment_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn scene_lifecycle_releases_environment_snapshots_and_rearms_projection() {
+        let mut app = App::new();
+        install_environment_projection_state(&mut app);
+        for _ in 0..3 {
+            let plan = std::sync::Arc::new(lunco_usd_bevy_stage::UsdStageProjectionPlan::default());
+            let lease = std::sync::Arc::downgrade(&plan);
+            let stage_id = bevy::asset::AssetId::default();
+            let mut cache = app.world_mut().resource_mut::<EnvironmentProjectionCache>();
+            cache.cached.insert(
+                stage_id,
+                CachedEnvironmentProjection {
+                    projection_plan: Some(plan),
+                    valid: true,
+                    exposure_ev100: Some(12.0),
+                    ..Default::default()
+                },
+            );
+            cache.last = Some(vec![(stage_id, None, 0)]);
+            app.world_mut().resource_mut::<AuthoredEnv>().exposure_ev100 = Some(12.0);
+            lunco_core::run_scene_teardown(app.world_mut());
+            let cache = app.world().resource::<EnvironmentProjectionCache>();
+            assert!(cache.cached.is_empty());
+            assert!(
+                cache.last.is_none(),
+                "an identical surviving source must project again"
+            );
+            assert!(
+                lease.upgrade().is_none(),
+                "retired plans must be released without another frame"
+            );
+            assert!(
+                app.world()
+                    .resource::<AuthoredEnv>()
+                    .exposure_ev100
+                    .is_none()
+            );
+        }
+    }
 }
 
 fn usd_paths_overlap(left: &str, right: &str) -> bool {
@@ -169,11 +201,9 @@ fn project_env_settings(
     // The exposure single-source-of-truth — see the `exposureEv100` branch.
     mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
     mut scene_changes: Option<MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>>,
-    mut cached: Local<
-        std::collections::HashMap<bevy::asset::AssetId<UsdStageAsset>, CachedEnvironmentProjection>,
-    >,
-    mut last: Local<Option<Vec<(bevy::asset::AssetId<UsdStageAsset>, Option<usize>, u64)>>>,
+    mut cache: ResMut<EnvironmentProjectionCache>,
 ) {
+    let EnvironmentProjectionCache { cached, last } = &mut *cache;
     if let Some(changes) = scene_changes.as_mut() {
         for change in changes.read() {
             let Some(snapshot) = cached.get_mut(&change.stage_id) else {

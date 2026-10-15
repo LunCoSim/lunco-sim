@@ -410,4 +410,4 @@ for hook_id in [
         "optional policy owner availability is explicit for " + hook_id));
 }
 
-t_report(checks);
+report_verdict(checks, "Hook policies", "HOOK_POLICIES");

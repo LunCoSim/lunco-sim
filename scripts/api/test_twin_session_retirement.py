@@ -186,6 +186,15 @@ def main() -> None:
         print(f"Owned production session: PID={session.process.pid}, port={PORT}, checkout={ROOT}", flush=True)
         try:
             ids_a = open_twin(session, TWIN_A)
+            runtime_policy_file = execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8")
+                + '\nprint(policy_hook("camera.default_presentation").policy_file);')["stdout"].strip()
+            owner = next(doc["runtime_context"]["twin"] for doc in documents(session)
+                         if doc["kind"] == "usd" and doc["runtime_context"]["kind"] == "local_twin")
+            execute(session, "RunScenarioAsset", source_asset="lunco://scenarios/tests/twin_runtime_policy_binding.rhai",
+                    owner_twin_id=owner)
+            wait_for(session, lambda: execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8")
+                + "\nprint(runtime_policy_ready());")["stdout"].strip() == "true", "Twin inline policy binding")
+            verdict("verify_runtime_policy_applied")
             execute(session, "ActivatePerspective", id="editor")
             scene = next(doc for doc in documents(session) if doc["kind"] == "usd")
             execute(session, "OpenFile", path=scene["origin"]["path"])
@@ -220,6 +229,7 @@ def main() -> None:
                      and not view["worker_active"] and not view["pending_channels"], "outgoing telemetry browser")
             session.capture_screenshot(ROOT / "target/twin-telemetry-before-replacement.png")
             ids_b = open_twin(session, TWIN_B, ids_a)
+            verdict("verify_runtime_policy_retired", runtime_policy_file)
             execute(session, "FocusPanel", id="telemetry_browser")
             wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
                      and not view["worker_active"] and not view["pending_channels"], "replacement telemetry browser")
@@ -413,6 +423,15 @@ def main() -> None:
             verdict("verify_editor_retirement", retained, ids_final)
             verdict("verify_twin_browser_retirement", retained, ids_final, str(TWIN_B))
             verdict("verify_catalog_retirement", paths)
+            application_policy = execute(session, "RunRhai",
+                code=SOURCE.read_text(encoding="utf-8") + "\nprint(scene_policy_hook().policy_file);")["stdout"].strip()
+            if not application_policy or application_policy == "()":
+                raise RuntimeError("scene policy probe requires the application binding")
+            execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8") + "\nseed_scene_policy();")
+            wait_for(session, lambda: execute(session, "RunRhai",
+                code=SOURCE.read_text(encoding="utf-8") + "\nprint(scene_policy_ready());")["stdout"].strip() == "true",
+                "scene policy projection")
+            verdict("verify_scene_policy_applied")
             screenshot = os.environ.get("LUNCOSIM_TEST_SCREENSHOT")
             if screenshot:
                 execute(session, "ActivatePerspective", id="editor")
@@ -423,6 +442,7 @@ def main() -> None:
                 execute(session, "CloseDocument", doc_id=doc["doc_id"])
             wait_for(session, lambda: not documents(session), "test document cleanup before Exit")
         verdict("verify_editor_retirement", ids_final, [])
+        verdict("verify_scene_policy_retired", application_policy)
         verdict("verify_scene_interaction_requires_scene")
         try:
             execute(session, "RunRhaiTool", tool="gizmo", args={"Map": {}}, scene_bound=True)
