@@ -9951,3 +9951,48 @@ superseded task-owned compressed executable copies and completed test
 executables are retired for space; source, shared caches, captures and verdict
 logs remain. The current binary hash and retirement manifests are retained in
 `.lunco/performance-evidence/`. No profiling process remains on owned ports.
+
+
+### Borrowed typed Rhai conversion — 2026-10-15
+
+`lunco-hooks-rhai` owns the single borrowed traversal from Rhai values to the
+owned `HookValue` ABI. Native Rhai read accessors retain shared containers and
+map order. `dynamic_to_hook_with_native` admits owner-provided opaque-leaf
+lowering without changing scalar/container handling; the world-bound adapter
+supplies finite f64 vector/quaternion leaves. The existing command/query bridge
+consumes this same traversal, while pure hooks retain the closed ABI. This is
+interpreter value conversion, not changeable product policy, so it adds no hook,
+cache, clock or execution lane. Canonical guidance is in `hook-policies.md`.
+
+The interpreter resource regression observes three unnecessary native-value
+clones under the baseline and zero with the borrowed traversal. All 15
+hook-owner tests pass, including shared native leaves, full-width unsigned
+integers, exact signed zero and explicit unsupported-type/lowering errors.
+Production gates pass 14 authored-runtime checks (native-vector and array
+raycasts agree), eight negative checks (nested unsupported native data rejects
+before dispatch), 42 task checks, 34 coupled initialization/clock checks at
+120 Hz host pacing and 24 exact selected-state comparisons with the pre-change
+build. See `target/typed-value-borrow-{baseline,hooks-tests}.log` and
+`target/typed-value-borrow-gates.json` plus its gate logs. API 4371 is released.
+
+The first normal run at API 4370 is excluded from acceptance: the mutable Twin
+controls contain an in-progress two-argument `input_hint` migration, which this
+checkout cannot execute. Its four-check evidence probe is not the complete
+mission verdict. Its changed topology and 2560 by 1568 viewport also prevent a
+performance comparison. The separate clean verification checkout uses Twin
+commit `bba86672533ac249684ee1dae70d59d524c5e5f3` and an identical copy of its
+untracked 67,020-byte heightmap (SHA in the terrain evidence record). With that
+complete payload, owned API 4372 emits all 16 mission checks, reports ready and
+clear diagnostics, and advances at 1.0052 realtime over the three-second
+observation. The inspected 1280 by 720 image shows the deployed rover, controls,
+terrain and shadows, with an optional dataset-download prompt. The retained
+physics median is 2.855 ms with 37 bodies, 36 colliders, 12 joints and eight
+substeps. Main-checkout compilation overlaps this observation; neither its
+44.98 retained FPS median nor the excluded run's lower physics time proves a
+performance improvement. Both owned sessions exit zero and release their ports.
+Evidence is `target/typed-value-borrow-admitted-{context,result,summary,terrain}.json`,
+its runtime/driver logs and image. The prior missing-payload attempt reports the
+terrain admission fault and supplies no acceptance evidence. The mutable Twin's
+in-progress edits remain untouched. Current-Twin integration, 200 FPS, sub-1 ms
+physics, full presentation isolation and external FMU interoperability remain
+open.

@@ -304,15 +304,26 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
     }
 }
 
-/// Convert a rhai [`Dynamic`] back into a neutral [`HookValue`]. The hook ABI is
-/// deliberately closed: an opaque Rhai value is a policy error, never a debug
-/// string that can accidentally satisfy a downstream schema.
-/// Convert a Rhai value to the shared typed hook ABI.
+/// Convert a Rhai value to the closed typed hook ABI. Opaque native values are
+/// errors; containers are borrowed while their leaves enter the owned result.
 pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
+    dynamic_to_hook_with_native(d, &|_| Ok(None))
+}
+
+/// Convert through the canonical traversal with an owner's native leaf lowering.
+/// The callback sees only values outside the scalar/container ABI. `None` rejects
+/// that native type, and an error terminates the conversion without a partial
+/// result. A native leaf enters the owned ABI directly.
+pub fn dynamic_to_hook_with_native(
+    d: &Dynamic,
+    native: &impl Fn(&Dynamic) -> Result<Option<HookValue>, HookError>,
+) -> HookResult {
     if d.is_unit() {
         Ok(HookValue::Unit)
     } else if d.is::<u64>() {
-        Ok(HookValue::UInt(d.clone().cast::<u64>()))
+        d.read_lock::<u64>()
+            .map(|value| HookValue::UInt(*value))
+            .ok_or_else(|| HookError("failed to read Rhai unsigned integer".into()))
     } else if d.is_int() {
         d.as_int()
             .map(HookValue::Int)
@@ -326,29 +337,38 @@ pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
             .map(HookValue::Bool)
             .map_err(|error| HookError(format!("failed to read Rhai bool: {error}")))
     } else if d.is_string() {
-        d.clone()
-            .into_string()
-            .map(HookValue::Str)
+        d.as_immutable_string_ref()
+            .map(|value| HookValue::Str(value.to_string()))
             .map_err(|error| HookError(format!("failed to read Rhai string: {error}")))
     } else if d.is_blob() {
-        Ok(HookValue::Bytes(d.clone().cast::<rhai::Blob>()))
+        d.as_blob_ref()
+            .map(|value| HookValue::Bytes(value.to_vec()))
+            .map_err(|error| HookError(format!("failed to read Rhai blob: {error}")))
     } else if d.is_array() {
-        let arr = d.clone().cast::<rhai::Array>();
+        let arr = d
+            .as_array_ref()
+            .map_err(|error| HookError(format!("failed to read Rhai array: {error}")))?;
         arr.iter()
-            .map(dynamic_to_hook)
+            .map(|value| dynamic_to_hook_with_native(value, native))
             .collect::<Result<Vec<_>, _>>()
             .map(HookValue::Array)
     } else if d.is_map() {
-        let map = d.clone().cast::<rhai::Map>();
+        let map = d
+            .as_map_ref()
+            .map_err(|error| HookError(format!("failed to read Rhai map: {error}")))?;
         map.iter()
-            .map(|(k, v)| dynamic_to_hook(v).map(|value| (k.to_string(), value)))
+            .map(|(k, v)| {
+                dynamic_to_hook_with_native(v, native).map(|value| (k.to_string(), value))
+            })
             .collect::<Result<Vec<_>, _>>()
             .map(HookValue::Map)
     } else {
-        Err(HookError(format!(
-            "unsupported Rhai hook return type `{}`",
-            d.type_name()
-        )))
+        native(d)?.ok_or_else(|| {
+            HookError(format!(
+                "unsupported Rhai hook return type `{}`",
+                d.type_name()
+            ))
+        })
     }
 }
 
@@ -465,6 +485,100 @@ mod tests {
         let err = register_rhai_hook("test.bad", "f", "fn f( { oops", false);
         assert!(err.is_err());
         assert!(lunco_hooks::get("test.bad").is_none());
+    }
+
+    #[test]
+    fn typed_conversion_rejects_nested_native_values_without_cloning_them() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Opaque(Arc<AtomicUsize>);
+        impl Clone for Opaque {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Self(Arc::clone(&self.0))
+            }
+        }
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut nested = rhai::Map::new();
+        nested.insert("native".into(), Dynamic::from(Opaque(Arc::clone(&clones))));
+        let mut root = rhai::Map::new();
+        root.insert(
+            "nested".into(),
+            Dynamic::from_array(vec![Dynamic::from_map(nested)]),
+        );
+        let value = Dynamic::from_map(root);
+        let error =
+            dynamic_to_hook(&value).expect_err("opaque native values remain outside the ABI");
+        assert!(error.0.contains("unsupported Rhai hook return type"));
+        assert_eq!(
+            clones.load(Ordering::SeqCst),
+            0,
+            "boundary traversal must borrow native containers"
+        );
+    }
+
+    #[test]
+    fn typed_conversion_lowers_native_leaves_inside_shared_containers() {
+        #[derive(Clone)]
+        struct NativeScalar(f64);
+        let mut fields = rhai::Map::new();
+        fields.insert(
+            "values".into(),
+            Dynamic::from_array(vec![
+                Dynamic::from(NativeScalar(-0.0)).into_shared(),
+                Dynamic::from(u64::MAX),
+                Dynamic::from_blob(vec![0, 255]),
+                Dynamic::from("text"),
+                Dynamic::from_bool(true),
+                Dynamic::UNIT,
+            ])
+            .into_shared(),
+        );
+        let value = Dynamic::from_map(fields).into_shared();
+        let calls = std::cell::Cell::new(0);
+        let lowered = dynamic_to_hook_with_native(&value, &|leaf| {
+            calls.set(calls.get() + 1);
+            Ok(leaf
+                .read_lock::<NativeScalar>()
+                .map(|scalar| HookValue::Float(scalar.0)))
+        })
+        .unwrap();
+        assert_eq!(
+            calls.get(),
+            1,
+            "native adapters cannot replace ABI scalars or containers"
+        );
+        assert_eq!(
+            lowered,
+            HookValue::map([(
+                "values",
+                HookValue::Array(vec![
+                    HookValue::Float(-0.0),
+                    HookValue::UInt(u64::MAX),
+                    HookValue::Bytes(vec![0, 255]),
+                    HookValue::str("text"),
+                    HookValue::Bool(true),
+                    HookValue::Unit,
+                ])
+            )])
+        );
+        let HookValue::Array(values) = lowered.get("values").unwrap() else {
+            panic!("array was not retained");
+        };
+        assert_eq!(values[0].as_f64().unwrap().to_bits(), (-0.0f64).to_bits());
+        assert!(
+            dynamic_to_hook(&value)
+                .unwrap_err()
+                .0
+                .contains("unsupported Rhai hook return type")
+        );
+        let error = dynamic_to_hook_with_native(&value, &|_| {
+            Err(HookError("native value rejected".into()))
+        })
+        .unwrap_err();
+        assert_eq!(error.0, "native value rejected");
     }
 
     #[test]

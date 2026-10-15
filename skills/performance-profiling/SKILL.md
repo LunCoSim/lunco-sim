@@ -17,6 +17,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   the scene in a pre-existing session. Report concurrent GPU/CPU workloads and
   classify affected numbers as contention-affected, not clean acceptance. Do
   not use Tracy's instrumented number as acceptance evidence.
+  Record the admitted Twin source revision and require its expected authored
+  verdict before comparing completed-mission windows. A tick threshold or zero
+  process exit does not prove acceptance. Exclude source/API errors, and require
+  readiness and diagnostics to pass for the measured cohort.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
@@ -162,6 +166,15 @@ it; indexed access can count participant statuses without copying their model
 input/output maps. Preserve the public hook facts and compare complete property
 outputs, including empty and unavailable states. Use paired real-owner spans
 for attribution; synthetic large-payload timings alone do not establish FPS.
+
+For typed Rhai boundary cost, use the shared `lunco-hooks-rhai` converter.
+It borrows input containers; embedding owners lower native leaves through
+`dynamic_to_hook_with_native`. Do not build a normalized Dynamic tree before
+calling it, clone containers to inspect their type, or add another recursive
+converter. Preserve native f64 math, unsigned integers, shared values and
+visible rejection of unsupported types. Check the interpreter resource seam
+with `typed_conversion_rejects_nested_native_values_without_cloning_them`, then
+exercise production typed command/query consumers, including a negative case.
 
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous

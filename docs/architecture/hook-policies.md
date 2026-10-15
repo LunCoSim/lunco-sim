@@ -37,6 +37,18 @@ is distinct from a fault in an installed function. The owner decides whether
 an absent optional policy is valid; a required seam reports a structured fault.
 No invalid result is converted into a guessed value.
 
+The Rhai binding owns one `Dynamic`-to-`HookValue` traversal. It borrows native
+maps, arrays and blobs through Rhai's read accessors, preserving container order
+and scalar types while constructing the owned ABI result. It does not clone
+input container trees. `dynamic_to_hook_with_native` lets an embedding owner
+lower otherwise opaque native leaves during that same traversal; it cannot
+replace the canonical scalar/container rules. An unhandled native type or
+lowering error terminates conversion visibly. `lunco-scripting-rhai-core`
+supplies finite `DVec3`/`DQuat` lowering to f64 arrays for world-bound command
+and query parameters. Pure policy hooks retain the closed default ABI.
+This is value conversion at the interpreter boundary, with no policy selection,
+new execution context or additional scheduling path.
+
 ## When behavior should be a hook
 
 Hook candidacy is part of every design review. Use a hook when behavior is
