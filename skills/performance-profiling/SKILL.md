@@ -177,6 +177,9 @@ For continuous-query dispatch, compare the CCD owner's bounded
 scene and ordered inputs. Small batches execute the same kernel directly;
 larger batches join before authoritative correction. Preserve native query
 results and compare complete physics time, including CCD and joints.
+The default minimum is eight queries per worker; joined chunks retain prepared order.
+Use `continuous_scoped_queries_preserve_order_geometry_and_errors` for bitwise
+witness/normal/contact-cache parity before production state replay.
 `ccd_query_dispatch` records bounded query and worker counts around the shared
 kernel and join. Match query population and simulation phase, retain power
 observations throughout each comparison, and separate dispatch duration from

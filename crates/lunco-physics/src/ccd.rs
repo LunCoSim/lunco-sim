@@ -54,7 +54,7 @@ pub struct ContinuousCollisionSettings {
 impl Default for ContinuousCollisionSettings {
     fn default() -> Self {
         Self {
-            minimum_query_batch_size: 64,
+            minimum_query_batch_size: 8,
             max_iterations: 1024,
             position_tolerance_m: 1e-6,
             angular_tolerance_rad: 1e-6,
@@ -2454,6 +2454,16 @@ mod tests {
 
     #[test]
     fn continuous_scoped_queries_preserve_order_geometry_and_errors() {
+        let bits = |value: DVec3| value.to_array().map(f64::to_bits);
+        let contact_bits = |contact: avian3d::parry::query::Contact| {
+            (
+                bits(contact.point1),
+                bits(contact.point2),
+                bits(contact.normal1),
+                bits(contact.normal2),
+                contact.dist.to_bits(),
+            )
+        };
         let shape = |collider| Shape {
             entity: Entity::PLACEHOLDER,
             part_index: 0,
@@ -2557,11 +2567,14 @@ mod tests {
                     (Ok(serial), Ok(parallel)) => {
                         assert_eq!(serial.len(), parallel.len());
                         for (serial, parallel) in serial.iter().zip(parallel) {
-                            assert_eq!(serial.time_of_impact, parallel.time_of_impact);
-                            assert_eq!(serial.witness1, parallel.witness1);
-                            assert_eq!(serial.witness2, parallel.witness2);
-                            assert_eq!(serial.normal1, parallel.normal1);
-                            assert_eq!(serial.normal2, parallel.normal2);
+                            assert_eq!(
+                                serial.time_of_impact.to_bits(),
+                                parallel.time_of_impact.to_bits()
+                            );
+                            assert_eq!(bits(serial.witness1), bits(parallel.witness1));
+                            assert_eq!(bits(serial.witness2), bits(parallel.witness2));
+                            assert_eq!(bits(serial.normal1), bits(parallel.normal1));
+                            assert_eq!(bits(serial.normal2), bits(parallel.normal2));
                             assert_eq!(serial.status, parallel.status);
                         }
                     }
@@ -2571,9 +2584,19 @@ mod tests {
             }
             for (serial, parallel) in serial_jobs.iter().zip(&parallel_jobs) {
                 assert_eq!(serial.pair_index, parallel.pair_index);
-                assert_eq!(serial.cache.contact, parallel.cache.contact);
+                assert_eq!(
+                    serial.cache.contact.map(contact_bits),
+                    parallel.cache.contact.map(contact_bits)
+                );
                 assert_eq!(serial.cache.depth_axis, parallel.cache.depth_axis);
-                assert_eq!(serial.cache.candidate_axis, parallel.cache.candidate_axis);
+                assert_eq!(
+                    serial.cache.candidate_axis.map(bits),
+                    parallel.cache.candidate_axis.map(bits)
+                );
+                assert_eq!(
+                    serial.cache.initial_overlap_proven,
+                    parallel.cache.initial_overlap_proven
+                );
             }
         }
     }

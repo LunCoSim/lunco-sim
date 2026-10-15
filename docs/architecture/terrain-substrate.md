@@ -665,7 +665,7 @@ across its leaves. Each unique leaf's whole-arc bound is computed once.
 Admitted candidate queries run in a synchronous Bevy compute-pool scope over
 immutable leaf trajectories and shapes. Each chunk owns its contact caches and
 reusable native EPA workspace. `ContinuousCollisionSettings.minimum_query_batch_size`
-sets the minimum queries per worker (default 64); smaller populations execute
+sets the minimum queries per worker (default 8); smaller populations execute
 the identical kernel directly. Zero permits one query per worker. Joined results, diagnostics and failures are
 consumed in prepared pair order before any body correction; worker completion
 order cannot select an authoritative result. The same query path serves one

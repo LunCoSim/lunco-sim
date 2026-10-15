@@ -9856,3 +9856,54 @@ rows (serial, default Compute, 0.25-jitter serial). The historical canonical
 reference discrepancy remains open as described above. Evidence is
 `target/shared-cycle-completion-{fault-baseline,time-tests,final-*,gate-*,gates.json}`.
 Full presentation isolation and external FMU interoperability also remain open.
+
+
+### Continuous-query batch admission — 2026-10-15
+
+`ContinuousCollisionSettings.minimum_query_batch_size` defaults to eight.
+The existing scoped query kernel, contiguous chunks and prepared result order
+remain authoritative; each worker retains independent native EPA scratch.
+The inline serial/parallel regression compares impact time, witnesses, normals,
+contact geometry and candidate axes by floating-point bits, as well as query
+counts, diagnostic order and initial-overlap proof state. Both cold and retained
+cache passes succeed (`target/ccd-batch-final-parity.log`).
+
+The normal production baseline at API 4362 uses the unchanged kernel and
+alternates minimum batches 64/8/64/8 after mission completion. All four windows
+have AC online and no competing Cargo or simulator process. Latest-sample CCD
+sweep medians are 1.336/0.915/1.082/0.943 ms; total physics medians are
+2.551/2.156/2.335/2.241 ms. The viewport remains 1280 by 720 with the same
+camera, rendering quality, 37 bodies, 36 colliders, 12 joints and eight substeps.
+The retained FPS medians are 108.05/126.16/119.76/109.58, so this evidence supports
+the query batching change without establishing a general FPS improvement.
+The scene passes all 16 mission checks and its four-check mission-evidence gate.
+The inspected image shows the deployed rover, route labels, terrain and shadows.
+Evidence is `target/ccd-balance-baseline-{context,phases,camera,status}.json`
+and `target/ccd-balance-baseline.png`; API 4362 exits zero and releases its port.
+
+The existing native Tracy capture `target/shared-clock-current-tracy.tracy`
+and its successful adjacent-tool export identify the same query kernel's
+one/three-worker dispatch costs above. The current batch admission changes no
+collision math, timestep, tolerance or solver ordering. Independent simulation
+and presentation ownership, 200 FPS, sub-1 ms physics and external FMU
+interoperability remain open.
+
+
+The final regular Cargo run (API 4365) passes all 16 mission checks and the
+four-check mission-evidence gate. It retains the same body/collider/joint/substep
+inventory and its inspected screenshot retains the rover, terrain and shadows.
+The four settled windows advance at 1.0007/0.9983/1.0023/1.0045 realtime.
+AC is offline throughout these windows: physics medians are
+2.558/1.771/2.482/2.365 ms and retained FPS medians are
+29.12/30.81/33.13/26.64. These are power-affected observations, not product FPS
+acceptance. The stronger batch-size evidence is the AC-powered baseline above.
+Evidence is `target/ccd-batch-final-{summary,phases,context}.json` and
+`target/ccd-batch-final.png`; API 4365 exits zero and releases its port.
+
+The final production scene gates pass all 12 continuous-contact checks,
+including initial-overlap rejection, with the default Compute pool. Three
+24-check state comparisons match the pre-change build's selected reference
+rows exactly: serial, default Compute and 0.25-jitter serial. These comparisons
+cover that retained state selection rather than a whole-world determinism
+claim. See `target/ccd-batch-final-gates.json` and matching gate logs. All four
+processes exit zero and release API 4366.
