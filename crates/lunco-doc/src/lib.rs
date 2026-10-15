@@ -532,6 +532,14 @@ pub trait Document: Send + Sync + 'static {
     /// back to the resulting state, restores the document to its exact
     /// previous state.
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError>;
+
+    /// Apply an ordered sequence, returning one inverse per input in application order.
+    ///
+    /// Owners may share local preparation across operations. The caller owns
+    /// the atomic candidate and discards it if any operation rejects.
+    fn apply_sequence(&mut self, ops: &[Self::Op]) -> Result<Vec<Self::Op>, DocumentError> {
+        ops.iter().cloned().map(|op| self.apply(op)).collect()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -949,17 +957,13 @@ impl<D: Document> DocumentHost<D> {
         }
 
         let mut candidate = self.document.clone();
-        let mut inverses = Vec::with_capacity(ops.len());
-        for op in &ops {
-            let inverse = match candidate.apply(op.clone()) {
-                Ok(inverse) => inverse,
-                Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
-                Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
-                    return Err(Reject::InvalidOp(msg));
-                }
-            };
-            inverses.push(inverse);
-        }
+        let inverses = match candidate.apply_sequence(&ops) {
+            Ok(inverses) => inverses,
+            Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
+            Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
+                return Err(Reject::InvalidOp(msg));
+            }
+        };
 
         self.document = candidate;
         if let Some(rec) = &self.recorder {
@@ -1008,13 +1012,11 @@ impl<D: Document> DocumentHost<D> {
         }
 
         let mut candidate = self.document.clone();
-        for op in &ops {
-            match candidate.apply(op.clone()) {
-                Ok(_) => {}
-                Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
-                Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
-                    return Err(Reject::InvalidOp(msg));
-                }
+        match candidate.apply_sequence(&ops) {
+            Ok(_) => {}
+            Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
+            Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
+                return Err(Reject::InvalidOp(msg));
             }
         }
         self.document = candidate;

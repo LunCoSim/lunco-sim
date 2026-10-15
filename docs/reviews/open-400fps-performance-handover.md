@@ -9247,25 +9247,51 @@ shared telemetry owns retained history in every host. Completion admission has
 one reader and one clock-free schedule; the native realtime driver services it
 on response readiness without running another application update.
 
-The latest clean regular-Cargo windowed Griffin run on owned API 4273 advances
-at 0.972 realtime over the sampled interval. Its final fixed-cycle window has
-p50 5.592 ms, p95 7.987 ms and max 11.381 ms, with 0.784 s queued demand and
-zero clipped demand. The inspected screenshot shows the rover clear of the
-ramps, 64 FPS and approximately 2.3 ms native physics service. These observations
-are below the requested 200 FPS and sub-1 ms physics targets. A pre-existing
-user application remains active throughout; this is concurrent-workload evidence.
-The owned app exits zero and releases its port. Evidence is
-`target/griffin-windowed-clean{.log,.png,-samples.json}`.
+Native Tracy attribution identifies the rover-release task's ten-operation
+view edit: one 999.213 ms fixed cycle spends 982.339 ms in
+`usd_apply_transient_ops`. The 55,308,116-byte capture exports successfully
+through the native tool (52.73 MiB, 9,913,988 zones, 96.7 seconds). Its startup
+observer exceeded query/value bounds, so it provides owner attribution rather
+than throughput acceptance. Capture and exports use `target/griffin-current`.
 
-A separate 55,308,116-byte native Tracy capture validates through CSV export;
-the collector reports 52.73 MiB and 9,913,988 zones over 96.7 seconds. One
-999.213 ms fixed cycle spends 982.339 ms in `usd_apply_transient_ops`, a
-ten-operation view-layer edit invoked by the rover-release task. The earlier
-647.139 ms first cycle spends 623.847 ms in its initial native Rhai task.
-These are attribution results, not clean performance acceptance. The first
-startup observer in that diagnostic capture exceeded its query/value bounds;
-its errors are recorded and its throughput must not be treated as acceptance.
-Capture, native exports, process/port ownership, and selected long zones use the
-`target/griffin-current` prefix. The next work is the USD compound-edit owner
-and whole-simulation/render isolation specified in architecture 62. Moving only
-Avian, dropping fixed ticks, changing substeps, or reducing quality is not admitted.
+The document owner now retains one native composed authoring stage through an
+ordered compound edit. Direct Sdf layer changes retire that stage. Validation,
+units, inverses, and target-layer extraction retain their current-layer semantics;
+the host publishes only the complete private candidate. The focused suites pass
+16 generic document tests and 92 native document tests. The production
+`usd_compound_edit` scene passes four Rhai checks, including trailing-operation
+rejection without partial layer or generation publication. The Modelica clock
+scene passes its 34 checks after the change.
+
+Paired normal Cargo runs use the same Griffin scene and inactive networking
+feature. The route-start fixed cycle at tick 3104 decreases from 949.235 ms to
+121.962 ms headless and measures 125.886 ms windowed. Both hosts retain engine
+cutoff at tick 1316, touchdown at 1407, and route start at 3104. These selected
+event matches do not establish whole-state replay. The windowed run sets the
+existing `LUNCO_SCENARIO_UNATTENDED=1` audience so authored operator decisions
+match the headless mission. An attended run correctly waits for ramp commands.
+
+The final 25.25-second headless window advances at 0.999995 realtime. Its final
+pending demand is 0.129 ms with zero clipped time. Windowed pending demand ends
+at 5.677 ms, also with zero clipped time; its final fixed-cycle window has p50
+6.266 ms, p95 8.907 ms, and max 11.510 ms. The inspected image shows FLIP clear
+of the ramps, driving under autopilot with terrain and shadows. At the final
+checkpoint all 256 wanted terrain tiles are resident, streaming has no pending
+work, and the derived visual map is ready (1/1, inactive, no pending work).
+
+The sampled windowed FPS median is 67.4 over 40 distinct retained observations;
+the screenshot shows 47.6 FPS. The final retained native-physics median is
+2.328 ms. The 200 FPS and sub-1 ms physics targets remain unmet. The first fixed
+cycle still takes hundreds of milliseconds, and a 126 ms edit still blocks its
+calling thread. Independent rendering requires the whole-simulation owner and
+typed command/snapshot boundary in architecture 62. Further attribution must
+include native collision, UI, projection, and render costs without changing
+substeps, tolerances, or visual quality.
+
+Evidence is `target/griffin-geometry-baseline-{runtime.log,samples.json}`,
+`target/griffin-usd-session-{runtime.log,samples.json}`, and
+`target/griffin-usd-session-windowed-auto{.log,.png,-samples.json,-terrain.json}`.
+The focused production gates use `target/usd-compound-production-gate.log` and
+`target/usd-edit-session-cosim-gate.log`. The baseline and final measurement runs exit zero and release
+their explicit API ports. No other LunCoSim process is present during the latest
+windowed observation; broader workstation contention is not isolated.

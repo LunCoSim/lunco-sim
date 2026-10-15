@@ -229,11 +229,23 @@ Binary source preparation retains parsed data without requiring text export.
 Source display, text snapshots, and USDA export report native writer failures
 at their respective consumer boundaries.
 
+Document compound edits enter `Document::apply_sequence` on the host's private
+candidate. `UsdDocument` uses one call-local `UsdEditSession` for single and
+compound edits, retaining its native composed stage through ordered native
+mutations. Validation, units, inverses, and target-layer extraction read that
+same current composition. Direct Sdf layer replacement retires the session's
+stage before another operation can read it. The editor never escapes the call
+or enters the send-safe document. The host publishes the candidate, generations,
+journal records, and undo group only after the complete sequence succeeds;
+transient edits use that same boundary without durable history.
+
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
 recompile the command library's normal target. Private pending-load and
-grouped-edit seams remain beside their owning implementation because they
-cannot be observed through the public contract. Scene projection seams remain
+native layer-composition seams remain beside their owning implementation.
+`assets/scenes/tests/usd_compound_edit.usda` and its Rhai observer exercise
+ordered compound application and terminal atomic rejection through the shared
+production command/query bridge. Scene projection seams remain
 beside `lunco-usd-bevy-runtime-core`; shared contract helpers are tested in
 `lunco-usd-core/tests/`.
 

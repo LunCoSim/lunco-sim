@@ -108,7 +108,7 @@ crates. Project declarations are generated from the schema source by
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd-document`** | Headless authored OpenUSD document/layer lifecycle and typed operation substrate: `UsdDocument`, layer identity, edit history, and document state. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-document`** | Headless authored OpenUSD document/layer lifecycle and typed operation substrate: `UsdDocument`, layer identity, edit history, and local native authoring sessions shared across ordered compound edits. No runtime, physics, rendering, or UI. |
 | **`lunco-usd-data`** | Reusable render-free authored USD data contracts: metadata, stage units/conventions, and composed-value readers. No document lifecycle, authoring registry, runtime, physics, rendering, or UI. |
 | **`lunco-usd-authoring`** | OpenUSD authored-layer operations and schema registry: path-addressed authoring, USDA conversion, reference/list-op helpers, and registered schema metadata. No document lifecycle, runtime, physics, rendering, or UI. |
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |

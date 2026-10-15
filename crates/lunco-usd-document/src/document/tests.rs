@@ -20,6 +20,86 @@ fn native_snapshot(document: &UsdDocument) -> sdf::Data {
 
 const TINY_USDA: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
 
+#[test]
+fn compound_authoring_preserves_ordered_native_layers() {
+    let original = UsdDocument::new(DocumentId::new(990), TINY_USDA);
+    let path = "/World/Part".to_owned();
+    let ops = vec![
+        UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "Part".into(),
+            type_name: Some("Cylinder".into()),
+            reference: None,
+            reference_prim_path: None,
+        },
+        UsdOp::SetTranslate {
+            edit_target: LayerId::view(),
+            path: path.clone(),
+            value: [1.0, 2.0, 3.0],
+        },
+        UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path: path.clone(),
+            value: [10.0, 20.0, 30.0],
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: path.clone(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "2".into(),
+        },
+        UsdOp::SetStageMetrics {
+            edit_target: LayerId::root(),
+            metrics: StageMetrics {
+                meters_per_unit: 0.01,
+                up_axis: lunco_usd_data::units::UpAxis::Z,
+            },
+        },
+        UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: path.clone(),
+            value: [4.0, 5.0, 6.0],
+        },
+        UsdOp::SetAttributeDocumentation {
+            edit_target: LayerId::runtime(),
+            path: path.clone(),
+            name: "radius".into(),
+            documentation: Some("Radius in stage units".into()),
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::view(),
+            path: path.clone(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "3".into(),
+        },
+    ];
+    let mut sequential = original.clone();
+    for op in &ops {
+        sequential.apply(op.clone()).unwrap();
+    }
+    let layers = |doc: &UsdDocument| {
+        [doc.data(), doc.runtime_data(), doc.view_data()]
+            .map(|data| author::data_to_usda(data).unwrap())
+    };
+    for transient in [false, true] {
+        let mut host = DocumentHost::new(original.clone());
+        if transient {
+            host.apply_group_transient(ops.clone()).unwrap();
+        } else {
+            host.apply_group(ops.clone()).unwrap();
+        }
+        assert_eq!(layers(host.document()), layers(&sequential));
+        assert_eq!(host.document().generation(), sequential.generation());
+        assert_eq!(
+            author::data_to_usda(&native_snapshot(host.document())).unwrap(),
+            author::data_to_usda(&native_snapshot(&sequential)).unwrap()
+        );
+    }
+}
+
 fn prim_type(doc: &UsdDocument, path: &str) -> Option<String> {
     doc.data().prim_type_name(&SdfPath::new(path).unwrap())
 }
