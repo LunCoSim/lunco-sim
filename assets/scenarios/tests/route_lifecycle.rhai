@@ -542,6 +542,8 @@ fn route_step_hud_projection_action(me) {
     this.checks.push(t_true(surface.properties.program_count == "1 PROGRAMS"
             && surface.properties.programs[0].path == this.program_path,
         "the Application/Ui owner publishes the typed program collection properties"));
+    this.checks.push(t_true(surface.properties.simulation_summary == "no simulation participants",
+        "the runtime HUD reports an empty participant set for a Rhai-only program scope"));
     for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
     this.route_step_hud_projection_finished = true;
     return;

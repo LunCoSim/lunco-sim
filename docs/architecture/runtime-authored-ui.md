@@ -342,6 +342,12 @@ The same policy boundary applies to simulation participants: Rust exposes
 typed participant facts and authored public outputs, while Twin Rhai chooses
 which values become a presentation property. Missing, compiling, paused, and
 failed states remain explicit instead of being hidden until a sample exists.
+The built-in properties policy counts statuses through indexed participant
+access and passes only those counts to its formatting helper. Rhai array
+iteration and by-value helper arguments can copy nested input/output maps;
+presentation helpers should receive only the fields they consume. Custom
+policies retain the complete typed participant facts at the existing hook
+boundary.
 
 Subject-scoped publication is lifecycle-scoped. It accepts only prims below the
 current primary `SceneMountState::active_root`; preview, additive, and outgoing

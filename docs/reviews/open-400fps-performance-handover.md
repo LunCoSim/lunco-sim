@@ -9511,3 +9511,55 @@ outputs. Source, sibling targets and shared caches remain intact. The normal
 production artifact is rebuilt with regular sccache and `-j 4` before the
 normal gates above. All owned runtime/test ports are released; other checkouts'
 processes are untouched.
+
+### Participant summary projection — 2026-10-15
+
+The built-in `runtime.ui.properties` policy counts participant statuses by
+indexed access and passes only the counts to its formatter. This avoids Rhai
+copies of nested Modelica input/output maps during array iteration and helper
+argument passing. Complete typed facts remain available to custom policies;
+labels, ordering, precision, hook context and publication cadence are preserved.
+The canonical guidance is in `runtime-authored-ui.md` and the profiling skill.
+
+The production windowed `route_lifecycle` gate passes 112 checks, including an
+empty participant list in a Rhai-only program scope. The normal production
+one-shot hook gate passes 45 checks, including off-cycle rejection. Complete
+property output matches across ten paired synthetic cases covering empty,
+mixed, missing and unknown statuses. An alternating same-process large-payload
+benchmark uses nine participants with 2,000 inputs and 2,000 outputs each;
+warm request medians for ten policy calls are 334.025 versus 80.827 ms. These
+include source compilation, fixture construction and transport, so they are
+not isolated hook CPU or FPS measurements. Evidence is
+`target/participant-policy-{route,hook-test}.log`,
+`target/participant-policy-route-driver.log`,
+`target/participant-policy-{parity,comparison}.json`.
+
+The real Griffin exposure owner is compared in one owned production process
+at API 4343 (PID 3830390, collector 3830388, connected on Tracy 8086). Original
+and revised policy bodies alternate twice through the supported inline hook
+binding API; unique entry names identify the trace windows. Seven-second
+interiors after each binding have these inclusive per-surface medians:
+
+| Owner | Original 1 | Revised 1 | Original 2 | Revised 2 |
+|---|---:|---:|---:|---:|
+| properties | 2.168 ms | 1.186 ms | 2.148 ms | 1.295 ms |
+| unchanged visibility | 1.359 ms | 1.338 ms | 1.425 ms | 1.372 ms |
+| unchanged fact construction | 0.671 ms | 0.679 ms | 0.715 ms | 0.662 ms |
+
+Properties have 154/178/132/138 samples respectively. Every phase retains nine
+active shared-clock participants and ready topology. Both surface summaries
+remain identical across phases; the camera stays at the same 1280×720 Avatar
+view. The final inspected image shows Griffin in flight, terrain and the
+objective overlay; it does not establish settled route acceptance. The run
+spans ticks 209–715, with some pending terrain work. A concurrent build remains
+active and AC reports offline; a GPU observation reports 247 MHz and 10.38 W.
+These observations support reduced policy cost, not overall FPS acceptance.
+No power profile, solver cadence or graphics quality is changed.
+
+The collector saves 59,830,985 bytes, matching its 57.05 MiB report, with
+8,332,765 zones over 154.8 seconds. Both native CSV exports succeed. Evidence
+is `target/participant-policy-live{.tracy,.png,-context.json,-phases.json,-summary.json}`
+and `target/participant-policy-{profile-driver.log,power.csv}`. The current
+policy is restored in the last phase; the app and collector exit zero and
+release their ports. The 200 FPS, sub-1 ms physics and complete simulation/UI
+isolation goals remain open.

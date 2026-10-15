@@ -67,13 +67,8 @@ fn telemetry_text(values) {
     result
 }
 
-fn participant_text(values) {
-    if values.len == 0 { return "no simulation participants"; }
-    let counts = #{};
-    for value in values {
-        let label = status_label(value.status);
-        counts[label] = if counts[label] == () { 1 } else { counts[label] + 1 };
-    }
+fn participant_text(counts) {
+    if counts.len() == 0 { return "no simulation participants"; }
     let result = "";
     for label in ["RUNNING", "COMPILING", "PAUSED", "ERROR", "READY", "UNAVAILABLE"] {
         if counts[label] != () {
@@ -160,7 +155,17 @@ fn runtime_ui_properties(facts) {
     result.position = vector_text(facts.position, 1.0) + " m";
     result.angular_velocity = angular_speed_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);
-    result.simulation_summary = participant_text(facts.participants);
+    // Index only statuses; copying participant maps also copies their model values.
+    let participant_counts = #{};
+    for index in 0..facts.participants.len() {
+        let label = status_label(facts.participants[index].status);
+        participant_counts[label] = if participant_counts[label] == () {
+            1
+        } else {
+            participant_counts[label] + 1
+        };
+    }
+    result.simulation_summary = participant_text(participant_counts);
     result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };
     let programs = if facts.programs == () { [] } else { facts.programs };
     result.program_count = programs.len().to_string() + " PROGRAMS";

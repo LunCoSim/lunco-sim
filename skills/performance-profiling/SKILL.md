@@ -132,6 +132,13 @@ initialized globals persist, while per-call constants and function locals
 must be released on both success and error. Use Rhai's scope-rewinding option
 at every scenario call boundary; do not periodically clear live scenario state.
 
+For Rhai presentation cost, inspect helper arguments and array iteration for
+copies of nested facts. Project the fields a helper consumes before calling
+it; indexed access can count participant statuses without copying their model
+input/output maps. Preserve the public hook facts and compare complete property
+outputs, including empty and unavailable states. Use paired real-owner spans
+for attribution; synthetic large-payload timings alone do not establish FPS.
+
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
 owner records native body and collider identities, poses, mass/inertia and
