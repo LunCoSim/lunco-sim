@@ -1,5 +1,5 @@
 //! Bounded, revision-fenced presentation policy over immutable canvas facts.
-use super::{UsdCanvasSessionState, UsdCanvasState};
+use super::{CanvasSourceLease, UsdCanvasSessionState, UsdCanvasState};
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use lunco_doc::Document;
@@ -34,8 +34,26 @@ struct LayoutResult {
 }
 #[derive(Resource, Default)]
 pub struct LayoutJobs {
-    jobs: HashMap<u64, (u64, Task<Result<LayoutResult, String>>)>,
+    jobs: HashMap<u64, (CanvasSourceLease, u64, Task<Result<LayoutResult, String>>)>,
     hook_generation: u64,
+}
+
+impl lunco_core::SceneResource for LayoutJobs {
+    fn clear_scene(&mut self) {
+        let mut outgoing = std::mem::take(self);
+        outgoing
+            .jobs
+            .retain(|_, (lease, _, _)| lease.document.is_some());
+        self.jobs = outgoing.jobs;
+        self.hook_generation = outgoing.hook_generation;
+    }
+}
+
+impl LayoutJobs {
+    pub(super) fn retire_document(&mut self, document: lunco_doc::DocumentId) {
+        self.jobs
+            .retain(|_, (lease, _, _)| lease.document != Some(document));
+    }
 }
 
 pub(super) fn request(state: &mut UsdCanvasSessionState) {
@@ -359,10 +377,25 @@ pub fn update_layouts(
             continue;
         };
         live.insert(id);
+        let Some(lease) = state.source_lease() else {
+            let retired = pending.jobs.remove(&id).is_some();
+            let requested = state.layout_request.take().is_some();
+            if retired || requested {
+                state.last_error = Some("Diagram layout has no admitted source".into());
+            }
+            continue;
+        };
+        if pending
+            .jobs
+            .get(&id)
+            .is_some_and(|(owner, _, _)| *owner != lease)
+        {
+            pending.jobs.remove(&id);
+        }
         if changed_policy && state.built {
             state.rebuild_view();
         }
-        let completed = pending.jobs.get_mut(&id).and_then(|(revision, task)| {
+        let completed = pending.jobs.get_mut(&id).and_then(|(_, revision, task)| {
             future::block_on(future::poll_once(task)).map(|result| (*revision, result))
         });
         if let Some((revision, result)) = completed {
@@ -431,6 +464,7 @@ pub fn update_layouts(
                 pending.jobs.insert(
                     id,
                     (
+                        lease,
                         state.layout_revision,
                         AsyncComputeTaskPool::get().spawn(async move { evaluate(facts) }),
                     ),

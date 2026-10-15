@@ -230,6 +230,25 @@ native plot interaction memory retire at the same boundary, so outgoing zoom
 bounds cannot hide a restarted clock. Layout preferences and visualization
 configurations keep their application lifetime.
 
+Editor cursor modes, armed tool names, context menus, sub-selection and
+cinematic targets use the same registered scene lifetime. A replacement disarms
+them before another scene can interpret the same tool or asset name. Brush
+dimensions remain explicit application preferences. Entity-tree snapshots,
+pending tree builds, port snapshots, row indexes and edit drafts are resources
+rather than fields on application-owned panel objects; hidden panels therefore
+release outgoing data without painting. Tree publication revisions remain
+monotonic across reset and are independent of worker submission revisions.
+
+Connections separates the live scene graph from isolated document-preview
+graphs. Scene retirement drops the live graph and its async layout/file jobs;
+preview state survives only under its document lifetime. Every async result
+pins the structural root, stage and optional preview document in a typed source
+lease. A matching document/layout revision is insufficient when that lease has
+retired. Document closure releases its preview graph and workers. Retiring a
+pending view-file operation publishes its terminal command failure before
+dropping the handle. File I/O already executing may finish at its captured
+file destination, but cannot publish into a replacement graph.
+
 Live document edits use a separate, stage-scoped boundary; they do not invoke
 the application-wide `SceneTeardown`. Before a full-stage re-projection, the
 generic USD runtime asks registered domain owners to retire their derived state.

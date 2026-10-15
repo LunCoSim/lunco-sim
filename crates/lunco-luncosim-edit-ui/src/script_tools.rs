@@ -71,6 +71,8 @@ pub struct ScenePointerDispatch {
     move_hooks: HashMap<DocumentId, ScenePointerMoveHook>,
 }
 
+impl lunco_core::SceneResource for ScenePointerDispatch {}
+
 #[derive(Clone)]
 struct ScenePointerMoveHook {
     interaction_id: String,
@@ -93,6 +95,8 @@ pub(crate) struct PendingUsdCurveViews {
     latest_revision: HashMap<Entity, u64>,
     status: HashMap<Entity, UsdCurveViewStatus>,
 }
+
+impl lunco_core::SceneResource for PendingUsdCurveViews {}
 
 #[derive(Clone, Debug)]
 struct UsdCurveViewStatus {
@@ -317,11 +321,6 @@ pub(crate) fn clear_scene_pointer_move_hooks_on_twin_closed(
     dispatch
         .move_hooks
         .retain(|doc, _| !closed_documents.contains(doc));
-}
-
-pub(crate) fn reset_scene_pointer_move_hooks(mut dispatch: ResMut<ScenePointerDispatch>) {
-    dispatch.move_hooks.clear();
-    dispatch.pending_moves.clear();
 }
 
 #[on_command(SetUsdViewPreviewTransform)]
@@ -1162,10 +1161,6 @@ fn complete_curve_view_status(
     status.completed_revision = revision;
     status.segment_count = segment_count;
     status.error = error;
-}
-
-pub(crate) fn reset_pending_usd_curve_views(mut pending: ResMut<PendingUsdCurveViews>) {
-    *pending = PendingUsdCurveViews::default();
 }
 
 fn prepare_usd_curve_view_product(

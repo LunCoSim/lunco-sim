@@ -79,6 +79,16 @@ pub(crate) struct EditorSessionSelections {
     live: LiveSceneSelection,
 }
 
+impl lunco_core::SceneResource for EditorSessionSelections {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            // Preview selection belongs to its document lease.
+            sessions: std::mem::take(&mut self.sessions),
+            ..Default::default()
+        };
+    }
+}
+
 #[derive(Clone, Default)]
 struct LiveSceneSelection {
     entities: Vec<Entity>,
@@ -385,6 +395,7 @@ pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
@@ -394,11 +405,11 @@ impl Plugin for SceneEditUiPlugin {
         // egui preview lease. Generic editor mechanisms and command observers
         // are installed by `lunco-luncosim-edit-core::SceneEditPlugin`.
         app.add_plugins(edit_gizmo::SceneEditGizmoPlugin)
-            .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
-            .init_resource::<scene_context_menu::SceneContextMenuState>()
-            .init_resource::<lunco_interaction_core::ArmedScriptTool>()
-            .init_resource::<crate::script_tools::ScenePointerDispatch>()
-            .init_resource::<crate::script_tools::PendingUsdCurveViews>()
+            .init_scene_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
+            .init_scene_resource::<scene_context_menu::SceneContextMenuState>()
+            .init_scene_resource::<lunco_interaction_core::ArmedScriptTool>()
+            .init_scene_resource::<crate::script_tools::ScenePointerDispatch>()
+            .init_scene_resource::<crate::script_tools::PendingUsdCurveViews>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hook_on_document_closed);
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hooks_on_twin_closed);
@@ -410,18 +421,6 @@ impl Plugin for SceneEditUiPlugin {
             .register(crate::script_tools::InspectUsdCurveViewProvider);
         app.add_systems(Startup, crate::physics_viz::configure_gizmo_overlay);
         app.register_type::<crate::physics_viz::PhysicsArrows>();
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            crate::diagnostic_visuals::reset_diagnostic_visuals,
-        );
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            crate::script_tools::reset_pending_usd_curve_views,
-        );
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            crate::script_tools::reset_scene_pointer_move_hooks,
-        );
         app.add_systems(
             Update,
             (
@@ -492,9 +491,9 @@ impl Plugin for SceneEditUiPlugin {
         // `lunco_luncosim::ui`), and a run condition that reads a missing resource
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
         // the gate.
-        app.init_resource::<lunco_scene_selection::SelectedEntities>();
-        app.init_resource::<lunco_scene_selection::SelectionTarget>();
-        app.init_resource::<EditorSessionSelections>();
+        app.init_scene_resource::<lunco_scene_selection::SelectedEntities>();
+        app.init_scene_resource::<lunco_scene_selection::SelectionTarget>();
+        app.init_scene_resource::<EditorSessionSelections>();
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
@@ -502,7 +501,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_systems(Update, sync_editor_session_selection.before(ViewModelSet));
 
         app.init_resource::<cinematic::CinematicViz>();
-        app.init_resource::<cinematic::CinematicTarget>();
+        app.init_scene_resource::<cinematic::CinematicTarget>();
         app.init_resource::<LiveHelpSections>();
         app.add_plugins(trail::VehicleTrailPlugin);
         app.add_systems(
@@ -708,7 +707,6 @@ impl Plugin for SceneEditUiPlugin {
             asset_visibility::AssetVisibilitySettings,
         >(app);
         app.add_systems(Startup, asset_visibility::register_settings_submenu);
-        app.init_resource::<entity_list::EntityTreeView>();
         entity_list::install_entity_tree_source_tracking(app);
         app.add_observer(entity_list::on_twin_closed);
         app.add_systems(
@@ -737,8 +735,9 @@ impl Plugin for SceneEditUiPlugin {
         // port-surface generation invalidates candidate discovery only at an
         // owner mutation boundary. The panel itself remains a pure view and
         // emits SetPorts/ReleasePort.
-        app.init_resource::<ports::PortView>()
-            .init_resource::<ports::PortInspectionRequest>()
+        app.init_scene_resource::<ports::PortView>()
+            .init_scene_resource::<ports::PortPanelState>()
+            .init_scene_resource::<ports::PortInspectionRequest>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
@@ -746,9 +745,9 @@ impl Plugin for SceneEditUiPlugin {
         // stage by a main-thread producer (the stage is `!Send`). Its view-model
         // runs only while the canvas panel is visible; stage path batches then
         // keep unrelated authored changes from rebuilding the graph.
-        app.init_resource::<connection_canvas::UsdCanvasState>();
+        app.init_scene_resource::<connection_canvas::UsdCanvasState>();
         connection_canvas::init_view_commands(app);
-        app.init_resource::<connection_canvas::LayoutJobs>();
+        app.init_scene_resource::<connection_canvas::LayoutJobs>();
         app.add_systems(Update, connection_canvas::update_layouts);
         app.add_systems(
             Update,
@@ -762,7 +761,7 @@ impl Plugin for SceneEditUiPlugin {
         // Command Deck view-model: selection + possession for its visible
         // panel. A hidden panel has no reader, so do not allocate its label or
         // query control state in the frame loop.
-        app.init_resource::<command_deck::CommandDeckView>();
+        app.init_scene_resource::<command_deck::CommandDeckView>();
         app.add_systems(
             Update,
             command_deck::populate_command_deck_view
@@ -775,7 +774,7 @@ impl Plugin for SceneEditUiPlugin {
         // selection, possession, camera, runtime-diagnostic, and diagnostic
         // lease owners; it does not add a second policy or status store. Its
         // gate ignores repeated writes that leave diagnostic facts unchanged.
-        app.init_resource::<authoring_review::AuthoringReviewView>();
+        app.init_scene_resource::<authoring_review::AuthoringReviewView>();
         authoring_review::install_view_model_tracking(app);
         app.add_view_model(
             authoring_review::populate_authoring_review_view,
@@ -785,7 +784,7 @@ impl Plugin for SceneEditUiPlugin {
         // Joint State view-model: live physics readouts are rebuilt only while
         // their panel is visible. Hidden dock tabs have no consumer and must
         // not scan the scene's joints and wheels every app frame.
-        app.init_resource::<joint_state::JointStateView>();
+        app.init_scene_resource::<joint_state::JointStateView>();
         app.add_systems(
             Update,
             joint_state::populate_joint_state_view

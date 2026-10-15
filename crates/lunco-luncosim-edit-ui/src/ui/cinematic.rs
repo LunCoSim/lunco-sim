@@ -63,6 +63,8 @@ pub struct CinematicTarget {
     pub domain: Option<Entity>,
 }
 
+impl lunco_core::SceneResource for CinematicTarget {}
+
 /// Publish the sole authored camera path's domain for the panel to drive.
 ///
 /// Multiple camera paths require an explicit selection; entity/archetype order

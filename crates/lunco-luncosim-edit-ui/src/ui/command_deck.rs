@@ -21,6 +21,8 @@ pub struct CommandDeckView {
     pub driving: bool,
 }
 
+impl lunco_core::SceneResource for CommandDeckView {}
+
 pub(super) fn command_deck_visible(workbench: Option<Res<WorkbenchSnapshot>>) -> bool {
     workbench.is_some_and(|snapshot| snapshot.is_panel_visible(COMMAND_DECK_PANEL_ID))
 }

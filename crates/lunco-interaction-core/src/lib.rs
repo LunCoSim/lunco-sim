@@ -130,6 +130,11 @@ pub struct TerrainToolActive(pub bool);
 #[derive(Resource, Default)]
 pub struct ArmedScriptTool(pub Option<String>);
 
+impl lunco_core::SceneResource for ArmedScriptTool {}
+impl lunco_core::SceneResource for DragModeActive {}
+impl lunco_core::SceneResource for SpawnToolActive {}
+impl lunco_core::SceneResource for TerrainToolActive {}
+
 impl ArmedScriptTool {
     /// Whether any script tool is armed.
     pub fn armed(&self) -> bool {

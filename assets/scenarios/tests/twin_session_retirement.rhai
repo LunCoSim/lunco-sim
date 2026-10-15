@@ -211,6 +211,30 @@ fn verify_telemetry_preserved(keys) {
     report_verdict(checks, "Rejected replacement preserves telemetry", "TWIN_TELEMETRY_PRESERVED")
 }
 
+fn verify_hidden_editor_scene_retirement() {
+    let diagram = query("InspectConnectionDiagram");
+    let selected = query("InspectSelection");
+    report_verdict([
+        t_true(!diagram.built, "hidden Connections graph retires on reload"),
+        t_true(diagram.source == (), "outgoing Connections source is absent"),
+        t_true(diagram.view_id == (), "outgoing view document is absent"),
+        t_true(diagram.definitions.is_empty() && diagram.nodes.is_empty(), "outgoing graph data is released"),
+        t_true(selected.selected.is_empty() && selected.paths.is_empty(), "scene selection is cleared"),
+        t_true(selected.stale_count.to_float() == 0.0, "selection retains no retired entity")
+    ], "Hidden editor scene retirement", "HIDDEN_EDITOR_SCENE_RETIREMENT")
+}
+
+fn verify_editor_diagram_reopened(outgoing_view) {
+    let diagram = query("InspectConnectionDiagram");
+    let old_view = false;
+    for definition in diagram.definitions { if definition.name == "RetirementProbe" { old_view = true; } }
+    report_verdict([
+        t_true(diagram.built && diagram.source != (), "reopened Connections publishes the current scene"),
+        t_true(diagram.view_id.to_string() != outgoing_view.to_string(), "reopened Connections has a fresh view document"),
+        t_true(!old_view, "outgoing transient named view is absent")
+    ], "Editor diagram after reload", "EDITOR_DIAGRAM_AFTER_RELOAD")
+}
+
 fn verify_additive_workspace(ids, active_root) {
     let checks = [];
     for id in ids {

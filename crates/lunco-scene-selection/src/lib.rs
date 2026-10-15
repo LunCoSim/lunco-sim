@@ -67,6 +67,8 @@ pub struct SelectedEntities {
     pub stable_paths: Vec<String>,
 }
 
+impl lunco_core::SceneResource for SelectedEntities {}
+
 impl SelectedEntities {
     /// Returns the primary selected entity, if any.
     pub fn primary(&self) -> Option<Entity> {
@@ -80,6 +82,8 @@ pub struct SelectionTarget {
     /// The targeted sub-part, or `None` for the complete selected object.
     pub part: Option<Entity>,
 }
+
+impl lunco_core::SceneResource for SelectionTarget {}
 
 /// Semantic selection operation shared by viewport and panel input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,17 +123,12 @@ pub struct SceneSelectionPlugin;
 
 impl Plugin for SceneSelectionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SelectedEntities>()
+        use lunco_core::AppSceneExt;
+        app.init_scene_resource::<SelectedEntities>()
+            .init_scene_resource::<SelectionTarget>()
             .init_resource::<lunco_api::queries::ApiQueryRegistry>()
-            .init_resource::<lunco_signal::TelemetryFocus>()
-            .add_systems(Update, mirror_selection_to_telemetry_focus)
-            .add_systems(
-                lunco_core::SceneTeardown,
-                |mut selected: ResMut<SelectedEntities>| {
-                    selected.entities.clear();
-                    selected.stable_paths.clear();
-                },
-            );
+            .init_scene_resource::<lunco_signal::TelemetryFocus>()
+            .add_systems(Update, mirror_selection_to_telemetry_focus);
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(InspectSelectionProvider);

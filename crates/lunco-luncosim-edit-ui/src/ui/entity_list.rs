@@ -164,6 +164,25 @@ pub struct EntityTreeView {
     built: bool,
 }
 
+impl lunco_core::SceneResource for EntityTreeView {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            revision: self.revision.wrapping_add(1),
+            ..Default::default()
+        };
+    }
+}
+
+impl lunco_core::SceneResource for EntityTreeBuildState {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            revision: self.revision.wrapping_add(1),
+            dirty: true,
+            ..Default::default()
+        };
+    }
+}
+
 struct NamedTreeCandidate {
     entity: Entity,
     label: String,
@@ -243,7 +262,10 @@ fn record_entity_tree_candidate_add<C: Component>(
 }
 
 pub(crate) fn install_entity_tree_source_tracking(app: &mut App) {
-    app.init_resource::<EntityTreeBuildState>()
+    use lunco_core::AppSceneExt;
+    app.init_scene_resource::<EntityTreeView>()
+        .init_scene_resource::<EntityListState>()
+        .init_scene_resource::<EntityTreeBuildState>()
         .add_message::<EntityTreeSourceInserted>()
         .add_observer(record_entity_tree_parent_insert)
         .add_observer(record_entity_tree_candidate_add::<Mesh3d>)
@@ -525,7 +547,7 @@ pub(crate) fn poll_entity_tree_view_build(
     };
     build.task = None;
     if revision == build.revision {
-        result.revision = revision;
+        result.revision = view.revision.wrapping_add(1);
         *view = result;
         build.dirty = false;
     } else {
@@ -933,20 +955,21 @@ pub(crate) fn on_twin_closed(
     mut source_insertions: ResMut<Messages<EntityTreeSourceInserted>>,
 ) {
     if trigger.event().was_active {
-        *view = EntityTreeView::default();
-        build.invalidate();
+        lunco_core::SceneResource::clear_scene(&mut *view);
+        lunco_core::SceneResource::clear_scene(&mut *build);
         source_insertions.clear();
     }
 }
 
 /// Entity list panel — hierarchy tree of scene entities.
-pub struct EntityList {
+#[derive(Resource)]
+pub(crate) struct EntityListState {
     visible_rows: Vec<VisibleEntityRow>,
     visible_rows_revision: Option<u64>,
     visible_rows_dirty: bool,
 }
 
-impl Default for EntityList {
+impl Default for EntityListState {
     fn default() -> Self {
         Self {
             visible_rows: Vec::new(),
@@ -961,6 +984,11 @@ struct VisibleEntityRow {
     depth: usize,
     branch_id: Option<egui::Id>,
 }
+
+#[derive(Default)]
+pub struct EntityList;
+
+impl lunco_core::SceneResource for EntityListState {}
 
 impl Panel for EntityList {
     fn id(&self) -> PanelId {
@@ -980,14 +1008,16 @@ impl Panel for EntityList {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        ctx.panel_content_frame().show(ui, |ui| {
-            entity_list_content(
-                ui,
-                ctx,
-                &mut self.visible_rows,
-                &mut self.visible_rows_revision,
-                &mut self.visible_rows_dirty,
-            )
+        let _ = ctx.resource_scope::<EntityListState, _>(|ctx, state| {
+            ctx.panel_content_frame().show(ui, |ui| {
+                entity_list_content(
+                    ui,
+                    ctx,
+                    &mut state.visible_rows,
+                    &mut state.visible_rows_revision,
+                    &mut state.visible_rows_dirty,
+                )
+            });
         });
     }
 }
@@ -1267,6 +1297,43 @@ fn entity_list_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_lifecycle_retires_hidden_tree_and_pending_builds() {
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut app = App::new();
+        install_entity_tree_source_tracking(&mut app);
+        let old = app.world_mut().spawn_empty().id();
+        for _ in 0..3 {
+            let revision = app.world().resource::<EntityTreeView>().revision;
+            app.world_mut()
+                .resource_mut::<EntityTreeView>()
+                .labels
+                .insert(old, "outgoing".into());
+            app.world_mut().resource_mut::<EntityTreeBuildState>().task =
+                Some(pool.spawn(future::pending()));
+            app.world_mut()
+                .resource_mut::<EntityListState>()
+                .visible_rows
+                .push(VisibleEntityRow {
+                    entity: old,
+                    depth: 0,
+                    branch_id: None,
+                });
+            lunco_core::run_scene_teardown(app.world_mut());
+            let view = app.world().resource::<EntityTreeView>();
+            assert!(view.labels.is_empty());
+            assert!(view.revision > revision);
+            let build = app.world().resource::<EntityTreeBuildState>();
+            assert!(build.task.is_none() && build.dirty);
+            assert!(
+                app.world()
+                    .resource::<EntityListState>()
+                    .visible_rows
+                    .is_empty()
+            );
+        }
+    }
 
     #[derive(Resource, Default)]
     struct GateRuns(u32);

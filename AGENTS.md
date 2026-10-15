@@ -175,6 +175,10 @@ package checks after changing skill metadata or packaging.
   `docs/architecture/61-scene-lifecycle-and-teardown.md` for ordering and scope.
   Change-gated producers must wake once when their scene cache resets, including
   surviving paused sources; do not require a new simulation tick to republish.
+  Stateful panels keep scene-derived rows, drafts and selections in registered
+  scene resources, so hidden panels also release them. Async presentation work
+  validates its exact source lease as well as its revision before publication;
+  a matching revision alone does not authorize work from a retired scene.
 - Tutorial controls use the controller-owned `input_bindings` settings through
   Rhai `input_binding(...)`/`input_hint(...)`; progression uses semantic commands
   or authoritative state, never raw physical key names.

@@ -562,6 +562,8 @@ simulation, and vessel control; the generic engine substrate remains in
 `lunco-core`.
 
 **`lunco-interaction-core`**
+Scene-derived cursor-mode flags and armed script-tool names implement
+`SceneResource`; their owning hosts initialize them with scene cleanup.
 Small cross-runtime cursor-interaction contract package. The editor publishes
 `DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
 consume those contracts to stand down during a transform drag. Its
@@ -1293,6 +1295,9 @@ authored click-tool dispatch is UI-owned because it consumes pointer events and
 the UI tool library.
 
 **`lunco-luncosim-edit-ui`**
+Transient editor panel snapshots, row indexes, drafts, menus and worker handles
+use registered scene resources. Connections retains isolated preview graphs
+through document lifetime and fences async results by exact source lease.
 Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and USD preview interaction, physics diagnostic visualization, and
 the bounded async preparation/commit path for transient curve views and terrain-local annotation sources.

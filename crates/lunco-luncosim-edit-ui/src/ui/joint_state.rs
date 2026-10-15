@@ -92,6 +92,8 @@ pub struct JointStateView {
     pub rows: Vec<JointStateRow>,
 }
 
+impl lunco_core::SceneResource for JointStateView {}
+
 pub(super) fn joint_state_visible(workbench: Option<Res<WorkbenchSnapshot>>) -> bool {
     workbench.is_some_and(|snapshot| snapshot.is_panel_visible(JOINT_STATE_PANEL_ID))
 }

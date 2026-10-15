@@ -71,6 +71,16 @@ impl Default for TerrainToolState {
     }
 }
 
+impl lunco_core::SceneResource for TerrainToolState {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            radius: self.radius,
+            strength: self.strength,
+            ..Default::default()
+        };
+    }
+}
+
 impl TerrainToolState {
     /// Whether a brush is currently armed.
     pub fn armed(&self) -> bool {

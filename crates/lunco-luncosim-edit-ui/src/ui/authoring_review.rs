@@ -63,6 +63,8 @@ pub struct AuthoringReviewView {
     pub fault: Option<(String, String, String)>,
 }
 
+impl lunco_core::SceneResource for AuthoringReviewView {}
+
 /// Coalesces USD identity lifecycle events for the diagnostic target lookup.
 #[derive(Resource)]
 pub(crate) struct AuthoringReviewTargetIndexDirty(pub bool);
@@ -258,9 +260,13 @@ pub(crate) fn authoring_review_view_due(
         || fault_changed
 }
 
+impl lunco_core::SceneResource for AuthoringReviewTargetIndexDirty {}
+impl lunco_core::SceneResource for AuthoringReviewViewDirty {}
+
 pub(crate) fn install_view_model_tracking(app: &mut App) {
-    app.init_resource::<AuthoringReviewTargetIndexDirty>()
-        .init_resource::<AuthoringReviewViewDirty>()
+    use lunco_core::AppSceneExt;
+    app.init_scene_resource::<AuthoringReviewTargetIndexDirty>()
+        .init_scene_resource::<AuthoringReviewViewDirty>()
         .add_observer(mark_target_index_dirty_on_insert::<UsdPrimPath>)
         .add_observer(mark_target_index_dirty_on_remove::<UsdPrimPath>)
         .add_observer(mark_target_index_dirty_on_insert::<GlobalEntityId>)

@@ -371,6 +371,24 @@ def main() -> None:
             wait_for(session, lambda: all(doc["doc_id"] != playback_doc for doc in documents(session)),
                      "experiment playback document closure")
             verdict("verify_experiment_playback_retirement", playback_doc, playback_run, fresh_playback_keys, [], False)
+            execute(session, "FocusPanel", id="usd_connection_canvas")
+            def outgoing_diagram():
+                view = execute(session, "InspectConnectionDiagram")
+                return view if view.get("built") and view.get("view_id") else None
+            diagram = wait_for(session, outgoing_diagram, "outgoing Connections graph")
+            execute(session, "CreateConnectionView", view_id=diagram["view_id"], name="RetirementProbe", scope=diagram["scope"])
+            session.capture_screenshot(ROOT / "target/editor-connections-before-reload.png")
+            execute(session, "ActivatePerspective", id="sandbox_view")
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "hidden editor scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_hidden_editor_scene_retirement")
+            execute(session, "FocusPanel", id="usd_connection_canvas")
+            wait_for(session, outgoing_diagram, "reopened Connections graph")
+            verdict("verify_editor_diagram_reopened", diagram["view_id"])
+            session.capture_screenshot(ROOT / "target/editor-connections-after-reload.png")
             retained = [doc["doc_id"] for doc in documents(session)]
             for root, command in [(TWIN_A, "AddTwin"), (FIXTURE / "replacement", "AddFolderToWorkspace")]:
                 print(f"Additive route: {command}, path={root}", flush=True)

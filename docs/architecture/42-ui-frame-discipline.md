@@ -160,6 +160,9 @@ it does not add an alternate lighting path.
 Panel view-models also gate on the Workbench's live dock state. A registered
 panel that is docked but not the active tab has no visible consumer, so its
 producer must not rebuild a projection in the background.
+Visibility does not define lifetime: scene-derived panel caches, row indexes,
+drafts and pending workers live in registered scene resources, including while
+the panel is hidden. Panel objects retain application preferences only.
 `WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
 that decision; selecting the panel makes its normal producer cadence eligible
 again. `is_panel_docked` remains the layout-presence query for shell operations.

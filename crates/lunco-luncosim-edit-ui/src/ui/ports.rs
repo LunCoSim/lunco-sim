@@ -421,8 +421,8 @@ pub fn populate_port_view(world: &mut World) {
     view.sampled_at = sampled_at;
 }
 
-#[derive(Default)]
-pub struct PortPanel {
+#[derive(Resource, Default)]
+pub(crate) struct PortPanelState {
     filter: String,
     normalized_filter: String,
     drafts: HashMap<Entity, HashMap<String, PortDraft>>,
@@ -431,6 +431,13 @@ pub struct PortPanel {
     matching_cache: Option<PortMatchCache>,
     row_index: PortRowIndexCache,
 }
+
+impl lunco_core::SceneResource for PortView {}
+impl lunco_core::SceneResource for PortInspectionRequest {}
+impl lunco_core::SceneResource for PortPanelState {}
+
+#[derive(Default)]
+pub struct PortPanel;
 
 impl Panel for PortPanel {
     fn id(&self) -> PanelId {
@@ -461,7 +468,9 @@ impl Panel for PortPanel {
         if ctx
             .resource_scope::<PortView, _>(|ctx, view| {
                 ctx.panel_content_frame().show(ui, |ui| {
-                    self.render_view(ui, ctx, view);
+                    let _ = ctx.resource_scope::<PortPanelState, _>(|ctx, state| {
+                        state.render_view(ui, ctx, view);
+                    });
                 });
             })
             .is_none()
@@ -471,7 +480,7 @@ impl Panel for PortPanel {
     }
 }
 
-impl PortPanel {
+impl PortPanelState {
     fn render_view(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, view: &PortView) {
         ui.heading("Ports");
         ui.label(
@@ -661,7 +670,7 @@ impl PortPanel {
     }
 }
 
-impl PortPanel {
+impl PortPanelState {
     fn render_row(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &PortRow) {
         let info = &row.info;
         let local_origin = ctx

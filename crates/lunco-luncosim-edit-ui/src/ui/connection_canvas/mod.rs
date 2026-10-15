@@ -227,46 +227,19 @@ impl Default for UsdCanvasSessionState {
 
 impl UsdCanvasSessionState {
     fn clear(&mut self) {
-        self.layout_revision = self.layout_revision.wrapping_add(1);
-        self.layout_request = None;
-        self.navigation_history.clear();
-        self.navigation_restore = None;
-        self.inspection = Default::default();
-        self.expanded_scene = None;
-        self.group_plan.clear();
-        self.scope_search.clear();
-        self.source_root = None;
-        self.source_uri = None;
-        self.entities.clear();
-        self.view_document = None;
-        self.selected_view = "Overview".into();
-        self.view_file_path.clear();
-        self.new_view_name.clear();
-        self.saved_view_generation = 0;
-        self.canvas.scene = Scene::default();
-        self.canvas_rect = None;
-        self.canvas.selection.clear();
-        self.stage_id = None;
-        self.doc = None;
-        self.edit_target = None;
-        self.generation = 0;
-        self.canonical_generation = None;
-        self.topo_hash = 0;
-        self.built = false;
-        self.frame_request = None;
-        self.source_nodes.clear();
-        self.source_wires.clear();
-        self.source_prim_paths.clear();
-        self.pending_changes = CanvasStageChanges::default();
-        self.schema_roots.clear();
-        self.active_schema_root = None;
-        self.diagram_mode = true;
-        self.diagram_root = "/".into();
-        self.include_descendants = false;
-        self.diagram_roots.clear();
-        self.unresolved_links.clear();
-        self.published_diagnostic.clear();
-        self.last_error = None;
+        *self = Self {
+            layout_revision: self.layout_revision.wrapping_add(1),
+            details_open: self.details_open,
+            ..Default::default()
+        };
+    }
+
+    fn source_lease(&self) -> Option<CanvasSourceLease> {
+        Some(CanvasSourceLease {
+            root: self.source_root?,
+            stage: self.stage_id?,
+            document: self.doc,
+        })
     }
 
     /// Reproject cached facts after explicit navigation; never reread USD in paint.
@@ -361,6 +334,39 @@ impl Default for UsdCanvasState {
             sessions: Default::default(),
         }
     }
+}
+
+/// Exact structural source admitted by an asynchronous diagram operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CanvasSourceLease {
+    root: Entity,
+    stage: AssetId<UsdStageAsset>,
+    document: Option<DocumentId>,
+}
+
+impl lunco_core::SceneResource for UsdCanvasState {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            show_scene: self.show_scene,
+            // Isolated editor previews have document lifetime.
+            sessions: std::mem::take(&mut self.sessions),
+            ..Default::default()
+        };
+    }
+}
+
+fn retire_closed_diagram_document(
+    event: On<lunco_doc_bevy::DocumentClosed>,
+    mut views: ResMut<UsdCanvasState>,
+    mut layouts: ResMut<LayoutJobs>,
+    mut files: ResMut<view_files::PendingViewFiles>,
+    mut results: ResMut<lunco_core::CommandResults>,
+) {
+    views
+        .sessions
+        .retain(|_, state| state.doc != Some(event.doc));
+    layouts.retire_document(event.doc);
+    files.retire_document(event.doc, &mut results);
 }
 
 /// Order-stable hash of the projected topology (paths + connectors + wires).
@@ -508,7 +514,7 @@ pub fn produce_usd_canvas(
     let live = mounts
         .active_root()
         .and_then(|root| q.get(root).ok().map(|(_, path)| (root, path)));
-    if live.is_none() {
+    if live.is_none() && views.scene.source_root.is_some() {
         views.scene.clear();
     }
     if !workbench

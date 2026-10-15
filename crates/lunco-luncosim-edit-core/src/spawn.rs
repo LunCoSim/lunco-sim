@@ -127,6 +127,8 @@ pub struct FootprintCache {
     map: HashMap<String, CachedFootprint>,
 }
 
+impl lunco_core::SceneResource for FootprintCache {}
+
 struct CachedFootprint {
     handle: Handle<UsdStageAsset>,
     root_prim: String,

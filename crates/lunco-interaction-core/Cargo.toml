@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared cursor-interaction contracts for LunCoSim runtimes"
 
 [dependencies]
+lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true, features = ["bevy_camera", "bevy_picking", "bevy_window"] }
 
 [lints]
