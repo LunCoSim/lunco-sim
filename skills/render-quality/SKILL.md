@@ -199,7 +199,11 @@ collar starts on the measured crop boundary and blends its edge profile to the
 matching sphere outside the crop. Derive its width from measured crop-edge
 relief and one-sided slope, using a 0.60 relief-grade sizing target.
 Continue the slope over one posting and fade the single nearest boundary
-signal toward the sphere. Geometry and material fade share one width sized from maximum edge relief;
+signal toward the sphere over at least one full crop width. A narrow exterior
+can turn broad edge relief into a steep artificial dark rim. Check the
+`terrain_surface_continuation` graphics verdict and ground views with the
+physical Sun and shadow settings unchanged. Geometry and material fade share
+one width sized from crop scale and maximum edge relief;
 each corner contributes once. Preserve the native inner posting lattice, then
 reduce exterior ring density to the outer boundary with at least 32 segments per side. Queries and colliders remain bounded to the DEM, whose samples
 stay unchanged. Globe tiles clip against the collar's outer boundary with

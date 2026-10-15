@@ -199,6 +199,11 @@ impl SiteSurfaceSource {
                 samples[perimeter_index] = [relief, relative_gradient[0], relative_gradient[1]];
             }
         }
+        // Retain the crop's horizontal scale outside its boundary. A relief-only
+        // width compresses broad landforms into a steep artificial perimeter rim.
+        // The first posting carries the measured slope; the sphere fade then has
+        // at least one full crop width in which to relax that relief.
+        width_m = width_m.max(posting_m + 2.0 * half_extent);
         Ok(BoundaryCollarProfile {
             width_m,
             signal: BoundarySignalProfile {
@@ -436,8 +441,8 @@ impl HeightSource for BoundaryBlendSource {
     }
 }
 
-// Measured relief sizes only the visual collar. This grade is a shoulder
-// sizing target; DEM samples, queries, and physical slopes remain unchanged.
+// Crop scale and measured relief size only the visual collar. The grade bounds
+// the shoulder fade; DEM samples, queries, and physical slopes remain unchanged.
 const MAX_GLOBE_HANDOFF_RELIEF_GRADE: f64 = 0.60;
 
 fn relief_fade_width(posting_m: f64, boundary_relief_m: f64) -> Result<f64, &'static str> {

@@ -145,8 +145,10 @@ continues the measured edge profile outside the crop and reaches the render
 sphere; local DEM appearance maps fade across that same visual shoulder. The
 shoulder width comes from the active crop's measured boundary relief and
 one-sided slope with a 0.60 relief-grade sizing target. One measured perimeter
-signal continues over a posting and fades to the sphere. Its maximum relief
-sizes one shared width for exterior geometry and material fade. A unique corner sample closes
+signal continues over a posting and fades to the sphere over at least one full
+crop width, preserving broad landform scale outside the measured boundary.
+Crop width and maximum relief size one shared width for exterior geometry and
+material fade, independently of the Sun and camera. A unique corner sample closes
 the transition around corners. The rectangular outer boundary keeps the
 collar mesh and globe cutout watertight; this changes neither the DEM nor its
 physics surface.
