@@ -79,6 +79,26 @@ def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTw
     return ids
 
 
+def seed_exposure(session: ProductionSession) -> str:
+    doc = next(doc for doc in documents(session) if doc["kind"] == "usd"
+               and doc["runtime_context"]["kind"] == "local_twin")
+    retired = "lifecycle-retirement-exposure-probe"
+    namespace = retired + "-renamed"
+    # Use the registered schema field through the owning document API. Keep
+    # this probe in the unsaved journal; authored fixtures remain untouched.
+    for surface in (retired, namespace):
+        execute(session, "ApplyUsdOp", doc_id=doc["doc_id"], op={"SetAttribute": {
+            "edit_target": "@root@", "path": "/World", "name": "lunco:ui:surfaceId",
+            "type_name": "string", "value": surface,
+        }})
+        code = SOURCE.read_text(encoding="utf-8") + "\nprint(exposure_present(" + json.dumps(surface) + "));"
+        wait_for(session, lambda: execute(session, "RunRhai", code=code)["stdout"].strip() == "true",
+                 "authored exposure publication")
+        verdict("verify_exposure_published", surface)
+    verdict("verify_exposure_retired", retired)
+    return namespace
+
+
 def seed_telemetry(session: ProductionSession) -> tuple[list[str], list[str]]:
     prim = live_prim(session, "/World", topology=True)
     if not prim or not prim.get("spawned"):
@@ -228,7 +248,9 @@ def main() -> None:
             wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
                      and not view["worker_active"] and not view["pending_channels"], "outgoing telemetry browser")
             session.capture_screenshot(ROOT / "target/twin-telemetry-before-replacement.png")
+            surface = seed_exposure(session)
             ids_b = open_twin(session, TWIN_B, ids_a)
+            verdict("verify_exposure_retired", surface)
             verdict("verify_runtime_policy_retired", runtime_policy_file)
             execute(session, "FocusPanel", id="telemetry_browser")
             wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
@@ -242,7 +264,9 @@ def main() -> None:
 
             # Same-path reopening is a fresh session, even when no scene path changes.
             paths_b = catalog_paths(session)
+            surface = seed_exposure(session)
             ids_reload = open_twin(session, TWIN_B, ids_b)
+            verdict("verify_exposure_retired", surface)
             verdict("verify_catalog_retirement", paths_b)
             verdict("verify_editor_retirement", ids_b, ids_reload)
             verdict("verify_twin_browser_retirement", ids_b, ids_reload, str(TWIN_B))
@@ -324,6 +348,7 @@ def main() -> None:
             print("Scene routes: LoadScene and RestartScene", flush=True)
             scene_path = "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda"
             telemetry = seed_telemetry(session)
+            surface = seed_exposure(session)
             execute(session, "LoadScene", path=scene_path)
             def scenario_projected():
                 data = live_prim(session, "/World", topology=True)
@@ -331,6 +356,7 @@ def main() -> None:
             wait_for(session, scenario_projected, "scenario scene projection")
             wait_for_ready(session.port)
             telemetry_retirement_verdict(session, telemetry)
+            verdict("verify_exposure_retired", surface)
             before_interaction_restart = scenario_projected()["topology"]["binding"]["entity"]
             code = SOURCE.read_text(encoding="utf-8") + "\nqueue_scene_interactions_and_restart();"
             interaction_ids = json.loads(execute(session, "RunRhai", code=code)["stdout"].strip())

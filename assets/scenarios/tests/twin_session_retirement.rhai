@@ -3,6 +3,25 @@
 const TEST_KIND = "headless";
 import "lunco://scripting/tools/modelica_editor" as modelica_editor;
 
+fn exposure_present(namespace) {
+    query("ReadExposures", #{surface: namespace}).surfaces.contains(namespace)
+}
+
+fn verify_exposure_published(namespace) {
+    report_verdict([
+        t_true(exposure_present(namespace), "outgoing authored surface is retained in the public registry"),
+    ], "Exposure publication", "EXPOSURE_PUBLICATION")
+}
+
+fn verify_exposure_retired(namespace) {
+    report_verdict([
+        t_true(!exposure_present(namespace), "retired surface and its properties are removed from the public registry"),
+        t_true(exposure_present("camera-status"), "explicit application camera surface survives"),
+        t_true(exposure_present("engine-health"), "explicit application health surface survives"),
+        t_true(exposure_present("application-cadence"), "explicit application cadence surface survives"),
+    ], "Exposure retirement", "EXPOSURE_RETIREMENT")
+}
+
 fn scene_policy_hook() {
     policy_hook("runtime.ui.properties")
 }

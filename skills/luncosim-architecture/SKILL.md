@@ -202,6 +202,10 @@ Script backends register `ScenarioDriver::retire_removed_model` so interactive
 attachments on retiring entities stop during the removal flush before scene
 resources reset. Independent source-document lifetime does not extend the
 running program's entity lifetime; stable application hosts remain explicit.
+`EngineExposures` removes scene namespaces and their data at that final reset;
+application producers explicitly declare `retain_across_scenes`. Register
+`ExposureRefresh` and authored surface/program caches with the same boundary.
+Surviving change-gated producers wake once when their namespace is absent.
 Projection caches and retained source handles are scene resources too. Reset
 their previous-source signal and request one refresh without relying on an
 asset identity or revision change. USD policy retirement reuses the same

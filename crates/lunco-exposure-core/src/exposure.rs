@@ -2,12 +2,12 @@
 //!
 //! Engine producers publish named snapshots here. Consumers may be an HTML UI,
 //! egui, an API stream, a remote client, or a diagnostic recorder. The registry
-//! deliberately has no renderer dependency and changes only when an exposed
-//! value changes.
+//! deliberately has no renderer dependency. Publication revisions track value
+//! changes, namespace withdrawal and scene retirement.
 
 use bevy::prelude::Resource;
-use lunco_core::GlobalEntityId;
-use std::collections::HashMap;
+use lunco_core::{GlobalEntityId, SceneResource};
+use std::collections::{HashMap, HashSet};
 
 /// Maximum presentation publication rate for reactive runtime consumers.
 pub const EXPOSURE_UPDATE_HZ: f32 = 20.0;
@@ -60,11 +60,13 @@ pub struct ExposureSurface {
 
 /// Retained named exposure snapshots shared by engine and presentation
 /// consumers. `revision` is the change-detection boundary; it is not a frame
-/// counter and does not change for identical values.
+/// counter. Identical writes keep it stable; namespace withdrawal and scene
+/// retirement advance it.
 #[derive(Resource, Debug)]
 pub struct EngineExposures {
     pub surfaces: HashMap<String, ExposureSurface>,
     pub revision: u64,
+    application_surfaces: HashSet<String>,
 }
 
 impl Default for EngineExposures {
@@ -72,7 +74,21 @@ impl Default for EngineExposures {
         Self {
             surfaces: HashMap::new(),
             revision: 1,
+            application_surfaces: HashSet::new(),
         }
+    }
+}
+
+impl SceneResource for EngineExposures {
+    fn clear_scene(&mut self) {
+        let mut outgoing = std::mem::take(self);
+        self.revision = outgoing.revision.wrapping_add(1);
+        self.application_surfaces = std::mem::take(&mut outgoing.application_surfaces);
+        self.surfaces = outgoing
+            .surfaces
+            .into_iter()
+            .filter(|(namespace, _)| self.application_surfaces.contains(namespace))
+            .collect();
     }
 }
 
@@ -102,6 +118,8 @@ impl Default for ExposureRefresh {
         Self::new()
     }
 }
+
+impl SceneResource for ExposureRefresh {}
 
 impl ExposureRefresh {
     pub fn new() -> Self {
@@ -142,6 +160,19 @@ pub struct ExposureWriter<'a> {
 }
 
 impl EngineExposures {
+    /// Give an application-owned surface an explicit lifetime across scene
+    /// replacement. Other snapshots expire at teardown, including hidden data.
+    pub fn retain_across_scenes(&mut self, namespace: impl Into<String>) {
+        self.application_surfaces.insert(namespace.into());
+    }
+
+    /// Withdraw a retired surface and all of its retained data.
+    pub fn remove_surface(&mut self, namespace: &str) {
+        if self.surfaces.remove(namespace).is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
     pub fn writer(&mut self, namespace: &str) -> ExposureWriter<'_> {
         let surface = self.surfaces.entry(namespace.to_owned()).or_default();
         ExposureWriter {
@@ -223,6 +254,63 @@ impl From<f64> for ExposureValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_lifecycle_retires_surfaces_after_terminal_publications() {
+        use bevy::prelude::*;
+        use lunco_core::{AppSceneExt, SceneOwned, SceneTeardown, run_scene_teardown};
+        #[derive(Component)]
+        struct TerminalPublisher;
+        let mut app = App::new();
+        app.init_scene_resource::<EngineExposures>()
+            .init_scene_resource::<ExposureRefresh>()
+            .add_systems(SceneTeardown, |mut exposures: ResMut<EngineExposures>| {
+                exposures
+                    .writer("shutdown")
+                    .property("source", "old source");
+            })
+            .add_observer(|_: On<Remove, TerminalPublisher>, mut commands: Commands| {
+                commands.queue(|world: &mut World| {
+                    world
+                        .resource_mut::<EngineExposures>()
+                        .writer("removal")
+                        .property("source", "old source");
+                });
+            });
+        app.world_mut()
+            .resource_mut::<EngineExposures>()
+            .retain_across_scenes("application");
+        app.world_mut()
+            .resource_mut::<EngineExposures>()
+            .writer("application")
+            .property("status", "ready");
+        for _ in 0..3 {
+            app.world_mut().spawn((SceneOwned, TerminalPublisher));
+            let revision = {
+                let mut exposures = app.world_mut().resource_mut::<EngineExposures>();
+                exposures.writer("scene").property("secret", "old source");
+                exposures
+                    .writer("hidden-scene")
+                    .property("secret", "hidden old source");
+                exposures.revision
+            };
+            {
+                let mut refresh = app.world_mut().resource_mut::<ExposureRefresh>();
+                refresh.clear_dirty();
+                refresh.first_update = false;
+            }
+            run_scene_teardown(app.world_mut());
+            let exposures = app.world().resource::<EngineExposures>();
+            assert_eq!(exposures.surfaces.len(), 1);
+            assert_eq!(
+                exposures.surfaces["application"].properties["status"].render(),
+                "ready"
+            );
+            assert!(exposures.revision > revision);
+            let refresh = app.world().resource::<ExposureRefresh>();
+            assert!(refresh.first_update && refresh.any_dirty());
+        }
+    }
 
     #[test]
     fn revision_changes_only_for_new_exposure_values() {

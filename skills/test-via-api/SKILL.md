@@ -282,8 +282,10 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ReadExposures","params":{"surface":"driven-vessel"}}' | jq .
 ```
 
-The response's `revision` changes only when an exposed value or visibility flag
-changes. If it is stable, an unchanged runtime surface should not rebuild its
+The response's `revision` tracks changed values, visibility, namespace withdrawal
+and scene retirement. Scene namespaces and their properties are removed on
+reload; only explicitly application-owned surfaces survive. If the revision is
+stable, an unchanged runtime surface should not rebuild its
 view-model. Use `CaptureScreenshot` for the visual check. `ReloadShader` and
 `RunScenario` reload WGSL and Rhai respectively; neither reloads HTML/CSS.
 

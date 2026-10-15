@@ -475,8 +475,12 @@ The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
 20 Hz); discrete lifecycle facts should use an event observer. Camera status
-is the latter. `EngineExposures.revision` advances only when a visibility flag
-or value actually changes; it is not a frame counter.
+is the latter. `EngineExposures.revision` tracks changed values, visibility,
+namespace withdrawal and scene retirement; it is not a frame counter.
+The registry and authored metadata caches follow the shared
+[scene resource lifetime contract](61-scene-lifecycle-and-teardown.md).
+Namespaces default to scene lifetime, with application retention declared at
+the producer through `retain_across_scenes`.
 
 The runtime-surface producer keeps authored USD metadata behind its existing
 active-root and `UsdStageRevision` cache. That includes surface membership,

@@ -236,6 +236,18 @@ telemetry sessions, physics kinematic cursors, sampler plans, queued delivery,
 focus, browser workers/indexes and transient browser requests use the same
 resource registration. API-created channel entities carry `SceneOwned`.
 
+Runtime exposures follow the same lifetime contract. `EngineExposures` removes
+scene namespaces, subjects and properties, including hidden surfaces, at the
+registered resource reset boundary. Only namespaces explicitly declared with
+`EngineExposures::retain_across_scenes` survive; health, application cadence and
+camera status use that lifetime. Authored topology/program caches and seminar
+trace state are registered scene resources too. `ExposureRefresh` resets all
+invalidation domains and requests an immediate first publication. Independent
+change-gated producers also wake once when their namespace is absent; dataset
+consent uses that condition so surviving application downloads republish while
+retired Twin scope data remains removed. Editing away an authored surface
+withdraws its namespace through `EngineExposures::remove_surface`.
+
 Independent editor Modelica documents may survive scene reload. The telemetry
 owner requests one projection pass when its scene cache resets, so paused
 sources republish current state without advancing their solvers. Its typed
@@ -524,13 +536,17 @@ a conflicting duplicate of a prim that no longer exists.
 
 ## Verification
 
-Generic `scene_lifecycle` tests at the core, scripting, guided UI and runtime UI
-owners cover repeated reset, removal/shutdown callbacks, independent documents,
+Generic `scene_lifecycle` tests at the core, scripting, exposure, guided UI and
+runtime UI owners cover repeated reset, removal/shutdown callbacks, independent documents,
 pending preparation and preserved application state. These are engine ownership
 invariants; authored Rhai retains control over script behavior. The production
 `scripts/api/test_twin_session_retirement.py` driver exercises Twin replacement
 and full reload through the public API with verdicts in
-`assets/scenarios/tests/twin_session_retirement.rhai`.
+`assets/scenarios/tests/twin_session_retirement.rhai`. Its exposure probe authors
+an unsaved registered surface field with `ApplyUsdOp`, proves publication,
+renames the namespace and proves withdrawal, then verifies removal across Twin
+replacement, same-path reopening and `LoadScene` while application namespaces
+survive.
 
 ## See also
 

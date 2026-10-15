@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_assets_datasets::{
     DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState,
 };
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, on_command, register_commands};
 use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_hooks::HookValue;
 use lunco_workspace::WorkspaceResource;
@@ -444,7 +444,8 @@ pub(crate) fn publish_dataset_provisioning_surface(
         || workspace.as_ref().is_some_and(|value| value.is_changed())
         || state.is_changed()
         || state.last_hook_generation != hook_generation
-        || state.last_interactive != Some(interactive);
+        || state.last_interactive != Some(interactive)
+        || !exposures.surfaces.contains_key(SURFACE_NAMESPACE);
     if !dirty {
         return;
     }
@@ -645,7 +646,7 @@ pub(crate) fn on_dataset_scope_removed(
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<DatasetProvisioningState>()
-        .init_resource::<EngineExposures>()
+        .init_scene_resource::<EngineExposures>()
         .add_observer(on_dataset_scope_ready)
         .add_observer(on_dataset_scope_removed)
         .add_observer(on_set_missing_asset_prompt_suppressed)
@@ -658,11 +659,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dataset_projection_input_ticks_and_new_facts() {
+    fn scene_lifecycle_dataset_projection_input_ticks_and_new_facts() {
         let mut app = App::new();
         app.init_resource::<DatasetRegistry>()
             .init_resource::<DatasetProvisioningState>()
-            .init_resource::<EngineExposures>()
+            .init_scene_resource::<EngineExposures>()
             .add_systems(Update, publish_dataset_provisioning_surface);
         app.update();
         let state_tick = app
@@ -713,6 +714,35 @@ mod tests {
                 .unwrap()
                 .last_changed(),
             refreshed
+        );
+
+        lunco_core::run_scene_teardown(app.world_mut());
+        assert!(
+            !app.world()
+                .resource::<EngineExposures>()
+                .surfaces
+                .contains_key(SURFACE_NAMESPACE)
+        );
+        app.update();
+        assert!(
+            app.world()
+                .resource::<EngineExposures>()
+                .surfaces
+                .contains_key(SURFACE_NAMESPACE)
+        );
+        let republished = app
+            .world()
+            .get_resource_ref::<EngineExposures>()
+            .unwrap()
+            .last_changed();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get_resource_ref::<EngineExposures>()
+                .unwrap()
+                .last_changed(),
+            republished,
+            "scene reset wakes the unchanged source exactly once"
         );
 
         let window = app.world_mut().spawn(Window::default()).id();

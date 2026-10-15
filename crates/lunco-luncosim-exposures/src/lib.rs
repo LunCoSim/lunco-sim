@@ -20,6 +20,7 @@ use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
 use lunco_core::GlobalEntityId;
 use lunco_core::SceneMountState;
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealthSnapshot};
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
@@ -52,11 +53,9 @@ impl Plugin for RuntimeExposuresPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        app.init_resource::<EngineExposures>()
-            .init_resource::<ExposureRefresh>()
-            .add_systems(Startup, publish_initial_camera_exposure)
+        install_exposure_state(app);
+        app.add_systems(Startup, publish_initial_camera_exposure)
             .add_observer(on_camera_selection_status_changed)
-            .add_systems(lunco_core::SceneTeardown, clear_scene_exposures)
             .add_systems(Update, mark_exposure_dirty)
             .add_systems(
                 Update,
@@ -78,6 +77,13 @@ impl Plugin for RuntimeExposuresPlugin {
     }
 }
 
+fn install_exposure_state(app: &mut App) {
+    app.init_scene_resource::<EngineExposures>()
+        .init_scene_resource::<ExposureRefresh>()
+        .init_scene_resource::<RuntimeSurfaceRootCache>()
+        .init_scene_resource::<SeminarExposureTrace>();
+}
+
 /// Publish engine health through the same generic retained exposure boundary
 /// used by authored HUDs and remote presentation clients.
 ///
@@ -94,6 +100,7 @@ fn publish_engine_health_exposure(
         return;
     }
 
+    exposures.retain_across_scenes("engine-health");
     let mut surface = exposures.writer("engine-health");
     surface.clear_properties();
     if let Some(fps) = engine.fps {
@@ -134,6 +141,7 @@ fn publish_application_cadence_exposure(
         return;
     }
 
+    exposures.retain_across_scenes("application-cadence");
     let mut surface = exposures.writer("application-cadence");
     surface.clear_properties();
     surface.property("command_sequence", cadence.command.sequence.to_string());
@@ -708,7 +716,7 @@ pub(crate) struct RuntimeOverlayInputs<'w> {
 /// These are event logs, not a second domain state store: the authoritative
 /// vessel pose, terrain oracle, battery outputs, and overlay resource remain
 /// owned by their existing systems.
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub(crate) struct SeminarExposureTrace {
     current_vessel: Option<Entity>,
     last_label: Option<String>,
@@ -716,6 +724,8 @@ pub(crate) struct SeminarExposureTrace {
     max_slope_deg: Option<f32>,
     overlay: Option<lunco_terrain_surface::overlay::TerrainOverlayParams>,
 }
+
+impl SceneResource for SeminarExposureTrace {}
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SeminarTraceInputs<'w, 's> {
@@ -1592,24 +1602,55 @@ mod exposure_tests {
     }
 
     #[test]
-    fn scene_teardown_hides_scene_surfaces_but_retains_camera_status() {
-        let mut exposures = EngineExposures::default();
-        exposures.writer("camera-status").visible(true);
-        exposures.writer("subject-surface").visible(true);
-        exposures.writer("secondary-surface").visible(true);
-        let mut refresh = ExposureRefresh {
-            first_update: false,
-            ..default()
-        };
-        refresh.clear_dirty();
-
-        clear_scene_exposures_impl(&mut exposures, &mut refresh);
-
-        assert!(exposures.surfaces["camera-status"].visible);
-        assert!(!exposures.surfaces["subject-surface"].visible);
-        assert!(!exposures.surfaces["secondary-surface"].visible);
-        assert!(refresh.first_update);
-        assert!(refresh.any_dirty());
+    fn scene_lifecycle_releases_authored_projection_caches() {
+        let mut app = App::new();
+        install_exposure_state(&mut app);
+        let entity = app.world_mut().spawn_empty().id();
+        {
+            let mut cache = app.world_mut().resource_mut::<RuntimeSurfaceRootCache>();
+            cache.initialized = true;
+            cache.active_root = Some(entity);
+            cache.revision = Some(42);
+            cache.roots.push(AuthoredRuntimeSurface {
+                entity,
+                surface_id: "retired".into(),
+                visibility_mode: "always".into(),
+                programs: vec![AuthoredRuntimeProgram {
+                    path: "/Old/Program".into(),
+                    entity: Some(entity),
+                    implementation_source: "sourceCode".into(),
+                    source: "old authored source".into(),
+                }],
+            });
+            cache
+                .public_output_names
+                .insert(entity, Some(HashSet::from(["old-output".into()])));
+            cache.retired_surface_ids.push("older".into());
+        }
+        {
+            let mut trace = app.world_mut().resource_mut::<SeminarExposureTrace>();
+            trace.current_vessel = Some(entity);
+            trace.last_label = Some("old vessel".into());
+            trace.tipped = true;
+            trace.max_slope_deg = Some(45.0);
+        }
+        lunco_core::run_scene_teardown(app.world_mut());
+        let cache = app.world().resource::<RuntimeSurfaceRootCache>();
+        assert!(!cache.initialized);
+        assert!(cache.active_root.is_none() && cache.revision.is_none());
+        assert!(
+            cache.roots.is_empty()
+                && cache.public_output_names.is_empty()
+                && cache.retired_surface_ids.is_empty()
+        );
+        let trace = app.world().resource::<SeminarExposureTrace>();
+        assert!(
+            trace.current_vessel.is_none()
+                && trace.last_label.is_none()
+                && trace.max_slope_deg.is_none()
+        );
+        assert!(!trace.tipped);
+        assert!(trace.overlay.is_none());
     }
 }
 
@@ -1699,39 +1740,6 @@ pub(crate) fn mark_exposure_dirty(
     if overlay_changed {
         refresh.overlay_dirty = true;
     }
-}
-
-/// Withdraw scene-derived surfaces synchronously at the replacement boundary.
-///
-/// Bevy defers scene entity despawns, while the retained UI consumes the last
-/// exposure snapshot. Hiding these namespaces here prevents an outgoing HUD from
-/// remaining visible until the next bounded publication; the next active scene
-/// repopulates them through the normal first-update path. Camera status is an
-/// application-owned retained fact and intentionally survives scene replacement.
-pub(crate) fn clear_scene_exposures(
-    mut exposures: ResMut<EngineExposures>,
-    mut refresh: ResMut<ExposureRefresh>,
-) {
-    clear_scene_exposures_impl(&mut exposures, &mut refresh);
-}
-
-fn clear_scene_exposures_impl(exposures: &mut EngineExposures, refresh: &mut ExposureRefresh) {
-    let namespaces = exposures
-        .surfaces
-        .keys()
-        .filter(|namespace| namespace.as_str() != "camera-status")
-        .cloned()
-        .collect::<Vec<_>>();
-    for namespace in namespaces {
-        exposures.writer(&namespace).visible(false);
-    }
-
-    refresh.driven_vessel_dirty = true;
-    refresh.control_dirty = true;
-    refresh.schema_dirty = true;
-    refresh.celestial_dirty = true;
-    refresh.overlay_dirty = true;
-    refresh.first_update = true;
 }
 
 /// Run the exposure publisher on its existing bounded cadence while preserving
@@ -1825,8 +1833,8 @@ pub(crate) fn publish_exposure(
     mut runtime: ExposureRuntime,
     overlays: RuntimeOverlayInputs,
     trace_inputs: SeminarTraceInputs,
-    mut seminar: Local<SeminarExposureTrace>,
-    mut runtime_surface_roots: Local<RuntimeSurfaceRootCache>,
+    mut seminar: ResMut<SeminarExposureTrace>,
+    mut runtime_surface_roots: ResMut<RuntimeSurfaceRootCache>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
 ) {
@@ -2467,7 +2475,7 @@ fn publish_lunica_schema_exposure(
 /// Cached authored runtime-surface topology. The USD revision is the authoritative
 /// invalidation boundary; entity IDs remain valid until that same projection
 /// changes, so a motion-only publication never scans every USD prim again.
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub(crate) struct RuntimeSurfaceRootCache {
     revision: Option<u64>,
     active_root: Option<Entity>,
@@ -2476,6 +2484,8 @@ pub(crate) struct RuntimeSurfaceRootCache {
     public_output_names: HashMap<Entity, Option<HashSet<String>>>,
     retired_surface_ids: Vec<String>,
 }
+
+impl SceneResource for RuntimeSurfaceRootCache {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AuthoredRuntimeSurface {
@@ -2575,10 +2585,7 @@ fn publish_runtime_surface_exposures(
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     for surface_id in retired_surface_ids {
-        let mut ui = exposures.writer(surface_id);
-        ui.subject(None);
-        ui.visible(false);
-        ui.clear_properties();
+        exposures.remove_surface(surface_id);
     }
 
     for root in roots {
@@ -3051,6 +3058,7 @@ fn publish_camera_exposure(
         ),
     ]);
     let properties = runtime_ui_properties(&facts, "camera-status", runtime_context);
+    exposures.retain_across_scenes("camera-status");
     let mut ui = exposures.writer("camera-status");
     ui.visible(true);
     ui.clear_properties();

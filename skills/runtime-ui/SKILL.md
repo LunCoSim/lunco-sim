@@ -116,6 +116,17 @@ and remote consumers. Do not add `domain_to_view`, `vessel_exposure`, or a
 widget-specific Rust registry. Resolve source state in the engine producer;
 keep markup unaware of ECS/domain types.
 
+Initialize `EngineExposures` and scene-derived producer caches through
+`AppSceneExt::init_scene_resource`. Surfaces default to scene lifetime,
+including hidden properties and subject identities. Application-owned producers
+must explicitly call `retain_across_scenes(namespace)`; never retain a namespace
+that can contain Twin-owned values. Change-gated producers that survive a scene
+must republish once when their namespace is absent after reset. Remove an
+authored namespace with `remove_surface` when its source is deleted or renamed.
+The production Twin retirement gate seeds an unsaved authored surface through
+`ApplyUsdOp` and uses Rhai `ReadExposures` verdicts across replacement and
+same-path reopening.
+
 Engine health follows the same generic path. Read the typed
 `EngineHealthSnapshot`/`PhysicsHealthSnapshot` publication and expose named
 properties through the ordinary `engine-health` namespace; do not add a HUD
@@ -140,8 +151,9 @@ completed script evaluations, or read the command/REPL owners directly.
 
 Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
-`EngineExposures.revision` changes only when a value or visibility flag changes;
-it is not a frame counter. Do not use JSON to detect internal changes.
+`EngineExposures.revision` tracks changed values, visibility, namespace withdrawal
+and scene retirement; it is not a frame counter. Do not use JSON to detect
+internal changes.
 When one producer owns several surfaces, keep invalidation domains separate so
 continuous motion does not rebuild static authored topology. Use the existing
 authoritative stage revision for USD-derived membership and cache that
