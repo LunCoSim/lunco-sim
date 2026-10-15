@@ -107,6 +107,8 @@ Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against
 monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
 a short native physics service time does not certify realtime co-simulation.
+For scene-test diagnostics, `--tick-hz` varies manual update pacing; use the
+runtime's `Time<Fixed>` quantum and elapsed time when interpreting physics cost.
 Completed Modelica receipts have one reader in `SimulationCompletions`, serviced
 before clock projection and by the native driver on response readiness between
 application updates. Windowed completion admission still depends on application

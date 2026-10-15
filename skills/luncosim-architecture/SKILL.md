@@ -103,7 +103,9 @@ bundle. The Bash and PowerShell matrices in
 `scripts/test-deterministic-physics-profiles.sh` and
 `scripts/test-deterministic-physics-profiles.ps1` invoke regular production
 `luncosim test` processes and trust their exit status. They leave `--tick-hz`
-unset, so the default fixed step is 60 Hz; the runner advances the manual clock
+unset, supplying one nominal physics interval per manual update. The shared
+runtime owns the physics timestep; `--tick-hz` and jitter vary only the driver's
+clock input. The runner reports completed fixed-clock elapsed time and advances
 without wall-time pacing. This remains fixture-specific evidence. Do not claim
 whole-simulation replay determinism while the remaining reviewed gaps are open.
 

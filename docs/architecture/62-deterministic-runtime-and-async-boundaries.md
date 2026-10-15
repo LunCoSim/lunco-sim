@@ -1430,8 +1430,13 @@ The whole-simulation guarantee remains open because:
    `scripts/test-deterministic-physics-profiles.sh` and
    `scripts/test-deterministic-physics-profiles.ps1` invoke production
    `luncosim test` processes and check their exit statuses. They leave
-   `--tick-hz` unset, so the fixed step remains 60 Hz; the runner advances the
-   manual clock without wall-time pacing. This remains fixture-specific evidence, not
+   `--tick-hz` unset, supplying one nominal physics interval per manual update.
+   The production composition owns the fixed timestep in every host; scene
+   tests change only manual wall-clock input duration through `--tick-hz` and
+   `--jitter`. Update count and completed tick count are independent. Reported
+   simulation duration comes from completed `Time<Fixed>` elapsed time, so a
+   different driver cadence cannot relabel physics or Modelica time. The runner
+   advances without wall-time pacing. This remains fixture-specific evidence, not
    whole-simulation replay determinism. The current profile
    records effective pool width but does not select a deterministic Avian
    solver profile; that guarantee still needs a measured production choice or

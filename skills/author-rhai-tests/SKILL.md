@@ -158,6 +158,11 @@ Review drift from an older fixture against the current physics/Modelica owners;
 a fresh capture alone is not proof that the candidate preserves behavior.
 Record pool width from `clock_snapshot().physics_compute_threads` with
 `physics_profile_known=true`; CLI `threads=0` alone does not observe the width.
+For update-cadence sensitivity, vary `--tick-hz` or jitter while retaining the
+production physics clock. `clock_snapshot().fixed_dt_s` observes its quantum;
+the runner's `sim` duration measures completed physics time. Cover default
+Modelica exchange, explicit subrates, pause/rate changes and telemetry with the
+`modelica_initialization_network` gate at a different manual update cadence.
 
 For an intentional owner-contract repair that changes initialized state, first
 demonstrate the fault and trace state differences to the authored inputs and

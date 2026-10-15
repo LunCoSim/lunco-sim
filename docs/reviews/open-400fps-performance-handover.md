@@ -9563,3 +9563,53 @@ and `target/participant-policy-{profile-driver.log,power.csv}`. The current
 policy is restored in the last phase; the app and collector exit zero and
 release their ports. The 200 FPS, sub-1 ms physics and complete simulation/UI
 isolation goals remain open.
+
+### Shared physics clock in the scene-test driver — 2026-10-15
+
+The scene-test driver supplies manual elapsed duration through Bevy's existing
+`TimeUpdateStrategy`; the production composition retains its `Time<Fixed>`
+quantum, fixed scheduler and Modelica barrier. `--tick-hz` selects manual update
+cadence. Completed simulation duration is read from `Time<Fixed>::elapsed`,
+independently of that input rate. There is no test-specific integration clock,
+replacement stepper, policy hook or conditional networking path.
+
+Before this repair, a 120 Hz manual driver also replaced `Time<Fixed>` with
+8.333333 ms. Lightyear's `TimelinePlugin::finish` triggered its configured
+`SetTickDuration` event and restored 16.666667 ms in networking builds. Without
+networking, the same authored Modelica clock gate failed 4/34 checks: default
+exchange cadence, resumed coupling and two telemetry-time checks. Networking
+masked the competing owner. The process summary also divided completed ticks
+by manual update rate, reporting half the actual physics duration at 120 Hz.
+Evidence is `target/communication-120-owner.log` and
+`target/communication-no-network-baseline.log`; the latter exits 1.
+
+The repaired normal production builds pass the existing 34-check
+`modelica_initialization_network` gate with a 120 Hz manual driver, both with
+and without networking. The non-networking build also passes at 30 Hz with
+0.3 jitter. These authored checks cover coupled initialization, default
+per-physics-tick exchange, explicit 30 Hz exchange, pause/resume, 4x/0.25x rates,
+latched interval-start inputs and telemetry timestamps. The inconsistent
+initialization fixture still reaches its declared `modelica-initialization-failed`
+terminal fault and exits zero at 120 Hz manual cadence. An external process
+check verifies each exit/verdict and its rounded simulation duration against
+completed 60 Hz ticks. Evidence is
+`target/communication-driver-{local,network}-results.json` and the corresponding
+`target/communication-driver-{local,network}-*.log` files. Temporary owner
+diagnostics are removed before the passing builds.
+
+A separate unprofiled Griffin run of the preceding HUD change uses API 4344
+(PID 51185), reaches tick 1858 and exits zero through the API. Its last retained
+window has fixed-cycle p50/p95/max 5.157/8.050/13.004 ms, native-physics p50
+2.608 ms and retained FPS median 82.39. This is a landing/early-egress window,
+not settled route acceptance; competing work and power conditions change during
+the run. Evidence is `target/participant-policy-normal-{context,samples,status}.json`
+and `target/participant-policy-normal{.png,-driver.log}`. It establishes neither
+200 FPS nor sub-1 ms physics.
+
+Native exports of the retained `griffin-d17d65261.tracy` capture over seconds
+80–94 attribute 1.395 ms per physics tick to inclusive CCD sweep geometry:
+1.005 ms candidate geometry (including 0.416 ms native initial contacts),
+0.239 ms leaf trajectories and 0.088 ms swept BVH work. Parent and child costs
+must not be summed. These numbers identify the next contact-query investigation;
+they do not justify changing substeps, contact tolerance or graphics quality.
+Evidence is `target/ccd-existing-breakdown.json` and its successful native export.
