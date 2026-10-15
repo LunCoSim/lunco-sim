@@ -21,6 +21,7 @@ fi
 PORT="$1"
 TEST="$2"
 PROBE="${3:-}"
+BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 
 if [[ ! -f "$TEST" ]]; then
     echo "Rhai test does not exist: $TEST" >&2
@@ -44,7 +45,7 @@ set +e
 CODE="$PRELUDE"
 CODE+=$'\n'
 CODE+="$(<"$TEST")"
-OUTPUT="$(target/debug/luncosim rhai --api "$PORT" --stdout -e "$CODE")"
+OUTPUT="$("$BIN" rhai --api "$PORT" --stdout -e "$CODE")"
 CODE=$?
 set -e
 
@@ -56,7 +57,9 @@ if ((CODE != 0)); then
     exit "$CODE"
 fi
 
-LAST="$(printf '%s\n' "$OUTPUT" | tail -n 1)"
+# The CLI prints the Rhai expression result after script output. Read authored
+# verdict lines, and preserve any failure when a source reports several groups.
+LAST="$(printf '%s\n' "$OUTPUT" | awk '/^TESTS_OK[[:space:]]/ { verdict=$0 } /^TESTS_FAIL([[:space:]]|$)/ { failure=$0 } END { print failure ? failure : verdict }')"
 case "$LAST" in
     TESTS_OK\ *) exit 0 ;;
     TESTS_FAIL\ *) exit 1 ;;

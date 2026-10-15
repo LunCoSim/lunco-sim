@@ -81,7 +81,8 @@ def verdict(session: ProductionSession, baseline: dict, signal: str, prepared: i
     result = subprocess.run([str(BINARY), "rhai", "--api", str(session.port), "--stdout", "-e", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
     print(result.stdout.strip(), flush=True)
     lines = result.stdout.strip().splitlines()
-    if result.returncode or not lines or not lines[-1].startswith("TESTS_OK "):
+    if (result.returncode or "TESTS_FAIL" in result.stdout
+            or not any(line.startswith("TESTS_OK ") for line in lines)):
         print(json.dumps({"baseline": baseline, "current": execute(session, "InspectTelemetryCatalog", {"signal": signal})}), flush=True)
         raise RuntimeError(f"authored catalog verdict failed: {result.stdout}\n{result.stderr}")
 

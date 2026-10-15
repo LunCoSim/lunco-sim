@@ -72,7 +72,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
-        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
+        app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin);
         app.add_plugins(lunco_capture::screenshot::ScreenshotPlugin);
 
         // No winit event loop, so tick the app ourselves — flat out, zero wait:

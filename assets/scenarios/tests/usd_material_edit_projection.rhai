@@ -6,11 +6,14 @@ const SHADER = ROOT + "/World/MyMaterial/PbrShader";
 const GEOMETRY = ROOT + "/World/MeshWithMaterial";
 const PREVIEW = 15991;
 const SECOND_VIEW = 15992;
+const SECOND_PREVIEW = 15993;
+const PROBE = ROOT + "/World/LifecycleProbe";
 
 fn finish(me, passed, message) {
-    if me.done { return; }
+    if me.done { return me; }
     me.done = true;
     report_verdict([t_true(passed, message)], "USD MATERIAL EDIT PROJECTION", "USD_MATERIAL_EDIT_PROJECTION");
+    me
 }
 
 fn document_id() {
@@ -42,6 +45,25 @@ fn preview_matches(viewport, preview_id, doc) {
             && preview.doc_id == doc { matches += 1; }
     }
     matches
+}
+
+fn preview_record(id) {
+    for preview in assembly_edit::viewport().previews {
+        if preview.preview.to_string() == id.to_string() { return preview; }
+    }
+    ()
+}
+
+fn framed_at(preview_id, view_id, x) {
+    let preview = preview_record(preview_id);
+    if preview == () { return false; }
+    for view in preview.views {
+        if view.view.to_string() == view_id.to_string() {
+            return (view.target[0] - x).abs() < 0.0001
+                && view.target[1].abs() < 0.0001 && view.target[2].abs() < 0.0001;
+        }
+    }
+    false
 }
 
 fn shader_matches(doc, red, green, blue, roughness) {
@@ -97,7 +119,7 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 45.0 {
-        finish(this, false, "USD material edit timed out in phase " + this.phase);
+        this = finish(this, false, "USD material edit timed out in phase " + this.phase);
         return;
     }
 
@@ -110,7 +132,7 @@ fn on_tick(me, ctx) {
         }
         let forked = assembly_edit::fork_document(this.source_doc, "PBR material preview");
         if forked == () || forked.ok == false {
-            finish(this, false, "Editor did not accept a material preview document fork");
+            this = finish(this, false, "Editor did not accept a material preview document fork");
             return;
         }
         this.phase = 1;
@@ -130,14 +152,14 @@ fn on_tick(me, ctx) {
         let source = assembly_edit::sync_document(this.doc, ());
         if description == () || description.ok == false || source == ()
             || source.layers == () || source.layers.root == () {
-            finish(this, false, "USD material fixture document was not readable");
+            this = finish(this, false, "USD material fixture document was not readable");
             return;
         }
         this.generation = description.generation;
         this.original_source = source.layers.root.source;
         let opened = assembly_ui::open_session(PREVIEW, this.doc, "@root@");
         if opened == () || opened.ok == false {
-            finish(this, false, "Editor preview session could not be opened");
+            this = finish(this, false, "Editor preview session could not be opened");
             return;
         }
         this.phase = 2;
@@ -145,9 +167,11 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 2 {
+        let prepared = preview_record(PREVIEW);
+        if prepared == () || !prepared.projection_ready { return; }
         let description = assembly_edit::describe(this.doc);
         if description == () || description.ok == false {
-            finish(this, false, "Editor preview document became unavailable");
+            this = finish(this, false, "Editor preview document became unavailable");
             return;
         }
         this.generation = description.generation;
@@ -156,7 +180,7 @@ fn on_tick(me, ctx) {
         }
         let viewport = assembly_edit::viewport();
         if viewport == () {
-            finish(this, false, "InspectUsdViewport returned no viewport state");
+            this = finish(this, false, "InspectUsdViewport returned no viewport state");
             return;
         }
         let preview_count = preview_matches(viewport, PREVIEW, this.doc);
@@ -171,13 +195,13 @@ fn on_tick(me, ctx) {
             || viewport.focused_preview.to_string() != PREVIEW.to_string()
             || preview == () || !preview.focused || preview.views.len() != 1
             || viewport.focused_view == () || viewport.focused_view != preview.views[0].view {
-            finish(this, false, "InspectUsdViewport did not report the opened preview session");
+            this = finish(this, false, "InspectUsdViewport did not report the opened preview session");
             return;
         }
         this.primary_view = preview.views[0].view;
         let opened = assembly_edit::preview_view_open(PREVIEW, SECOND_VIEW);
         if opened == () || opened.id == () || opened.ok == false {
-            finish(this, false, "public USD command did not open a second preview view");
+            this = finish(this, false, "public USD command did not open a second preview view");
             return;
         }
         this.command = opened.id;
@@ -189,12 +213,12 @@ fn on_tick(me, ctx) {
         let result = command_result(this.command);
         if result.status == "pending" { return; }
         if result.status != "applied" || result.ok != true {
-            finish(this, false, "second USD preview view failed: " + result.error);
+            this = finish(this, false, "second USD preview view failed: " + result.error);
             return;
         }
         let focused = assembly_edit::preview_view_focus(SECOND_VIEW);
         if focused == () || focused.id == () || focused.ok == false {
-            finish(this, false, "public USD command did not focus the second preview view");
+            this = finish(this, false, "public USD command did not focus the second preview view");
             return;
         }
         this.command = focused.id;
@@ -206,12 +230,12 @@ fn on_tick(me, ctx) {
         let result = command_result(this.command);
         if result.status == "pending" { return; }
         if result.status != "applied" || result.ok != true {
-            finish(this, false, "second USD preview view could not be focused: " + result.error);
+            this = finish(this, false, "second USD preview view could not be focused: " + result.error);
             return;
         }
         let viewport = assembly_edit::viewport();
         if viewport == () {
-            finish(this, false, "InspectUsdViewport returned no viewport state");
+            this = finish(this, false, "InspectUsdViewport returned no viewport state");
             return;
         }
         let preview_count = preview_matches(viewport, PREVIEW, this.doc);
@@ -229,15 +253,15 @@ fn on_tick(me, ctx) {
             || preview.views[0].view != this.primary_view || preview.views[0].focused
             || preview.views[1].view.to_string() != SECOND_VIEW.to_string()
             || !preview.views[1].focused {
-            finish(this, false, "InspectUsdViewport did not report the exact focused preview/view handles");
+            this = finish(this, false, "InspectUsdViewport did not report the exact focused preview/view handles");
             return;
         }
         if !shader_matches(this.doc, 1.0, 0.5, 0.25, 0.75) {
-            finish(this, false, "fixture did not expose its authored USD material values");
+            this = finish(this, false, "fixture did not expose its authored USD material values");
             return;
         }
         if !geometry_matches(this.doc, 0.0, 1.0) {
-            finish(this, false, "fixture geometry did not match its initial preview");
+            this = finish(this, false, "fixture geometry did not match its initial preview");
             return;
         }
         let edit = assembly_edit::batch(this.doc, "Change material appearance", [
@@ -251,7 +275,7 @@ fn on_tick(me, ctx) {
                 value: [2.0, 1.0, 1.0] } },
         ], this.generation);
         if edit == () || edit.id == () || edit.ok == false {
-            finish(this, false, "public USD edit command rejected the material change");
+            this = finish(this, false, "public USD edit command rejected the material change");
             return;
         }
         this.command = edit.id;
@@ -264,7 +288,7 @@ fn on_tick(me, ctx) {
         let result = command_result(this.command);
         if result.status == "pending" { return; }
         if result.status != "applied" || result.ok != true {
-            finish(this, false, "USD material command failed: " + result.error);
+            this = finish(this, false, "USD material command failed: " + result.error);
             return;
         }
         this.generation = assembly_edit::describe(this.doc).generation;
@@ -279,12 +303,12 @@ fn on_tick(me, ctx) {
     if this.phase == 3 {
         if !preview_ready(PREVIEW, this.doc, this.generation) { return; }
         if !shader_matches(this.doc, 0.0, 0.0, 1.0, 0.1) {
-            finish(this, false, "USD edit did not update the authored material query and preview generation");
+            this = finish(this, false, "USD edit did not update the authored material query and preview generation");
             return;
         }
         if !geometry_matches(this.doc, 3.0, 2.0)
             || geometry_matches(this.doc, 0.0, 1.0) {
-            finish(this, false, "ready preview query returned geometry from the immutable recipe");
+            this = finish(this, false, "ready preview query returned geometry from the immutable recipe");
             return;
         }
         let restore = cmd("ApplyUsdOp", #{
@@ -293,7 +317,7 @@ fn on_tick(me, ctx) {
             op: #{ ReplaceSource: #{ edit_target: "@root@", text: this.original_source } },
         });
         if restore == () || restore.id == () || restore.ok == false {
-            finish(this, false, "public whole-source replacement command was rejected");
+            this = finish(this, false, "public whole-source replacement command was rejected");
             return;
         }
         this.command = restore.id;
@@ -304,15 +328,92 @@ fn on_tick(me, ctx) {
     if this.phase == 5 {
         if !preview_ready(PREVIEW, this.doc, this.generation) { return; }
         if !shader_matches(this.doc, 1.0, 0.5, 0.25, 0.75) {
-            finish(this, false, "whole-source replacement did not restore the original USD material");
+            this = finish(this, false, "whole-source replacement did not restore the original USD material");
             return;
         }
         if !geometry_matches(this.doc, 0.0, 1.0) {
-            finish(this, false, "whole-source replacement did not restore preview geometry");
+            this = finish(this, false, "whole-source replacement did not restore preview geometry");
             return;
         }
+        this.stage = preview_record(PREVIEW).stage_asset_id;
+        let opened = assembly_ui::open_session(SECOND_PREVIEW, this.doc, "@root@");
+        if opened == () || opened.ok == false {
+            this = finish(this, false, "second document lease could not be opened"); return;
+        }
+        this.phase = 10; return;
+    }
+
+    if this.phase == 10 {
+        if !preview_ready(SECOND_PREVIEW, this.doc, this.generation) { return; }
+        let preview = preview_record(SECOND_PREVIEW);
+        if preview.stage_asset_id != this.stage || preview.views.len() != 1 {
+            this = finish(this, false, "same-document leases do not share their source stage"); return;
+        }
+        this.other_view = preview.views[0].view;
+        let edit = assembly_edit::batch(this.doc, "Create structural projection probe", [
+            #{AddPrim: #{edit_target: "@root@", parent_path: ROOT + "/World", name: "LifecycleProbe",
+                type_name: "Cube", reference: (), reference_prim_path: ()}},
+            #{SetTranslate: #{edit_target: "@root@", path: PROBE, value: [17.0, 0.0, 0.0]}},
+        ], this.generation);
+        if edit == () || edit.ok == false || edit.id == () {
+            this = finish(this, false, "structural projection probe was rejected"); return;
+        }
+        this.command = edit.id; this.phase = 11; return;
+    }
+
+    if this.phase == 11 || this.phase == 14 {
+        let result = command_result(this.command);
+        if result.status == "pending" { return; }
+        if result.ok != true || result.status != "applied" {
+            this = finish(this, false, "structural preview edit failed: " + result.error); return;
+        }
+        this.generation = assembly_edit::describe(this.doc).generation;
+        this.phase = if this.phase == 11 { 12 } else { 15 }; return;
+    }
+
+    if this.phase == 12 || this.phase == 15 {
+        if !preview_ready(PREVIEW, this.doc, this.generation)
+            || !preview_ready(SECOND_PREVIEW, this.doc, this.generation) { return; }
+        if preview_record(PREVIEW).stage_asset_id != this.stage
+            || preview_record(SECOND_PREVIEW).stage_asset_id != this.stage {
+            this = finish(this, false, "structural edit replaced a leased source stage"); return;
+        }
+        if this.phase == 12 {
+            cmd("FrameUsdPreviewSelection", #{preview: PREVIEW, view: this.primary_view, path: PROBE});
+            cmd("FrameUsdPreviewSelection", #{preview: SECOND_PREVIEW, view: this.other_view, path: PROBE});
+            this.phase = 13;
+        } else {
+            cmd("FrameUsdPreviewView", #{view: this.primary_view});
+            cmd("FrameUsdPreviewView", #{view: this.other_view});
+            this.phase = 16;
+        }
+        return;
+    }
+
+    if this.phase == 13 {
+        if !framed_at(PREVIEW, this.primary_view, 17.0)
+            || !framed_at(SECOND_PREVIEW, this.other_view, 17.0) { return; }
+        let edit = assembly_edit::batch(this.doc, "Retire structural projection probe", [
+            #{RemovePrim: #{edit_target: "@root@", path: PROBE}},
+        ], this.generation);
+        if edit == () || edit.ok == false || edit.id == () {
+            this = finish(this, false, "structural probe removal was rejected"); return;
+        }
+        this.command = edit.id; this.phase = 14; return;
+    }
+
+    if this.phase == 16 {
+        // Framing reads projected mesh bounds. A leaked probe would retain
+        // the old x=17 extent even though the document no longer contains it.
+        if !framed_at(PREVIEW, this.primary_view, 0.0)
+            || !framed_at(SECOND_PREVIEW, this.other_view, 0.0) { return; }
+        let removed = query("QueryUsdPrim", #{doc_id: this.doc, path: PROBE});
+        if removed.ok != false || removed.code != 404 {
+            this = finish(this, false, "retired probe remains in the document"); return;
+        }
+        assembly_edit::preview_close(SECOND_PREVIEW);
         assembly_edit::preview_close(PREVIEW);
         assembly_edit::close_document(this.doc);
-        finish(this, true, "material and geometry queries follow standalone preview edits and source replacement");
+        this = finish(this, true, "material, source replacement and structural edits reconcile and retire every preview lease");
     }
 }

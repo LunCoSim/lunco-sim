@@ -1839,6 +1839,36 @@ fn log_scene_readiness_blockers(world: &mut World) {
         "[test] scene blocker load_in_flight={} prims={} visual_synced={} unprocessed_sample={:?} ground_pending={} terrain_requests={}",
         load_in_flight, prim_count, visual_count, unprocessed, ground_pending, terrain_requests,
     );
+    let pending_sources: Vec<_> = world
+        .query::<(
+            Entity,
+            &PendingModelicaSource,
+            Option<&lunco_usd_bevy_scene::UsdPrimPath>,
+        )>()
+        .iter(world)
+        .take(32)
+        .map(|(entity, source, path)| {
+            format!(
+                "{entity:?} path={:?} source={}",
+                path.map(|path| path.path.as_str()),
+                source.asset_path
+            )
+        })
+        .collect();
+    let models: Vec<_> = world
+        .query_filtered::<(Entity, &ModelicaModel), With<UsdSourcedCosim>>()
+        .iter(world)
+        .take(32)
+        .map(|(entity, model)| {
+            format!(
+                "{entity:?} compiled={} compiling={} stepping={} error={:?}",
+                model.is_compiled, model.is_compiling, model.is_stepping, model.last_error
+            )
+        })
+        .collect();
+    warn!(
+        "[test] Modelica materialization blockers pending_sources={pending_sources:?} models={models:?}"
+    );
 }
 
 fn hold_scenarios_closed(app: &mut App) -> Result<(), &'static str> {
@@ -2454,15 +2484,13 @@ pub fn run() -> u8 {
             std::thread::yield_now();
         }
 
-        // A declared negative fixture reaches its terminal boundary instead of
-        // emitting an ordinary scenario verdict. Stop at that boundary so the
-        // test proves the fault is raised and the process remains rebootable;
-        // it does not burn the remaining max-ticks against a held simulation.
+        // A terminal fault holds simulation time, so further tick-driven
+        // verdicts cannot arrive. Stop at that boundary; the result owner below
+        // distinguishes declared negative fixtures from unexpected failures.
         if app
             .world()
             .get_resource::<lunco_core::RuntimeFaults>()
             .is_some_and(|faults| faults.active())
-            && !app.world().resource::<ExpectedRuntimeFaults>().0.is_empty()
         {
             break;
         }

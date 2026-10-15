@@ -46,6 +46,24 @@ pub fn dispatch_modelica_compile_requests(
 
 fn dispatch_one(world: &mut World, request: CompileRequested) {
     let doc = request.source.document;
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    // Deferred compile intent belongs to its exact source lease. Retirement
+    // cancels it before diagnostics or process-wide worker failures can publish.
+    if !request.source.is_current(workspace, replication.as_ref()) {
+        bevy::log::debug!(document = ?doc, entity = ?request.entity,
+            "[Modelica] discarded compile request from retired runtime owner");
+        return;
+    }
+    if request.entity.is_some_and(|entity| {
+        world.get_entity(entity).is_err() || world.get::<ModelicaModel>(entity).is_none()
+    }) {
+        bevy::log::debug!(document = ?doc, entity = ?request.entity,
+            "[Modelica] discarded compile request for retired participant");
+        return;
+    }
     if let Some(error) = world
         .get_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
         .and_then(|failure| failure.0.clone())
@@ -56,32 +74,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             request.entity,
             request.class.as_deref().unwrap_or_default(),
             &error,
-        );
-        return;
-    }
-    let workspace = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
-        .map(|workspace| &workspace.0);
-    let replication = lunco_core_session::current_replication_owner_in(world);
-    if !request.source.is_current(workspace, replication.as_ref()) {
-        fail_request(
-            world,
-            doc,
-            request.entity,
-            request.class.as_deref().unwrap_or_default(),
-            "compile source runtime owner has retired or changed",
-        );
-        return;
-    }
-    if request.entity.is_some_and(|entity| {
-        world.get_entity(entity).is_err() || world.get::<ModelicaModel>(entity).is_none()
-    }) {
-        fail_request(
-            world,
-            doc,
-            None,
-            request.class.as_deref().unwrap_or_default(),
-            "compile target participant has retired",
         );
         return;
     }
@@ -729,7 +721,7 @@ mod tests {
         assert_eq!(model.pending_generation, 1);
     }
     #[test]
-    fn retired_compile_source_and_missing_target_fail_without_spawning_actor() {
+    fn retired_compile_requests_publish_no_failure_or_actor() {
         use lunco_doc::PathlessOrigin;
         let mut documents = ModelicaDocuments::default();
         let doc = documents.allocate(
@@ -745,6 +737,11 @@ mod tests {
         world.insert_resource(documents);
         world.insert_resource(lunco_doc_bevy::DocumentDiagnostics::default());
         world.insert_resource(Messages::<ModelicaNotice>::default());
+        // A worker failure must not turn an already retired request into a
+        // fresh diagnostic in the successor scene.
+        world.insert_resource(lunco_modelica_runtime::ModelicaWorkerFailure(Some(
+            "worker unavailable".into(),
+        )));
         let (tx, rx) = crossbeam_channel::unbounded();
         let (_results, result_rx) = crossbeam_channel::unbounded();
         world.insert_resource(ModelicaChannels { tx, rx: result_rx });
@@ -765,7 +762,7 @@ mod tests {
             },
         );
         assert!(rx.try_recv().is_err());
-        assert_eq!(world.resource::<Messages<ModelicaNotice>>().len(), 1);
+        assert!(world.resource::<Messages<ModelicaNotice>>().is_empty());
         let target = world.spawn_empty().id();
         world.despawn(target);
         dispatch_one(
@@ -789,6 +786,38 @@ mod tests {
                 .count(),
             0
         );
-        assert_eq!(world.resource::<Messages<ModelicaNotice>>().len(), 2);
+        assert!(world.resource::<Messages<ModelicaNotice>>().is_empty());
+        let target = world
+            .spawn(ModelicaModel {
+                document: doc,
+                ..Default::default()
+            })
+            .id();
+        dispatch_one(
+            &mut world,
+            CompileRequested {
+                source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                entity: Some(target),
+                class: Some("Plant".into()),
+                force: true,
+                resume_after_compile: true,
+            },
+        );
+        assert_eq!(
+            world.resource::<Messages<ModelicaNotice>>().len(),
+            1,
+            "a current request still reports a genuine worker failure"
+        );
+        assert!(
+            world
+                .get::<ModelicaModel>(target)
+                .unwrap()
+                .last_error
+                .as_ref()
+                .is_some_and(|error| error.contains("worker unavailable"))
+        );
     }
 }

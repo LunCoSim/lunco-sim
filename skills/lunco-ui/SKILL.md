@@ -97,6 +97,17 @@ launched by `scripts/api/test_usd_source_isolation.py` with an exact scene,
 source and composed selection path in an owned production session. Successful
 and rejected sources preserve the
 active Twin and physics topology, and physics continues while a preview opens.
+Scene clear and reload also retire `StatusBus` history, progress and handles
+through its owner-installed scene resource registration. Check the recent-status
+popup after clearing a compiling scene; old completion text must not remain.
+One document may have several preview leases over the same stage. Structural
+edits and subtree refreshes must update each lease through the shared USD
+projector. Readiness requires the exact stage's consumed document generation
+and completed visual work under that preview root; framing must also stay in
+that hierarchy. The `usd_material_edit_projection` production gate verifies
+creation and removal through projected bounds in two same-document leases.
+Wait for that readiness before composed preview inspection; allocated stage
+handles may still be preparing their dependency recipe.
 Use the composed USD reader's runtime-provider schema contract to display exact
 authored interface references before runtime projection. Runtime owners validate
 availability and types; the diagram does not admit connections to simulation.

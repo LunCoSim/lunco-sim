@@ -1200,8 +1200,11 @@ External held-input changes, discrete edges, live `SetModelInput` changes,
 lifecycle input-hold releases, and raw-file runtime spawns share the bounded
 session-owned ingress queue and assigned per-tick sequence. `SetModelInput`
 identifies live participants by
-stable `target_gid`; editor-only documents keep their document selector. While
-capture is active, `SessionInputStream` retains their typed payloads,
+stable `target_gid`; editor-only documents keep their document selector. When
+applying a live Modelica record, the commit reads the target's `ModelicaModel`
+identity, as admission does. A USD-projected model need not have an editor
+document registry link; that registry does not authorize live input commits.
+While capture is active, `SessionInputStream` retains their typed payloads,
 correlation ids, producer class and stable caller ID, target, committed
 generation, tick, and sequence. Spawn records additionally retain the scene
 root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root

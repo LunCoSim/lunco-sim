@@ -37,6 +37,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use bevy::prelude::*;
+use lunco_core::scene_lifecycle::{AppSceneExt, SceneResource};
 use web_time::Instant;
 
 /// Scope of a busy/progress entry. Determines which surfaces render the
@@ -589,28 +590,6 @@ impl StatusBus {
         }
     }
 
-    /// Retire the active Twin's status, including its visible event history.
-    ///
-    /// The strip and history popup describe the current session. Outgoing
-    /// events must not become the replacement's fallback status. Monotonic
-    /// publication counters survive retirement; clearing `by_id` makes late
-    /// handle completions harmless.
-    pub fn wind_down_twin(&mut self) {
-        let changed = !self.history.is_empty()
-            || !self.active_progress.is_empty()
-            || !self.by_id.is_empty()
-            || !self.mirror_handles.is_empty()
-            || !self.last_outcome.is_empty();
-        self.history.clear();
-        self.active_progress.clear();
-        self.by_id.clear();
-        self.mirror_handles.clear();
-        self.last_outcome.clear();
-        if changed {
-            self.seq = self.seq.wrapping_add(1);
-        }
-    }
-
     /// Most recent terminal outcome within `scope`, if any. Picks the
     /// latest by wall-clock timestamp. Returns the source key so
     /// callers can filter (e.g. "only show the projection error,
@@ -824,7 +803,7 @@ pub fn wind_down_on_twin_closed(
     mut bus: ResMut<StatusBus>,
 ) {
     if trigger.event().was_active {
-        bus.wind_down_twin();
+        bus.clear_scene();
     }
 }
 
@@ -887,6 +866,30 @@ pub fn surface_error_telemetry(
     bus.push(TELEMETRY_SOURCE, level, message);
 }
 
+impl SceneResource for StatusBus {
+    /// Retire the active scene's status, including its visible event history.
+    ///
+    /// The strip and history popup describe the current session. Outgoing
+    /// events must not become the replacement's fallback status. Monotonic
+    /// publication counters survive retirement; clearing `by_id` makes late
+    /// handle completions harmless.
+    fn clear_scene(&mut self) {
+        let changed = !self.history.is_empty()
+            || !self.active_progress.is_empty()
+            || !self.by_id.is_empty()
+            || !self.mirror_handles.is_empty()
+            || !self.last_outcome.is_empty();
+        self.history.clear();
+        self.active_progress.clear();
+        self.by_id.clear();
+        self.mirror_handles.clear();
+        self.last_outcome.clear();
+        if changed {
+            self.seq = self.seq.wrapping_add(1);
+        }
+    }
+}
+
 /// Adds the [`StatusBus`] resource and the per-frame `drain_busy_drops`
 /// system. Renderers and fan-out systems are added by their owning
 /// plugins (each can opt in independently).
@@ -900,7 +903,7 @@ impl Plugin for StatusBusPlugin {
         // completed) clear from `active_progress` before any panel
         // reads `is_busy` / `lifecycle`. Keeps the rendered bus
         // state in lock-step with the underlying work.
-        app.init_resource::<StatusBus>()
+        app.init_scene_resource::<StatusBus>()
             .add_systems(PreUpdate, drain_busy_drops)
             .add_observer(clear_outcomes_on_close_document)
             .add_observer(wind_down_on_twin_closed)
@@ -1165,56 +1168,62 @@ mod tests {
     }
 
     #[test]
-    fn active_twin_close_retires_status_and_fences_late_completion() {
-        let mut app = App::new();
-        app.add_plugins((
-            lunco_telemetry_core::LunCoTelemetryCorePlugin,
-            StatusBusPlugin,
-        ));
-        let outgoing = {
-            let mut bus = app.world_mut().resource_mut::<StatusBus>();
-            bus.push("session", StatusLevel::Info, "outgoing Twin event");
-            bus.set_progress("scene", "loading", 1, 2);
-            bus.begin(BusyScope::Document(42), "modelica", "outgoing compile")
-        };
+    fn status_retires_at_twin_close_and_scene_teardown() {
+        for scene_teardown in [false, true] {
+            let mut app = App::new();
+            app.add_plugins((
+                lunco_telemetry_core::LunCoTelemetryCorePlugin,
+                StatusBusPlugin,
+            ));
+            let outgoing = {
+                let mut bus = app.world_mut().resource_mut::<StatusBus>();
+                bus.push("session", StatusLevel::Info, "outgoing Twin event");
+                bus.set_progress("scene", "loading", 1, 2);
+                bus.begin(BusyScope::Document(42), "modelica", "outgoing compile")
+            };
 
-        app.world_mut().trigger(lunco_workspace::TwinClosed {
-            twin: lunco_workspace::TwinId::new(2),
-            root: std::path::PathBuf::from("/additional"),
-            was_active: false,
-        });
-        app.world_mut().flush();
-        assert!(
-            app.world()
-                .resource::<StatusBus>()
-                .is_busy(BusyScope::Global)
-        );
-        assert_eq!(app.world().resource::<StatusBus>().history().count(), 1);
+            app.world_mut().trigger(lunco_workspace::TwinClosed {
+                twin: lunco_workspace::TwinId::new(2),
+                root: std::path::PathBuf::from("/additional"),
+                was_active: false,
+            });
+            app.world_mut().flush();
+            assert!(
+                app.world()
+                    .resource::<StatusBus>()
+                    .is_busy(BusyScope::Global)
+            );
+            assert_eq!(app.world().resource::<StatusBus>().history().count(), 1);
 
-        app.world_mut().trigger(lunco_workspace::TwinClosed {
-            twin: lunco_workspace::TwinId::new(1),
-            root: std::path::PathBuf::from("/outgoing"),
-            was_active: true,
-        });
+            if scene_teardown {
+                lunco_core::scene_lifecycle::run_scene_teardown(app.world_mut());
+            } else {
+                app.world_mut().trigger(lunco_workspace::TwinClosed {
+                    twin: lunco_workspace::TwinId::new(1),
+                    root: std::path::PathBuf::from("/outgoing"),
+                    was_active: true,
+                });
+            }
 
-        app.world_mut().flush();
-        let bus = app.world().resource::<StatusBus>();
-        assert!(!bus.is_busy(BusyScope::Global));
-        assert!(bus.last_outcome(BusyScope::Global).is_none());
-        assert_eq!(bus.history().count(), 0);
-        assert!(bus.display_latest().is_none());
-        assert_eq!(bus.history_total(), 1);
+            app.world_mut().flush();
+            let bus = app.world().resource::<StatusBus>();
+            assert!(!bus.is_busy(BusyScope::Global));
+            assert!(bus.last_outcome(BusyScope::Global).is_none());
+            assert_eq!(bus.history().count(), 0);
+            assert!(bus.display_latest().is_none());
+            assert_eq!(bus.history_total(), 1);
 
-        app.world_mut().resource_mut::<StatusBus>().set_progress(
-            "scene",
-            "replacement loading",
-            0,
-            0,
-        );
-        drop(outgoing);
-        app.update();
-        let bus = app.world().resource::<StatusBus>();
-        assert_eq!(bus.display_latest().unwrap().message, "replacement loading");
-        assert!(bus.last_outcome(BusyScope::Document(42)).is_none());
+            app.world_mut().resource_mut::<StatusBus>().set_progress(
+                "scene",
+                "replacement loading",
+                0,
+                0,
+            );
+            drop(outgoing);
+            app.update();
+            let bus = app.world().resource::<StatusBus>();
+            assert_eq!(bus.display_latest().unwrap().message, "replacement loading");
+            assert!(bus.last_outcome(BusyScope::Document(42)).is_none());
+        }
     }
 }

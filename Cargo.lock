@@ -9984,6 +9984,7 @@ name = "lunco-status-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-doc-bevy",
  "lunco-telemetry-core",
  "lunco-workspace",

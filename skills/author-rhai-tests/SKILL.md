@@ -68,6 +68,12 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    keep the observer short and declarative. If a helper needs engine state that
    the public API cannot expose, add one generic Rust capability at its owner,
    then consume it from Rhai.
+   Preserve unsigned document, generation and admission identities. Use `()`
+   for a missing document rather than comparing its `u64` id with a negative
+   sentinel. Compare identity strings exactly; use checked `parse_int` only
+   when a bounded unsigned tick must be compared with signed `sim_tick()`.
+   A helper that changes a state map must return it and the caller must assign
+   it back to `this`; a terminal verdict must stop the observer's later work.
 3. Make positive conformance evidence the default: prove that the required
    component, topology, relationship, datum, or runtime outcome is present and
    correct. Do not write a negative test merely to assert that an obsolete
@@ -114,7 +120,12 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    evidence; it is not a behavior or visual verdict. For a live Editor session,
    use `RunRhai`/`run_rhai_test.sh` or an attached `RunScenario` and preserve
    the current process and camera. Do not rebuild Rust for a Rhai-only change.
-   Scene discovery is recursive. Give independent Editor fixtures nested
+   A terminal runtime fault ends stepping immediately. Declare
+   `expect_runtime_fault(kind)` before triggering an intended negative case;
+   unexpected kinds fail with the owner's diagnostic.
+   Scene discovery is recursive and uses the owning Twin's prepared asset-path
+   context, including USD search paths. Require `luncosim test --list` to resolve
+   the complete catalog before a suite pass. Give independent Editor fixtures nested
    one-scene directories so each windowed run mounts its own Twin and preview
    state. The production test wrappers give each process a run-scoped
    `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as

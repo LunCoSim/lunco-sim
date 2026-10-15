@@ -318,6 +318,13 @@ network behavior.
 | engine scene-test root | `lunco-assets-core::engine_scene_tests_root` |
 | asset manifest path/URL | `lunco-assets-core::asset_manifest_path` / `asset_manifest_url` |
 
+Scene-test discovery is a scoped consumer of the same asset owners. It opens
+the scene's owning Twin/folder through `TwinMode`, registers a local `TwinRoots`
+lease, composes the captured recipe and installs `PreparedAssetPaths` before
+reading program sources. Test classification reads the resolved source path,
+so nested Twin search paths keep layer-first/root-second precedence. Discovery
+never borrows a live application's mount or adds a separate file resolver.
+
 Registration follows what is OPEN, not what exists: the runtime asset manifest
 describes the delivered library, and a Twin's `Assets.toml` is discovered after that
 Twin mounts. Workspace `TwinAdded` announces ownership; `TwinRoots` then emits

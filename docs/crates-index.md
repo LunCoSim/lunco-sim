@@ -156,7 +156,7 @@ crates. Project declarations are generated from the schema source by
 | **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. Native catalog preflight receives the discovered source's admitted Twin root for composition dependencies. It retires closed-mount entries and scan generations at `TwinClosed`, and prunes retired document-private mounts before the next catalog scan. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose, `QueryUsdPrim` for one composed USD prim, and `QueryUsdPrims` for deterministic multi-prim reads from one composed-stage snapshot. Native Sdf values serialize directly into the typed API ABI, preserving precision and empty arrays. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
 | **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
-| **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
+| **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. Scene-test discovery uses scoped Twin roots and the shared prepared USD asset reads. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
 | **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), WGSL-reflected param schema, typed `ShaderTexture`/`PreparedShaderImage` asset-worker preparation, CDLOD vertex attribute, and slot-backed live shader inputs through `lunco-port-core`. Carries typed float-texture patches to the renderer. Names no material type. |
 
 ---
@@ -280,7 +280,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-runtime`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
 | **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: scene-registered environment opinions and projection snapshots, status, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
-| **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
+| **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, terminal-fault termination of stepping, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, exact-owner asynchronous experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
@@ -741,7 +741,10 @@ through the production scene gates in
 with the assembly editor proposal gate.
 
 **`lunco-usd-bevy-runtime-core`**
-Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
+Headless-safe scene runtime boundary. Structural deltas reconcile the running
+projection and all preview roots through one indexed projector; subtree refresh
+updates every stage/path instance. These are engine ownership invariants, not
+changeable selection policy. Installs scene admission, Twin-backed
 stage loading, live document-to-stage projection, coalesced stage-change
 path/generation publication, authored control/program projection, scene
 commands, and the stage terminal-outcome contract. Default Twin admission
@@ -881,7 +884,7 @@ or document navigation.
 **`lunco-usd-viewport-runtime`**
 Render runtime for document-backed USD preview sessions. It owns preview
 lifecycle, offscreen images and egui texture registration, render cameras and
-lights, projection readiness, render budgets, preview commands, measurements,
+lights, exact-stage consumed-generation readiness, render budgets, preview commands, measurements,
 and pointer-event handling. Presentation query providers live in
 `lunco-usd-viewport-ui`; the runtime does not register API queries or
 workbench panels.
@@ -1280,6 +1283,8 @@ Renderer-independent status and lifecycle substrate. It owns the shared
 mirroring. The concrete workbench status bar and `lunco-ui` busy widgets are
 consumers; headless hosts can publish and inspect the same status without
 linking the shell.
+The owner registers `StatusBus` as a scene resource; clear, reload and active
+Twin closure retire visible history and work handles while retaining counters.
 
 **`lunco-ui`**
 Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.
@@ -1372,6 +1377,8 @@ same package directly.
 Owns Modelica `CloseDocument` in every host: linked execution entities and the
 document registry are retired together, including during workspace replacement.
 The UI owns only tab, canvas, and unfinished editor-preparation cleanup.
+Live `SetModelInput` admission and fixed-tick commit both read the target's
+`ModelicaModel` identity; USD participants do not require editor registry links.
 
 Modelica document/runtime host. It consumes the headless `ModelicaDocument`
 contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
@@ -1411,6 +1418,8 @@ artifacts, and the Bevy response/clock bridge. Keeping this package separate
 from the host transport lets worker changes and browser transport changes
 rebuild as independent production packages while both native and wasm paths
 use the same dispatch implementation.
+Deferred compile requests validate source and participant retirement before
+publishing worker failures or diagnostics; cancelled work cannot fault a successor.
 
 **`lunco-modelica-runner`**
 Modelica experiment backend. It owns `ModelicaRunner`, source snapshots,

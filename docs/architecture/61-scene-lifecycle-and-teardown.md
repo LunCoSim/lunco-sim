@@ -236,6 +236,12 @@ telemetry sessions, physics kinematic cursors, sampler plans, queued delivery,
 focus, browser workers/indexes and transient browser requests use the same
 resource registration. API-created channel entities carry `SceneOwned`.
 
+`StatusBus` registers as a scene resource at its owner. Clear and reload retire
+visible history, progress, outcomes and handles through that boundary. Windowed
+and offscreen hosts both install the owning `StatusBusPlugin`; closing
+the active Twin invokes the same reset. Publication counters remain monotonic,
+and late handle completion cannot replace successor status.
+
 Runtime exposures follow the same lifetime contract. `EngineExposures` removes
 scene namespaces, subjects and properties, including hidden surfaces, at the
 registered resource reset boundary. Only namespaces explicitly declared with
@@ -536,6 +542,34 @@ a conflicting duplicate of a prim that no longer exists.
 
 ## Verification
 
+USD stage changes reconcile the running projection and every explicit preview
+root through one structural projector. Indexed stage/path candidates are scoped
+to the consuming preview hierarchy; subtree refresh updates all instances.
+Framing also requires that preview's own hierarchy. Preview readiness requires
+both the document's consumed projection cursor for the exact stage and completed
+visual work under that root. Document and cursor changes wake the readiness
+producer even when no mesh or transform changed.
+Consumers wait for this readiness before composed preview inspection, then
+compare the document generation. An allocated asset handle does not establish
+that its dependency recipe has finished preparation.
+
+The generic viewport seams use one shared explicit quality-profile fixture and
+wait for exact document generations. The production
+`usd_material_edit_projection` Rhai gate creates and removes geometry in two
+same-document preview leases and checks projected mesh bounds through framing;
+removed geometry must disappear from both views without replacing their stage.
+`preview_domain_isolation` uses a closed electrical fixture with explicit solar
+inputs. It verifies that preview copies and rejected connections cannot admit a
+solver or replace the live network. Its root-rename plan includes `SetDefaultPrim`
+in the same compound edit so the preview's projection target remains valid.
+
+During stepped execution, the production scene runner stops at a terminal
+`RuntimeFaults` boundary.
+Its existing expected-fault registry distinguishes authored negative fixtures
+from unexpected failures; it does not pump frozen simulation ticks while a
+terminal fault is active. Same-process recovery still needs an owned API
+session or the generic lifecycle seam.
+
 Generic `scene_lifecycle` tests at the core, scripting, exposure, guided UI and
 runtime UI owners cover repeated reset, removal/shutdown callbacks, independent documents,
 pending preparation and preserved application state. These are engine ownership
@@ -547,6 +581,22 @@ an unsaved registered surface field with `ApplyUsdOp`, proves publication,
 renames the namespace and proves withdrawal, then verifies removal across Twin
 replacement, same-path reopening and `LoadScene` while application namespaces
 survive.
+
+Deferred Modelica compile admission validates its pinned source owner and
+participant before consulting worker failures or publishing diagnostics.
+Retirement cancels the request; it cannot raise a fault after scene teardown.
+Current requests still report actual compiler and worker failures.
+`scripts/api/test_twin_loading_replacement.py` covers early replacement and
+clear, late physics/compile admission, and recovery after a terminal Modelica
+initialization fault. It verifies immediate and delayed empty-state readiness,
+physics retirement, and a freshly projected successor after each clear.
+
+`scripts/api/test_modelica_lifecycle.py` runs the parameterized native-worker
+retirement and source-duplication gates in sequential isolated sessions. The
+native-worker gate's Command host verifies exact scene projection before
+signaling its retained Application orchestrator. Authored Rhai proves cancellation of running and queued
+outgoing jobs, source retirement, same-name successor isolation, and rejection
+of imports from the closed owner.
 
 ## See also
 

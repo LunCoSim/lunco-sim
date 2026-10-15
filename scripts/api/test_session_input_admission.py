@@ -17,7 +17,6 @@ from runtime import BINARY, ProductionSession, ROOT
 
 
 SCENE_SOURCE = ROOT / "assets/scenes/tests/rocket_engine_observables.usda"
-CONTROL_SCENE_SOURCE = ROOT / "assets/scenes/terrain_only.usda"
 SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_input_admission.rhai"
 RELEASE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_control_release_admission.rhai"
 AUTHORITY_RELEASE_SCENARIO_SOURCE = ROOT / "assets/scenarios/tests/session_authority_release_preserves_ports.rhai"
@@ -105,7 +104,7 @@ def wait_for_modelica_fixture(session: ProductionSession) -> tuple[int, int, dic
             ports_response = session.post(
                 {
                     "type": "ExecuteCommand",
-                    "command": "ReadPorts",
+                    "command": "ListPorts",
                     "params": {"api_id": target["api_id"]},
                 }
             )
@@ -153,7 +152,9 @@ def wait_for_input_value(
 ) -> None:
     deadline = time.monotonic() + TIMEOUT_S
     while time.monotonic() < deadline:
-        ports = execute(session, "ReadPorts", {"api_id": target_gid}).get("ports") or []
+        ports = execute(
+            session, "ReadPorts", {"api_id": target_gid, "port_names": [name]}
+        ).get("ports") or []
         if any(
             port.get("name") == name
             and port.get("direction") == "in"
@@ -177,11 +178,13 @@ def wait_for_control_endpoint(session: ProductionSession) -> int:
         ]
         last_entities = entities
         for entity in entities:
+            if entity.get("name") != "Input Endpoint":
+                continue
             target_gid = int(entity["api_id"])
             ports_response = session.post(
                 {
                     "type": "ExecuteCommand",
-                    "command": "ReadPorts",
+                    "command": "ListPorts",
                     "params": {"api_id": target_gid},
                 }
             )
@@ -211,7 +214,9 @@ def wait_for_port_values(
 ) -> None:
     deadline = time.monotonic() + TIMEOUT_S
     while time.monotonic() < deadline:
-        ports = execute(session, "ReadPorts", {"api_id": target_gid}).get("ports") or []
+        ports = execute(
+            session, "ReadPorts", {"api_id": target_gid, "port_names": list(expected)}
+        ).get("ports") or []
         actual = {
             port.get("name"): port.get("value")
             for port in ports
@@ -246,7 +251,6 @@ def wait_for_verdict(log_path: Path, offset: int) -> str:
 def main() -> int:
     fixtures = (
         SCENE_SOURCE,
-        CONTROL_SCENE_SOURCE,
         SCENARIO_SOURCE,
         RELEASE_SCENARIO_SOURCE,
         AUTHORITY_RELEASE_SCENARIO_SOURCE,
@@ -266,9 +270,6 @@ def main() -> int:
         scene_path = twin_root / scene_rel
         scene_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(SCENE_SOURCE, scene_path)
-        # Give the control-profile fixture a task-owned Twin-relative path.
-        control_scene_rel = Path("sim/scenes/lifecycle_controls.usda")
-        shutil.copy2(CONTROL_SCENE_SOURCE, twin_root / control_scene_rel)
         (twin_root / "twin.toml").write_text(
             'name = "ModelicaInputAdmissionGate"\n'
             'version = "0.1.0"\n'
@@ -280,6 +281,28 @@ def main() -> int:
 
         with ProductionSession(PORT, log_path=log_path) as session:
             session_pid = verify_owned_session(session)
+            execute(session, "NewDocument", {"kind": "usd"})
+            documents = execute(session, "ListOpenDocuments")["open_documents"]
+            doc = next(doc["doc_id"] for doc in documents if doc["kind"] == "usd")
+            inspected = execute(session, "InspectUsdDocument", {"doc_id": doc, "path": "/World"})
+            if not inspected["prim"]["exists"] or inspected["layers"]["root"]["id"] != "@root@":
+                raise RuntimeError("input fixture has no valid root/edit target")
+            execute(session, "ApplyUsdOps", {"doc_id": doc, "ops": [
+                {"AddPrim": {"edit_target": "@root@", "parent_path": "/World",
+                    "name": "InputEndpoint", "type_name": "Xform", "reference": None,
+                    "reference_prim_path": None}},
+                {"AddPrim": {"edit_target": "@root@", "parent_path": "/World",
+                    "name": "TestLight", "type_name": "DistantLight", "reference": None,
+                    "reference_prim_path": None}},
+                {"AddPrim": {"edit_target": "@root@", "parent_path": "/World/InputEndpoint",
+                    "name": "Controls", "type_name": "Scope",
+                    "reference": "lunco://vessels/control_profiles.usda",
+                    "reference_prim_path": "/AvatarControls"}},
+            ]})
+            execute(session, "SaveAsDocument", {"doc_id": doc,
+                "path": str(twin_root / "sim/scenes/lifecycle_controls.usda")})
+            execute(session, "InspectUsdDocument", {"doc_id": doc, "path": "/World/InputEndpoint/Controls"})
+            execute(session, "CloseDocument", {"doc_id": doc})
             opened = execute(session, "OpenTwin", {"path": str(twin_root)})
             if not opened:
                 raise RuntimeError("OpenTwin returned an empty acknowledgement")
@@ -461,7 +484,7 @@ def main() -> int:
             port_admission = port_admission_ack.get("admission")
             port_correlation_id = port_admission_ack.get("correlation_id")
             if (
-                port_admission_ack.get("target_gid") != target_gid
+                port_admission_ack.get("target_gids") != [target_gid]
                 or port_admission_ack.get("producer_kind") != "api_transport"
                 or port_admission_ack.get("producer_id") != PORT_PRODUCER_ID
                 or not isinstance(port_admission, dict)
@@ -542,7 +565,7 @@ def main() -> int:
                 ("ReleaseControl", control_release_ack, RELEASE_CONTROL_PRODUCER_ID),
             ):
                 if (
-                    ack.get("target_gid") != target_gid
+                    ack.get("target_gids") != [target_gid]
                     or ack.get("producer_kind") != "api_transport"
                     or ack.get("producer_id") != producer_id
                     or not isinstance(ack.get("admission"), dict)
@@ -596,16 +619,16 @@ def main() -> int:
             release_verdict = wait_for_verdict(log_path, release_offset)
 
             execute(session, "ClearSessionInputCapture")
-            execute(
-                session,
-                "LoadScene",
-                {
-                    "path": "twin://ModelicaInputAdmissionGate/"
-                    "sim/scenes/lifecycle_controls.usda"
-                },
-            )
+            # This authored endpoint has no local self-driver, so the gate
+            # isolates authority release from interaction-clock input writes.
+            execute(session, "LoadScene", {
+                "path": "twin://ModelicaInputAdmissionGate/sim/scenes/lifecycle_controls.usda"
+            })
             authority_target_gid = wait_for_control_endpoint(session)
             execute(session, "SetTimeTransport", {"playing": True})
+            claim_ack = execute(
+                session, "ClaimControl", {"target": authority_target_gid}
+            )
             execute(session, "StartSessionInputCapture")
             authority_port_ack = execute(
                 session,
@@ -622,7 +645,7 @@ def main() -> int:
             authority_port_admission = authority_port_ack.get("admission")
             authority_port_correlation_id = authority_port_ack.get("correlation_id")
             if (
-                authority_port_ack.get("target_gid") != authority_target_gid
+                authority_port_ack.get("target_gids") != [authority_target_gid]
                 or authority_port_ack.get("producer_kind") != "api_transport"
                 or authority_port_ack.get("producer_id") != AUTHORITY_PORT_PRODUCER_ID
                 or not isinstance(authority_port_admission, dict)
@@ -633,9 +656,6 @@ def main() -> int:
                     f"{authority_port_ack}"
                 )
             wait_for_port_values(session, authority_target_gid, AUTHORITY_PORT_WRITES)
-            claim_ack = execute(
-                session, "ClaimControl", {"target": authority_target_gid}
-            )
             authority_release_ack = execute(
                 session, "ReleaseControlClaim", {"target": authority_target_gid}
             )
@@ -655,6 +675,7 @@ def main() -> int:
                         "producer_id": AUTHORITY_PORT_PRODUCER_ID,
                         "correlation_id": authority_port_correlation_id,
                         "admission": authority_port_admission,
+                        "expected_writes": [list(write) for write in AUTHORITY_PORT_WRITES.items()],
                     },
                 },
             )

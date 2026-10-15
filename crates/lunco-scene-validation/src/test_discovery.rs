@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use lunco_usd_bevy_core::program;
-use lunco_usd_bevy_stage::{StageView, UsdRead};
+use lunco_usd_bevy_stage::UsdRead;
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -164,9 +164,64 @@ fn scene_paths(_scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
-    let stage = lunco_usd_bevy_stage::compose::compose_file_to_stage(scene_path)
+    // Use the same Twin provenance and prepared asset reads as scene loading.
+    // Native file composition alone has no Twin root for USD search paths.
+    let root = lunco_twin::root_for_file(scene_path);
+    let roots = lunco_assets_core::TwinRoots::default();
+    let twin = match lunco_twin::TwinMode::open(&root)
+        .map_err(|error| format!("{}: cannot open test root: {error}", scene_path.display()))?
+    {
+        lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
+        lunco_twin::TwinMode::Orphan(_) => {
+            return Err(format!(
+                "{}: test root is not a folder",
+                scene_path.display()
+            ));
+        }
+    };
+    let authority = roots
+        .register_twin(&twin)
+        .map_err(|error| format!("{}: cannot mount test root: {error}", scene_path.display()))?;
+    let relative = scene_path
+        .strip_prefix(&root)
+        .map_err(|error| format!("{}: invalid test root: {error}", scene_path.display()))?;
+    let identifier = lunco_assets_core::twin_uri(&authority, relative);
+    let assets_root = lunco_assets_core::shipped_asset_root(scene_path);
+    let limits = lunco_usd_compose::recipe::StageClosureLimits::default();
+    let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        &identifier,
+        assets_root,
+        Some(&root),
+        limits.max_bytes,
+    )
+    .map_err(|error| format!("{}: cannot read scene: {error}", scene_path.display()))?;
+    let recipe = lunco_usd_compose::recipe_from_bytes_with_roots(
+        &identifier,
+        bytes,
+        assets_root,
+        Some(&root),
+        limits,
+    )
+    .map_err(|error| format!("{}: cannot prepare scene: {error}", scene_path.display()))?;
+    let mut stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
         .map_err(|error| format!("{}: cannot compose scene: {error}", scene_path.display()))?;
-    let view = StageView::new(&stage);
+    let references = lunco_usd_bevy_stage::native_paths::native_references_for_prims(
+        &stage.view(),
+        stage.view().prim_paths(),
+    );
+    let origin =
+        lunco_assets_core::asset_path::load_asset_path(&identifier, None, Some(&roots), None)
+            .map_err(|error| {
+                format!("{}: invalid scene identity: {error}", scene_path.display())
+            })?;
+    stage.set_native_asset_paths(std::sync::Arc::new(
+        lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
+            references,
+            Some(origin),
+            Some(&roots),
+        ),
+    ));
+    let view = stage.view();
     let mut kinds = BTreeSet::new();
     let mut sources = BTreeSet::new();
 
@@ -193,26 +248,24 @@ fn discover_scene_test(scene_path: &Path) -> Result<Option<SceneTest>, String> {
         else {
             continue;
         };
-        let source_rel = lunco_assets_core::engine_asset_rel(&source_asset);
-        if !lunco_assets_runtime::discovery::is_test_asset(source_rel)
-            || !source_rel.ends_with(".rhai")
-        {
+        if !source_asset.ends_with(".rhai") || !sources.insert(source_asset.clone()) {
             continue;
         }
-        if !sources.insert(source_asset.clone()) {
+        let source_path =
+            match lunco_assets_core::parse_twin_uri(&source_asset) {
+                Some((authority, relative)) => roots
+                    .resolve_file(authority, Path::new(relative))
+                    .map_err(|error| {
+                    format!("{scene_path:?}: invalid test source {source_asset}: {error}")
+                })?,
+                None => lunco_assets_core::id_to_disk_path(&source_asset, assets_root).map_err(
+                    |error| format!("{scene_path:?}: invalid test source {source_asset}: {error}"),
+                )?,
+            }
+            .ok_or_else(|| format!("{scene_path:?}: cannot resolve test source {source_asset}"))?;
+        if !lunco_assets_runtime::discovery::is_test_asset(&source_path.to_string_lossy()) {
             continue;
         }
-
-        // Resolve relative to the scene's own shipped-library root rather than
-        // the process CWD. Cargo integration tests run with the package as the
-        // current directory, while the production binary normally runs from
-        // the workspace or beside a packaged `assets/` directory.
-        let source_path = lunco_assets_core::id_to_disk_path(
-            &source_asset,
-            lunco_assets_core::shipped_asset_root(scene_path),
-        )
-        .map_err(|error| format!("{scene_path:?}: invalid test source {source_asset}: {error}"))?
-        .ok_or_else(|| format!("{scene_path:?}: cannot resolve test source {source_asset}"))?;
         let source = lunco_assets_core::read_asset_file_string(&source_path).map_err(|error| {
             format!(
                 "{}: cannot read test source {}: {error}",
@@ -272,7 +325,6 @@ mod tests {
         )
         .unwrap();
         let error = discover_scene_test(&scene).unwrap_err();
-        assert!(error.contains("invalid test source"), "{error}");
         assert!(error.contains("invalid file URI"), "{error}");
     }
 

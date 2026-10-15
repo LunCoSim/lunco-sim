@@ -1,10 +1,6 @@
-//! Integration test for the **sink-driven structural projection** path (#1/#2):
-//! an `AddPrim` op on a doc-backed viewport scene is authored onto the live
-//! `CanonicalStage`, whose openusd change sink fires and `project_stage_changes`
-//! spawns the matching ECS entity — with **no whole-scene asset reload**. This
-//! is the end-to-end regression for the incremental projection path: the twin
-//! projection systems (`sync_twin_overlays` → typed live authoring →
-//! `project_stage_changes`) now drive incremental structural edits.
+//! Generic integration seams for sink-driven structural projection and explicit
+//! document preview leases. A committed stage edit must update every consuming
+//! preview hierarchy without replacing its root or source stage.
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
@@ -29,24 +25,17 @@ fn has_prim_entity(app: &mut App, path: &str) -> bool {
     q.iter(app.world()).any(|p| p.path == path)
 }
 
-/// How many live entities project a prim strictly under `prefix` (e.g. children
-/// pulled in by a reference arc).
-fn prims_under(app: &mut App, prefix: &str) -> usize {
-    let mut q = app.world_mut().query::<&UsdPrimPath>();
+/// Count exact children of one explicit preview root.
+fn projected_children(app: &mut App, parent: Entity, path: &str) -> usize {
+    let mut q = app.world_mut().query::<(&UsdPrimPath, &ChildOf)>();
     q.iter(app.world())
-        .filter(|p| p.path.starts_with(prefix))
+        .filter(|(prim, owner)| prim.path == path && owner.parent() == parent)
         .count()
 }
 
 /// Boot a doc-backed viewport app with the twin asset source wired.
 fn boot_app() -> App {
-    // Asset sources root at `current_dir()/assets`; under `cargo test` that's the
-    // crate dir, so anchor it at the workspace root (deterministic — every test
-    // thread sets the same path, no race) so `/vessels/...` references resolve to
-    // the shipped `networking/assets/vessels/...`.
-    let ws_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let _ = std::env::set_current_dir(&ws_root);
-
+    // Inline fixtures resolve through private document mounts.
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     // Twin asset source + `TwinRoots` — must be registered BEFORE `AssetPlugin`
@@ -63,6 +52,14 @@ fn boot_app() -> App {
     app.init_resource::<lunco_core::CommandResults>()
         .init_resource::<lunco_core::ActiveCommandId>();
     app.add_plugins(UsdViewportPlugin);
+    app.world_mut()
+        .resource_mut::<lunco_render::RenderingQualitySettings>()
+        .apply_profile(support::preview_quality());
+    app.add_observer(|event: On<lunco_telemetry_core::TelemetryEvent>| {
+        if matches!(event.severity, lunco_telemetry_core::Severity::Error) {
+            eprintln!("{}: {:?}", event.name, event.data);
+        }
+    });
     app
 }
 
@@ -89,12 +86,33 @@ fn add_prim_projects_live_via_sink_no_reload() {
         doc_id: doc,
         edit_target: LayerId::root(),
     });
-    for _ in 0..40 {
-        app.update();
-        if has_prim_entity(&mut app, "/World") {
-            break;
-        }
-    }
+    support::settle_visual_projection(&mut app);
+    let first_root = app
+        .world()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
+        .session(UsdPreviewId(1))
+        .unwrap()
+        .scene_root();
+    let stage = app
+        .world()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
+        .session(UsdPreviewId(1))
+        .unwrap()
+        .stage_handle()
+        .id();
+    app.world_mut().trigger(OpenUsdPreview {
+        preview: UsdPreviewId(2),
+        doc_id: doc,
+        edit_target: LayerId::root(),
+    });
+    support::settle_visual_projection(&mut app);
+    let second_root = app
+        .world()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
+        .session(UsdPreviewId(2))
+        .unwrap()
+        .scene_root();
+    assert_ne!(first_root, second_root);
     assert!(
         has_prim_entity(&mut app, "/World"),
         "the scene root must project onto the live world before we spawn into it"
@@ -107,6 +125,9 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // Author a plain (reference-less) child prim into the runtime layer. This
     // rides `sync_twin_overlays` → typed live authoring (Plain) → the live
     // stage's sink → `project_stage_changes`, spawning the entity in place.
+    app.world_mut()
+        .resource_mut::<lunco_core::ActiveCommandId>()
+        .set(Some(1));
     app.world_mut().trigger(ApplyUsdOp {
         doc_id: doc,
         parent_gen: None,
@@ -119,19 +140,42 @@ fn add_prim_projects_live_via_sink_no_reload() {
             reference_prim_path: None,
         },
     });
-
-    // A few ticks for: command → doc mutation → sync_twin_overlays authors onto
-    // the stage → sink drains → project spawns → observer builds the subtree.
-    for _ in 0..10 {
-        app.update();
-        if has_prim_entity(&mut app, "/World/Box") {
-            break;
-        }
-    }
+    app.world_mut()
+        .resource_mut::<lunco_core::ActiveCommandId>()
+        .set(None);
+    app.update();
+    let result = app.world().resource::<lunco_core::CommandResults>().get(1);
     assert!(
-        has_prim_entity(&mut app, "/World/Box"),
-        "the authored prim must project into a live entity through the sink bridge (no reload)"
+        matches!(result, Some(lunco_core::CommandOutcome::Succeeded(_))),
+        "typed edit failed: {result:?}"
     );
+
+    // The source cursor and every preview hierarchy must consume this edit.
+    support::settle_visual_projection(&mut app);
+    for root in [first_root, second_root] {
+        assert_eq!(projected_children(&mut app, root, "/World/Box"), 1);
+    }
+    app.world_mut().trigger(ApplyUsdOp {
+        doc_id: doc,
+        parent_gen: None,
+        op: UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: "/World/Box".into(),
+        },
+    });
+    support::settle_visual_projection(&mut app);
+    assert!(!has_prim_entity(&mut app, "/World/Box"));
+    let state = app
+        .world()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>();
+    for (preview, root) in [
+        (UsdPreviewId(1), first_root),
+        (UsdPreviewId(2), second_root),
+    ] {
+        let session = state.session(preview).unwrap();
+        assert_eq!(session.scene_root(), root);
+        assert_eq!(session.stage_handle().id(), stage);
+    }
 }
 
 #[test]

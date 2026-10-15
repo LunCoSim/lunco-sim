@@ -88,6 +88,43 @@ and spawn sources. The driver covers OpenTwin, OpenFolder and native/file-URI
 OpenFile replacement. Include a round trip: reopening
 a Twin must resolve its authored logical dependencies through the fresh mount,
 while requests from its retired origin remain rejected.
+`python3 scripts/api/test_twin_loading_replacement.py --port <free-port>`
+exercises the native File menu while a scene is pending, then queues
+`RestartScene`/`ClearScene` before replacing that owner and submits rapid
+successive replacements. It requires final projection and repeated authored
+retirement verdicts after delayed preparation can arrive. Clear/restart requests
+use the serialized scene transaction; replacement retires the outgoing owner's
+pending intent through the shared lifecycle boundary.
+The driver also clears a pending load without a successor, checks that delayed
+work leaves the viewport empty and ready, and then proves recovery by loading
+another Twin. The default `--phase all` also clears late participant admission
+and a terminal Modelica initialization fault, then verifies an empty fault-free
+world and a fresh successor. Use `--phase loading` or `--phase late` to isolate
+one boundary. The driver establishes a completed physics sample before fault
+injection: `PhysicsPerformance` explicitly rejects timing queries before the
+first Avian step, even when the scene is otherwise ready.
+Retired deferred compile requests must be discarded before any
+worker failure or diagnostic can publish into the cleared scene.
+
+`SESSION_INPUT_API_PORT=<free-port> python3 scripts/api/test_session_input_admission.py`
+checks fixed-tick input admission for USD-projected Modelica participants and
+control release. Discover names with `ListPorts`; `ReadPorts` requires an explicit
+`port_names` selection. Live Modelica commits use the target model identity,
+including participants without an editor document link. Authority-release
+preservation uses a document-authored control endpoint without a local
+self-driver; a free-flight avatar continuously publishes its own input and
+cannot isolate that assertion.
+
+`python3 scripts/api/test_modelica_lifecycle.py --port <free-port>` runs both
+parameterized Modelica lifecycle scenarios sequentially in owned UI sessions.
+It authors isolated Twin entries through document commands, supplies an admitted
+scene clock without an initial workspace Twin, and limits native experiments to
+one worker slot. The runtime-retirement gate proves cancellation of running and
+queued outgoing work, rejection of retired documents and sibling imports, and
+successful replacement work. The Command host admits each exact mounted scene
+before signaling the retained Application orchestrator; that script must not
+read a Twin Simulation route from Application Simulation scope.
+
 Set `LUNCOSIM_TEST_RECENT_MENU=1` to exercise the actual native Recent Twin menu
 at the default desktop scale (the same coordinates as the loading-replacement
 driver). The scene-only LoadScene and RestartScene checks preserve the open
@@ -150,6 +187,13 @@ scenario, not a Rust test with a multiline USDA string. The
 whole-source replacement, and the preview's projected-generation lifecycle
 through the production editor runner. Keep Rust coverage for the focused
 USD-to-render-intent mapping mechanism, where the mapping itself is the subject.
+The material-edit gate also adds and removes a primitive in two leases of one
+document. Framing reads actual projected mesh bounds, so a native USD edit alone
+cannot satisfy that gate while stale or missing preview entities remain.
+Wait for preview readiness before composing its document inspection. The
+`preview_domain_isolation` gate uses explicit electrical inputs, declared query
+dependencies, and an atomic `MovePrim` plus `SetDefaultPrim` plan before proving
+that preview copies do not admit Modelica execution.
 
 For source-preview isolation, run `scripts/api/test_usd_source_isolation.py`
 with an exact `--scene`, `--source`, composed `--selection-path`, free `--port`
@@ -182,9 +226,11 @@ before replacement admission. The focused regression names are
 `terminal_runtime_fault_pauses_physics_until_cleared` in `lunco-physics` and
 `fault_then_scene_reload_can_admit_a_replacement_runtime` in `lunco-usd-sim`.
 
-The multi-process scene-test runner cannot prove same-process replacement: its
-expected terminal-fault process exits when the authored verdict is observed.
-Use a lifecycle test or a live API session that explicitly submits teardown,
+The scene-test runner stops stepping at a terminal runtime fault. A declared
+`expect_runtime_fault(kind)` satisfies that negative fixture; an unexpected
+fault fails immediately with the owner's structured diagnostic. A separate
+process cannot prove same-process recovery. Use a lifecycle test or a live API
+session that explicitly submits teardown,
 loads the replacement, and checks the new scene's admission/status. Do not add
 an automatic repair, retry, process restart, or fault-clearing fallback to make
 the invalid scene continue.
@@ -200,7 +246,9 @@ For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
 the test libraries and delegates to the native `luncosim rhai --stdout` client,
 which calls `RunRhai` on the existing production session. Editing and rerunning
-the test does not restart the app. Use `./scripts/api/run_scenario.sh`
+the test does not restart the app. It reads authored verdict lines before the
+CLI's expression result and fails if any verdict reports `TESTS_FAIL`.
+Use `./scripts/api/run_scenario.sh`
 when the assertion should remain attached as a persistent observer.
 
 When a test depends on a Twin-scoped Rhai tool, register or reload that library
