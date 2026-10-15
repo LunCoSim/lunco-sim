@@ -321,6 +321,17 @@ def main() -> None:
             wait_for(session, scenario_projected, "scenario scene projection")
             wait_for_ready(session.port)
             telemetry_retirement_verdict(session, telemetry)
+            before_interaction_restart = scenario_projected()["topology"]["binding"]["entity"]
+            code = SOURCE.read_text(encoding="utf-8") + "\nqueue_scene_interactions_and_restart();"
+            interaction_ids = json.loads(execute(session, "RunRhai", code=code)["stdout"].strip())
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"]
+                     != before_interaction_restart, "queued interaction scene restart")
+            wait_for_ready(session.port)
+            ready_code = (SOURCE.read_text(encoding="utf-8")
+                          + "\nprint(interaction_results_ready(" + json.dumps(interaction_ids) + "));")
+            wait_for(session, lambda: execute(session, "RunRhai", code=ready_code)["stdout"].strip() == "true",
+                     "queued interaction terminal results")
+            verdict("verify_scene_interaction_retirement", interaction_ids)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
             before_restart = scenario_projected()
@@ -412,6 +423,14 @@ def main() -> None:
                 execute(session, "CloseDocument", doc_id=doc["doc_id"])
             wait_for(session, lambda: not documents(session), "test document cleanup before Exit")
         verdict("verify_editor_retirement", ids_final, [])
+        verdict("verify_scene_interaction_requires_scene")
+        try:
+            execute(session, "RunRhaiTool", tool="gizmo", args={"Map": {}}, scene_bound=True)
+        except RuntimeError as error:
+            admission_error = str(error)
+        else:
+            admission_error = ""
+        verdict("verify_scene_interaction_transport_rejection", admission_error)
         print(f"PASS: Twin switching, same-Twin reopening, rejected replacement; owned PID={session.process.pid}, port={PORT}")
     print("API Exit completed; owned process and port released")
 

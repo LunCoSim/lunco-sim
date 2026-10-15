@@ -99,6 +99,65 @@ fn application_telemetry_current(keys) {
     true
 }
 
+fn queue_scene_interactions_and_restart() {
+    let context = #{Map: #{button: #{String: "secondary"}, pointer_intents: #{Array: []}}};
+    let click = cmd("RunRhaiTool", #{tool: "gizmo", args: context, scene_bound: true});
+    if click.status != "pending" { throw "click invocation must be deferred"; }
+    if command_result(click.id).status != "pending" { throw "native command ID must retain its pending result"; }
+    let requests = [click.id];
+    for scene_bound in [true, false] {
+        let result = cmd("RunRhaiToolHook", #{
+            tool: "scene_interaction", hook: "on_pointer", args: context,
+            scene_bound: scene_bound,
+        });
+        if result.status != "pending" { throw "tool invocation must be deferred"; }
+        requests.push(result.id);
+    }
+    print(requests);
+    cmd("RestartScene", #{});
+    ()
+}
+
+fn verify_scene_interaction_requires_scene() {
+    let result = cmd("RunRhaiTool", #{tool: "gizmo", args: #{Map: #{}}, scene_bound: true});
+    let invalid_id_rejected = false;
+    try { command_result(-1); } catch(error) { invalid_id_rejected = true; }
+    report_verdict([
+        t_true(result.ok == false && result.status != "pending",
+            "scene-bound invocation rejects admission without a scene"),
+        t_true(result.error != () && result.error.contains("active scene"),
+            "missing scene rejection names the required owner"),
+        t_true(invalid_id_rejected, "command result lookup rejects negative identifiers"),
+    ], "Scene interaction admission", "SCENE_INTERACTION_ADMISSION")
+}
+
+fn verify_scene_interaction_transport_rejection(error) {
+    report_verdict([t_true(error.contains("active scene"),
+        "transport returns the scene admission error without waiting for execution")],
+        "Scene interaction transport admission", "SCENE_INTERACTION_TRANSPORT_ADMISSION")
+}
+
+fn interaction_results_ready(ids) {
+    for id in ids { if command_result(id).status == "pending" { return false; } }
+    true
+}
+
+fn verify_scene_interaction_retirement(ids) {
+    if ids.len() != 3 { throw "interaction retirement needs two scene calls and an application call"; }
+    let checks = [];
+    for i in 0..2 {
+        let result = command_result(ids[i]);
+        checks.push(t_true(result.ok == false && result.status != "pending",
+            "scene gesture receives a terminal failure at reload"));
+        checks.push(t_true(result.error != () && result.error.contains("scene"),
+            "scene gesture rejection reports its retired owner"));
+    }
+    let retained = command_result(ids[2]);
+    checks.push(t_true(retained.ok == true && retained.status != "pending",
+        "application invocation of the same tool survives reload"));
+    report_verdict(checks, "Queued scene interaction retirement", "SCENE_INTERACTION_RETIREMENT")
+}
+
 fn verify_telemetry_retirement(retired_keys, application_keys) {
     if retired_keys.is_empty() { throw "telemetry retirement requires sampled outgoing channels"; }
     let channels = query("ListTelemetryChannels").channels;

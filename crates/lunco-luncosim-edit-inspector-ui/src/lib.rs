@@ -7,6 +7,7 @@
 //! and USD authoring surface.
 
 use bevy::prelude::*;
+use lunco_core::AppSceneExt;
 use lunco_scene_selection::{SelectedEntities, SelectionTarget};
 use lunco_usd_viewport_core::UsdViewportState;
 use lunco_workbench_core::WorkbenchPanelAppExt;
@@ -38,13 +39,14 @@ pub struct SceneEditInspectorUiPlugin;
 
 impl Plugin for SceneEditInspectorUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SelectionTarget>();
+        app.init_scene_resource::<SelectionTarget>();
 
         app.register_panel(inspector::Inspector::default())
             .register_panel(inspector::EnvironmentPanel);
 
-        app.init_resource::<lunco_luncosim_edit_inspector_core::InspectorView>()
+        app.init_scene_resource::<lunco_luncosim_edit_inspector_core::InspectorView>()
             .init_resource::<inspector::ShaderSchemaCache>();
+        app.add_systems(Update, inspector::retire_shader_schemas);
         app.add_observer(inspector::on_inspector_component_edit)
             .add_observer(inspector::on_projection_edit_requested)
             .add_observer(inspector::on_usd_attribute_edit_requested)
@@ -64,8 +66,8 @@ impl Plugin for SceneEditInspectorUiPlugin {
             lunco_luncosim_edit_inspector_core::inspector_inputs_changed,
         );
 
-        app.init_resource::<usd_params::UsdParamView>()
-            .init_resource::<usd_params::UsdParamDrafts>();
+        app.init_resource::<usd_params::UsdParamView>();
+        usd_params::install_draft_lifecycle(app);
         app.add_view_model(
             usd_params::produce_usd_param_view,
             usd_selection_view_changed,

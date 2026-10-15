@@ -1329,6 +1329,7 @@ pub(crate) fn on_scene_click_script_tool(
     commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiTool {
         tool,
         args: context,
+        scene_bound: true,
     });
 }
 
@@ -1964,6 +1965,7 @@ pub(crate) fn on_scene_pointer_event(
         hook: "on_pointer".to_string(),
         args: context.clone(),
         owner_twin_id: None,
+        scene_bound: true,
     });
     commands.trigger(TelemetryEvent {
         name: "scene.pointer".to_string(),
@@ -2338,6 +2340,7 @@ pub(crate) fn flush_scene_pointer_moves(
             hook: subscription.hook.clone(),
             args,
             owner_twin_id: subscription.owner_twin_id,
+            scene_bound: true,
         });
     }
 }

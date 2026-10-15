@@ -60,6 +60,8 @@ pub struct InspectorView {
     pub joint: Option<JointReadout>,
 }
 
+impl lunco_core::SceneResource for InspectorView {}
+
 /// Producer for [`InspectorView`]. Exclusive (needs `&mut World` for the
 /// scans + `joint_angle_holder`); runs in `Update` before the egui pass,
 /// gated by [`inspector_inputs_changed`] so the world scans are skipped on

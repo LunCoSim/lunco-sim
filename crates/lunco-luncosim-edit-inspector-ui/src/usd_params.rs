@@ -83,19 +83,10 @@ impl UsdParamView {
 /// never projected into the stage until the Inspector submits one compound
 /// USD change set.
 pub(crate) struct UsdParamDraft {
+    pub document: lunco_doc::DocumentId,
     pub generation: u64,
     pub values: HashMap<String, f64>,
     pub scope: lunco_usd_core::edit_session::UsdEditScope,
-}
-
-impl Default for UsdParamDraft {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            values: HashMap::new(),
-            scope: lunco_usd_core::edit_session::UsdEditScope::Assembly,
-        }
-    }
 }
 
 /// Session/path keyed parameter drafts. The composed stage remains the only
@@ -103,6 +94,36 @@ impl Default for UsdParamDraft {
 #[derive(Resource, Default)]
 pub(crate) struct UsdParamDrafts {
     pub entries: HashMap<(UsdPreviewId, String), UsdParamDraft>,
+}
+
+pub(crate) fn install_draft_lifecycle(app: &mut App) {
+    app.init_resource::<UsdParamDrafts>()
+        .add_observer(retire_document_drafts)
+        .add_systems(
+            Update,
+            retire_closed_preview_drafts.run_if(resource_changed_or_removed::<UsdViewportState>),
+        );
+}
+
+fn retire_document_drafts(
+    event: On<lunco_doc_bevy::DocumentClosed>,
+    mut drafts: ResMut<UsdParamDrafts>,
+) {
+    drafts
+        .entries
+        .retain(|_, draft| draft.document != event.doc);
+}
+
+fn retire_closed_preview_drafts(
+    viewport: Option<Res<UsdViewportState>>,
+    mut drafts: ResMut<UsdParamDrafts>,
+) {
+    drafts.entries.retain(|(preview, _), draft| {
+        viewport
+            .as_ref()
+            .and_then(|viewport| viewport.session(*preview))
+            .is_some_and(|session| session.doc() == draft.document)
+    });
 }
 
 /// Classify a composed numeric value without changing it. The Inspector may
@@ -250,7 +271,88 @@ pub fn produce_usd_param_view(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_real;
+    use super::*;
+    use lunco_core::AppSceneExt;
+
+    #[test]
+    fn scene_lifecycle_retires_inspector_snapshot_and_document_drafts_at_their_owners() {
+        use lunco_doc::DocumentId;
+        use lunco_luncosim_edit_inspector_core::InspectorView;
+        use lunco_usd_viewport_core::{UsdPreviewSession, UsdPreviewViewId};
+
+        let mut app = App::new();
+        app.init_scene_resource::<InspectorView>()
+            .init_resource::<UsdViewportState>();
+        install_draft_lifecycle(&mut app);
+        let preview = UsdPreviewId(47);
+        let other_preview = UsdPreviewId(48);
+        let add_session = |app: &mut App, preview, doc| {
+            let root = app.world_mut().spawn_empty().id();
+            app.world_mut()
+                .resource_mut::<UsdViewportState>()
+                .insert(UsdPreviewSession::new(
+                    preview,
+                    doc,
+                    Default::default(),
+                    root,
+                    Handle::default(),
+                    1,
+                    UsdPreviewViewId(preview.0),
+                ));
+            app.world_mut()
+                .resource_mut::<UsdParamDrafts>()
+                .entries
+                .insert(
+                    (preview, "/Part".to_owned()),
+                    UsdParamDraft {
+                        document: doc,
+                        generation: 1,
+                        values: HashMap::from([("radius".to_owned(), 37.0)]),
+                        scope: lunco_usd_core::edit_session::UsdEditScope::Assembly,
+                    },
+                );
+        };
+        for cycle in 1..=3 {
+            let doc = DocumentId::new(cycle);
+            let other_doc = DocumentId::new(cycle + 100);
+            add_session(&mut app, preview, doc);
+            add_session(&mut app, other_preview, other_doc);
+            app.world_mut().resource_mut::<InspectorView>().selected = Some(Entity::PLACEHOLDER);
+            lunco_core::run_scene_teardown(app.world_mut());
+            assert!(app.world().resource::<InspectorView>().selected.is_none());
+            assert_eq!(
+                app.world().resource::<UsdParamDrafts>().entries.len(),
+                2,
+                "open document drafts survive unrelated scene reload"
+            );
+            app.world_mut()
+                .trigger(lunco_doc_bevy::DocumentClosed::local(doc));
+            assert_eq!(
+                app.world().resource::<UsdParamDrafts>().entries.len(),
+                1,
+                "document closure retires its drafts immediately"
+            );
+            app.world_mut()
+                .resource_mut::<UsdViewportState>()
+                .remove(other_preview);
+            app.update();
+            assert!(
+                app.world().resource::<UsdParamDrafts>().entries.is_empty(),
+                "preview closure retires drafts without painting"
+            );
+            add_session(&mut app, preview, doc);
+            app.world_mut()
+                .resource_mut::<UsdViewportState>()
+                .session_mut(preview)
+                .unwrap()
+                .doc = other_doc;
+            app.update();
+            assert!(
+                app.world().resource::<UsdParamDrafts>().entries.is_empty(),
+                "a reused preview identity cannot keep another document's draft"
+            );
+        }
+    }
 
     #[test]
     fn invalid_composed_values_are_reported_without_clamping() {

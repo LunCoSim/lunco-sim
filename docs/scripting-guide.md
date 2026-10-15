@@ -1562,7 +1562,7 @@ scoped to that hook.
 | HTTP API | `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}` |
 | MCP | the `run_scenario` tool (`mcp/src/index.js`) |
 | One-shot eval | `RunRhai { code }` — runs once with full world access; stdout in the original deferred response |
-| Structured click tool | `RunRhaiTool { tool, args }` — invokes `on_click(context)` with typed values; scene contexts include diagnostic `button` (`primary`, `secondary`, or `middle`) and settings-derived semantic `pointer_intents`; authored tools should use `pointer_intent(context, name)` |
+| Structured click tool | `RunRhaiTool { tool, args, scene_bound: true }` — invokes `on_click(context)` with typed values and retires queued scene input on reload; scene contexts include diagnostic `button` (`primary`, `secondary`, or `middle`) and settings-derived semantic `pointer_intents`; authored tools should use `pointer_intent(context, name)` |
 | Control | `SetScenarioPaused { target, paused }`, `StopScenario { target }` |
 
 ## N. Examples index

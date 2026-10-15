@@ -214,7 +214,15 @@ resources, tag playback entities `SceneOwned`, and release a closed document's
 playback at its publisher.
 Keep scene-derived panel state in registered resources instead of panel fields;
 hidden panels must release rows, drafts and workers without repainting. Cursor
-modes and tool names are scene intent. Async presentation results must match
+modes and tool names are scene intent. Scene interaction adapters set
+`scene_bound: true` on queued
+Rhai tool calls, independently of the tool library's application/Twin scope.
+The runtime pins the active mount and completes retired calls terminally.
+Queue admission publishes `CommandOutcome::Pending`; only execution or owner
+retirement may publish the terminal result.
+Parameter drafts pin their preview and document; document closure and preview
+retirement clear them without painting while unrelated scene reload preserves
+open document drafts. Async presentation results must match
 their captured source lease (structural root, stage and document), not merely a
 revision that a new source can reuse. Complete retired pending commands before
 dropping their handles; preserve preview work only through its document lifetime.

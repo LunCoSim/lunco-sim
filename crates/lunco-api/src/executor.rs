@@ -487,6 +487,15 @@ pub fn api_command_dispatcher(
                     world
                         .resource_mut::<lunco_core::ActiveCommandId>()
                         .set_with_origin(cmd_id, origin);
+                    let deferred_correlation_id = world
+                        .get_resource::<PendingApiRequest>()
+                        .map(|pending| pending.correlation_id)
+                        .filter(|id| *id != 0)
+                        .filter(|_| {
+                            matches!(origin, Some(lunco_core::CommandOrigin::ApiTransport))
+                                && world.get_resource::<DeferredCommands>()
+                                    .is_some_and(|deferred| deferred.contains(&cmd_name))
+                        });
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
                     // The pending correlation is a per-dispatch handoff to a
@@ -495,6 +504,20 @@ pub fn api_command_dispatcher(
                     // inherit an old transport request.
                     if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
                         pending.correlation_id = 0;
+                    }
+                    // A deferred owner can reject synchronously, before there
+                    // is any queued operation to produce its later response.
+                    // Forward that terminal result through the same transport
+                    // mapper; accepted work remains pending under its owner.
+                    if let Some(deferred_id) = deferred_correlation_id {
+                        let failure = world
+                            .get_resource::<lunco_core::CommandResults>()
+                            .and_then(|results| results.get(cmd_id))
+                            .and_then(|outcome| normalize_command_result(Some(outcome)).error);
+                        if let Some((_, message)) = failure {
+                            warn!("[lunco-api] deferred command '{cmd_name}' rejected at admission: {message}");
+                            emit_command_response(world, Some(deferred_id), cmd_id);
+                        }
                     }
                     emit_command_response(world, correlation_id, cmd_id);
                 }

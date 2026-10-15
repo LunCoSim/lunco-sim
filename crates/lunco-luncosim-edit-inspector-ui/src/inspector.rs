@@ -1680,6 +1680,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
         ctx.resource_scope::<crate::usd_params::UsdParamDrafts, _>(|_, drafts| {
             let draft = drafts.entries.entry(draft_key.clone()).or_insert_with(|| {
                 crate::usd_params::UsdParamDraft {
+                    document: doc,
                     generation,
                     values: params
                         .iter()
@@ -1689,7 +1690,8 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                     scope: UsdEditScope::Assembly,
                 }
             });
-            if draft.generation != generation {
+            if draft.document != doc || draft.generation != generation {
+                draft.document = doc;
                 draft.generation = generation;
                 draft.values = params
                     .iter()
@@ -3359,6 +3361,69 @@ pub(crate) struct ShaderSchemaCache {
             Option<std::sync::Arc<lunco_materials::ParamSchema>>,
         ),
     >,
+}
+
+/// Shared schema entries follow their shader asset's lifetime, including while
+/// the Inspector is hidden. A modified asset must not reuse a cached schema.
+pub(crate) fn retire_shader_schemas(
+    mut events: MessageReader<AssetEvent<bevy::shader::Shader>>,
+    mut cache: ResMut<ShaderSchemaCache>,
+) {
+    for event in events.read() {
+        if let AssetEvent::Removed { id } | AssetEvent::Modified { id } = event {
+            cache.map.remove(id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn scene_lifecycle_shader_cache_follows_assets_without_painting() {
+        use std::sync::Arc;
+        let mut app = App::new();
+        app.add_message::<AssetEvent<bevy::shader::Shader>>()
+            .init_resource::<ShaderSchemaCache>()
+            .add_systems(Update, retire_shader_schemas);
+        let shader = bevy::asset::AssetId::default();
+        let shared = bevy::asset::AssetId::invalid();
+        let schema = Arc::new(lunco_materials::ParamSchema::default());
+        let weak = Arc::downgrade(&schema);
+        let shared_schema = Arc::new(lunco_materials::ParamSchema::default());
+        let shared_weak = Arc::downgrade(&shared_schema);
+        app.world_mut()
+            .resource_mut::<ShaderSchemaCache>()
+            .map
+            .extend([
+                (shader, ((0, 0), Some(schema))),
+                (shared, ((1, 1), Some(shared_schema))),
+            ]);
+        app.world_mut()
+            .write_message(AssetEvent::Added { id: shader });
+        app.update();
+        assert!(weak.upgrade().is_some());
+        app.world_mut()
+            .write_message(AssetEvent::Modified { id: shader });
+        app.update();
+        assert!(
+            weak.upgrade().is_none(),
+            "modified shader releases its schema"
+        );
+        assert!(
+            shared_weak.upgrade().is_some(),
+            "unrelated live shader remains cached"
+        );
+        app.world_mut()
+            .write_message(AssetEvent::Removed { id: shared });
+        app.update();
+        assert!(
+            shared_weak.upgrade().is_none(),
+            "removed shader releases its schema"
+        );
+        assert!(app.world().resource::<ShaderSchemaCache>().map.is_empty());
+    }
 }
 
 /// The reflected [`ParamSchema`](lunco_materials::ParamSchema) of a shader asset

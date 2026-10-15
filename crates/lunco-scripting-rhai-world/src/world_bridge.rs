@@ -1526,9 +1526,17 @@ fn build_world_engine_base(
     // command_result(id) -> #{ id, ok, status, data, error }. A deferred
     // command is not successful merely because it was accepted; scripts can
     // check this shared result surface on a later pass.
-    engine.register_fn("command_result", |id: u64| -> Dynamic {
-        bridge_core::command_result(&RhaiBuilder, id)
-    });
+    engine.register_fn(
+        "command_result",
+        |id: Dynamic| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            let value = dynamic_to_hook_value(&id).map_err(value_boundary_error)?;
+            let id = <u64 as serde::Deserialize>::deserialize(
+                lunco_api_core::ApiValueDeserializer::new(value),
+            )
+            .map_err(|error| value_boundary_error(format!("command_result: {error}")))?;
+            Ok(bridge_core::command_result(&RhaiBuilder, id))
+        },
+    );
 
     // open_context_menu(screen_position, items) is a typed script-to-UI bridge.
     // The payload is lowered directly to TelemetryValue and delivered as an
@@ -5232,10 +5240,17 @@ impl PendingWorldScripts {
     }
 
     fn take_twin_owned(&mut self, twin: lunco_workspace::TwinId) -> Vec<PendingWorldScript> {
+        self.take_owned(|request| request.twin_owner() == Some(twin))
+    }
+
+    fn take_owned(
+        &mut self,
+        retire: impl Fn(&PendingWorldScript) -> bool,
+    ) -> Vec<PendingWorldScript> {
         let mut retired = Vec::new();
         for queue in [&mut self.queue, &mut self.ui_queue] {
             for request in std::mem::take(queue) {
-                if request.twin_owner() == Some(twin) {
+                if retire(&request) {
                     retired.push(request);
                 } else {
                     queue.push(request);
@@ -5299,6 +5314,7 @@ impl WorldScriptWorkspace {
 pub struct WorldToolOwner {
     scope: lunco_tools::ToolScope,
     twin: Option<lunco_workspace::TwinId>,
+    scene_root: Option<Entity>,
 }
 
 impl WorldToolOwner {
@@ -5348,9 +5364,38 @@ impl WorldToolOwner {
             twin: registered_twin
                 .or(requested_twin)
                 .map(lunco_workspace::TwinId::new),
+            scene_root: None,
         };
         owner.validate_twin(workspace)?;
         Ok(owner)
+    }
+
+    /// Pin scene input independently of the tool library's registration scope.
+    /// Application tools may receive transient scene gestures while their code
+    /// and unrelated application invocations keep their application lifetime.
+    pub fn bind_scene(
+        mut self,
+        scene_bound: bool,
+        mounts: Option<&lunco_core::SceneMountState>,
+    ) -> Result<Self, String> {
+        if scene_bound {
+            self.scene_root = Some(
+                mounts
+                    .and_then(|mounts| mounts.active_root())
+                    .ok_or_else(|| "scene-bound Rhai tool requires an active scene".to_owned())?,
+            );
+        }
+        Ok(self)
+    }
+
+    fn validate_scene(&self, mounts: Option<&lunco_core::SceneMountState>) -> Result<(), String> {
+        if self
+            .scene_root
+            .is_some_and(|root| mounts.is_none_or(|mounts| !mounts.contains_root(root)))
+        {
+            return Err("queued Rhai tool belongs to a retired scene".to_owned());
+        }
+        Ok(())
     }
 
     fn validate_twin(
@@ -5367,8 +5412,10 @@ impl WorldToolOwner {
         &self,
         tool: &str,
         workspace: Option<&lunco_workspace::WorkspaceResource>,
+        mounts: Option<&lunco_core::SceneMountState>,
     ) -> Result<(), String> {
         self.validate_twin(workspace)?;
+        self.validate_scene(mounts)?;
         self.validate_scope(tool, lunco_tools::active_scope(tool).as_ref())
     }
 
@@ -5500,16 +5547,43 @@ pub fn retire_twin_world_scripts(world: &mut World, twin: lunco_workspace::TwinI
             twin.raw()
         );
     }
+    finish_retired_world_scripts(
+        world,
+        retired,
+        &format!(
+            "queued Rhai request was retired because Twin {} closed",
+            twin.raw()
+        ),
+    );
+}
+
+/// Retire scene gestures before scene shutdown can reuse their tool names.
+/// General REPL and application menu invocations keep their admitted lifetime.
+pub fn retire_scene_world_scripts(world: &mut World) {
+    let retired = world.resource_mut::<PendingWorldScripts>().take_owned(|request| {
+        matches!(request, PendingWorldScript::Tool { owner, .. } if owner.scene_root.is_some())
+    });
+    if !retired.is_empty() {
+        warn!(
+            "[rhai] retiring {} queued requests from the outgoing scene",
+            retired.len()
+        );
+    }
+    finish_retired_world_scripts(
+        world,
+        retired,
+        "queued Rhai request was retired because its scene closed",
+    );
+}
+
+fn finish_retired_world_scripts(world: &mut World, retired: Vec<PendingWorldScript>, reason: &str) {
     for request in retired {
         let (id, correlation_id) = request.request_ids();
         lunco_api::executor::finish_command_result(
             world,
             (id != 0).then_some(id),
             correlation_id,
-            Err(format!(
-                "queued Rhai request was retired because Twin {} closed",
-                twin.raw()
-            )),
+            Err(reason.to_owned()),
             lunco_api_core::ApiErrorCode::CommandRejected,
         );
     }
@@ -5637,7 +5711,11 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 workspace: admitted,
                 ..
             } => admitted.validate(workspace),
-            PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, workspace),
+            PendingWorldScript::Tool { tool, owner, .. } => owner.validate(
+                tool,
+                workspace,
+                world.get_resource::<lunco_core::SceneMountState>(),
+            ),
         };
         if let Err(error) = ownership {
             warn!("[rhai] {error}");
@@ -5835,6 +5913,7 @@ fn eval_tool_with_engine(
     owner.validate(
         tool,
         world.get_resource::<lunco_workspace::WorkspaceResource>(),
+        world.get_resource::<lunco_core::SceneMountState>(),
     )?;
     if !lunco_tools::has_function(tool, &format!("{hook}/1")) {
         return Err(format!("script tool '{tool}' has no {hook}/1 handler"));

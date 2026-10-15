@@ -138,6 +138,9 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   fixed simulation, and admits a bounded batch per application frame (one by
   default). Its capacity is independent of the REPL queue, so general `RunRhai`
   work cannot delay or consume admission for pointer and menu hooks. These calls
+  return `CommandOutcome::Pending` at admission; `command_result(id)` remains
+  pending until execution or owner retirement records the terminal outcome.
+  `RunRhai` uses the same admission/result contract. These calls
   resolve the registered tool and capture its actual `ToolScope` from one
   registry snapshot. A Twin registration supplies its stable owner even when
   `owner_twin_id` is omitted. An explicit interaction owner and a typed Twin
@@ -150,7 +153,15 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   generation zero until a scenario is admitted against the committed scene.
   `TwinClosed` removes its queued tool calls and snippets immediately, without
   waiting for Rhai readiness, and completes deferred results as
-  `CommandRejected`. Drain-time ownership rejection uses the same terminal
+  `CommandRejected`. Scene interaction adapters set `scene_bound: true` on
+  either structured tool command. Admission requires an active scene and pins
+  its root independently of the tool library scope. `SceneTeardown` removes
+  those queued invocations through the same terminal-result owner, and the
+  drain revalidates the captured mount before execution. Scene click, pointer
+  move and context-menu calls use this lifetime. Application workbench menu
+  invocations omit it; the documented default is `false`. The registration
+  itself keeps its declared application or Twin lifetime.
+  Drain-time ownership rejection uses the same terminal
   result and a concise warning. Application-owned calls retain their own
   lifetime. General
   `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
@@ -223,7 +234,7 @@ generation and makes the cache refresh deterministic.
 |------|---------|---------|
 | `usd_document_generation(doc_id: u64)` → `u64 | ()` | read | read the authoritative USD generation as a cheap structural invalidation clock; detailed topology queries happen only after it changes |
 | `cmd(name, #{params})` → `#{ id: u64, ... }` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
-| `command_result(id: u64)` → `#{ id: u64, ... }` | read | read the terminal result for an admitted or deferred command |
+| `command_result(id)` → `#{ id: u64, ... }` | read | read the result for an admitted or deferred command; the shared typed value adapter validates the identifier as `u64`, accepting native unsigned IDs and non-negative integer literals |
 | `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
 | `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, current measured channels, producer origin, and optional fixed-tick admission stamp |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |

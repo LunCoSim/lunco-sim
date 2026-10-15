@@ -5,7 +5,7 @@
 //! command. They are registered only with this Rhai runtime, so an accepted
 //! command always has a corresponding handler.
 //!
-//! The handler returns `Result<Ack, String>`. API callers receive the completed
+//! Queue admission returns `CommandOutcome::Pending`. API callers receive the completed
 //! stdout or error on the same deferred request; in-process `cmd()` callers
 //! continue to use the internal command-result substrate.
 //!
@@ -70,6 +70,11 @@ pub struct RunRhaiTool {
     pub tool: String,
     /// Structured argument passed as the single `on_click(context)` argument.
     pub args: TelemetryValue,
+    /// Pin this invocation to the active scene and retire it on scene teardown.
+    /// Omitted/false keeps the tool's application or Twin invocation lifetime.
+    #[serde(default)]
+    #[reflect(default)]
+    pub scene_bound: bool,
 }
 
 /// Invoke any one-argument hook exposed by a registered Rhai tool.
@@ -94,6 +99,11 @@ pub struct RunRhaiToolHook {
     #[serde(default)]
     #[reflect(default)]
     pub owner_twin_id: Option<u64>,
+    /// Pin this invocation to the active scene and retire it on scene teardown.
+    /// Omitted/false keeps the tool's application or Twin invocation lifetime.
+    #[serde(default)]
+    #[reflect(default)]
+    pub scene_bound: bool,
 }
 
 /// One source-level edit for a script document. The document host performs
@@ -219,7 +229,7 @@ fn on_run_rhai(
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) -> Result<Ack, String> {
+) -> Result<lunco_core::CommandOutcome, String> {
     let id = active.get().unwrap_or(0);
     // §3.4: gate the snippet's cmd()s against the submitting session. `Some`
     // only when this RunRhai arrived from the wire (a remote peer); `None` for a
@@ -238,10 +248,7 @@ fn on_run_rhai(
         },
         *limits,
     )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 #[cfg(feature = "rhai")]
@@ -253,10 +260,12 @@ fn on_run_rhai_tool(
     mut pending: ResMut<PendingWorldScripts>,
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mounts: Option<Res<lunco_core::SceneMountState>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) -> Result<Ack, String> {
+) -> Result<lunco_core::CommandOutcome, String> {
     let cmd = trigger.event();
-    let owner = WorldToolOwner::capture(&cmd.tool, "on_click", None, workspace.as_deref())?;
+    let owner = WorldToolOwner::capture(&cmd.tool, "on_click", None, workspace.as_deref())?
+        .bind_scene(cmd.scene_bound, mounts.as_deref())?;
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -273,10 +282,7 @@ fn on_run_rhai_tool(
         },
         *limits,
     )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 #[cfg(feature = "rhai")]
@@ -288,15 +294,17 @@ fn on_run_rhai_tool_hook(
     mut pending: ResMut<PendingWorldScripts>,
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mounts: Option<Res<lunco_core::SceneMountState>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) -> Result<Ack, String> {
+) -> Result<lunco_core::CommandOutcome, String> {
     let cmd = trigger.event();
     let owner = WorldToolOwner::capture(
         &cmd.tool,
         &cmd.hook,
         cmd.owner_twin_id,
         workspace.as_deref(),
-    )?;
+    )?
+    .bind_scene(cmd.scene_bound, mounts.as_deref())?;
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -313,10 +321,7 @@ fn on_run_rhai_tool_hook(
         },
         *limits,
     )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 /// Attach a persistent rhai scenario to an entity — the scenario-loading entry

@@ -324,6 +324,14 @@ Document-private viewport mounts retire at `DocumentClosed`, or when their
 final preview lease ends with no workspace projection owner. Mount-set changes
 prune their catalog entries before replacement scans; closing a preview must
 not unregister a shared workspace authority.
+Inspector parameter drafts pin their document and preview identity. Document
+closure and preview removal retire them without painting; an unrelated scene
+reload preserves drafts for surviving document previews. Live readouts use
+the shared scene-resource lifetime, and shared shader-schema entries expire
+with their assets. Queued scene gestures and context menus
+set `scene_bound: true` on the typed Rhai tool command; application workbench
+menus keep their explicit application/Twin lifetime. See the
+[invocation ownership contract](../../docs/architecture/rhai-integration.md#how-to-load--run-a-scenario).
 
 For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by

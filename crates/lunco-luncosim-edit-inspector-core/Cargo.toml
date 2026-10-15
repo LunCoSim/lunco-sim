@@ -8,6 +8,7 @@ description = "Renderer-independent Inspector readouts for LunCoSim scene editin
 [dependencies]
 bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_post_process"] }
 lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-core = { path = "../lunco-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-physics = { path = "../lunco-physics" }

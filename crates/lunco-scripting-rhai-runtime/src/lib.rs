@@ -210,6 +210,7 @@ fn dispatch_workbench_menu_action(
         hook: hook.clone(),
         args: args.clone(),
         owner_twin_id: *owner_twin_id,
+        scene_bound: false,
     });
 }
 
@@ -217,6 +218,7 @@ fn dispatch_workbench_menu_action(
 /// are reclaimed.
 #[cfg(feature = "rhai")]
 pub fn stop_scene_owned_scripts(world: &mut World) {
+    lunco_scripting_rhai_world::world_bridge::retire_scene_world_scripts(world);
     let targets: Vec<(Entity, Option<u64>)> = {
         let mut query = world
             .query_filtered::<(Entity, Option<&lunco_scripting::doc::ScriptedModel>),

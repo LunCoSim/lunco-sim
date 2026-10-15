@@ -238,6 +238,12 @@ pending tree builds, port snapshots, row indexes and edit drafts are resources
 rather than fields on application-owned panel objects; hidden panels therefore
 release outgoing data without painting. Tree publication revisions remain
 monotonic across reset and are independent of worker submission revisions.
+The live Inspector snapshot is a registered scene resource. Parameter drafts
+belong to an explicit preview and document, survive unrelated scene reloads,
+and retire immediately at `DocumentClosed` or when the preview owner removes
+or replaces that session. Draft retirement runs independently of panel paint.
+Shared Inspector shader schemas follow their asset lifetime: shader removal
+or modification evicts the cached entry independently of panel visibility.
 
 Connections separates the live scene graph from isolated document-preview
 graphs. Scene retirement drops the live graph and its async layout/file jobs;

@@ -348,6 +348,12 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-returning typed command puts its command-specific payload in the same `data` envelope. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. A deferred command may resolve its acknowledgement on the same request, but that is not necessarily completion of the domain work. `RunExperiment` returns its exact `experiment_id` once registered; the numerical solve remains asynchronous and is read through `RunStatus` and `GetExperimentResult` using that id. Rhai's in-process `cmd` may expose a pending command id; `command_result(id)` resolves that deferred command acknowledgement only. There is no generic HTTP command-id polling endpoint, and callers must not guess the run from its label or newest position.
 
+Queued Rhai invocations publish `CommandOutcome::Pending` at admission and a
+terminal outcome only at execution or owner retirement. Test cancellation
+through `command_result(id)` as well as the original transport response.
+Synchronous admission failures must return on the original request even when
+no work was queued. See the [deferred response contract](../../docs/architecture/12-api.md#deferred-command-responses).
+
 ### Loading a scene or model
 
 Choose the command that owns the address type and check its result:

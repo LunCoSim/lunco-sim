@@ -8291,6 +8291,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-camera-core",
+ "lunco-core",
  "lunco-cosim-core",
  "lunco-environment",
  "lunco-physics",

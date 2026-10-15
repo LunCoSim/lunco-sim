@@ -570,6 +570,7 @@ fn on_runtime_ui_action(
                 hook: "on_action".to_owned(),
                 args: action_args.clone(),
                 owner_twin_id: None,
+                scene_bound: false,
             });
             commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
@@ -597,6 +598,7 @@ fn on_guided_hud_action(
         hook: action.hook.clone(),
         args: lunco_telemetry_core::TelemetryValue::String(action.action.clone()),
         owner_twin_id: None,
+        scene_bound: false,
     });
 }
 

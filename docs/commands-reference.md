@@ -2993,6 +2993,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `tool` | `String` |  Registered tool namespace, for example `recover` or `waypoint_editor`. |
 | `args` | `TelemetryValue` |  Structured argument passed as the single `on_click(context)` argument. |
+| `scene_bound` | `bool` |  Pin this invocation to the active scene and retire it on scene teardown.  Omitted/false keeps the tool's application or Twin invocation lifetime. |
 
 #### `RunRhaiToolHook`
 
@@ -3012,6 +3013,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `args` | `TelemetryValue` |  Structured argument passed to the hook. |
 | `owner_twin_id` | `Option < u64 >` |  Twin owning an interaction flow, when explicitly supplied by its caller.  Twin-scoped tools also pin their registered owner when this is omitted.  A supplied owner must match a Twin-scoped tool's actual registration. |
+| `scene_bound` | `bool` |  Pin this invocation to the active scene and retire it on scene teardown.  Omitted/false keeps the tool's application or Twin invocation lifetime. |
 
 #### `RunScenario`
 

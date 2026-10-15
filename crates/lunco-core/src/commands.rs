@@ -67,8 +67,8 @@ impl EditIntent {
 // - `Rejected` (never ran — validation/auth/dedup) vs `Failed` (ran, errored):
 //   the caller reverts an optimistic edit on `Rejected`, not on `Failed`
 //   (MAVLink's `DENIED` vs `FAILED`).
-// - `Pending`: accepted, terminal not yet known (async/long-running). MVP
-//   handlers are synchronous and never leave a result `Pending`.
+// - `Pending`: accepted, terminal not yet known. Deferred handlers keep this
+//   state until their owning executor records completion or retirement.
 
 /// Terminal (or in-flight) state of a command invocation, keyed by request id.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,7 +118,7 @@ impl CommandResults {
         self.record_handler_result(id, result);
     }
 
-    /// Record a command handler's declared result type as a terminal outcome.
+    /// Record a command handler's declared terminal or pending outcome.
     pub fn record_handler_result(&mut self, id: u64, result: impl Into<CommandOutcome>) {
         self.insert(id, result.into());
     }
@@ -132,6 +132,15 @@ impl From<Result<Ack, String>> for CommandOutcome {
     fn from(result: Result<Ack, String>) -> Self {
         match result {
             Ok(ack) => Self::Succeeded(ack),
+            Err(message) => Self::Failed(message),
+        }
+    }
+}
+
+impl From<Result<CommandOutcome, String>> for CommandOutcome {
+    fn from(result: Result<CommandOutcome, String>) -> Self {
+        match result {
+            Ok(outcome) => outcome,
             Err(message) => Self::Failed(message),
         }
     }
@@ -158,6 +167,7 @@ mod command_result_tests {
             2,
             Err::<Ack, _>(Reject::InvalidOp("input was rejected".to_owned())),
         );
+        results.record_handler_result(3, Ok::<_, String>(CommandOutcome::Pending));
 
         assert!(matches!(
             results.get(1),
@@ -168,6 +178,7 @@ mod command_result_tests {
             Some(CommandOutcome::Rejected(Reject::InvalidOp(message)))
                 if message == "input was rejected"
         ));
+        assert!(matches!(results.get(3), Some(CommandOutcome::Pending)));
     }
 }
 
