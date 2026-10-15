@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 import tomllib
+from contextlib import ExitStack
 from pathlib import Path
 
 from runtime import BINARY, ProductionSession, ROOT, get_json, wait_for_ready
@@ -122,6 +123,19 @@ def telemetry_retirement_verdict(session: ProductionSession, telemetry: tuple[li
     verdict("verify_telemetry_retirement", *telemetry)
 
 
+def experiment_playback_probe(session: ProductionSession, doc: int, name: str, cleanup: ExitStack) -> tuple[str, list[str]]:
+    run = execute(session, "RunExperiment", doc_id=doc,
+                  **{"class": name, "t_end": 0.1, "n_intervals": 10})["experiment_id"]
+    # Remove only this run's generated artifact, after the owned app exits.
+    cleanup.callback((TWIN_B / "results" / f"{run}.json").unlink, missing_ok=True)
+    wait_for(session, lambda: execute(session, "RunStatus", experiment_id=run).get("state") == "done",
+             "experiment playback completion")
+    keys = wait_for(session, lambda: [channel["key"] for channel in execute(session, "ListTelemetryChannels")["channels"]
+                                     if channel["name"] == "playback_probe_value" and channel["samples"] > 0],
+                    "experiment playback publication")
+    return run, keys
+
+
 def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:
     def admitted():
         # The authored probe creates and closes transient scratch documents;
@@ -164,7 +178,7 @@ def verdict(function: str, *args) -> None:
 
 
 def main() -> None:
-    with ProductionSession(PORT, windowed=True, log_path=ROOT / "target/twin-session-retirement.log") as session:
+    with ExitStack() as cleanup, ProductionSession(PORT, windowed=True, log_path=ROOT / "target/twin-session-retirement.log") as session:
         process_root = Path("/proc") / str(session.process.pid)
         if process_root.is_dir():
             if (process_root / "cwd").resolve() != ROOT.resolve() or (process_root / "exe").resolve() != BINARY.resolve():
@@ -339,6 +353,24 @@ def main() -> None:
             wait_for(session, lambda: all(doc["doc_id"] != survivor_doc for doc in documents(session)),
                      "surviving probe document closure")
             verdict("verify_closed_modelica_telemetry", survivor_doc, [survivor_key], application_keys)
+            playback_name = "TwinPlaybackReloadProbe"
+            playback_doc = execute(session, "CreateScratchModelicaDocument", name=playback_name,
+                source=f"model {playback_name} Real playback_probe_value(start=37, fixed=true); equation der(playback_probe_value)=0; end {playback_name};")["doc_id"]
+            wait_for(session, lambda: execute(session, "CompileStatus", doc_id=playback_doc).get("ast_parsed"),
+                     "experiment playback parse")
+            playback_run, playback_keys = experiment_playback_probe(session, playback_doc, playback_name, cleanup)
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "experiment playback scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, playback_keys, [], True)
+            playback_run, fresh_playback_keys = experiment_playback_probe(session, playback_doc, playback_name, cleanup)
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, playback_keys, fresh_playback_keys, True)
+            execute(session, "CloseDocument", doc_id=playback_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != playback_doc for doc in documents(session)),
+                     "experiment playback document closure")
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, fresh_playback_keys, [], False)
             retained = [doc["doc_id"] for doc in documents(session)]
             for root, command in [(TWIN_A, "AddTwin"), (FIXTURE / "replacement", "AddFolderToWorkspace")]:
                 print(f"Additive route: {command}, path={root}", flush=True)

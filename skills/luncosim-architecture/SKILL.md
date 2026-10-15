@@ -208,6 +208,10 @@ Change-gated producers must consume a one-shot refresh after their scene cache
 resets, including when a surviving source is paused. Explicit document closure
 retires the producer's exact owned signal references through `DocumentClosed`;
 ordinary source removal may archive history only while its document remains open.
+Experiment history and active playback have separate lifetimes: preserve completed
+trajectories in the experiment registry, but register playback maps as scene
+resources, tag playback entities `SceneOwned`, and release a closed document's
+playback at its publisher.
 Signal producers default to scene lifetime; only process-owned signals opt into
 `SignalRegistry::retain_across_scenes`. Extend the authored Twin retirement gate
 for observable lifecycle changes, including same-path reload, rejected

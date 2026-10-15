@@ -183,6 +183,11 @@ Scene-cache retirement sets a one-shot refresh request: surviving paused editor
 solvers republish their current sample and metadata without stepping or resuming.
 The refresh request is consumed once, so idle presentation does not poll solvers.
 
+Experiment playback is a separate producer: its entity map is a registered scene
+resource and its entities carry `SceneOwned`. Scene reload drops the transient
+playback; document closure drops that document's playback signals and entity.
+Completed experiment trajectories remain queryable from experiment history.
+
 Derived visualization histories and async plot builds live in the viz owner's
 scoped `scene_data` store, together with canvas signal/value snapshots, interests,
 queued input writes and plot-drop requests. Final scene-resource retirement

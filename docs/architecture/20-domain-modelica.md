@@ -247,9 +247,11 @@ application lifetime.
 The UI publishes results only while the pinned document owner remains in the
 active workspace scope. Automatic plot selection also requires the selected
 or pinned experiments document to match. Playback entities carry the same typed
-source attribution; closing their Twin drops their signals, entities, document pins, and live/archived
-plot selections while
-completed trajectory history remains queryable. `ExperimentRemoved` reports
+source attribution. Document closure releases its playback signals and entity;
+scene reload resets the registered playback entity map and reclaims its
+`SceneOwned` entities. Closing their Twin also drops document pins and
+live/archived plot selections. Completed trajectory history remains queryable.
+`ExperimentRemoved` reports
 explicit deletion and bounded registry eviction, retiring source attribution
 and pending handles, as well as UI run visibility, without scanning retained
 history each frame. Retained historical results are fenced by their admission

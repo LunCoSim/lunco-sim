@@ -177,6 +177,28 @@ fn verify_closed_modelica_telemetry(doc, keys, retained_keys) {
     report_verdict(checks, "Closed Modelica telemetry retirement", "CLOSED_MODELICA_TELEMETRY")
 }
 
+fn verify_experiment_playback_retirement(doc, run, retired_keys, current_keys, document_open) {
+    if retired_keys.is_empty() { throw "playback retirement requires recorded outgoing channels"; }
+    let checks = [t_true(document_present(doc) == document_open, "playback document has the expected lifetime")];
+    let channels = query("ListTelemetryChannels").channels;
+    for key in retired_keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "outgoing playback channel is absent: " + key));
+        checks.push(t_true(query("QueryTelemetryHistory", #{key: key}).ok == false,
+            "outgoing playback history is absent: " + key));
+    }
+    for key in current_keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "new playback publishes through a fresh owner: " + key));
+    }
+    let result = query("GetExperimentResult", #{experiment_id: run, variables: ["playback_probe_value"]});
+    checks.push(t_true(result.series.playback_probe_value.len() == 11,
+        "completed experiment history survives transient playback retirement"));
+    report_verdict(checks, "Experiment playback retirement", "EXPERIMENT_PLAYBACK_RETIREMENT")
+}
+
 fn verify_telemetry_preserved(keys) {
     if keys.is_empty() { throw "telemetry preservation requires a sampled channel"; }
     let channels = query("ListTelemetryChannels").channels;

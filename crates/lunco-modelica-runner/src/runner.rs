@@ -1203,10 +1203,14 @@ impl std::ops::Deref for PendingRun {
 /// finishes (drop old signals, push new ones). When live cosim is
 /// active for the same doc, the live entity wins in
 /// `doc_to_entity` — playback is selected when no live cosim entity is active.
+/// The map resets with the scene; publishers tag its entities `SceneOwned`.
+/// Document closure releases its playback while completed run history survives.
 #[derive(Resource, Default)]
 pub struct PlaybackEntities(
     pub std::collections::HashMap<lunco_doc::DocumentId, bevy::prelude::Entity>,
 );
+
+impl lunco_core::SceneResource for PlaybackEntities {}
 
 /// Bevy system: drain RunUpdate messages from each pending handle,
 /// update the registry status, and emit lifecycle Bevy messages

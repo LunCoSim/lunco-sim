@@ -1415,6 +1415,9 @@ own annotation bounds; the runner retains no class-name source/default map.
 Native batch and live compilation share the worker's admitted roots and bounded
 artifact cache. `TwinClosed` cancels owned runs and unloads its source roots;
 retained source attribution follows bounded experiment history.
+The registered `PlaybackEntities` scene resource indexes transient, `SceneOwned`
+UI playback entities. Scene reload and document closure retire playback without
+deleting completed experiment trajectories.
 Fallible annotation readers and the shared `sim_target::validate_run_bounds`
 guard reject invalid or over-limit output grids before registration and solver
 allocation on both platforms.

@@ -95,6 +95,7 @@ pub struct ModelicaRunnerPlugin;
 
 impl Plugin for ModelicaRunnerPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
         app.add_plugins(lunco_experiments::ExperimentsPlugin);
         let runner = ModelicaRunner::new(
             #[cfg(not(target_arch = "wasm32"))]
@@ -106,7 +107,7 @@ impl Plugin for ModelicaRunnerPlugin {
         app.insert_resource(ModelicaRunnerResource(Arc::new(runner)));
         app.init_resource::<ExperimentDrafts>();
         app.init_resource::<PendingHandles>();
-        app.init_resource::<PlaybackEntities>();
+        app.init_scene_resource::<PlaybackEntities>();
         app.add_observer(cancel_closed_twin_runs);
         app.add_observer(cancel_retired_replication_runs);
         app.add_systems(

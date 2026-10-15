@@ -210,6 +210,13 @@ document-to-signal attribution outlives live producer removal within the scene;
 `DocumentClosed` retires those exact references, including archived history,
 without clearing channels owned by another document or producer.
 
+Completed experiment trajectories remain in the experiment registry, while
+their active playback is scene-owned. The runner registers `PlaybackEntities`
+as a scene resource and the UI publisher tags each playback entity `SceneOwned`.
+Reload drops both the map and entities; a later completed run publishes through
+a fresh entity. `DocumentClosed`, `TwinClosed`, and replication retirement use
+the same publisher-owned playback release path without deleting run history.
+
 Visualization widgets that only receive an egui context store scene-derived
 data through `lunco-viz::scene_state::scene_data`, a single scoped egui
 `IdTypeMap`. This includes history snapshots, async plot tasks, canvas interest
