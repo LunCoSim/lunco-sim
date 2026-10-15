@@ -25,8 +25,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
   from another process is not evidence for the task scene.
   A zero collector exit does not prove capture integrity. Compare the saved
-  file size with the collector's reported compressed size and require a
-  successful native CSV export before using its zones. A size mismatch,
+  file size with the collector's reported compressed payload plus native file
+  framing, and require a successful native CSV export before using its zones.
+  `FileWrite::GetCompressionStatistics` excludes the six-byte file header and
+  four-byte length per compressed block; these bytes are present on disk. A size
+  mismatch,
   parser failure or stalled export leaves that capture unusable. A reported
   instrumentation failure also makes the requested window incomplete. Keep hot
   zone names bounded: step ids, timestamps, and measured durations must not be

@@ -9809,7 +9809,8 @@ checks and the four-check mission-evidence gate. Its 705.41 MiB capture contains
 Tracy tools. For 29-query CCD dispatches, the final eight seconds of each
 1/3/1/3-worker cohort have medians 0.201/0.135/0.153/0.120 ms. AC remains online.
 Other-checkout Cargo builds overlap the comparison, so these data do not justify
-a product FPS claim or a default change. The default minimum batch remains 64.
+a product FPS claim. The AC-powered batch-admission comparison below supplies
+the separate evidence for the current default.
 Evidence is `target/shared-clock-current-tracy-*` and its `.tracy`/`.png`.
 
 The separate unprofiled run (API 4359) also overlaps other-checkout builds.
@@ -9857,7 +9858,6 @@ reference discrepancy remains open as described above. Evidence is
 `target/shared-cycle-completion-{fault-baseline,time-tests,final-*,gate-*,gates.json}`.
 Full presentation isolation and external FMU interoperability also remain open.
 
-
 ### Continuous-query batch admission — 2026-10-15
 
 `ContinuousCollisionSettings.minimum_query_batch_size` defaults to eight.
@@ -9888,7 +9888,6 @@ collision math, timestep, tolerance or solver ordering. Independent simulation
 and presentation ownership, 200 FPS, sub-1 ms physics and external FMU
 interoperability remain open.
 
-
 The final regular Cargo run (API 4365) passes all 16 mission checks and the
 four-check mission-evidence gate. It retains the same body/collider/joint/substep
 inventory and its inspected screenshot retains the rover, terrain and shadows.
@@ -9907,3 +9906,48 @@ rows exactly: serial, default Compute and 0.25-jitter serial. These comparisons
 cover that retained state selection rather than a whole-world determinism
 claim. See `target/ccd-batch-final-gates.json` and matching gate logs. All four
 processes exit zero and release API 4366.
+
+### Current default batch: CPU and GPU attribution — 2026-10-15
+
+The current-source Tracy run uses owned API 4367 and collector 492103,
+connected to app 492104 on 8086. The capture contains 31,180,806 zones over
+155 seconds. Its 579,902,098 file bytes equal 579,789,052 compressed payload
+bytes plus the native six-byte header and 28,260 four-byte block lengths;
+the payload rounds to the collector's 552.93 MiB report. Adjacent native CPU,
+GPU and exposure exports all exit zero. The run passes all 16 mission checks
+and the four-check mission-evidence gate; its inspected image retains the
+rover, terrain and shadows. Both processes exit zero and release their ports.
+
+The settled window is trace seconds 146.558–153.558, before screenshot delivery.
+It contains 420 physics cycles and 282 host/render updates. Median inclusive
+CPU spans are 9.031 ms for the shared fixed runner, 4.640 ms for native physics,
+7.016 ms for the render schedule and 3.700 ms per exposure publication (140
+publications). These nested/cross-thread values must not be summed. The
+29-query, three-worker dispatch has 4,028 samples at 0.122 ms median.
+The exposure subspans identify per-surface fact construction at 0.308 ms,
+visibility policy at 0.651 ms and properties policy at 0.835 ms, each with 280
+samples. This leaves presentation fact construction/conversion and policy calls
+as a concrete CPU investigation alongside whole-simulation isolation.
+
+GPU timestamps cover the same trace coordinate and window. The opaque 3D pass
+has 282 samples at 1.472 ms median; the camera early-shadow pass has 282 samples
+at 0.438 ms, while its late pass measures timestamp overhead. No shared-shadow
+span is emitted, so this is a camera-shadow attribution rather than a measured
+whole-shadow aggregate. These settled data do not justify reducing shadows or
+terrain quality. The endpoint terrain observation reports 256/256 resident
+meshes, no pending work and a complete inactive derived map.
+
+Another checkout's assembly test overlaps the settled window. AC has returned
+by that window, but GPU clock observations are 547–667 MHz after the preceding
+battery-powered run. Instrumentation and those operating conditions preclude a
+product FPS comparison. Evidence is `target/ccd-batch-current-tracy.tracy`,
+`target/ccd-batch-current-tracy-{integrity,owners,exposure,context,phases}.json`
+and the matching image/logs. The 200 FPS, sub-1 ms physics, independent
+presentation and external FMU interoperability acceptance goals remain open.
+
+The standard uninstrumented networking-feature production binary is rebuilt
+successfully after capture (`target/ccd-batch-final-normal-rebuild.log`). Only
+superseded task-owned compressed executable copies and completed test
+executables are retired for space; source, shared caches, captures and verdict
+logs remain. The current binary hash and retirement manifests are retained in
+`.lunco/performance-evidence/`. No profiling process remains on owned ports.
