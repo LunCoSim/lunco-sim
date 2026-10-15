@@ -9370,5 +9370,48 @@ transport; it is not isolated hook CPU time or product FPS. Evidence is
 The windowed route gate passes 111 checks, including actual exposure properties,
 and the production hook suite passes 45 checks with off-cycle rejection, using
 the supported API Rhai test wrapper. Its log is
-`target/runtime-ui-narrow-hook-context.log`. Whole-application performance after
-this policy change still needs measurement.
+`target/runtime-ui-narrow-hook-context.log`.
+
+On committed `d17d65261`, the owned 95.4-second Tracy capture contains 30,239,014
+zones and 6,118 frames, saves 193,583,332 bytes consistently with its reported
+compressed payload, and passes native CSV exports for all four queried owners.
+The route projection span decreases from 617.279 ms to 208.441 ms; native asset
+discovery accounts for 207.055 ms of the current span. Its ancestor prim resync
+still scans the subtree. In the same trace-time window (seconds 80–94), mean HUD
+publication decreases from 4.951 ms to 3.936 ms over 280 calls each; properties
+evaluation decreases from 1.231 ms to 0.936 ms and visibility from 0.820 ms to
+0.609 ms over 560 calls each. These are inclusive diagnostic spans, not product
+FPS or proof of isolated CPU capacity. Native substeps already use Avian's
+single-threaded executor; another executor override would duplicate that owner.
+Evidence is `target/griffin-d17d65261{.tracy,-context.txt,-capture.log,-owners.json}`
+and its native PSV exports.
+
+The separate normal Cargo run uses no Tracy feature or diagnostic log override.
+Its final 21.506-second window advances at 0.99973 realtime, ends with 2.123 ms
+pending demand and clips no simulation time. Fixed-cycle p50/p95/max are
+6.262/8.348/10.515 ms; retained native-physics median is 2.456 ms. The 1,466
+distinct retained FPS samples after simulation second 60 have median 71.65.
+All eight terrain observations after that boundary have 256/256 tiles resident,
+zero pending streaming and a complete inactive derived map. This is sampled
+readiness, not a continuous guarantee. The inspected image retains the driven
+FLIP, route labels, terrain and shadows. The selected cutoff/touchdown-confirmed/
+route-start ticks remain 1316/1407/3104. The normal run exits zero and releases
+API 4323; the capture and its app also exit zero and release their ports.
+Evidence is `target/griffin-d17-normal{.png,-runtime.log,-context.txt,-samples.json,-summary.json}`.
+
+The same normal artifact also passes the Twin-authored headless
+`rumoca_startup.rhai` gate (3 checks) through `RunScenarioAsset` at API 4324.
+`CosimStatus` confirms nine active shared-clock participants, ready topology and
+954 real solver samples; the mean per-participant worker step is 0.269 ms at
+that startup checkpoint. The normal windowed sampling script's `ModelicaStatus`
+call used options belonging to `CosimStatus` and was rejected; it supplies no
+participant-status evidence. The separate headless gate and compact status
+receipt provide that verification. Its process exits zero, leaving no owned
+simulator or collector running. Evidence is
+`target/griffin-d17-startup-headless{.log,-status.json}`. Rumoca remains locked to
+`e3da928cce08b794c6ec78ef85d2db0bd521547f` on `LunCoSim/rumoca` main.
+
+The 200 FPS and sub-1 ms physics targets remain unmet. Full simulation and
+presentation isolation still requires the typed command/snapshot boundary in
+architecture 62; these improvements do not move the whole simulation owner
+off the GUI app thread.
