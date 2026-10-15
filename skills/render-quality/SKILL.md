@@ -55,6 +55,12 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    isolated separately. The High Gaussian filter uses normal bias 4.0,
    scaled by cascade texel size; keep its metre-valued depth bias and the
    physical Sun unchanged.
+   Inspect the live light bias as well as the preset: saved Graphics values
+   override changed preset defaults. For diagonal boundaries in close grain,
+   isolate the raw procedural noise from lighting and geometry. Shared lattice
+   corners must be identical; run the `noise_continuity` graphics fixture for
+   the GPU value/gradient contract. Reload shader libraries with `ReloadShader`
+   using an empty path so imported modules and their consumers refresh together.
 3. Check the authored light and shadow contract, GPU shadow-resource status,
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,

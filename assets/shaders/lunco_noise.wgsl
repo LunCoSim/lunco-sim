@@ -1,6 +1,6 @@
 // Shared procedural value noise for the terrain/prop shaders, via naga_oil
-// import. Two families, one hash lineage (fract-dot arithmetic hashes — no
-// `sin`, so results don't drift across driver polynomial approximations):
+// import. Both dimensionalities use Bevy's integer PCG hash for lattice values.
+// Floating-point arithmetic is reserved for interpolation between those values.
 //
 //   * 3D (`hash13`/`vnoise`/`fbm`) — world-space noise for the native
 //     shaders; sampled on a direction vector it is a function on the sphere
@@ -13,10 +13,17 @@
 
 #define_import_path lunco::noise
 
+#import bevy_pbr::utils::rand_u
+
 fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
+    // Callers supply floor(p) plus integer corner offsets. Hash the integer
+    // identity so neighbouring cells obtain exactly the same shared corner,
+    // independent of floating-point contraction/reassociation. A float fract-dot
+    // hash magnifies rounding at kilometre-scale grain coordinates into seams.
+    let cell = bitcast<vec3<u32>>(vec3<i32>(p));
+    var state = cell.x * 1597334677u ^ cell.y * 3812015801u ^ cell.z * 2798796415u;
+    // The upper 24 bits convert exactly to f32 and keep the value below one.
+    return f32(rand_u(&state) >> 8u) * (1.0 / 16777216.0);
 }
 
 fn vnoise(p: vec3<f32>) -> f32 {
@@ -74,27 +81,9 @@ fn vnoise_gradient(p: vec3<f32>) -> vec4<f32> {
     return vec4(value, dx, dy, dz);
 }
 
-/// `vnoise` with a QUINTIC interpolant (6t^5 - 15t^4 + 10t^3) instead of the
-/// cubic smoothstep. Same hash lineage and lattice, so it is a drop-in with the
-/// same statistics — only the interpolation between lattice points differs.
-///
-/// Cubic smoothstep has a discontinuous SECOND derivative at the lattice planes.
-/// On a large, smooth, low-frequency gradient — a diffuse Milky Way band is the
-/// case in hand — the eye reads those planes as straight axis-aligned edges and
-/// the field visibly breaks into rectangular brightness terraces. The quintic is
-/// C2-continuous at the lattice, so no second-derivative step exists to latch
-/// onto and the terraces do not form.
-///
-/// This was long misattributed to the equirect→cubemap projection; a test
-/// (`dome_projection_continuity.rs`) then proved that projection essentially
-/// exact (worst error 2.7e-5), leaving the cause unidentified. It was the noise:
-/// value noise's lattice cells are axis-aligned boxes, and the artifact
-/// reappeared in a pure per-direction shader with no cubemap anywhere.
-///
-/// Kept SEPARATE from `vnoise` rather than replacing it: the terrain ramps were
-/// authored against the cubic's output distribution, so switching the shared
-/// function under them would shift every terrain shader's appearance. Prefer
-/// this one for large smooth gradients; `vnoise` stays the terrain default.
+/// Quintic value noise for smooth sky fields. Its value, first derivative and
+/// second derivative are continuous at the lattice planes. Terrain and prop
+/// layers use the cubic interpolant and its matching analytic gradient above.
 fn vnoise_quintic(p: vec3<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
@@ -200,9 +189,7 @@ fn fbm_rot_gradient(p: vec3<f32>, octaves: i32, gain: f32) -> vec4<f32> {
 }
 
 fn hash12(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
+    return hash13(vec3(p.x, 0.0, p.y));
 }
 
 fn vnoise2d(p: vec2<f32>) -> f32 {

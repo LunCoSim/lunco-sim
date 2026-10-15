@@ -200,6 +200,20 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" == "noise_continuity" ]]; then
+        # The panel executes the shared GPU noise at thousands of lattice
+        # boundaries. A discontinuous value or gradient turns that pixel red.
+        # Ignore the frame margin; the authored panel covers the central half.
+        read -r green_min red_max < <(
+            convert "$last" -crop "$((RENDER_WIDTH / 2))x$((RENDER_HEIGHT / 2))+$((RENDER_WIDTH / 4))+$((RENDER_HEIGHT / 4))" \
+                -format '%[fx:minima.g] %[fx:maxima.r]' info: 2>/dev/null
+        )
+        if ! awk -v green="${green_min:-0}" -v red="${red_max:-1}" \
+            'BEGIN { exit !(green > 0.5 && red < 0.3) }'; then
+            reason="GPU noise continuity panel contains a failure or is missing (green-min=${green_min:-unavailable} red-max=${red_max:-unavailable})"
+        fi
+    fi
+
     if [[ -z "$reason" && "$name" =~ ^(six_wheel_visual|rocker_bogie_antenna_visual|parts_attached_visual)$ ]]; then
         # These fixtures are authored visual reviews, so a successful process
         # and a PNG are not enough: reject black or empty captures by checking

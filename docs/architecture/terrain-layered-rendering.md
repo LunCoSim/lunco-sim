@@ -193,6 +193,15 @@ second material representation. USD-authored `UsdShade` source and map roles
 remain the source of intent, while the terrain reconciler supplies only the
 engine-derived products that USD did not author.
 
+### Procedural noise continuity
+
+The shared GPU value noise hashes integer lattice identities with Bevy's PCG
+generator before floating-point interpolation. Adjacent cells must reuse exactly
+the same corner value, including at negative, high-frequency terrain coordinates;
+rounding in the hash must not become a visible lattice boundary. Scalar noise and
+analytic-gradient noise share that owner. The `noise_continuity` graphics fixture
+checks both the 2D and 3D value/gradient contracts on the production GPU path.
+
 ### Shadow ownership
 
 Static and streamed terrain both keep native directional-shadow casting and
