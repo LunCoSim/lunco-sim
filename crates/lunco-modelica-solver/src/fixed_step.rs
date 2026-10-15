@@ -148,6 +148,34 @@ impl FixedStepSession {
         self.rk4_step()
     }
 
+    /// Reach a communication point on the configured fixed-step lattice.
+    /// Validate the complete target before applying any internal step.
+    pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
+        let index = ((target_time - self.time_origin) / self.fixed_dt).round();
+        let represented = self.time_origin + index * self.fixed_dt;
+        let roundoff = 32.0
+            * f64::EPSILON
+            * (self.time_origin.abs() + target_time.abs() + (index * self.fixed_dt).abs())
+                .max(self.fixed_dt);
+        if !target_time.is_finite()
+            || !index.is_finite()
+            || index < self.step_index as f64
+            || index >= u64::MAX as f64
+            || !represented.is_finite()
+            || (represented - target_time).abs() > roundoff
+        {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "fixed-rk4 target {target_time:?} is not a forward point on its configured lattice (origin={}, step={})",
+                self.time_origin, self.fixed_dt,
+            )));
+        }
+        let target_index = index as u64;
+        for _ in self.step_index..target_index {
+            self.step(self.fixed_dt)?;
+        }
+        Ok(())
+    }
+
     pub fn time(&self) -> f64 {
         self.time_origin + self.step_index as f64 * self.fixed_dt
     }

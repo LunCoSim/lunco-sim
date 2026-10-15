@@ -281,9 +281,8 @@ this graph. See
 ## The macro-step contract (what step 6 actually promises)
 
 The ordering above is *within* a tick. The other half of an FMI-CS master is the
-**communication step** itself: what `dt` each engine is asked for, and who waits
-for whom. Stating it explicitly (finding `A3` — it was previously unstated, and
-the code did not implement any coherent version of it):
+**communication step** itself: the requested integration interval and which
+completed transactions admit the next fixed tick.
 
 **1. Communication points follow the fixed master clock.** Every model carries a
 `communication_period_secs` and `next_communication_time`. The world still
@@ -308,10 +307,10 @@ participant contract.**
 `current_time` is the model's own clock (`stepper.time()`), reported back by the
 worker. A `TimeTransport.rate` burst therefore produces more Avian/Rhai fixed
 ticks and proportionally more *declared* Modelica communication points, rather
-than multiplying worker callbacks at the render cadence. The requested `dt` is
-capped at `MAX_MACRO_STEP_DT` (~0.18 s) for catch-up, so one explicit time jump
-cannot hand the solver a ten-second step. Normal authored communication points
-are validated to fit that bound and the fixed master-tick lattice; the worker
+than multiplying worker callbacks at the render cadence. The requested `dt`
+must fit `MAX_MACRO_STEP_DT` (~0.18 s); an oversized request fails before
+mutating solver state. Authored communication periods also satisfy the fixed
+master-tick lattice. The worker
 receives the master's sequence number and `[start_time, stop_time]`, validates
 both against its own solver clock, and the main thread accepts only the exact
 in-flight response at that endpoint. A worker result is still required before
@@ -380,17 +379,19 @@ participants through 4x, 0.25x, pause, and resume, including Modelica's own `tim
 coordinate.
 
 **5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
-The worker's command-squashing (which correctly collapses redundant
-`UpdateParameters`/`Compile`) explicitly does **not** apply to `Step`: dropping
-one would delete `dt` of simulated time and ack it as a success. If back-pressure
-is ever needed there, `dt`s must be **summed**, never dropped.
+The worker retains every ordered transaction with its interval-start input
+sample. Setpoint coalescing applies to `UpdateParameters`/`Compile`, never to
+`Step`. Backpressure bounds pending work without merging integration intervals
+or retiming their inputs.
 
-**6. The live solver is not the batch solver.** The interactive path integrates a
-fixed ladder of `SECS_PER_TICK / 3` micro-steps with an explicit-family solver;
-the batch/Fast-Run path keeps its adaptive-implicit BDF. See
-[`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a — that
-doc also states, honestly, how far short of true Tier-A determinism this still
-falls.
+**6. Numerical backends own internal steps.** The worker asks
+`LiveStepper::advance_to` to reach the exact communication point. Adaptive
+sessions use Rumoca's maintained Model Exchange driver, including event
+handling. Fixed prediction validates the target against its configured lattice
+before integrating the same internal RK4 steps. Interval validation precedes
+input admission; completion time and finite observations are checked before
+publication. The worker does not implement a second numerical step planner.
+See [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a.
 
 ## FMI boundary and conformance claim
 
@@ -402,8 +403,7 @@ current code has the right master-side invariants for a future FMU backend:
 * input snapshots at a communication point;
 * a positive, bounded communication step;
 * zero-order hold of the last validated outputs between points;
-* conservative waiting only for participants whose outputs can reach a
-  state-writing sink; and
+* conservative waiting for every due active participant; and
 * explicit faulting instead of releasing a failed coupled step as if it had
   completed.
 

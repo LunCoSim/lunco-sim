@@ -80,38 +80,12 @@ What is actually in the code:
 | A fixed-step deterministic Modelica solver good enough to honour the promise | **implemented as `fixed-rk4`** for the restricted continuous profile; construction rejects events, discrete assignments, clocks, and external tables |
 | Effect of the promise on live solver choice | **enforced** — `solver::resolve` admits prediction only for a backend declaring both `fixed_step` and `deterministic`; `fixed-rk4` is selected for qualified predicted Modelica programs while `rk45` remains authoritative-live only |
 
-### Solver selection is resolved, not hardcoded (2026-07-27)
+### Solver selection and numerical ownership
 
-The live path used to name its own solver family, and that was a second,
-independent selection site: `lunco_modelica_worker::worker::live_stepper_options` hardcoded the explicit
-family for **every** live model while the batch path resolved one properly. The
-two silently disagreed.
-
-MEASURED CONSEQUENCE: a rover's generated electrical island (battery + solar
-panel) carries algebraic unknowns. Handed the explicit stepper it failed every
-step with `rk45 backend only supports a narrow explicit ODE subset: algebraic
-refresh row 2 cannot be solved for …Battery.p.i`, published no ports, and
-reported nothing a driver would see. Every solar rover in the repo was dead,
-including the shipped `scenes/luncosim/solar_rover_demo.usda` — which is the class
-of model §2 above calls the adaptive solver's *sweet spot*.
-
-Both paths now call `lunco_experiments::solver::resolve`, from two facts — and
-**both are facts about WHERE the model runs**, never claims about the model:
-
-- **`live`** — is it stepped inside the fixed-step frame loop, as opposed to an
-  offline batch solve that owns its own time;
-- **`predicted`** — does it drive a client-predicted body under the declared
-  `RealtimeSafe` contract, carried to the worker on `ModelicaCommand::Compile`
-  because the worker thread has no ECS.
-
-There is deliberately **no** third fact for whether the model is *solvable*, and
-the first attempt at one is worth recording because it was plausible and wrong:
-`implicit = (dae.variables.algebraics non-empty)`, read off the compiled DAE. A
-healthy battery island has algebraic variables too, so that predicate routed live
-islands onto the adaptive backend — which owns its own step sequence and stalled
-the worker so badly that one of three models finished compiling in 30 s of sim
-time, with no error. Solvability is the backend's own lowering to answer and the
-authored domain rules to constrain. A thin substrate does not get an opinion.
+Live and batch construction use `lunco_experiments::solver::resolve` with
+execution requirements: `live` identifies incremental co-simulation, and
+`predicted` requires a fixed-step deterministic backend. The backend owns
+solvability checks; algebraic-variable presence does not select a solver.
 
 The electrical storage boundary follows the same ownership rule. `Battery.mo`
 authors the initial `soc` as a fixed state inside the physical `[0, 1]` storage
@@ -124,43 +98,26 @@ drained-state recovery, or source-disabling branch is part of this contract.
 
 ### The registry is the vocabulary
 
-`SolverChoice` was a closed enum; it is a registry now, and that changes the
-public surface in two ways worth stating plainly:
+`ListSolvers` exposes registered IDs, labels, rank and capabilities. Unknown
+or incapable authored solver choices fail the run with a diagnostic.
 
-- **The old spellings are gone, not aliased.** Ids normalise case, `-`, `_` and
-  spaces, so a stored `"rk_like"` normalises to `"rklike"` and matches no
-  registered backend (the registered id is `"rk45"`). An API caller or saved
-  `RunBounds` carrying a pre-registry name gets an `Unknown` error naming every
-  valid id. There is no compatibility shim: one form, discoverable.
-- **`ListSolvers` is how you discover them** (`lunco-modelica-api/src/lib.rs`)
-  — id, label, rank and every capability flag, straight from the registry. It
-  exists so that "what may I pass?" has an answer that cannot drift from what
-  `resolve` accepts.
+The master supplies the exact communication target through
+`LiveStepper::advance_to`. The numerical backend owns all internal integration:
 
-An unknown or incapable authored solver **fails the run**. It is not downgraded to
-one that happens to work — `parse_solver_arg` used to warn and drop, which meant a
-typo produced numbers under a different integrator than the caller believed, with
-only a log line to say so. Refusal is reported to the console, not just the log,
-because a run that never started otherwise looks like one still compiling.
+- `rk45` uses Rumoca's checked Model Exchange session, including its adaptive
+  integration and event handling. Internal accepted steps do not become public
+  communication points.
+- `fixed-rk4` uses the configured internal lattice. A communication point must
+  lie on that lattice; the backend validates the complete target before
+  applying its fixed RK4 steps. It rejects unsupported events, discrete state,
+  clocks and external tables at construction.
 
-What remains genuinely live-specific is stepping POLICY, not solver choice:
-
-- a **fixed micro-step ladder**: every macro step is an integer number of
-  `LIVE_MICRO_DT = SECS_PER_TICK / 3` micro-steps (`micro_steps_for(dt)`), so the
-  model's stop-time lattice is a pure function of the fixed-step clock and the
-  requested `dt` — identical on every peer;
-- a fixed tolerance, **not** the model's `experiment(Tolerance=…)` annotation (an
-  offline-accuracy knob must not reach into the realtime loop).
-
-The current `rk45` backend is an *embedded* RK45: its internal sub-step size is
-error-adapted, so it is not a fixed-step deterministic implementation. It is
-registered for authoritative live co-simulation only. The `fixed-rk4` backend
-owns an explicit four-stage integration loop over Rumoca's lowered derivative
-runtime, advances on one exact configured lattice, and is registered with the
-required prediction capabilities. It refuses unsupported model constructs at
-construction; there is no tolerance path that knowingly permits peer divergence.
-Adding events, discrete state, or external tables requires a new backend profile
-with its own deterministic semantics, not a fallback to adaptive stepping.
+Live construction supplies explicit tolerance and an internal step setting;
+offline experiment annotations do not change the realtime solver profile. The
+worker validates the requested interval before input admission and validates
+completion time and finite observations before publishing the transaction.
+The master does not round, clamp or compensate communication points according
+to an internal numerical grid.
 
 The USD wiring gate independently refuses a force/torque edge from a program
 without `RealtimeSafe` when the target is a client-predicted dynamic body. It
@@ -368,9 +325,9 @@ profile, not a claim that every Modelica construct is prediction-safe. A model i
 admitted only when the backend can establish this profile at construction and is
 rejected with a diagnostic otherwise.
 
-**The current special solver:** classical RK4 with exactly four derivative stages
-per configured step. It advances only when the caller supplies that exact step
-size; it neither adapts, subdivides, nor rounds a step. Determinism comes from the
+**The fixed solver:** classical RK4 with exactly four derivative stages
+per configured internal step. Its communication target is validated against
+that lattice before any internal steps run. Determinism comes from the
 fixed operation sequence, fixed algebraic solve budget, fixed evaluation order,
 and the simulation clock—not from turning an adaptive session's nominal `dt` into
 a promise. The profile currently requires continuous, event-free,

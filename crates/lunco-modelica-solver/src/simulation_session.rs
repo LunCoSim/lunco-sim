@@ -26,10 +26,12 @@ impl LiveStepper {
         }
     }
 
-    pub fn step(&mut self, dt: f64) -> Result<(), SimulationDiagnosticError> {
+    /// Reach the master's communication point using the selected backend's
+    /// internal integration policy.
+    pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
         match self {
-            Self::Adaptive(session) => session.step(dt).map_err(adaptive_error),
-            Self::Fixed(session) => session.step(dt),
+            Self::Adaptive(session) => session.advance_to(target_time).map_err(adaptive_error),
+            Self::Fixed(session) => session.advance_to(target_time),
         }
     }
 

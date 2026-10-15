@@ -80,24 +80,11 @@ fn diagnostics_from_sim_error(
     }
 }
 
-/// Solver options for the **LIVE** (co-simulated) path.
-///
-/// WHAT IS LIVE-SPECIFIC, and it is only this: a **fixed macro/micro step
-/// ladder** ([`LIVE_MICRO_DT`] via [`micro_steps_for`], so the stop-time sequence
-/// is an integer function of `dt`), `h0` pinned to that micro-step, and an
-/// explicit fixed tolerance ([`LIVE_TOL`]) rather than the model's
-/// `experiment(Tolerance=…)`, which is an offline accuracy knob and must not
-/// reach the realtime loop.
-///
-/// WHAT IS NOT LIVE-SPECIFIC: **which solver**. Hardcoding a family here would
-/// bypass the resolver the batch path uses, and the two would disagree silently.
-/// See `lunco_experiments::solver`.
-///
-/// So the family comes from [`solver::resolve`], the same call the batch path
-/// makes, from where the model runs: stepped inside the frame loop, and whether
-/// it drives a client-predicted body. A live model resolves to a backend that
-/// declares `usable_live`; a predicted one is admitted only by a backend that
-/// is both fixed-step and deterministic.
+/// Live solver selection and numerical settings. The shared master supplies
+/// exact communication points; the selected backend owns internal integration.
+/// Adaptive sessions use Rumoca's Model Exchange driver, while prediction
+/// requires the registered fixed-step deterministic capability. Live tolerance
+/// and initial/internal step size are independent of offline experiment settings.
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
 ) -> Result<
@@ -121,37 +108,20 @@ fn live_stepper_options(
     let parameters = solver::SolverParams {
         atol: LIVE_TOL,
         rtol: LIVE_TOL,
-        // `h0` is the initial/maximum internal step: pinned to the micro-step
-        // so the integrator's first internal step matches what it is asked for.
-        h0: Some(LIVE_MICRO_DT),
+        // Fixed prediction owns this internal lattice. Adaptive sessions
+        // consume the same numerical setting through Rumoca's options adapter.
+        h0: Some(LIVE_INTERNAL_STEP_SECS),
         // Live sessions are open. This span sets the initial root-scan scale;
         // it is not a stop time.
         t_start: 0.0,
-        t_end: LIVE_MICRO_DT,
+        t_end: LIVE_INTERNAL_STEP_SECS,
     };
     let options = lunco_modelica_solver::solver_backends::rumoca_options(&spec, &parameters)?;
     Ok((spec, parameters, options))
 }
 
-/// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
-///
-/// Every worker live construction uses this boundary to resolve solver options
-/// and borrow the checked prepared FMI component.
-///
-/// Stepping POLICY (fixed micro-step ladder, fixed tolerance) is live-specific;
-/// the SOLVER is resolved from the model's own requirements — see
-/// [`live_stepper_options`]. The model's `experiment(Tolerance=…)` annotation is
-/// deliberately ignored here: it is an offline-accuracy knob and must not reach
-/// into the realtime coupling loop.
-///
-/// A solver that cannot serve the model is an error HERE, at construction, not a
-/// per-step `WARN` on a model that has already been accepted and is silently
-/// producing nothing. That silence is what let broken islands ship.
-/// The realtime half of the solver request for one model.
-///
-/// A model absent from the set is NOT predicted. The live path still requires a
-/// frame-loop-usable backend; offline/batch paths are where adaptive implicit
-/// solvers are selected.
+/// Resolve execution requirements for one live participant. Prediction is
+/// admitted only by a fixed-step deterministic backend.
 fn profile_for(
     entity: Entity,
     realtime_models: &std::collections::HashSet<Entity>,
@@ -2177,7 +2147,6 @@ fn collect_stepper_observables(
 fn advance_checked_step(
     stepper: &mut LiveStepper,
     inputs: &[(String, f64)],
-    dt: f64,
     stop_time: f64,
 ) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
     {
@@ -2191,7 +2160,7 @@ fn advance_checked_step(
     }
     {
         let _span = bevy::log::info_span!("modelica_integrate_macro_step").entered();
-        integrate_macro_step(stepper, dt)?;
+        stepper.advance_to(stop_time)?;
     }
     validate_step_completion(stepper.time(), stop_time)
         .map_err(rumoca_sim::SimulationDiagnosticError::Solver)?;
@@ -2233,62 +2202,12 @@ fn merge_initial_inputs(initial: &mut Vec<(String, f64)>, values: &[(String, f64
 /// see [`live_stepper_options`] and the runtime solver capability contract.
 const LIVE_TOL: f64 = 1e-6;
 
-/// The LIVE path's **micro-step**: the one and only step size handed to the
-/// solver. Three micro-steps per fixed tick (60 Hz ⇒ 180 Hz solver rate).
-///
-/// Derived from [`lunco_core_runtime::SECS_PER_TICK`], so the model's stop-time lattice
-/// is a pure function of the FIXED-STEP clock — never of the render frame, GPU
-/// load, or window focus (A3).
-const LIVE_MICRO_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0;
+/// Numerical step setting supplied to the selected backend. Fixed prediction
+/// integrates on this lattice; adaptive integration owns its accepted steps.
+const LIVE_INTERNAL_STEP_SECS: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0;
 
 const COMMUNICATION_EPS: f64 = 1e-9;
 const COMMUNICATION_TIME_EPS: f64 = 1e-8;
-
-/// Hard cap on micro-steps integrated inside ONE `Step` command.
-///
-/// A large deficit can still occur after an intentional pause or a rate change,
-/// so the requested macro step is capped at this many micro-steps (~0.178 s).
-/// A worker stall is handled differently: the fixed-step coupling barrier holds
-/// physics and does not advance `target_time` while a step is in flight. The
-/// clamp therefore bounds an explicit authored time jump, not accumulated worker
-/// debt.
-const MAX_MICRO_STEPS_PER_MACRO: u32 = 32;
-
-/// Below this deficit we don't dispatch a `Step` at all — the model is already
-/// at the communication point (within half a micro-step) and a sub-micro-step
-/// `dt` would just round to a full micro-step and overshoot.
-const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
-
-/// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
-///
-/// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
-/// on every peer, for every `dt`. Round-to-nearest (rather than floor) keeps the
-/// model's clock centred on the world's: a residual of at most half a micro-step
-/// is carried into the next tick's deficit and cancels there.
-fn micro_steps_for(dt: f64) -> u32 {
-    if dt.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
-        return 0;
-    }
-    let n = (dt / LIVE_MICRO_DT).round();
-    (n as u32).clamp(1, MAX_MICRO_STEPS_PER_MACRO)
-}
-
-/// Integrate one macro step: `micro_steps_for(dt)` fixed micro-steps.
-///
-/// The ONE integration loop for the live path — native and wasm workers both
-/// call it, so the two `#[cfg]` twins cannot drift on step policy.
-/// Advances the model's own clock by exactly `micro_steps_for(dt) *
-/// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
-/// side reconciles any residual against the world clock next tick.
-fn integrate_macro_step(
-    stepper: &mut LiveStepper,
-    dt: f64,
-) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
-    for _ in 0..micro_steps_for(dt) {
-        stepper.step(LIVE_MICRO_DT)?;
-    }
-    Ok(())
-}
 
 /// Validate the worker-side FMI-CS transaction envelope before mutating solver
 /// state. The master owns the interval; a worker must not silently reinterpret
@@ -2308,6 +2227,7 @@ fn validate_step_request(
         || !stop_time.is_finite()
         || !dt.is_finite()
         || dt <= 0.0
+        || dt > MAX_MACRO_STEP_DT
         || stop_time <= start_time
         || !communication_times_close(stop_time - start_time, dt)
         || !communication_times_close(actual_start, start_time)
@@ -3784,7 +3704,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     let step_started = web_time::Instant::now();
-                    let step_outcome = advance_checked_step(stepper, &inputs, dt, stop_time);
+                    let step_outcome = advance_checked_step(stepper, &inputs, stop_time);
                     let worker_step_duration_ns = step_started.elapsed().as_nanos() as u64;
 
                     if let Err(e) = &step_outcome {
@@ -4430,166 +4350,9 @@ mod worker_budget_tests {
 
 #[cfg(test)]
 mod macro_step_tests {
-    use super::bridge::plan_macro_step;
     use super::*;
 
-    /// Stand-in for the worker: integrate what the worker WOULD integrate for a
-    /// requested `dt` — an integer number of fixed micro-steps — and return the
-    /// model's new own-clock value. This is the same arithmetic
-    /// [`integrate_macro_step`] performs, without a `SimulationSession`.
-    fn worker_integrate(current_time: f64, dt: f64) -> f64 {
-        current_time + micro_steps_for(dt) as f64 * LIVE_MICRO_DT
-    }
-
-    /// Drive N fixed ticks, resolving the in-flight step after `latency_ticks`
-    /// ticks (0 = the worker answers within the same tick). Returns
-    /// `(model_time, world_time)`.
-    ///
-    /// `latency_ticks` stands in for "how many fixed ticks the worker takes" —
-    /// i.e. exactly the axis that used to be the RENDER FRAME. The contract is
-    /// that it must not change the model's time.
-    fn run_ticks(ticks: u32, latency_ticks: u32) -> (f64, f64) {
-        let fixed_dt = lunco_core_runtime::SECS_PER_TICK;
-        let mut model_time = 0.0_f64;
-        let mut target_time = 0.0_f64;
-        // (dt, ticks-remaining-until-it-lands)
-        let mut in_flight: Option<(f64, u32)> = None;
-
-        for _ in 0..ticks {
-            // `handle_modelica_responses` — the result lands, model clock moves.
-            if let Some((dt, 0)) = in_flight {
-                model_time = worker_integrate(model_time, dt);
-                in_flight = None;
-            } else if let Some((dt, n)) = in_flight {
-                in_flight = Some((dt, n - 1));
-            }
-
-            // `spawn_modelica_requests` — one fixed tick of world time.
-            target_time += fixed_dt;
-            if let Some(dt) = plan_macro_step(target_time, model_time, in_flight.is_some()) {
-                in_flight = Some((dt, latency_ticks));
-            }
-        }
-        // The world stops; let the model catch up. While the world is MOVING the
-        // model is legitimately up to (latency + 1) ticks behind — that is the
-        // in-flight step plus the tick that elapsed while it was in flight, and
-        // it is bounded, not cumulative. The A3 contract is that the deficit is
-        // never DISCARDED: once the world stops advancing, the model converges on
-        // it. So drain to convergence rather than landing a single step, which is
-        // what `spawn_modelica_requests` does on any tick the world is paused.
-        if let Some((dt, _)) = in_flight.take() {
-            model_time = worker_integrate(model_time, dt);
-        }
-        while let Some(dt) = plan_macro_step(target_time, model_time, false) {
-            model_time = worker_integrate(model_time, dt);
-        }
-        (model_time, target_time)
-    }
-
-    /// **The A3 regression test.** Model time must equal world time after N
-    /// ticks REGARDLESS of how long the worker (read: the render frame) takes to
-    /// answer. Before the fix, a worker/frame latency of k ticks made the model
-    /// run k+1× too slow, permanently.
-    #[test]
-    fn model_time_tracks_world_time_at_any_worker_latency() {
-        const TICKS: u32 = 600; // 10 s of world time at 60 Hz
-        let (_, world) = run_ticks(TICKS, 0);
-
-        for latency in [0_u32, 1, 2, 5, 10] {
-            let (model, w) = run_ticks(TICKS, latency);
-            assert!(
-                (w - world).abs() < 1e-9,
-                "world clock must not depend on latency"
-            );
-            // Converged to within one micro-step (the rounding residual), NOT
-            // to within a factor of (latency + 1).
-            let err = (model - world).abs();
-            assert!(
-                err <= LIVE_MICRO_DT,
-                "latency={latency}: model={model:.6} world={world:.6} err={err:.6} \
-                 (> one micro-step: the model is losing time)"
-            );
-        }
-    }
-
-    /// The specific pre-fix failure: a worker that answers every OTHER tick used
-    /// to halve the model's rate. Assert we no longer lose ~half the time.
-    #[test]
-    fn every_other_tick_worker_does_not_halve_model_time() {
-        let (model, world) = run_ticks(600, 1);
-        assert!(
-            model > world * 0.99,
-            "model={model:.4} world={world:.4}: model is running slow (half-rate regression)"
-        );
-    }
-
-    /// A long stall (worker busy for 120 ticks — a compile) must be CAUGHT UP,
-    /// not lost. The per-step clamp bounds each macro step; several ticks close
-    /// the gap.
-    #[test]
-    fn stalled_model_catches_up_instead_of_losing_time() {
-        let fixed_dt = lunco_core_runtime::SECS_PER_TICK;
-        let mut model_time = 0.0_f64;
-        let mut target_time = 0.0_f64;
-
-        // 120 ticks of world time pass with the worker unavailable.
-        for _ in 0..120 {
-            target_time += fixed_dt;
-        }
-        assert!(model_time < target_time - 1.0);
-
-        // Now the worker answers immediately, one macro step per tick.
-        for _ in 0..200 {
-            target_time += fixed_dt;
-            if let Some(dt) = plan_macro_step(target_time, model_time, false) {
-                assert!(
-                    dt <= MAX_MACRO_STEP_DT + 1e-12,
-                    "macro step must stay clamped: {dt}"
-                );
-                model_time = worker_integrate(model_time, dt);
-            }
-        }
-        assert!(
-            (model_time - target_time).abs() <= LIVE_MICRO_DT,
-            "model={model_time:.4} world={target_time:.4}: the 2 s stall was never caught up"
-        );
-    }
-
-    /// The deficit is clamped per step (so one long gap can't hand the solver a
-    /// 10 s macro step), but never discarded.
-    #[test]
-    fn macro_step_is_clamped_but_deficit_survives() {
-        let dt = plan_macro_step(10.0, 0.0, false).expect("a 10 s deficit must request a step");
-        assert!((dt - MAX_MACRO_STEP_DT).abs() < 1e-12);
-        // In flight ⇒ no second step, but the deficit is still there next tick.
-        assert!(plan_macro_step(10.0, 0.0, true).is_none());
-    }
-
-    /// At the communication point, nothing is dispatched (and a sub-micro-step
-    /// overshoot is absorbed rather than integrated).
-    #[test]
-    fn no_step_at_the_communication_point() {
-        assert!(plan_macro_step(1.0, 1.0, false).is_none());
-        assert!(plan_macro_step(1.0, 1.0 + LIVE_MICRO_DT, false).is_none());
-        assert!(plan_macro_step(1.0 + LIVE_MICRO_DT, 1.0, false).is_some());
-    }
-
-    /// The micro-step ladder is an integer function of `dt` alone — same on
-    /// every peer, clamped, and never zero for a positive `dt`.
-    #[test]
-    fn micro_step_ladder_is_deterministic_and_clamped() {
-        assert_eq!(micro_steps_for(0.0), 0);
-        assert_eq!(micro_steps_for(-1.0), 0);
-        assert_eq!(micro_steps_for(LIVE_MICRO_DT), 1);
-        assert_eq!(micro_steps_for(lunco_core_runtime::SECS_PER_TICK), 3);
-        assert_eq!(micro_steps_for(2.0 * lunco_core_runtime::SECS_PER_TICK), 6);
-        assert_eq!(micro_steps_for(1e-9), 1);
-        assert_eq!(micro_steps_for(1_000.0), MAX_MICRO_STEPS_PER_MACRO);
-    }
-
-    /// **A5.** `Step` is an integration, not a setpoint: two queued `Step`s must
-    /// NEVER collapse (the dropped one used to be acked with a fake success,
-    /// deleting `dt` of model time). Setpoint-shaped commands still squash.
+    /// Every communication transaction is distinct; setpoint commands coalesce.
     #[test]
     fn step_is_not_squashable() {
         let e = Entity::PLACEHOLDER;
@@ -4644,8 +4407,8 @@ mod macro_step_tests {
             f64::NAN,
             f64::INFINITY,
             0.0,
-            LIVE_MICRO_DT * 0.5,
-            LIVE_MICRO_DT,
+            LIVE_INTERNAL_STEP_SECS * 0.5,
+            LIVE_INTERNAL_STEP_SECS,
         ] {
             let mut model = ModelicaModel {
                 communication_period_secs: invalid,
@@ -4687,7 +4450,7 @@ mod macro_step_tests {
         assert!(lunco_modelica_runtime::validate_communication_period_secs(0.13).is_err());
         assert!(
             lunco_modelica_runtime::validate_communication_period_secs(
-                MAX_MACRO_STEP_DT + LIVE_MICRO_DT
+                MAX_MACRO_STEP_DT + LIVE_INTERNAL_STEP_SECS
             )
             .is_err()
         );
@@ -5179,9 +4942,9 @@ mod live_solver_snapshot_tests {
         assert!(plan.snapshot.capabilities.deterministic);
         assert_eq!(plan.snapshot.parameters.atol, LIVE_TOL);
         assert_eq!(plan.snapshot.parameters.rtol, LIVE_TOL);
-        assert_eq!(plan.snapshot.parameters.h0, Some(LIVE_MICRO_DT));
+        assert_eq!(plan.snapshot.parameters.h0, Some(LIVE_INTERNAL_STEP_SECS));
         assert_eq!(plan.snapshot.parameters.t_start, 0.0);
-        assert_eq!(plan.snapshot.parameters.t_end, LIVE_MICRO_DT);
+        assert_eq!(plan.snapshot.parameters.t_end, LIVE_INTERNAL_STEP_SECS);
         assert_eq!(
             plan.snapshot.parameter_overrides,
             vec![("alpha".to_owned(), 1.0), ("zeta".to_owned(), 2.0)]
@@ -5198,6 +4961,40 @@ mod live_solver_snapshot_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod checked_step_tests {
     use super::*;
+
+    #[test]
+    fn adaptive_communication_interval_lands_on_its_requested_stop() {
+        let source = "model ClockProbe Real x(start=0); equation der(x)=1; end ClockProbe;";
+        let compiled = ModelicaCompiler::new()
+            .compile_str("ClockProbe", source, "ClockProbe.mo")
+            .unwrap();
+        let plan = live_build_plan(
+            solver::RuntimeProfile {
+                live: true,
+                predicted: false,
+            },
+            &[],
+            &[],
+            0,
+            Some(0),
+        )
+        .unwrap();
+        let component = rumoca_sim::prepare_fmi_component(&compiled.dae, &plan.options).unwrap();
+        let mut stepper = lunco_modelica_solver::simulation_session::live_from_fmi_component(
+            &component,
+            &plan.spec,
+            plan.options,
+        )
+        .unwrap();
+        for stop_time in [0.007, 0.014, 0.025] {
+            let values = advance_checked_step(&mut stepper, &[], stop_time)
+                .expect("an adaptive session must honor the requested communication point");
+            assert!((stepper.time() - stop_time).abs() < 1e-12);
+            assert!(
+                (values.iter().find(|(name, _)| name == "x").unwrap().1 - stop_time).abs() < 1e-12
+            );
+        }
+    }
 
     #[test]
     fn rejected_worker_inputs_return_diagnostics_without_advancing() {
@@ -5228,8 +5025,7 @@ mod checked_step_tests {
             let error = advance_checked_step(
                 &mut stepper,
                 &[(name.to_owned(), value)],
-                LIVE_MICRO_DT,
-                LIVE_MICRO_DT,
+                LIVE_INTERNAL_STEP_SECS,
             )
             .unwrap_err();
             assert!(

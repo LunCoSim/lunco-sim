@@ -9613,3 +9613,59 @@ Native exports of the retained `griffin-d17d65261.tracy` capture over seconds
 must not be summed. These numbers identify the next contact-query investigation;
 they do not justify changing substeps, contact tolerance or graphics quality.
 Evidence is `target/ccd-existing-breakdown.json` and its successful native export.
+
+### Backend-owned communication targets — 2026-10-15
+
+Live execution calls `LiveStepper::advance_to` with the master's requested
+endpoint. Adaptive integration delegates to the pinned Rumoca Model Exchange
+session; fixed prediction validates the configured lattice and applies its
+unchanged internal RK4 steps. Native and Wasm workers share the checked advance
+boundary. The canonical contracts are in architecture 20, 22 and 28.
+
+The focused inline ODE regression initially requests 0.007 seconds and fails
+completion at 0.005555555556 seconds. It passes after this cutover, including
+subsequent 0.014 and 0.025 endpoints. All 65 worker tests and six fixed-backend
+tests pass. The latter cover exact state equality against individual internal
+steps, bitwise repeatability with changing inputs, and non-mutating rejection
+of off-lattice, backward and non-finite targets. Evidence is
+`target/exact-communication-{baseline,worker-tests,solver-tests}.log`.
+
+The rebuilt production binary passes the 34-check initialization/clock gate,
+four-check drive-law gate and both expected terminal observation/initialization
+failure gates. Each process exits zero and its authored verdict or declared
+terminal fault is checked. Evidence is `target/exact-communication-gates.json`
+and its four corresponding gate logs.
+
+An owned Tracy run at API 4345 (PID 281430, collector 281429 connected on 8086)
+saves approximately 587.4 MiB; the native statistics and numerical-zone exports
+succeed. The capture includes a large host clock discontinuity. Its exported
+24,705 numerical jobs cover only part of the 49,455 worker samples observed by
+the runtime, so it does not establish complete late-window attribution or a
+speedup. The mission reaches its completion report, which fails one of 16
+checks: the Twin clears `route_engaged` at completion and then requires that
+same live flag in its final historical phase assertion. This is a distinct
+authored verdict defect, not a passing mission result. Evidence is
+`target/exact-communication-tracy{.tracy,.png,-context.json,-runtime.log,-status.json,-numerical.json}`.
+
+A separate ordinary Cargo run at API 4346 (PID 302524) advances ticks
+4302–5411 over 18.472 seconds of monotonic time: 1.00059 realtime, with pending
+demand decreasing from 13.850 to 2.628 ms and zero clipped simulation time.
+Final fixed-cycle p50/p95/max are 5.772/7.159/9.499 ms; retained native-physics
+p50 is 2.580 ms. The 1,110 unique retained FPS observations have median 104.17.
+All seven terrain observations report 256/256 resident tiles, zero pending
+work and an inactive complete derived map. The inspected 1280×720 Avatar image
+shows the driven FLIP, terrain, shadows and route labels. Nine shared-clock
+participants remain active; selected cutoff/touchdown/route-start milestones
+are ticks 1316/1407/3103. These milestones do not establish full state replay.
+The sampled simulator/build inventory contains only this app; AC is online.
+Graphics settings, eight native substeps and numerical tolerance are unchanged.
+Evidence is `target/exact-communication-normal{.png,-context.json,-camera.json,-samples.json,-status.json,-settled-summary.json}`.
+Both apps and the collector exit zero and release their ports. The 200 FPS,
+sub-1 ms physics, full presentation isolation and external FMU interoperability
+goals remain open.
+
+Shared disk pressure required a full checkout-local `cargo clean` after
+package-scoped cleaning proved insufficient. All 305 evidence/config entries
+at the target root were preserved and restored; source, sibling targets,
+Cargo registry and shared sccache were retained. Both production builds use
+the normal target, regular sccache and `-j 4`.

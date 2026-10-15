@@ -134,7 +134,7 @@ impl SessionHandle {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 super::validate_step_request(stepper.time(), start_time, stop_time, dt)
                     .map_err(owner_error)?;
-                super::advance_checked_step(stepper, &inputs, dt, stop_time)
+                super::advance_checked_step(stepper, &inputs, stop_time)
             }));
             let outputs = match outcome {
                 Ok(outputs) => outputs,

@@ -115,6 +115,12 @@ application updates. Windowed completion admission still depends on application
 updates until its simulation owner is isolated. The default
 communication period is one physics tick; longer periods must be authored
 explicitly.
+Attribute numerical service separately from transaction dispatch and result
+admission. Live workers pass the exact communication point to the existing
+`LiveStepper::advance_to` boundary; adaptive Rumoca sessions and fixed
+prediction own their internal steps. Preserve the fixed prediction lattice,
+event handling, input sampling and finite/completion validation when optimizing
+that path. Do not add another worker-side integration grid or catch-up planner.
 
 UI exposure publication is paced by `Time<Real>`, independent of simulation
 pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep
@@ -373,8 +379,9 @@ and retirement. Compare concurrent construction intervals and end-to-end
 readiness, not only summed worker time. A round transfers complete input buffers
 once, runs independent participants concurrently, and admits checked results in
 command order. Require exact replay, terminal observation-failure and scene
-replacement evidence before a scheduling gain claim. Keep solver clocks,
-micro-step math, metadata and generation retirement unchanged. The native
+replacement evidence before a scheduling gain claim. Preserve exact
+communication points, backend numerical profiles, metadata and generation
+retirement. The native
 compiler already shares its DAE and source map; additional metadata caches do
 not address dominant native construction cost.
 For mixed loading and live execution, inspect `modelica_live_step_job` queue

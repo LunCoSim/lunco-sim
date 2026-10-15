@@ -459,8 +459,11 @@ cross back to the command owner; native sessions never cross threads.
 
 A scheduling round dispatches at most one initialized transaction per entity
 before awaiting results. It transfers the complete owned input vector, retaining
-the existing micro-step math, bounds and checked observation path. Independent
-owners can execute concurrently. The command owner admits results in its
+the requested communication point and checked observation path. The selected
+numerical backend owns internal steps through `LiveStepper::advance_to`:
+Rumoca drives adaptive Model Exchange, and fixed prediction validates its
+configured lattice before integrating. Independent owners can execute
+concurrently. The command owner admits results in its
 existing round order, validates session/library-generation fences before
 construction commit, and retains per-entity command order. Repeated commands
 for one entity wait for its preceding transaction. Despawn drops the handle and
