@@ -395,6 +395,15 @@ See [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a.
 
 ## FMI boundary and conformance claim
 
+The native transaction boundary validates `stop_time` against the single
+addition `start_time + dt`, following the endpoint calculation described for
+[`fmi3DoStep`](https://fmi-standard.org/docs/3.0.2/#fmi3DoStep). Request and
+completion admission share one finite-time comparison with an allowance of
+32 machine epsilons at the timestamp's scale. This allowance covers floating
+point representation, not solver error or permission to return stale state.
+Non-finite clocks and intervals too small to advance their represented start
+time fail before input admission.
+
 The contract above is deliberately an **FMI-CS-shaped master algorithm**, not a
 claim that the current Modelica worker is already an FMI implementation. The
 current code has the right master-side invariants for a future FMU backend:

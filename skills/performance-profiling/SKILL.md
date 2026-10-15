@@ -121,6 +121,11 @@ admission. Live workers pass the exact communication point to the existing
 prediction own their internal steps. Preserve the fixed prediction lattice,
 event handling, input sampling and finite/completion validation when optimizing
 that path. Do not add another worker-side integration grid or catch-up planner.
+Keep communication-clock checks at floating point roundoff scale, with finite
+timestamps required at both request and completion admission. A solver's state
+tolerance must not loosen its communication endpoint validation. Validate the
+endpoint using `start + dt`; subtracting large absolute timestamps can reject
+a valid short interval through cancellation.
 
 UI exposure publication is paced by `Time<Real>`, independent of simulation
 pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep

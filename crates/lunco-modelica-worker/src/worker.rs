@@ -2207,29 +2207,35 @@ const LIVE_TOL: f64 = 1e-6;
 const LIVE_INTERNAL_STEP_SECS: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0;
 
 const COMMUNICATION_EPS: f64 = 1e-9;
-const COMMUNICATION_TIME_EPS: f64 = 1e-8;
+const COMMUNICATION_TIME_ROUNDOFF: f64 = 32.0 * f64::EPSILON;
 
-/// Validate the worker-side FMI-CS transaction envelope before mutating solver
-/// state. The master owns the interval; a worker must not silently reinterpret
-/// a request as "whatever time happens to be next".
+/// Compare finite communication timestamps at floating point roundoff scale.
 #[inline]
 fn communication_times_close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= COMMUNICATION_TIME_EPS * a.abs().max(b.abs()).max(1.0)
+    a.is_finite()
+        && b.is_finite()
+        && (a - b).abs() <= COMMUNICATION_TIME_ROUNDOFF * a.abs().max(b.abs()).max(1.0)
 }
 
+/// Validate the worker-side FMI-CS transaction envelope before mutating solver
+/// state. The master owns the interval and the worker must honor that interval.
 fn validate_step_request(
     actual_start: f64,
     start_time: f64,
     stop_time: f64,
     dt: f64,
 ) -> Result<(), String> {
+    // FMI 3 computes the endpoint with one addition. Subtracting a large
+    // absolute start from stop loses precision relative to the short interval.
+    let expected_stop = start_time + dt;
     if !start_time.is_finite()
         || !stop_time.is_finite()
         || !dt.is_finite()
         || dt <= 0.0
         || dt > MAX_MACRO_STEP_DT
         || stop_time <= start_time
-        || !communication_times_close(stop_time - start_time, dt)
+        || expected_stop <= start_time
+        || !communication_times_close(stop_time, expected_stop)
         || !communication_times_close(actual_start, start_time)
     {
         return Err(format!(
@@ -4587,6 +4593,43 @@ mod macro_step_tests {
         assert!(validate_step_request(0.1, 0.1, 0.2, 0.2).is_err());
         assert!(validate_step_completion(0.2, 0.2).is_ok());
         assert!(validate_step_completion(0.199, 0.2).is_err());
+    }
+
+    #[test]
+    fn communication_transaction_preserves_large_time_addition() {
+        let start = 1e9;
+        let dt = lunco_core_runtime::SECS_PER_TICK;
+        let stop = start + dt;
+        assert!(validate_step_request(start, start, stop, dt).is_ok());
+        assert!(validate_step_completion(stop, stop).is_ok());
+        assert!(validate_step_completion(stop.next_up(), stop).is_ok());
+    }
+
+    #[test]
+    fn communication_transaction_rejects_non_finite_and_stale_clocks() {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(validate_step_request(invalid, 0.0, 0.1, 0.1).is_err());
+            assert!(validate_step_completion(invalid, 0.1).is_err());
+            assert!(validate_step_completion(0.1, invalid).is_err());
+        }
+        let start = 1e9;
+        let dt = lunco_core_runtime::SECS_PER_TICK;
+        let stop = start + dt;
+        assert!(validate_step_request(start - 1.0, start, stop, dt).is_err());
+        assert!(validate_step_completion(stop - 1.0, stop).is_err());
+        assert!(validate_step_completion(stop - dt, stop).is_err());
+        assert!(validate_step_request(start, start, stop + 1.0, dt).is_err());
+        assert!(validate_step_request(0.0, 0.0, 0.2, 0.2).is_err());
+        let unresolved_start: f64 = 1e20;
+        assert!(
+            validate_step_request(
+                unresolved_start,
+                unresolved_start,
+                unresolved_start.next_up(),
+                dt
+            )
+            .is_err()
+        );
     }
 }
 

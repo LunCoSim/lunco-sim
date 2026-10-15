@@ -9669,3 +9669,26 @@ package-scoped cleaning proved insufficient. All 305 evidence/config entries
 at the target root were preserved and restored; source, sibling targets,
 Cargo registry and shared sccache were retained. Both production builds use
 the normal target, regular sccache and `-j 4`.
+
+### Communication-clock validation — 2026-10-15
+
+The shared worker request/completion and main-thread response comparison
+requires finite clocks and permits only floating point roundoff. Request
+validation compares the endpoint with `start + dt` and rejects an interval
+that cannot advance its represented start. Architecture 22 owns the contract.
+
+Two focused inline protocol regressions fail before the repair: the previous
+comparison accepts an infinite actual clock, and cancellation rejects a valid
+one-physics-tick request starting at 1e9 seconds. The updated tests also reject
+a stale whole-tick endpoint at that origin, oversized requests, non-finite
+endpoints and unresolvable intervals, while accepting adjacent representation
+roundoff. All 67 worker tests pass. Evidence is
+`target/communication-envelope-{baseline,worker-tests}.log`.
+
+The regular production rebuild passes the existing 34-check Modelica
+initialization/clock gate at 120 Hz manual pacing and the declared terminal
+observation-failure gate. Both processes exit zero and their authored result
+markers are verified in `target/communication-envelope-gates.json` and the two
+scene logs. These cover the stricter validation in production; the preceding
+ordinary Griffin run supplies the performance measurement, not this focused
+protocol check. Full external FMU conformance remains open.
