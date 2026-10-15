@@ -407,14 +407,21 @@ after retained UI placement when its owner revisions change; its production
 hook-policy test rejects REPL invocation, and the focused owner test verifies
 the scheduled call's context and selected visible surface.
 
-The `runtime.ui.visibility` and `runtime.ui.properties` policies receive
-`Application/Ui/Preparation` from the `publish_exposure` owner. Camera-status
-properties receive `Application/Presentation/Initialization` at startup and
-`Application/Presentation/Event` when camera status changes. Their production
-hook-policy checks reject unowned REPL calls, and the camera exposure owner
-test covers the startup projection. The production `route_lifecycle` gate also
-checks the visible `program-browser` exposure and its typed program collection
-after authored UI metadata is admitted.
+The `lunco-luncosim-exposures` owner captures immutable UI facts and their
+`Application/Ui/Preparation` context at the bounded `Time<Real>` cadence.
+Camera properties capture `Application/Presentation/Initialization` at startup
+and `Application/Presentation/Event` on camera changes or policy replacement.
+The owner retains the selected hook registrations and prepares complete views
+through `AsyncWorkAdmission`. `RegisteredHook::invoke` applies the same context,
+argument and result validation to captured and registry-dispatched calls.
+No live World, USD reader or authoritative mutation crosses this boundary.
+
+Retained views, bounded admission, source fencing and failure recovery follow
+[the publication contract](runtime-authored-ui.md). `runtime_ui_preparation`
+exercises failure and recovery while physics is held in both headless and
+windowed production sessions; `route_lifecycle` checks the authored
+`program-browser` consumer.
+
 The default runtime UI policies pass only status, progress blockers and input
 maps to their internal helpers. The public typed fact map remains available to
 the policy; helper evaluation does not copy unrelated participant/output trees.

@@ -332,8 +332,9 @@ packages from acquiring USD's Truck/NURBS dependency solely for extrusion.
 
 **`lunco-exposure-core`**
 The dependency-light typed exposure store. `EngineExposures` and its value
-types are reusable by UI, API, scripting, telemetry, and recovery consumers;
-the domain projection remains in `lunco-luncosim-exposures`.
+types are reusable by UI, API, scripting, telemetry, and recovery consumers.
+Atomic complete-surface replacement and pending/ready/failed state belong to
+this registry. The domain projection remains in `lunco-luncosim-exposures`.
 
 **`lunco-port-core`**
 Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, borrowed `PortDeclarationQuery` discovery for full inspection or an exact name and direction, owner-supplied metadata and typed affine initial expressions, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.
@@ -1530,7 +1531,10 @@ Production integration crate for the renderer-independent runtime exposure
 projection. `RuntimeExposuresPlugin` registers the single shared path from
 authoritative ECS/domain state and authored telemetry to
 `lunco_exposure_core::EngineExposures`; HTML, egui, API, telemetry, and remote
-clients consume that registry. It owns no UI, renderer, or tutorial policy.
+clients consume that registry. It captures immutable facts and caller context,
+prepares pure policy views through bounded async admission, and atomically
+publishes only current source/identity results. It owns no UI, renderer, or
+tutorial policy.
 
 **`lunco-luncosim-server`**
 Headless launcher for the luncosim runtime — a three-line binary that depends directly on `lunco-luncosim-runtime`, with the API + networking host enabled. The GUI shell is not in its dependency closure.

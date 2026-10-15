@@ -481,8 +481,25 @@ The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
 20 Hz); discrete lifecycle facts should use an event observer. Camera status
-is the latter. `EngineExposures.revision` advances only when a visibility flag
-or value actually changes; it is not a frame counter.
+is the latter. `EngineExposures.revision` advances only when a complete surface
+changes (including its preparation state) or is retired; it is not a frame counter.
+
+`lunco-luncosim-exposures` captures immutable facts and typed caller context,
+then evaluates pure visibility and property policies through shared bounded
+async admission. Headless and windowed consumers use this same path. The owner
+retains one job plus the latest pending input per surface, and atomically commits
+validated results. Policy generation, active source revision and subject identity
+fence stale completions; closing a Twin retires its surfaces immediately.
+Existing ready samples remain available during continuous refresh. New surfaces
+or replaced identities start `pending`, hidden with no properties. Invalid
+policy results become `failed`, with an error and no partial view. Such failures
+remain terminal until the source or identity changes. Native synchronous domain
+producers publish `ready` views through the same registry.
+
+Only owned values and pure hook registrations leave the application thread.
+The native host uses workers; wasm currently schedules the same kernel as a
+cooperative local task. Neither path changes simulation clocks or permits UI
+completion to choose an authoritative simulation transition.
 
 The runtime-surface producer keeps authored USD metadata behind its existing
 active-root and `UsdStageRevision` cache. That includes surface membership,
@@ -506,9 +523,11 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ReadExposures","params":{"surface":"mission-status"}}'
 ```
 
-The response contains `revision`, `visible`, and typed properties. A remote
-consumer can retain its own view and skip rebuilding while the revision is
-unchanged.
+The response contains `revision` and each surface's `state` (`pending`, `ready`,
+or `failed`), `error` (a diagnostic on failure, otherwise unit), `visible`, and
+typed properties. Consumers wait for `ready` before reading prepared properties,
+and can retain their view while the revision is unchanged. Inspect `failed`
+rather than repeatedly waiting for an invalid policy.
 
 ## Placement and workbench coexistence
 

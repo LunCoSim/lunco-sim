@@ -9996,3 +9996,71 @@ terrain admission fault and supplies no acceptance evidence. The mutable Twin's
 in-progress edits remain untouched. Current-Twin integration, 200 FPS, sub-1 ms
 physics, full presentation isolation and external FMU interoperability remain
 open.
+
+
+### Immutable runtime UI policy preparation — 2026-10-16
+
+The native UI projection captures owned facts and caller context, then prepares
+pure policy views through existing bounded `AsyncWorkAdmission`. The exposure
+owner retains one in-flight batch and one latest pending input per namespace;
+source epochs and surface identity fence publication. Captured registrations use
+`RegisteredHook::invoke`, the same context/type validation as global dispatch.
+Complete views replace registry entries atomically. Invalid results expose a
+terminal failed state without partial properties; source replacement recovers.
+The canonical contract is in `runtime-authored-ui.md`. Live-World scripts and
+simulation clock/receipt admission remain on their existing owners.
+
+All 28 focused owner tests pass. The baseline production gate rejects the absent
+publication-state contract; the candidate's nine authored checks pass in both
+headless and windowed production sessions, including held-physics failure and
+recovery. The maintained driver is `scripts/api/test_runtime_ui_preparation.py`.
+Windowed `route_lifecycle` passes 112 checks. Shared stepping passes 28 checks;
+recording passes 25 and ffprobe confirms exactly 4/1/2 frames at 1280 by 720.
+The frozen complete Griffin Twin at `bba8667` passes all 16 mission checks with
+clear readiness and diagnostics on both normal and Tracy artifacts. The normal
+image retains controls, telemetry, rover, terrain and shadows, plus the optional
+raw-dataset provisioning popup. Its 3.578 ms retained physics median and 22.14 FPS
+median overlap another simulator, sibling compilation and a brief headless gate;
+these are contention-affected observations, not performance acceptance.
+
+Owned Tracy app 1203836 at API 4380 connects to collector 1203835 on 8086.
+The 132.2-second capture has 29,886,099 zones. All five adjacent native exports
+succeed. File size 572,864,020 equals 572,754,478 compressed payload bytes plus
+the six-byte header and 27,384 four-byte block lengths; payload 546.221 MiB
+matches the collector's 546.22 MiB report. In trace seconds 123.453–130.453,
+139 publications take 0.9655 ms median on the main thread; pure policy batches
+take 3.2027 ms on worker 27. Visibility and properties run on that worker,
+while completion service is 0.0069 ms median. The earlier trace's 3.700 ms
+publication belongs to a different instrumented cohort; do not present a paired
+FPS gain from those timings.
+
+The current window contains 315 host updates and about 419 fixed cycles.
+Inclusive medians are 7.116 ms for the shared fixed runner, 4.100 ms for native
+physics, and 6.843 ms for the render schedule. GPU opaque and camera early-shadow
+medians are 1.403 and 0.433 ms; shared-shadow spans are absent. These nested and
+cross-thread spans must not be summed. Terrain is complete (256/256 resident,
+no pending work, derived 1/1 inactive). Sibling compilation overlaps the window;
+profiling overhead is diagnostic. Full presentation isolation, 200 FPS, sub-1 ms
+physics, current mutable-Twin API integration and external FMU interoperability
+remain open.
+
+Evidence is `target/ui-policy-{owner-tests,route,recording}*.log`,
+`target/ui-policy-griffin-{context,result,summary}.json` and its inspected image,
+and `target/ui-policy-tracy{.tracy,-owners.json,-integrity.json,-context.json}`
+plus logs and image. All owned applications, collector and exporters exit;
+API 4374–4378/4380 and Tracy 8086 are released. Large prior CSV exports are
+losslessly archived as `target/griffin-{current-all,owner-schedules}.psv.zst`;
+round-trip SHA records are in
+`.lunco/performance-evidence/ui-policy-csv-archives.json`. Shared caches,
+sibling worktrees and the mutable Twin's unrelated HUD edits are preserved.
+
+
+The final non-Tracy rebuild was interrupted before disk exhaustion (exit 130),
+so it supplies no additional build evidence. Profile-only output was cleaned,
+and the already runtime-tested normal executable was restored from its
+round-trip verified archive, SHA-256
+`97273ac13aeb9ac0da07ff4fc69064d7483adbc1ea96fa677353b2f279f4fdfe`.
+Current Rust source also compiled successfully with Tracy after unused-import
+cleanup; later changes are formatting and documentation only. The build and
+restoration manifest is
+`.lunco/performance-evidence/ui-policy-build-manifest.json`.

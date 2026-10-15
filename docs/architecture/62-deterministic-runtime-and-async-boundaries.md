@@ -1295,16 +1295,18 @@ clock sampled from `Time<Real>`. It runs in the UI owner's `PostUpdate` chain
 only when the exposure, policy, or recording revision changes; it does not
 create a second UI cadence. Its Rhai policy rejects off-cycle calls.
 
-The authored runtime-surface visibility and property policies receive
-`Application/Ui/Preparation` from the `publish_exposure` owner, which is
-explicitly placed in `RuntimeCycleSet::Ui`. Camera-status properties are
-published at startup and on camera-status events with
-`Application/Presentation/Initialization` and
-`Application/Presentation/Event` respectively. Their Rhai policy accepts only
-those owner contexts; the visibility policy accepts only the UI refresh owner.
-The production `route_lifecycle` gate queries `ReadExposures` after authoring
-its `program-browser` surface and checks the scheduled visibility and program
-collection output.
+Runtime-surface policies consume immutable snapshots prepared by the shared
+headless/windowed exposure owner. Native pure policy evaluation runs through
+bounded async admission; the page host uses the same kernel with cooperative
+local task execution, without claiming browser worker isolation. Captured hooks
+retain the caller's typed execution context. Completion servicing runs every
+application update independently of the real-time capture cadence or physics
+holds. One in-flight job and one latest pending input per surface bound work;
+source epochs and identity checks reject retired results. Publication changes
+only non-authoritative presentation state and never advances simulation time.
+Live-World scripts remain serial. The complete state and failure contract lives
+in [runtime UI architecture](runtime-authored-ui.md); the production
+`runtime_ui_preparation` gate covers held-physics failure and recovery.
 
 The whole-simulation guarantee remains open because:
 

@@ -143,7 +143,15 @@ endpoint using `start + dt`; subtracting large absolute timestamps can reject
 a valid short interval through cancellation.
 
 UI exposure publication is paced by `Time<Real>`, independent of simulation
-pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep
+pause and rate. Its dirty-state gate still coalesces unchanged facts. Attribute
+main-thread snapshot capture separately from `runtime_ui_policy_preparation`
+and owner publication. Native pure policy evaluation uses shared bounded worker
+admission, retaining captured hooks and caller context; one job plus one latest
+pending snapshot per surface bounds work. Source and identity changes fence
+completion. The wasm kernel is currently cooperative, not an isolated worker.
+Wait for ready surfaces and inspect preparation failures before taking a UI
+performance cohort. This boundary does not isolate the entire fixed runner
+from the presentation thread. Keep
 mission/timeline waits and telemetry deadlines on their declared simulation
 clocks; changing their timers to wall time changes simulation semantics.
 

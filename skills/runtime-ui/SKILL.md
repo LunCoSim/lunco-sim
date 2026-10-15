@@ -140,8 +140,25 @@ completed script evaluations, or read the command/REPL owners directly.
 
 Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
-`EngineExposures.revision` changes only when a value or visibility flag changes;
+`EngineExposures.revision` changes when a complete surface changes or retires;
 it is not a frame counter. Do not use JSON to detect internal changes.
+Runtime visibility/property policies prepare immutable facts through shared
+bounded async admission in the same headless and windowed owner. Use
+`ReadExposures` to wait for `state == "ready"` before asserting their properties.
+A new identity starts hidden and `pending`; `failed` exposes an owner error
+without partial properties and requires source/identity replacement to recover.
+Ready telemetry samples remain available while the next sample prepares. Never
+feed UI completion timing into simulation decisions or send live World/USD
+readers to the worker. See the
+[publication contract](../../docs/architecture/runtime-authored-ui.md).
+Run the held-physics preparation and negative-result gate with the built
+production binary in both host modes:
+
+```sh
+python3 scripts/api/test_runtime_ui_preparation.py --port 4374 --log target/ui-preparation-headless.log
+python3 scripts/api/test_runtime_ui_preparation.py --port 4375 --windowed --log target/ui-preparation-windowed.log
+```
+
 When one producer owns several surfaces, keep invalidation domains separate so
 continuous motion does not rebuild static authored topology. Use the existing
 authoritative stage revision for USD-derived membership and cache that

@@ -489,9 +489,13 @@ Celestial tile transitions keep reusable current and previous body maps, so
 steady frames do not allocate a replacement map and dirty writes do not clone
 the transition map.
 
-The engine exposure producer has one shared 20 Hz cadence gate for its change
-detector and publisher. The first publication is immediate; subsequent stable
-frames do not even enter the publisher's large query set. `ExposureRefresh`
+The engine exposure producer captures changed continuous facts at one shared
+20 Hz real-time cadence. Initial capture is immediate; stable frames do not
+enter the capture system's large query set. Pure policy evaluation uses bounded
+async admission on native hosts, with immutable facts and captured caller
+context. The owner services complete results each update without waiting;
+publication states and source/identity fencing follow the
+[runtime UI contract](runtime-authored-ui.md). `ExposureRefresh`
 records separate invalidation domains for the driven vessel, authored control
 cards, schema, celestial capability, and progress overlays. A rover motion
 therefore does not re-read static schema or celestial USD data. Authored

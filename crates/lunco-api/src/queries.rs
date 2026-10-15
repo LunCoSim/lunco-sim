@@ -735,7 +735,7 @@ impl ApiQueryProvider for ReadSessionInputArchiveExportProvider {
 /// runtime UI surfaces, egui, telemetry tools, and remote clients.
 ///
 /// params: `{ surface?: string }` · returns:
-/// `{ revision, surfaces: { <name>: { visible, properties: { <key>: value } } } }`
+/// `{ revision, surfaces: { <name>: { state, error, visible, properties: { <key>: value } } } }`
 ///
 /// `revision` is the change-detection boundary owned by `EngineExposures`. A
 /// client can poll this query and skip rebuilding its view when the revision is
@@ -779,6 +779,23 @@ impl ApiQueryProvider for ReadExposuresProvider {
                 (
                     name.clone(),
                     ApiValue::map([
+                        (
+                            "state",
+                            ApiValue::str(match &surface.state {
+                                lunco_exposure_core::ExposureState::Pending => "pending",
+                                lunco_exposure_core::ExposureState::Ready => "ready",
+                                lunco_exposure_core::ExposureState::Failed(_) => "failed",
+                            }),
+                        ),
+                        (
+                            "error",
+                            match &surface.state {
+                                lunco_exposure_core::ExposureState::Failed(message) => {
+                                    ApiValue::str(message.clone())
+                                }
+                                _ => ApiValue::Unit,
+                            },
+                        ),
                         ("visible", ApiValue::Bool(surface.visible)),
                         ("properties", ApiValue::Map(properties)),
                     ]),
