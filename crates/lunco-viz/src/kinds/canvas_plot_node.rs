@@ -169,14 +169,14 @@ pub struct SignalSnapshot {
 /// host must call this *before* `Canvas::ui` each frame — passing an
 /// empty snapshot is fine, plots just render no line.
 pub fn stash_signal_snapshot(ctx: &egui::Context, snapshot: SignalSnapshot) {
-    ctx.data_mut(|d| d.insert_temp(snapshot_id(), Arc::new(snapshot)));
+    crate::scene_state::scene_data(ctx, |d| d.insert_temp(snapshot_id(), Arc::new(snapshot)));
 }
 
 /// Fetch the most recently stashed snapshot. Returns an empty
 /// snapshot if the host hasn't stashed one this frame — visuals
 /// degrade to "no line, label only" rather than panicking.
 pub fn fetch_signal_snapshot(ctx: &egui::Context) -> Arc<SignalSnapshot> {
-    ctx.data(|d| d.get_temp::<Arc<SignalSnapshot>>(snapshot_id()))
+    crate::scene_state::scene_data(ctx, |d| d.get_temp::<Arc<SignalSnapshot>>(snapshot_id()))
         .unwrap_or_default()
 }
 
@@ -250,7 +250,7 @@ fn interest_id() -> egui::Id {
 }
 
 fn interest_set(ctx: &egui::Context) -> InterestSet {
-    ctx.data_mut(|d| {
+    crate::scene_state::scene_data(ctx, |d| {
         if let Some(existing) = d.get_temp(interest_id()) {
             existing
         } else {
@@ -324,15 +324,16 @@ pub fn stash_signal_snapshot_from_registry(
     doc_to_entity: HashMap<u64, Entity>,
 ) {
     let interest = read_signal_interest(ctx);
-    let cache: Arc<std::sync::Mutex<SignalSnapshotCache>> = ctx.data_mut(|d| {
-        if let Some(existing) = d.get_temp(snapshot_cache_id()) {
-            existing
-        } else {
-            let fresh: Arc<std::sync::Mutex<SignalSnapshotCache>> = Default::default();
-            d.insert_temp(snapshot_cache_id(), fresh.clone());
-            fresh
-        }
-    });
+    let cache: Arc<std::sync::Mutex<SignalSnapshotCache>> =
+        crate::scene_state::scene_data(ctx, |d| {
+            if let Some(existing) = d.get_temp(snapshot_cache_id()) {
+                existing
+            } else {
+                let fresh: Arc<std::sync::Mutex<SignalSnapshotCache>> = Default::default();
+                d.insert_temp(snapshot_cache_id(), fresh.clone());
+                fresh
+            }
+        });
     let mut samples: HashMap<(Entity, String), Arc<Vec<SamplePoint>>> =
         HashMap::with_capacity(interest.len());
     if let Ok(mut cache) = cache.lock() {
@@ -387,12 +388,14 @@ pub struct NodeStateSnapshot {
 }
 
 pub fn stash_node_state(ctx: &egui::Context, snapshot: NodeStateSnapshot) {
-    ctx.data_mut(|d| d.insert_temp(node_state_id(), Arc::new(snapshot)));
+    crate::scene_state::scene_data(ctx, |d| d.insert_temp(node_state_id(), Arc::new(snapshot)));
 }
 
 pub fn fetch_node_state(ctx: &egui::Context) -> Arc<NodeStateSnapshot> {
-    ctx.data(|d| d.get_temp::<Arc<NodeStateSnapshot>>(node_state_id()))
-        .unwrap_or_default()
+    crate::scene_state::scene_data(ctx, |d| {
+        d.get_temp::<Arc<NodeStateSnapshot>>(node_state_id())
+    })
+    .unwrap_or_default()
 }
 
 /// Per-frame snapshot of model inputs that are exposed for direct
@@ -407,12 +410,16 @@ pub struct InputControlSnapshot {
 }
 
 pub fn stash_input_control_snapshot(ctx: &egui::Context, snapshot: InputControlSnapshot) {
-    ctx.data_mut(|d| d.insert_temp(input_control_snapshot_id(), Arc::new(snapshot)));
+    crate::scene_state::scene_data(ctx, |d| {
+        d.insert_temp(input_control_snapshot_id(), Arc::new(snapshot))
+    });
 }
 
 pub fn fetch_input_control_snapshot(ctx: &egui::Context) -> Arc<InputControlSnapshot> {
-    ctx.data(|d| d.get_temp::<Arc<InputControlSnapshot>>(input_control_snapshot_id()))
-        .unwrap_or_default()
+    crate::scene_state::scene_data(ctx, |d| {
+        d.get_temp::<Arc<InputControlSnapshot>>(input_control_snapshot_id())
+    })
+    .unwrap_or_default()
 }
 
 /// Push a write request from an in-canvas control widget into the
@@ -421,16 +428,17 @@ pub fn fetch_input_control_snapshot(ctx: &egui::Context) -> Arc<InputControlSnap
 /// fully-qualified input names; multiple writes during one frame
 /// last-write-wins.
 pub fn queue_input_write(ctx: &egui::Context, name: &str, value: f64) {
-    let queue: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> = ctx.data_mut(|d| {
-        if let Some(existing) = d.get_temp(input_writes_id()) {
-            existing
-        } else {
-            let fresh: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
-                Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-            d.insert_temp(input_writes_id(), fresh.clone());
-            fresh
-        }
-    });
+    let queue: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
+        crate::scene_state::scene_data(ctx, |d| {
+            if let Some(existing) = d.get_temp(input_writes_id()) {
+                existing
+            } else {
+                let fresh: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
+                    Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+                d.insert_temp(input_writes_id(), fresh.clone());
+                fresh
+            }
+        });
     if let Ok(mut guard) = queue.lock() {
         guard.insert(name.to_string(), value);
     };
@@ -440,9 +448,10 @@ pub fn queue_input_write(ctx: &egui::Context, name: &str, value: f64) {
 /// per render pass after the canvas is done; returns the pending
 /// writes for the host to apply to its `ModelicaModel.inputs`
 /// (which the worker forwards to `SimulationSession::set_input`).
+/// Scene retirement discards undrained writes before a replacement can use them.
 pub fn drain_input_writes(ctx: &egui::Context) -> Vec<(String, f64)> {
     let queue: Option<Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>>> =
-        ctx.data(|d| d.get_temp(input_writes_id()));
+        crate::scene_state::scene_data(ctx, |d| d.get_temp(input_writes_id()));
     let Some(queue) = queue else {
         return Vec::new();
     };
@@ -766,16 +775,16 @@ impl NodeVisual for PlotNodeVisual {
             let key = (Arc::as_ptr(arc) as *const () as usize, plot_w as u32);
             let cache_id = ctx.ui.id().with(("plot_node_decimated", node.id.0));
             let cached: Option<Arc<((usize, u32), Vec<SamplePoint>)>> =
-                ctx.ui.ctx().data(|d| d.get_temp(cache_id));
+                crate::scene_state::scene_data(ctx.ui.ctx(), |d| d.get_temp(cache_id));
             match cached {
                 Some(c) if c.0 == key => c,
                 _ => {
                     let pts = crate::plot_fmt::decimate_min_max(arc, plot_w)
                         .unwrap_or_else(|| arc.as_ref().clone());
                     let fresh = Arc::new((key, pts));
-                    ctx.ui
-                        .ctx()
-                        .data_mut(|d| d.insert_temp(cache_id, fresh.clone()));
+                    crate::scene_state::scene_data(ctx.ui.ctx(), |d| {
+                        d.insert_temp(cache_id, fresh.clone())
+                    });
                     fresh
                 }
             }

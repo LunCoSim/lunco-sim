@@ -10,7 +10,7 @@
 //! It does not add attributes to USD or require a visualization binding.
 
 use bevy::prelude::*;
-use lunco_core::GlobalEntityId;
+use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap};
@@ -33,12 +33,14 @@ impl Plugin for ModelicaTelemetryPlugin {
         if !app.is_plugin_added::<lunco_telemetry::TelemetryRetentionPlugin>() {
             app.add_plugins(lunco_telemetry::TelemetryRetentionPlugin);
         }
-        app.init_resource::<RuntimeTelemetrySessions>().add_systems(
-            Update,
-            retain_modelica_runtime_state
-                .after(lunco_core::RuntimeCycleSet::Lifecycle)
-                .run_if(modelica_telemetry_inputs_changed),
-        );
+        app.init_scene_resource::<RuntimeTelemetrySessions>()
+            .add_observer(retire_modelica_runtime_session)
+            .add_systems(
+                Update,
+                retain_modelica_runtime_state
+                    .after(lunco_core::RuntimeCycleSet::Lifecycle)
+                    .run_if(modelica_telemetry_inputs_changed),
+            );
     }
 }
 
@@ -68,6 +70,15 @@ fn modelica_telemetry_inputs_changed(
 #[derive(Resource, Default)]
 pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
+}
+
+impl SceneResource for RuntimeTelemetrySessions {}
+
+fn retire_modelica_runtime_session(
+    event: On<Remove, ModelicaModel>,
+    mut sessions: ResMut<RuntimeTelemetrySessions>,
+) {
+    sessions.sessions.remove(&event.entity);
 }
 
 #[derive(Default)]

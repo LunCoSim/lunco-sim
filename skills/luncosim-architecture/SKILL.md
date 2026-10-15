@@ -190,6 +190,23 @@ transport authority. Background file snapshots resolve logical source names
 and fence publication by scope and mount revision. See
 [`61-scene-lifecycle-and-teardown.md`](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
 
+Register scene-derived state with `AppSceneExt::init_scene_resource::<R>()` and
+implement `SceneResource` at its owner. The default reset drops owned caches and
+tasks; mixed-lifetime stores retain only explicitly application-owned entries
+and monotonic publication counters. Domain shutdown runs first, then scene
+entities and their removal callbacks retire, then registered resources reset. Tag
+scene-owned entities outside the structural scene hierarchy with `SceneOwned`.
+Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
+owners use `run_scene_teardown`. Both share the replacement/reload boundary.
+Visualization history buffers, async tasks and queued canvas actions use
+`lunco-viz::scene_state::scene_data`; its scoped egui store retires after shutdown
+callbacks even when widgets are hidden. Keep only application preferences and
+saved visualization configuration in ordinary egui data.
+Signal producers default to scene lifetime; only process-owned signals opt into
+`SignalRegistry::retain_across_scenes`. Extend the authored Twin retirement gate
+for observable lifecycle changes, including same-path reload, rejected
+replacement and application-state preservation.
+
 Lifecycle work that changes authoritative scene state participates in
 `lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation
 key, carry that identity through async preparation, and release it only after

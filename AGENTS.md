@@ -163,6 +163,16 @@ package checks after changing skill metadata or packaging.
 - Twin-scoped timelines, tool libraries, tutorial state, status, and handles
   must be wound down on `TwinClosed` before another Twin can use those names.
   Never keep name-only global state that can run or display a previous Twin.
+- Initialize scene-derived resources through `AppSceneExt::init_scene_resource`
+  and implement `SceneResource` at their owner, so initialization also installs
+  teardown. Tag scene-owned entities outside the scene hierarchy with
+  `SceneOwned`. Use `run_scene_teardown_with_entities` to retire a scene hierarchy
+  inside the shared boundary, or `run_scene_teardown` for state-only teardown;
+  preserve application state only through an explicit lifetime contract.
+  Within `lunco-viz`, scene-derived widget data uses `scene_state::scene_data`,
+  including snapshots, async tasks and queued actions; ordinary egui data is for
+  application preferences and saved configuration. See
+  `docs/architecture/61-scene-lifecycle-and-teardown.md` for ordering and scope.
 - Tutorial controls use the controller-owned `input_bindings` settings through
   Rhai `input_binding(...)`/`input_hint(...)`; progression uses semantic commands
   or authoritative state, never raw physical key names.

@@ -78,6 +78,16 @@ scenes do not rebuild entity lookup maps or rewrite plot bindings; missing
 identities remain explicitly unresolved until the authoritative scene
 projection publishes them.
 
+Scene-derived widget data uses `scene_state::scene_data`, a scoped egui
+`IdTypeMap`: history buffers, pending plot tasks, canvas snapshots and interests,
+input-write queues and plot-drop requests share one lifetime. `LuncoVizPlugin`
+tracks all Bevy egui context lifetimes; final resource retirement
+removes the entire store, telemetry drag payloads and native plot interaction
+memory after shutdown callbacks, including bounds from the outgoing clock.
+Hidden widgets need no repaint to release their data. New scene-derived entries
+must use this store; layout preferences and visualization configurations
+remain application-owned.
+
 ## Crate layout
 
 The render-free `VizId` is owned by [`lunco-viz-core`](../lunco-viz-core/).
@@ -90,6 +100,7 @@ visualization framework.
 | `viz`               | `Visualization` trait, `VisualizationConfig`, `VizKindId`   |
 | `view`              | `ViewTarget`, `ViewKind`, compatibility matrix              |
 | `registry`          | `VisualizationRegistry` (Bevy resource)                     |
+| `scene_state`       | Scene-scoped widget data and final egui retirement         |
 | `panel`             | `VizPanel` — generic `InstancePanel` keyed by `VizId`       |
 | `kinds::line_plot`  | First concrete viz kind (time-series line on `Panel2D`)     |
 | `multi_series_plot` | Reusable completed-run/live trajectory comparison widget    |

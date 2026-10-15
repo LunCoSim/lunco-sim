@@ -164,9 +164,52 @@ the scene-time gate closed.
 ## Everything else — the `SceneTeardown` schedule
 
 Resources, caches, worker-side handles, and subsystem-derived entity trees are
-not covered by the USD prim sweep. They are retired by the dependency-light
-`lunco_core::SceneTeardown` schedule, run before the outgoing prims are
-despawned and before replacement projection starts.
+not covered by the USD prim sweep. The dependency-light core lifecycle boundary
+runs domain `SceneTeardown` shutdown before outgoing prims are despawned, then
+resets registered resources after removal callbacks and before replacement
+projection starts.
+
+Initialize scene-derived resources with `AppSceneExt::init_scene_resource::<R>()`,
+and implement `SceneResource` at the owning type. Initialization installs cleanup
+once for that type; a new scene resource does not need an entry in a central
+cleanup list. The default `clear_scene` replaces the value with `Default`,
+dropping collections, source handles and pending tasks. Mixed-lifetime stores
+override it to preserve only explicitly application-owned state and monotonic
+publication counters. Settings, shared source caches and application registries
+keep their application lifetime.
+
+`run_scene_teardown_with_entities` first drains domain `SceneTeardown` systems
+and their deferred shutdown work, then reclaims the supplied scene hierarchy
+and `SceneOwned` entities, flushes removal callbacks, then runs registered
+resource resets. `run_scene_teardown` uses the same boundary without a supplied
+hierarchy. This ordering prevents terminal callbacks from repopulating an
+already-cleared store. Tag scene-owned entities outside the USD hierarchy with
+`SceneOwned`; their linked children are reclaimed too. All scene transition
+routes must use this owner boundary, including same-path restart and active
+Twin closure. Closing an inactive Twin or rejecting a replacement does not run
+this global scene cleanup.
+
+Telemetry histories and metadata default to scene lifetime, including archived
+publishers and metadata published before the first sample. Only signals
+explicitly registered with `SignalRegistry::retain_across_scenes` survive;
+engine FPS and frame time use that application lifetime. The registry publishes
+normal descriptor removals and keeps its catalog revision monotonic. Modelica
+telemetry sessions, physics kinematic cursors, sampler plans, queued delivery,
+focus, browser workers/indexes and transient browser requests use the same
+resource registration. API-created channel entities carry `SceneOwned`.
+
+Visualization widgets that only receive an egui context store scene-derived
+data through `lunco-viz::scene_state::scene_data`, a single scoped egui
+`IdTypeMap`. This includes history snapshots, async plot tasks, canvas interest
+and value snapshots, pending input writes and plot-drop requests. The viz owner
+tracks Bevy egui context insertion, replacement and removal, including contexts already present
+at plugin installation. Its registered scene resource removes the entire store
+after callbacks and entity retirement, including removed contexts. Hidden
+widgets therefore release buffers and queued actions without another paint;
+new entries in that store inherit its lifetime. Telemetry drag payloads and
+native plot interaction memory retire at the same boundary, so outgoing zoom
+bounds cannot hide a restarted clock. Layout preferences and visualization
+configurations keep their application lifetime.
 
 Live document edits use a separate, stage-scoped boundary; they do not invoke
 the application-wide `SceneTeardown`. Before a full-stage re-projection, the
@@ -364,13 +407,14 @@ It is a **schedule**, not a registry, and that choice is the design:
   would put every subsystem's cleanup in one file that no subsystem author
   edits, and the state that gets forgotten is always the one whose owner never
   looked there.
-- `SceneTeardown` grep-lists everything a reload restores.
+- `SceneResource` identifies registered state; `SceneTeardown` identifies custom
+  domain shutdown, restoration and cross-resource work.
 
 ```rust
-app.add_systems(
-    lunco_core::SceneTeardown,
-    |mut commands: Commands| commands.remove_resource::<MySceneCache>(),
-);
+use lunco_core::AppSceneExt;
+
+impl lunco_core::SceneResource for MySceneCache {}
+app.init_scene_resource::<MySceneCache>();
 ```
 
 `add_systems` creates the schedule on first use, so no crate has to initialise

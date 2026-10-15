@@ -58,6 +58,7 @@ def wait_for(session: ProductionSession, predicate, detail: str):
 
 
 def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTwin", file_uri=False) -> list[int]:
+    telemetry = seed_telemetry(session) if previous_ids else None
     path = root
     if command == "OpenFile":
         manifest = tomllib.loads((root / "twin.toml").read_text(encoding="utf-8"))
@@ -72,7 +73,28 @@ def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTw
         return not any("preparing asynchronously" in error for error in analysis.get("errors", []))
     wait_for(session, source_terminal, "replacement SysML source preparation")
     verdict("verify_twin_source_scope", retired_authority)
+    if telemetry:
+        verdict("verify_telemetry_retirement", *telemetry)
     return ids
+
+
+def seed_telemetry(session: ProductionSession) -> tuple[list[str], list[str]]:
+    prim = live_prim(session, "/World", topology=True)
+    if not prim or not prim.get("spawned"):
+        raise RuntimeError("telemetry probe needs the current mounted /World")
+    # The plain Xform has session-local identity; the topology owner supplies
+    # its exact native Entity. Solver channels separately exercise API owners.
+    execute(session, "ControlTelemetry", channel="lifecycle_retirement_probe",
+            entity=prim["topology"]["binding"]["entity"], reflect="Transform.translation.x",
+            unit="m", rate_hz=60.0)
+    execute(session, "SetTimeTransport", playing=True)
+    def sampled():
+        channels = execute(session, "ListTelemetryChannels")["channels"]
+        return channels if any(channel["name"] == "lifecycle_retirement_probe"
+                               and channel["samples"] > 0 for channel in channels) else None
+    channels = wait_for(session, sampled, "outgoing telemetry samples")
+    return ([channel["key"] for channel in channels if not channel["name"].startswith("engine.")],
+            [channel["key"] for channel in channels if channel["name"].startswith("engine.")])
 
 
 def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:
@@ -90,17 +112,15 @@ def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int
         ready = get_json(session.port, "/api/ready")["data"]
         if ready.get("faulted"):
             raise RuntimeError(f"replacement faulted: {ready.get('fault')}")
+        if not ready.get("ready") or ready.get("world_hold"):
+            return False
         scenes = [doc for doc in documents(session) if doc["kind"] == "usd"
                   and doc["runtime_context"]["kind"] == "local_twin"]
-        for scene in scenes:
-            inspection = execute(session, "InspectUsdDocument", doc_id=scene["doc_id"])
-            default = inspection["metadata"]["defaultPrim"]["composed"]
-            if not default["present"]:
-                continue
-            prim = live_prim(session, "/" + default["value"].lstrip("/"))
-            if prim and prim.get("spawned") and prim.get("doc_id") == scene["doc_id"]:
-                return True
-        return False
+        # Scene admission is owned by the primary live binding. Editor-preview
+        # stages may still prepare independently after world readiness.
+        prim = live_prim(session, "/World")
+        return (prim and prim.get("spawned")
+                and prim.get("doc_id") in {scene["doc_id"] for scene in scenes})
     wait_for(session, projected, f"replacement scene projection for {root.name}")
     wait_for_ready(session.port)
     return [doc["doc_id"] for doc in documents(session)]
@@ -135,16 +155,36 @@ def main() -> None:
             execute(session, "OpenUsdPreview", preview=9002, doc_id=scene_doc, edit_target="@root@")
             wait_for(session, lambda: execute(session, "InspectUsdViewport")["preview_count"] >= 2,
                      "both Twin A editor previews")
-            execute(session, "CreateScratchModelicaDocument", name="TwinRetirementScratch",
-                    source="model TwinRetirementScratch Real x; equation x = 1; end TwinRetirementScratch;")
+            scratch = execute(session, "CreateScratchModelicaDocument", name="TwinRetirementScratch",
+                    source="model TwinRetirementScratch Real x(start=37, fixed=true); equation der(x)=0; end TwinRetirementScratch;")
             wait_for(session, lambda: any(doc["kind"] == "modelica" for doc in documents(session)), "Modelica scratch")
+            wait_for(session, lambda: execute(session, "CompileStatus", doc_id=scratch["doc_id"]).get("ast_parsed"),
+                     "Modelica scratch parse")
+            execute(session, "CompileModel", doc_id=scratch["doc_id"],
+                    **{"class": "TwinRetirementScratch", "resume_after_compile": True})
+            wait_for(session, lambda: any(channel.get("model_class") == "TwinRetirementScratch"
+                                         and channel["samples"] > 0
+                                         for channel in execute(session, "ListTelemetryChannels")["channels"]),
+                     "outgoing Modelica telemetry")
+            verdict("verify_modelica_telemetry_recorded", "TwinRetirementScratch")
             execute(session, "NewDocument", kind="sysml")
             wait_for(session, lambda: any(doc["kind"] == "sysml" for doc in documents(session)), "dirty SysML draft")
             sysml_ids = [doc["doc_id"] for doc in documents(session) if doc["kind"] == "sysml"]
             modelica_ids = [doc["doc_id"] for doc in documents(session) if doc["kind"] == "modelica"]
             ids_a = [doc["doc_id"] for doc in documents(session)]
             paths_a = catalog_paths(session)
+            seed_telemetry(session)
+            execute(session, "FocusPanel", id="telemetry_browser")
+            execute(session, "SetTelemetryBrowserView", filter="lifecycle_retirement_probe",
+                    signal="lifecycle_retirement_probe")
+            wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
+                     and not view["worker_active"] and not view["pending_channels"], "outgoing telemetry browser")
+            session.capture_screenshot(ROOT / "target/twin-telemetry-before-replacement.png")
             ids_b = open_twin(session, TWIN_B, ids_a)
+            execute(session, "FocusPanel", id="telemetry_browser")
+            wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
+                     and not view["worker_active"] and not view["pending_channels"], "replacement telemetry browser")
+            session.capture_screenshot(ROOT / "target/twin-telemetry-after-replacement.png")
             verdict("verify_catalog_retirement", paths_a)
             verdict("verify_editor_retirement", ids_a, ids_b)
             verdict("verify_sysml_retirement", sysml_ids)
@@ -159,9 +199,11 @@ def main() -> None:
             verdict("verify_twin_browser_retirement", ids_b, ids_reload, str(TWIN_B))
 
             # Invalid candidates must leave the admitted session untouched.
+            preserved_telemetry, _ = seed_telemetry(session)
             session.post({"type": "ExecuteCommand", "command": "OpenTwin",
                           "params": {"path": str(ROOT / "target/no-such-twin-retirement-negative")}})
             verdict("verify_session_preserved", ids_reload)
+            verdict("verify_telemetry_preserved", preserved_telemetry)
 
             # Repeated replacement cannot accumulate source documents or previews.
             paths_reload = catalog_paths(session)
@@ -178,8 +220,12 @@ def main() -> None:
             verdict("verify_twin_browser_retirement", ids_return, ids_final, str(TWIN_B))
             # Native folder picker and native/file-URI scene-file opening are
             # separate production entry points into workspace replacement.
+            # The replacement fixture is nested under A. OpenFile within an
+            # admitted root is document-only, so external file routes start in B.
             for root, command, file_uri in [(TWIN_A, "OpenFolder", False),
-                                           (TWIN_B, "OpenFile", False),
+                                           (TWIN_B, "OpenTwin", False),
+                                           (TWIN_A, "OpenFile", False),
+                                           (TWIN_B, "OpenFolder", False),
                                            (TWIN_A, "OpenFile", True),
                                            (TWIN_B, "OpenFolder", False)]:
                 outgoing = [doc["doc_id"] for doc in documents(session)]
@@ -228,20 +274,24 @@ def main() -> None:
             # the workspace root or reviving the previous Twin's documents.
             print("Scene routes: LoadScene and RestartScene", flush=True)
             scene_path = "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda"
+            telemetry = seed_telemetry(session)
             execute(session, "LoadScene", path=scene_path)
             def scenario_projected():
                 data = live_prim(session, "/World", topology=True)
                 return data if data and data.get("spawned") and data.get("doc_id") not in ids_final else False
             wait_for(session, scenario_projected, "scenario scene projection")
             wait_for_ready(session.port)
+            verdict("verify_telemetry_retirement", *telemetry)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
             before_restart = scenario_projected()
+            telemetry = seed_telemetry(session)
             execute(session, "RestartScene")
             wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"]
                      != before_restart["topology"]["binding"]["entity"],
                      "restarted scene projection")
             wait_for_ready(session.port)
+            verdict("verify_telemetry_retirement", *telemetry)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
             retained = [doc["doc_id"] for doc in documents(session)]

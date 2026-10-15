@@ -206,7 +206,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
 | **`lunco-viz-core`** | Render-free visualization identity substrate: the shared `VizId` used by visualization registries, plot state, and headless consumers. It has no Bevy or rendering dependency. |
-| **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
+| **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, scene-scoped widget buffers/tasks/actions, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-gizmo-ui`** | Focused rendered transform-gizmo capability: render-space proxies, live/preview pose transactions, camera binding, and kinematic-drive lifecycle. It owns the external `transform-gizmo-bevy` dependency independently of the editor panels. |
@@ -313,7 +313,11 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 **`lunco-core`**
 The stable ECS contract layer. It defines identity/provenance, shared markers,
 typed scene-lifecycle contracts, structured runtime faults/diagnostics, Bevy
-`RuntimeCycleSet` ordering labels, and generic state utilities. Owner-neutral
+`RuntimeCycleSet` ordering labels, and generic state utilities. Its
+`AppSceneExt::init_scene_resource` installs `SceneResource` cleanup at
+initialization; `run_scene_teardown_with_entities` drains domain shutdown,
+reclaims scene hierarchies and `SceneOwned` entities, flushes removal callbacks,
+then resets registered state. State-only owners use `run_scene_teardown`. Owner-neutral
 cycle and invocation values are defined in `lunco-runtime-context`. Pure mutation envelopes are owned by
 `lunco-command-contracts`; runtime command reflection remains available through
 the existing typed command API. It has no pacing, reconciliation, exposure
@@ -1117,6 +1121,10 @@ Application-bound API transports. Owns the native Axum HTTP listener, asset endp
 
 **`lunco-telemetry`**
 Reflection-based data extraction engine. Automatically samples and standardizes internal physics and software values for broadcast to external monitoring systems or Mission Control bridges (YAMCS/XTCE).
+Sampler plans and delivery queues use registered scene lifetimes; API-created
+channel entities are scene-owned. The shared `lunco-signal` registry retires
+scene histories and metadata at teardown, preserving only explicit application
+signals such as engine health.
 
 **`lunco-telemetry-core`**
 Shared typed telemetry contracts and the generic event projection/logging boundary used by
@@ -1416,6 +1424,8 @@ uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
 Modelica scalar metadata from the admitted FMI inventory and authored provenance
 from the generated USD layout. The execution host installs its plugin after
 worker responses; compiler/document hosts do not compile this projection.
+Participant removal retires its producer cache; scene teardown resets the
+registered session resource and shared histories independently of UI presence.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source

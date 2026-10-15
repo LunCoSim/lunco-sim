@@ -83,6 +83,52 @@ fn verify_session_preserved(ids) {
     report_verdict(checks, "Rejected Twin replacement", "TWIN_SESSION_PRESERVED")
 }
 
+fn verify_telemetry_retirement(retired_keys, application_keys) {
+    if retired_keys.is_empty() { throw "telemetry retirement requires sampled outgoing channels"; }
+    let channels = query("ListTelemetryChannels").channels;
+    let checks = [];
+    for key in retired_keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "outgoing channel is absent: " + key));
+        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
+        checks.push(t_true(history.ok == false, "outgoing history cannot be read: " + key));
+    }
+    for key in application_keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "application history survives: " + key));
+        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
+        let clock = clock_snapshot();
+        checks.push(t_true(history.samples[-1].t <= clock.world_sim_s + 2.0 * clock.fixed_dt_s,
+            "application sampling uses the replacement clock: " + key));
+    }
+    let browser = query("InspectTelemetryCatalog", #{signal: "lifecycle_retirement_probe"});
+    checks.push(t_true(browser.descriptors.len() == 0, "browser has no outgoing probe"));
+    report_verdict(checks, "Twin telemetry retirement", "TWIN_TELEMETRY_RETIREMENT")
+}
+
+fn verify_modelica_telemetry_recorded(class_name) {
+    let recorded = false;
+    for channel in query("ListTelemetryChannels").channels {
+        if channel.model_class == class_name && channel.samples.to_float() > 0.0 { recorded = true; }
+    }
+    report_verdict([t_true(recorded, "outgoing solver publishes retained telemetry")],
+        "Twin Modelica telemetry baseline", "TWIN_MODELICA_TELEMETRY_BASELINE")
+}
+
+fn verify_telemetry_preserved(keys) {
+    if keys.is_empty() { throw "telemetry preservation requires a sampled channel"; }
+    let channels = query("ListTelemetryChannels").channels;
+    let checks = [];
+    for key in keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "rejected replacement preserves channel " + key));
+    }
+    report_verdict(checks, "Rejected replacement preserves telemetry", "TWIN_TELEMETRY_PRESERVED")
+}
+
 fn verify_additive_workspace(ids, active_root) {
     let checks = [];
     for id in ids {
