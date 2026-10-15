@@ -489,7 +489,9 @@ An unclassified bridge call has no owner route; its `scope`, `cycle`, and
 `sim_tick()`, `dt()`, and `elapsed_seconds()` return a Rhai error outside
 simulation execution, stopping only that invocation. Missing mandatory
 simulation clock resources still raise the existing scene runtime fault after
-the cycle check.
+the cycle check. `dt()` is the configured physics timestep, available in
+simulation-cycle startup before the first tick as well as fixed execution;
+it does not depend on a previously elapsed tick or change with transport rate.
 
 The scenario owner currently supplies this context for fixed scenario passes,
 paused lifecycle/event passes, and one-shot REPL/tool evaluations. Fixed passes

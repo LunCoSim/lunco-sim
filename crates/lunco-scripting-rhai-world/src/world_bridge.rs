@@ -1083,25 +1083,19 @@ fn build_hoisted_ast(
 
 /// Native task leaves call their callback through the current Rhai evaluation so
 /// imports and the scenario's compiled function set remain available. Anonymous
-/// closures and named callbacks receive the persistent lifecycle map as
-/// `this`. Named pointers are resolved against the task AST before invocation;
-/// the state is passed through the same bound receiver and returned in the
-/// envelope because each task entity owns its own map.
+/// closures and named callbacks borrow the persistent lifecycle map as `this`.
+/// Named pointers are resolved against the task AST before invocation.
 const TASK_INVOKER_FN: &str = "__luncosim_invoke_task";
 
 fn invoke_task(
     context: NativeCallContext,
+    this: &mut Dynamic,
     f: FnPtr,
     me: i64,
-    mut this: Dynamic,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
     // Anonymous closures and named `Fn("name")` callbacks both use `(me)` and
     // read/write the persistent state through the bound `this` pointer.
-    let result = f.call_as_method_within_context::<Dynamic>(&context, &mut this, (me,))?;
-    let mut out = Map::new();
-    out.insert("result".into(), result);
-    out.insert("this".into(), this);
-    Ok(Dynamic::from_map(out))
+    f.call_as_method_within_context::<Dynamic>(&context, this, (me,))
 }
 
 /// Build the AST used by native task leaves. It contains the same callable
@@ -4841,25 +4835,15 @@ impl RhaiTaskCtx {
             let options = rhai::CallFnOptions::new()
                 .eval_ast(eval_ast)
                 .rewind_scope(false)
-                .in_all_namespaces(true);
-            let envelope: Dynamic = self.engine.call_fn_with_options(
+                .in_all_namespaces(true)
+                .bind_this_ptr(&mut self.this);
+            return self.engine.call_fn_with_options(
                 options,
                 &mut self.scope,
                 ast,
                 TASK_INVOKER_FN,
-                [
-                    Dynamic::from(f.clone()),
-                    Dynamic::from_int(self.me),
-                    self.this.clone(),
-                ],
-            )?;
-            let mut envelope = envelope.cast::<Map>();
-            self.this = envelope
-                .remove("this")
-                .expect("native task invoker must return the bound state");
-            return Ok(envelope
-                .remove("result")
-                .expect("native task invoker must return the callback result"));
+                [Dynamic::from(f.clone()), Dynamic::from_int(self.me)],
+            );
         }
 
         // A named `Fn("name")` pointer is intentionally resolved against the
@@ -7410,29 +7394,35 @@ mod tests {
             .call_fn_with_options(
                 rhai::CallFnOptions::new()
                     .eval_ast(true)
-                    .in_all_namespaces(true),
+                    .in_all_namespaces(true)
+                    .bind_this_ptr(&mut rhai::Dynamic::from_map(rhai::Map::new())),
                 &mut rhai::Scope::new(),
                 &task_ast,
                 super::TASK_INVOKER_FN,
-                [
-                    rhai::Dynamic::from(action),
-                    rhai::Dynamic::from_int(3),
-                    rhai::Dynamic::from_map(rhai::Map::new()),
-                ],
+                [rhai::Dynamic::from(action), rhai::Dynamic::from_int(3)],
             )
             .expect("native task invoker must preserve imports");
-        let result = result.cast::<rhai::Map>();
-        assert_eq!(result["result"].as_int().unwrap(), 10);
+        assert_eq!(result.as_int().unwrap(), 10);
     }
 
     #[test]
     fn native_task_callback_preserves_bound_this() {
+        use std::sync::Arc;
+
+        struct CloneProbe(Arc<std::sync::atomic::AtomicUsize>);
+        impl Clone for CloneProbe {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Self(Arc::clone(&self.0))
+            }
+        }
         let engine = super::build_world_engine_base(
             Default::default(),
             lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
         );
         let src = r#"
             fn make_action() { |me| { this.count += me; this.count } }
+            fn make_failed_action() { |me| { this.count += me; throw("task rejected"); } }
         "#;
         let full = super::compile_with_script_consts(&engine, src).unwrap();
         let task_ast = super::build_task_ast(&full, None, Some("twin://state/main.rhai"));
@@ -7446,28 +7436,31 @@ mod tests {
             )
             .expect("closure factory must run");
 
-        let mut state = rhai::Dynamic::from_map(rhai::Map::from([(
-            "count".into(),
-            rhai::Dynamic::from_int(0),
-        )]));
+        let clones = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut state = rhai::Dynamic::from_map(rhai::Map::from([
+            ("count".into(), rhai::Dynamic::from_int(0)),
+            (
+                "payload".into(),
+                rhai::Dynamic::from(CloneProbe(Arc::clone(&clones))),
+            ),
+        ]));
         for expected in [2_i64, 5_i64] {
-            let envelope: rhai::Dynamic = engine
+            let result: rhai::Dynamic = engine
                 .call_fn_with_options(
                     rhai::CallFnOptions::new()
                         .eval_ast(false)
-                        .in_all_namespaces(true),
+                        .in_all_namespaces(true)
+                        .bind_this_ptr(&mut state),
                     &mut rhai::Scope::new(),
                     &task_ast,
                     super::TASK_INVOKER_FN,
                     [
                         rhai::Dynamic::from(action.clone()),
                         rhai::Dynamic::from_int(expected - if expected == 2 { 0 } else { 2 }),
-                        state,
                     ],
                 )
                 .expect("native task callback must run");
-            let mut envelope = envelope.cast::<rhai::Map>();
-            state = envelope.remove("this").expect("bound state returned");
+            assert_eq!(result.as_int().unwrap(), expected);
             assert_eq!(
                 state.read_lock::<rhai::Map>().unwrap()["count"]
                     .as_int()
@@ -7475,6 +7468,38 @@ mod tests {
                 expected
             );
         }
+        let failed_action: rhai::FnPtr = engine
+            .call_fn_with_options(
+                rhai::CallFnOptions::new().eval_ast(false),
+                &mut rhai::Scope::new(),
+                &full,
+                "make_failed_action",
+                (),
+            )
+            .unwrap();
+        let error = engine
+            .call_fn_with_options::<rhai::Dynamic>(
+                rhai::CallFnOptions::new()
+                    .eval_ast(false)
+                    .in_all_namespaces(true)
+                    .bind_this_ptr(&mut state),
+                &mut rhai::Scope::new(),
+                &task_ast,
+                super::TASK_INVOKER_FN,
+                [
+                    rhai::Dynamic::from(failed_action),
+                    rhai::Dynamic::from_int(1),
+                ],
+            )
+            .expect_err("callback errors must propagate without losing the bound map");
+        assert!(error.to_string().contains("task rejected"));
+        assert_eq!(
+            state.read_lock::<rhai::Map>().unwrap()["count"]
+                .as_int()
+                .unwrap(),
+            6
+        );
+        assert_eq!(clones.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     /// No top-level imports ⇒ no second AST ⇒ hook calls keep using the full

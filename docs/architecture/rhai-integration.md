@@ -434,7 +434,10 @@ and time samples before calling a Rhai or native provider; invalid context is a
 visible hook error rather than an inferred clock.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
-simulation or another runtime cycle. Persistent scenarios may declare
+simulation or another runtime cycle.
+`dt()` reads the configured physics timestep, including a simulation-cycle
+startup call before the first tick; pause and rate changes do not rescale it.
+Persistent scenarios may declare
 `// @peer host|client|both` and `// @timing simulation`; these validate the
 scenario's execution target and fixed-step requirements while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a

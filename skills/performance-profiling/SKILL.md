@@ -119,6 +119,14 @@ pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep
 mission/timeline waits and telemetry deadlines on their declared simulation
 clocks; changing their timers to wall time changes simulation semantics.
 
+For script cost, attribute `rhai_native_task_tick` by stable actor gid and
+compare the same task-invocation range or simulation phase. Equal wall-time
+windows need not contain the same mission work when realtime pacing differs.
+Task callbacks borrow the persistent map through Rhai's bound receiver; see
+[the callback contract](../../docs/architecture/rhai-task-tree.md#leaf-callback-contract).
+Preserve captures, imports, state/error semantics and fixed cadence while
+removing copies at that boundary.
+
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
 owner records native body and collider identities, poses, mass/inertia and

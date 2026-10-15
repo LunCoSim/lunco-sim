@@ -9415,3 +9415,56 @@ The 200 FPS and sub-1 ms physics targets remain unmet. Full simulation and
 presentation isolation still requires the typed command/snapshot boundary in
 architecture 62; these improvements do not move the whole simulation owner
 off the GUI app thread.
+
+### Bound task state and startup clock — 2026-10-15
+
+The Rhai task adapter passes the persistent scenario map through
+`CallFnOptions::bind_this_ptr` for anonymous callbacks and accepts a mutable
+native receiver. It returns the callback result directly. Named callbacks use
+the same bound-map contract. Captures, imported modules, actor ordering and
+fixed cadence remain owned by the existing interpreter/task kernel. Callback
+errors retain already-applied state writes and surface as script diagnostics.
+The interpreter seam proves zero payload clones, persistent mutations, error
+propagation and top-level imports (2 checks). The production
+`scripting_task_contract` gate passes 42 authored checks, including anonymous
+actions/predicates with captures and startup clock access.
+
+The scripting clock owner's `dt()` reads the configured `Time<Fixed>` timestep.
+This is available before the first admitted tick, when the last elapsed delta
+is still zero; it remains the physics integration period across transport
+pause/rate changes. The cycle guard and missing/invalid-clock faults remain
+mandatory. The production Modelica initialization network passes 34 checks,
+including pause/rate coupling; the negative initialization fixture reaches its
+expected `modelica-initialization-failed` terminal fault and exits zero.
+
+The owned capture at API 4331 is connected to PID 3610572 on Tracy 8086,
+contains 19,384,132 zones over 107.9 seconds, saves approximately 126.34 MiB,
+and passes native CSV exports. For actor gid 7114085941306766, task invocation
+ordinals 1500–1999 have median 0.456 ms versus 0.612 ms in the earlier capture;
+means are 0.998 versus 1.087 ms, with a larger current tail. These are inclusive
+diagnostic observations under different resource contention, not an isolated
+speedup or product FPS comparison. The current capture ends before route
+startup and does not establish its settled cost. Evidence is
+`target/task-borrow-tracy{.tracy,-context.json,-capture.log,-matched-task.json}`.
+
+A separate normal Cargo run at API 4332 reaches tick 5403. Its final
+18.414-second window advances from simulation second 71.633 to 90.050 at
+1.00014 realtime, ends with 8.502 ms pending demand and clips no simulation
+time. Fixed-cycle p50/p95/max are 6.215/8.829/10.450 ms; the final retained
+native-physics median is 2.732 ms. The 1,106 retained FPS observations in that
+window have median 70.40. Seven terrain observations report 256/256 resident
+tiles, no pending stream work and an inactive complete derived map; an earlier
+observation at simulation second 68.567 has one pending tile and is outside
+this window. The camera audit and inspected screenshot show a 1280×720 view
+with the driven FLIP, route labels, terrain and shadows. Cutoff, touchdown
+confirmation and route startup remain ticks 1316, 1407 and 3104; these selected
+milestones do not prove complete state replay. Compact status reports nine
+active shared-clock participants and 48,672 real solver samples. Evidence is
+`target/task-borrow-normal{.png,-context.json,-camera.json,-status.json,-samples.json,-settled-summary.json}`.
+
+The concurrent simulator is PID 3602514, API 4286, in the `usd` checkout. It
+remains untouched; the current runs are contention-affected and are not an
+uncontended FPS comparison with the earlier viewport. Both owned simulators,
+the collector and the three scene gates exit zero and release their ports.
+The 200 FPS/sub-1 ms physics targets and full simulation/presentation isolation
+remain open.

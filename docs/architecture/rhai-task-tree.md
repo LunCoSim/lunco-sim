@@ -49,7 +49,10 @@ Action and predicate fields accept either an anonymous Rhai closure with one
 positional argument (`|me| ...`) or a named script function pointer
 (`Fn("name")`, declared as `fn name(me)`). `me` is the host entity id. Both
 forms access the persistent scenario-state map as the driver-bound `this`. The
-native task driver owns cursor, dwell, and event progression for both forms.
+native task driver borrows that map directly and owns cursor, dwell, and event
+progression for both forms. Callback errors propagate as script diagnostics;
+state mutations already performed remain in the bound map, as they do for
+lifecycle hooks.
 Rhai maps passed to helper functions are value/copy-on-write values: assigning a
 field in a helper does not update the caller's `this`. A helper that changes
 task state must return the updated map (or an explicit result), and the
