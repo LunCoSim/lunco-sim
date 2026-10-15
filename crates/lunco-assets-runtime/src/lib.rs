@@ -18,6 +18,8 @@ pub mod models;
 pub mod script_source;
 pub mod scripting;
 pub mod text_asset;
+#[cfg(feature = "ui")]
+pub mod ui_loader;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use asset_read::read_asset_text;

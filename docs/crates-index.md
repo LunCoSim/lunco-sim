@@ -31,7 +31,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), bounded file reads, lexical direct-file listing, and worker-prepared native destination identities. The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
-| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
+| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, canonical installed-source admission, library/model/script/text loaders, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -240,7 +240,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, run, and parser/compiler/Rumoca-lint capabilities plus document edit, headless scratch-document creation, and explicit-snapshot solve commands. The shared `GetDiagnostics` query reads Modelica parser, compiler, and Rumoca lint channels. It depends on the headless document/runtime core and compiler contracts but is not part of the compiler host's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagram/editor adapters, onboarding, and experiment-result view-models; reusable log, icon, documentation, and trajectory rendering lives in shared UI crates. It has no tutorial catalog or lifecycle. |
-| **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the source-library asset boundary. It has no workbench panel or document lifecycle ownership. |
+| **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and asynchronous bitmap presentation through the shared asset/image loaders. It has no workbench panel or document lifecycle ownership. |
 | **`lunco-modelica-docs-ui`** | Reusable egui Modelica documentation renderer: cached HTML-to-Markdown conversion, CommonMark presentation, and workbench URI-link dispatch. It does not resolve documents or own panel selection. |
 | **`lunco-modelica-ast`** | Pure Modelica source projections: selected-class declaration interfaces and component extraction, typed Icon/Diagram/Placement annotation values and extractors, icon transforms, source-derived memo primitives, Rumoca expression rendering and decoded description projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-sysml-ast`** | Pure SysML v2 parser/resolver projection: source files and their sorted CID-addressed project/standard-library closure, snapshot-scoped element/feature handles, typed literals and source-spanned constraint expression trees, requirements, verification links, diagnostics, and policy-neutral fact tables/selectors. It has no Bevy, filesystem, Twin, or scripting ownership. |
@@ -384,24 +384,24 @@ Supports native FS, memory, browser localStorage and OPFS. Native and OPFS
 reads and direct-file listings admit caller byte and retained-entry budgets.
 
 **`lunco-assets-path`**
-The dependency-free URI and relative-path algebra shared by USD composition,
+The platform-neutral URI and relative-path algebra shared by USD composition,
 document authoring, Twin resolution, and script imports. It owns canonical
-scheme parsing, separator normalization, relative-path validation, portable
+scheme parsing, standard URI component decoding, separator normalization, relative-path validation, portable
 filesystem filename-component validation (`validate_portable_file_name`), and
 traversal-safe path operations without depending on Bevy, storage, or a filesystem.
 
 **`lunco-assets-core`**
 The lightweight asset identity boundary. It owns cache and Twin-root
-resolution, traversal-safe source identity, and storage-facing cache/path
-operations; it uses `lunco-assets-path` for platform-neutral URI rules. It
+resolution, canonical directory admission, traversal-safe source identity, bounded registered-source/native-file/directory
+byte reads, and storage-facing cache/path operations; it uses `lunco-assets-path` for platform-neutral URI rules. It
 does not own source catalogs, discovery, scripting, text loaders, HTTP,
 archives, raster, SVG, GeoTIFF, or native processing.
 
 **`lunco-assets-runtime`**
 The Bevy asset-source, authored-text, and selected-dataset runtime. It owns
-source registration, discovery/catalogs, library/model/script/text loaders,
-policy-requested dataset artifact reads, web fetch integration, and the
-asset-manifest tool while consuming identity and storage contracts from
+source registration, discovery/catalogs, canonical installed-source admission, library/model/script/text loaders,
+policy-requested dataset artifact reads, web fetch integration, the optional
+shared egui byte loader, and the asset-manifest tool while consuming identity and storage contracts from
 `lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
 
 **`lunco-assets-datasets`**
@@ -1367,7 +1367,8 @@ transport. API commands are opt-in, and API query providers are owned by
 **`lunco-modelica-source-roots`**
 Host-side source-root admission. It inventories authored Modelica assets, resolves
 Twin manifest paths, registers roots contributed by opened documents, and queues
-demand-driven `LoadSourceRoot` operations. This lifecycle policy is separate from
+demand-driven `LoadSourceRoot` operations. It retains admitted package facts and
+publishes the immutable resource-to-asset context used by UI loaders. This lifecycle policy is separate from
 the document/runtime core so changing Twin discovery does not rebuild its engine
 implementation.
 
@@ -1375,7 +1376,7 @@ implementation.
 Production source-library capability shared by compiler, execution, and UI
 hosts. It owns the persisted local-root setting, native parsed-bundle admission,
 wasm manifest/bundle fetch, bounded decode and source unpack, editor-index
-handoff, and the typed worker callback seam. It has no compiler session or
+handoff, installed-library class/package storage facts, and the typed worker callback seam. It has no compiler session or
 solver lifecycle, so changes to library transport do not rebuild the compiler
 implementation.
 

@@ -650,10 +650,11 @@ async fn prepare(
         }
         Source::Logical(path) => {
             let server = server.ok_or("Registered asset server is unavailable")?;
-            let mut bytes =
-                lunco_usd_bevy_stage::compose::read_registered_asset_bytes(&server, &path, limit)
-                    .await
-                    .map_err(|error| error.to_string())?;
+            let mut bytes = lunco_assets_core::registered_read::read_registered_asset_bytes(
+                &server, &path, limit,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             let id = lunco_assets_core::asset_path::anchor_of(&path);
             let recipe = if crate::validate::is_usd_path(path.path()) {
                 Some(
@@ -847,7 +848,7 @@ async fn prepare_twin_sources(
                 let id = lunco_assets_core::twin_uri(authority, relative);
                 let path = lunco_assets_core::asset_path::load_asset_path(&id, None, roots, None)
                     .map_err(|error| error.to_string())?;
-                let mut bytes = lunco_usd_bevy_stage::compose::read_registered_asset_bytes(
+                let mut bytes = lunco_assets_core::registered_read::read_registered_asset_bytes(
                     server,
                     &path,
                     limits.max_bytes.saturating_sub(retained_bytes),

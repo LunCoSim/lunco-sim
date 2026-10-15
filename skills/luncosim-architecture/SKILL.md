@@ -1215,3 +1215,21 @@ cover mechanisms that the production query/command surface cannot observe.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.
+
+### Unified language asset resources
+
+`lunco-assets-path` owns scheme/path algebra and standard URI component decoding;
+internal source addresses keep literal filenames. `lunco-assets-core::registered_read`
+owns bounded registered-source and admitted-directory byte reads. The installed
+source store and its `library://` reader share containment and terminal I/O errors.
+Only absence advances search order. Native source walks use ordered storage
+listings and reject escapes and repeated canonical identities.
+
+Language integrations contribute semantics only: USD layer context, Rhai importer
+identity, Modelica package/source/member facts. Modelica package resources use the
+qualified hierarchy independently of physical `.mo` splitting and bind to a unique
+admitted source owner. Their immutable context carries source-root lifecycle;
+source operation mismatches cannot publish new package facts. Open document facts
+retire on document/Twin close. The common `AssetBytesLoader` and maintained egui
+image decoders serve documentation, bitmaps and `OpenAssetResource` previews;
+resource/source revisions invalidate bytes, images and textures together.

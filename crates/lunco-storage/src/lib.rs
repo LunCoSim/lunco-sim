@@ -132,7 +132,17 @@ pub fn file_uri_to_path(reference: &str) -> StorageResult<Option<PathBuf>> {
         ))
     };
     let violation = std::cell::Cell::new(None);
-    let report_violation = |value| violation.set(Some(value));
+    let report_violation = |value| {
+        // RFC 8089 permits an absolute path without an authority (`file:/…`).
+        // Keep url's native conversion while rejecting its other repairs.
+        let minimal_absolute = value == url::SyntaxViolation::ExpectedFileDoubleSlash
+            && reference
+                .split_once(':')
+                .is_some_and(|(_, path)| path.starts_with('/'));
+        if !minimal_absolute {
+            violation.set(Some(value));
+        }
+    };
     let uri = url::Url::options()
         .syntax_violation_callback(Some(&report_violation))
         .parse(reference)
@@ -262,6 +272,8 @@ mod file_uri_tests {
         let uri = file_path_to_uri(&path).unwrap();
         assert!(uri.contains("%20"));
         assert_eq!(file_uri_to_path(&uri).unwrap(), Some(path.clone()));
+        let minimal = uri.replacen("file://", "FiLe:", 1);
+        assert_eq!(file_uri_to_path(&minimal).unwrap(), Some(path.clone()));
         let localhost = uri.replacen("file://", "file://localhost", 1);
         assert_eq!(file_uri_to_path(&localhost).unwrap(), Some(path));
         for native_or_asset in [
@@ -275,6 +287,9 @@ mod file_uri_tests {
         for invalid in [
             "file:///invalid%00.mo",
             "file:///invalid%GG.mo",
+            "file:relative.mo",
+            "file:/invalid%GG.mo",
+            "file:/model.mo#Main",
             "file:///model.mo?version=2",
             "file:///model.mo#Main",
             r"file://C:\Projects\model.mo",

@@ -68,7 +68,7 @@ pub enum TwinRootsError {
     LogicalIdentityMismatch { requested: String, assigned: String },
     #[error("invalid Twin overlay path `{0}`")]
     InvalidOverlayPath(String),
-    #[error("Twin asset resolution failed ({0:?}): {1}")]
+    #[error("asset resolution failed ({0:?}): {1}")]
     AssetResolution(std::io::ErrorKind, String),
     #[error("Twin root resolution failed ({0:?}): {1}")]
     RootResolution(std::io::ErrorKind, String),
@@ -94,7 +94,7 @@ pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
 /// different scheme (or no scheme at all). The parsing inverse of [`twin_uri`].
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
     let (scheme, rest) = crate::asset_path::split_scheme(uri)?;
-    split_twin_rel((scheme == TWIN_SCHEME).then_some(rest)?)
+    split_twin_rel((scheme.eq_ignore_ascii_case(TWIN_SCHEME)).then_some(rest)?)
 }
 
 /// Split the scheme-stripped remainder of a `twin://` address — the
@@ -190,7 +190,7 @@ pub fn stable_source_path(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn canonical_root(root: &Path) -> Result<PathBuf, TwinRootsError> {
-    std::fs::canonicalize(root).map_err(|error| {
+    crate::canonical_directory_root(root).map_err(|error| {
         TwinRootsError::RootResolution(error.kind(), format!("{}: {error}", root.display()))
     })
 }

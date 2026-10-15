@@ -1,26 +1,8 @@
-//! source library filesystem layout — qualified-name → on-disk (or in-memory)
-//! `.mo` file resolution.
-//!
-//! Pure path / index logic, no parsing. The resolver tier consumed
-//! by drill-in and document-open flows that need a file path before
-//! reading source.
-//!
-//! One lazy index:
-//!
-//! - [`class_to_file_index`] — `qualified → PathBuf` for every
-//!   class the visual palette knows about. Built from
-//!   [`lunco_modelica_index::visual_diagram::library_class_library`].
-//!
-//! [`locate_library_file`] is the single source-of-truth resolver: it
-//! walks the in-memory bundle (web) or filesystem roots (native,
-//! including additional Twin-declared source roots) to map any
-//! qualified (fully-qualified only) name to its containing file.
-//!
-//! Short-form / scoped / import-based name lookup (MLS §5) is NOT done
-//! here — that is rumoca's job, via the engine `Session`. This module
-//! is purely §13 storage resolution (qualified name → `.mo` file) for
-//! the *pre-load* palette/drill-in path, where no resolved `Session`
-//! exists yet.
+//! Installed-library Modelica storage semantics. Qualified names map to `.mo`
+//! files through the shared source store; package declarations come from the
+//! admitted parsed bundle, including packages absent from the visual palette.
+//! Rumoca owns scoped/import name lookup. This module supplies section 13 file
+//! layout and declaration facts, never filesystem reads or cache selection.
 
 use bevy::log::info;
 
@@ -109,7 +91,7 @@ where
         if contains(&pkg) {
             return Some(pkg);
         }
-        let flat = dir.with_extension("mo");
+        let flat = dir.with_file_name(format!("{}.mo", segments[i - 1]));
         if contains(&flat) {
             return Some(flat);
         }
@@ -119,4 +101,35 @@ where
 
 pub fn resolve_class_path_indexed(qualified: &str) -> Option<std::path::PathBuf> {
     class_to_file_index().get(qualified).cloned()
+}
+
+/// Package declarations come from admitted parsed sources, including packages
+/// which have no palette component. Build only after the bundle is available.
+pub fn package_declaration(
+    qualified: &str,
+) -> Result<&'static lunco_modelica_ast::resource_uri::PackageSource, String> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static PACKAGES: OnceLock<HashMap<String, lunco_modelica_ast::resource_uri::PackageSource>> =
+        OnceLock::new();
+    if PACKAGES.get().is_none() {
+        let bundle = crate::source_library::parsed_source_bundle()
+            .ok_or("parsed source-library declarations are unavailable")?;
+        let mut packages = HashMap::new();
+        for package in lunco_modelica_ast::resource_uri::source_set_package_sources(
+            bundle
+                .iter()
+                .map(|document| (document.definition(), document.uri())),
+        ) {
+            let name = package.namespace.clone();
+            if packages.insert(name.clone(), package).is_some() {
+                return Err(format!("ambiguous source-library package `{name}`"));
+            }
+        }
+        let _ = PACKAGES.set(packages);
+    }
+    PACKAGES
+        .get()
+        .and_then(|packages| packages.get(qualified))
+        .ok_or_else(|| format!("unknown Modelica package `{qualified}`"))
 }

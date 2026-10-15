@@ -7,7 +7,7 @@ Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.
 rather than scenes.
 
 The implementation is split by change and dependency cost. `lunco-assets-path`
-owns the dependency-free URI and relative-path algebra. `lunco-assets-core`
+owns URI and relative-path algebra without Bevy or filesystem dependencies. `lunco-assets-core`
 owns cache/Twin roots and storage-facing identity/resolution contracts;
 `lunco-assets-runtime` owns registered source readers, runtime sources, and
 discovery.
@@ -29,11 +29,30 @@ discarding only the extension is not a valid normalization.
 
 **Authored content names logical identities; only the resolver knows locations.**
 
-Two authored forms, both location-independent and both resolvable by third-party
-USD tools when the bytes are present:
+This is one asset system, including source libraries. Language consumers may
+interpret language syntax and supply an importing source or package identity;
+they must not implement their own filesystem search, cache precedence,
+containment, transport decoding, or storage reader. USD contributes the
+strongest opinion's layer anchor and search-path spelling. Rhai contributes
+the importing script identity and its module suffix. Modelica name lookup and
+package mapping remain compiler facts; an external resource becomes an asset
+address before bytes are requested. UI widgets dispatch those same typed
+requests and show their pending, ready, or failed result.
+
+Internal asset-source addresses preserve literal filename characters. Standard
+`file:`, HTTP, and Modelica URIs have their specified encoding and fragment
+semantics, interpreted once at their boundary. A language adapter must not
+decode an internal address as a URL or join an encoded URI onto a filesystem
+root. Missing, ambiguous, malformed, out-of-root, and retired-source results
+must remain distinct from an ordinary cache miss. Preparation captures source
+revision and owning mount; publication validates both before admitting bytes.
+
+Authored forms retain logical identities. Custom schemes require the registered
+resolver when another USD tool opens the document:
 
 - `@lunco://models/perseverance.glb@` — the engine asset library
-- `@terrain/apollo15@` — root-relative, resolved against the owning root
+- `@terrain/apollo15@` — search beside the contributing layer, then in its supplied Twin context
+- `@./terrain/apollo15@` — strictly relative to the contributing layer
 
 A cache directory is never an address. If authored USDA can name the cache, the
 file asserts "this asset lives in my download cache" — an environment fact, not
@@ -542,3 +561,78 @@ must remain user-consented. The packaged `lunco://` reader checks authored
 assets, packed cache, and the machine-global cache in that order; Twin reads
 additionally check the Twin's authored/cache roots and then the same
 machine-global cache.
+
+## Source libraries and resource views
+
+`lunco-assets-runtime::library` is the common installed-source store for native
+filesystem and in-memory backends. Relative paths are validated once at that
+owner; native reads use `existing_path_within_root`, including symlink
+containment. Absolute source-file reads are accepted only by their owning
+installed filesystem root. An unowned absolute file remains the document
+admission owner's responsibility. Only `Ok(None)` advances an ordered search;
+invalid paths and I/O failures terminate it.
+
+The registered `library://<authority>/<relative>` source pins one installed
+source. Its authority is process-local, like a Twin mount authority; authored
+content uses its language's portable identity. The native scheme-registry mirror
+and byte source share the same selection and containment functions. The source
+reader streams native files and borrows resident memory bytes, so a bounded
+consumer need not materialize the whole payload before checking its budget.
+
+Default, engine-library and installed-library native sources share
+`lunco-assets-core::NativeAssetReader`, a containment adapter around Bevy's
+maintained streaming file reader. Payloads, metadata sidecars and directory
+queries all validate their owning root. A containment or I/O error terminates
+the search; only absence permits the next root. Native source roots must be
+absolute, and payload/sidecar reads require regular files.
+
+`lunco-assets-core::registered_read` owns bounded reads through registered
+sources and admitted directories. USD preparation and UI byte loading consume
+that owner. `lunco-assets-runtime::ui_loader::AssetBytesLoader` supplies one
+asynchronous pending/ready/failed state machine; a language adapter returns an
+`AssetReadTarget`, not bytes or another reader. Standard `file:` URIs use
+`lunco-storage` decoding, while internal logical addresses retain literal `#`
+and `%`. Scheme names normalize to lower case; package names, authorities and
+filename case remain unchanged.
+
+Document views of admitted directory sources retain the directory's source-set
+identity. Independent document-backed packages have document-scoped registrations;
+duplicate namespaces fail with their source paths, rather than replacing another
+document. Closing a view preserves its admitted source, and replacing a Twin
+retires that Twin's roots and dependent UI caches.
+
+The storage URI boundary accepts RFC 8089's authority form (`file:///path`)
+and minimal absolute form (`file:/path`); both use the maintained `url` crate
+for native conversion and reject malformed escapes, queries and fragments.
+
+The workbench's `OpenAssetResource` previews these same requests. Invalid links
+handled by a registered scheme remain in-app with their diagnostic. Text
+previews are bounded by `asset_ui.max_text_preview_bytes`; resource reads use
+`asset_ui.max_resource_bytes`. Native raster decoding uses egui's maintained
+asynchronous image loader. Source/root revisions clear bytes, decoded images
+and textures together. Detached byte workers retain discarded result slots. Scope invalidation also
+replaces the maintained raster decoder instance: completed old decodes retain
+their old cache Arc and cannot publish into the new scope's image cache.
+Invalidation runs before workbench widgets read resources.
+
+Native source-directory preparation uses the storage owner's ordered listing,
+shared root containment and canonical identity checks. Escapes, repeated
+files/directories and enumeration failures produce admission diagnostics;
+source sets cannot silently include an outside file or a partial traversal.
+
+Native directory identities are admitted by `canonical_directory_root` before
+source-store installation. Registered roots are absolute, canonical directories;
+symlink/case spellings cannot create another source identity. Installation is
+idempotent for the same ordered store and rejects a different store during the
+application lifetime. A missing optional cache is `Ok(None)`; an invalid explicit
+library override, malformed store or failed canonicalization is an error. Dataset
+provisioning cannot replace that rejection with an unrelated cached library.
+The settings panel reads the admitted resident root and performs no filesystem
+resolution during painting.
+
+Explicit native `file:` views use the storage boundary and its native filename
+contract. They do not reinterpret a native filename as a portable asset path.
+Language source identities require exact UTF-8; source discovery reports an
+unrepresentable path instead of dropping components or replacing bytes. Reloading
+an open resource is an explicit typed request which retires its byte/texture
+entry and decoder generation before reading again.

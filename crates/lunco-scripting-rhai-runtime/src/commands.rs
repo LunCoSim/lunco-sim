@@ -597,7 +597,10 @@ fn resolve_scenario_twin_owner(
     if route.is_some() && routed_twin.is_none() && explicit_twin_id.is_none() {
         return Err("Twin-scoped scenario request has no Twin owner identity".to_string());
     }
-    let asset_twin = if source_asset.is_some_and(|asset| asset.starts_with("twin://")) {
+    let asset_twin = if source_asset
+        .and_then(lunco_assets_core::parse_twin_uri)
+        .is_some()
+    {
         Some(active_twin.ok_or_else(|| {
             "Twin-backed scenario asset was requested without an active Twin".to_string()
         })?)

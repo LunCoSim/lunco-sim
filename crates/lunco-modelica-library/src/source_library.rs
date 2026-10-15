@@ -52,7 +52,7 @@ pub fn source_library_cache_dir() -> PathBuf {
 }
 
 /// Resolve the materialised Modelica source-library root, if it exists.
-pub fn source_library_root_path() -> Option<PathBuf> {
+pub fn source_library_root_path() -> std::io::Result<Option<PathBuf>> {
     lunco_assets_core::source_library_root_path(SOURCE_LIBRARY_ASSET_ROOT)
 }
 
@@ -216,7 +216,7 @@ pub fn parsed_source_bundle()
 /// bincode), streaming the decode so the whole file is never held as a
 /// `Vec<u8>`.
 ///
-/// `Ok(None)` = no/empty file (indexer hasn't run); `Err` = a present-but-
+/// `Ok(None)` = absent file; `Err` = a present-but-
 /// undecodable bundle. Provisioning must publish a valid current artifact
 /// before source-library admission can succeed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -224,12 +224,11 @@ fn read_parsed_bundle_file()
 -> Result<Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>, String> {
     let Some((_, file)) = lunco_assets_runtime::library::library_open(std::path::Path::new(
         PARSED_LIBRARY_BUNDLE_FILE_NAME,
-    )) else {
+    ))
+    .map_err(|error| format!("parsed bundle read: {error}"))?
+    else {
         return Ok(None);
     };
-    if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
-        return Ok(None); // empty / truncated
-    }
     let mut decoder = ruzstd::StreamingDecoder::new(std::io::BufReader::new(file))
         .map_err(|e| format!("zstd decoder: {e}"))?;
     let documents = bincode::serde::decode_from_std_read::<
@@ -511,22 +510,24 @@ fn stash_compressed_source(
 /// compiler-owned library document loader before it reads source text. No-op if already
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
-pub fn ensure_library_source_unpacked() {
+pub fn ensure_library_source_unpacked() -> Result<(), String> {
     if lunco_assets_runtime::library::has_library_source() {
-        return;
+        return Ok(());
     }
     let Some((bytes, meta)) = LIBRARY_SOURCE_COMPRESSED.get() else {
-        return;
+        return Ok(());
     };
     match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
             lunco_assets_runtime::library::install_global_library_sources(vec![
                 LibraryAssetSource::InMemory(Arc::new(LibraryInMemory { files })),
-            ]);
+            ])
+            .map_err(|error| error.to_string())?;
             info!("[source library] source bundle unpacked lazily ({n} files) for drill-in");
+            Ok(())
         }
-        Err(e) => warn!("[source library] lazy source unpack failed: {e}"),
+        Err(error) => Err(format!("source library unpack failed: {error}")),
     }
 }
 
@@ -690,24 +691,30 @@ impl Plugin for SourceLibraryPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let settings = app.world().resource::<crate::settings::LibrarySettings>();
-            let resolved_root = configured_native_library_root(settings);
-
-            if let Some(root) = resolved_root {
-                info!("[source library] using on-disk root {}", root.display());
-                lunco_assets_runtime::library::install_global_library_sources(vec![
-                    LibraryAssetSource::Filesystem(root.clone()),
-                ]);
-                app.insert_resource(LibraryLoadState::Ready {
-                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                });
-            } else {
-                info!(
-                    "[source library] no on-disk root — source-library provisioning is not composed"
-                );
-                app.insert_resource(LibraryLoadState::NotStarted);
-            }
+            let resolved = configured_native_library_root(settings).and_then(|root| {
+                if let Some(root) = &root {
+                    lunco_assets_runtime::library::install_global_library_sources(vec![
+                        LibraryAssetSource::Filesystem(root.clone()),
+                    ])?;
+                }
+                Ok(root)
+            });
+            let state = match resolved {
+                Ok(Some(root)) => {
+                    info!("[source library] admitted on-disk root {}", root.display());
+                    LibraryLoadState::Ready {
+                        file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
+                        compressed_bytes: 0,
+                        uncompressed_bytes: 0,
+                    }
+                }
+                Ok(None) => LibraryLoadState::NotStarted,
+                Err(error) => {
+                    warn!("[source library] root admission failed: {error}");
+                    LibraryLoadState::Failed(error.to_string())
+                }
+            };
+            app.insert_resource(state);
 
             // NO startup warm. Filling the parsed slot here would flip
             // `drive_source_bundle_bootstrap` onto its eager branch on every native launch,
@@ -741,22 +748,11 @@ impl Plugin for SourceLibraryPlugin {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn configured_native_library_root(
     settings: &crate::settings::LibrarySettings,
-) -> Option<std::path::PathBuf> {
-    // A settings-level override wins: the user explicitly selected a local
-    // Modelica checkout or system installation.
-    let override_root = settings.local_root_override.as_ref().and_then(|path| {
-        if path.is_dir() {
-            Some(path.clone())
-        } else {
-            warn!(
-                "[source-library] settings.library.local_root_override = {} is not a directory; ignoring",
-                path.display()
-            );
-            None
-        }
-    });
-
-    override_root.or_else(source_library_root_path)
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    match &settings.local_root_override {
+        Some(root) => lunco_assets_core::canonical_directory_root(root).map(Some),
+        None => source_library_root_path(),
+    }
 }
 
 // ─── Shared slot the wasm fetcher writes into ───────────────────────

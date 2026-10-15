@@ -350,6 +350,8 @@ pub struct ModelicaResult {
     /// Authored top-level namespaces installed by this exact source-set operation.
     #[serde(default)]
     pub loaded_source_root_namespaces: Vec<String>,
+    #[serde(default)]
+    pub loaded_source_root_packages: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
     /// Source-set unload acknowledgement from the Modelica worker.
     #[serde(default)]
     pub unloaded_source_root_id: Option<String>,
@@ -410,6 +412,7 @@ impl Default for ModelicaResult {
             compiled_model_name: None,
             loaded_source_root_id: None,
             loaded_source_root_namespaces: Vec::new(),
+            loaded_source_root_packages: Vec::new(),
             unloaded_source_root_id: None,
             source_root_operation_id: None,
             compile_diagnostics: Vec::new(),

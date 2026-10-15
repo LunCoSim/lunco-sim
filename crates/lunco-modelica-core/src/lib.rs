@@ -58,7 +58,6 @@ pub mod class_metadata;
 /// Source-aware class admission for document operations. Files are read and
 /// parsed outside the engine lock, then installed into the shared session.
 pub mod library_documents;
-pub mod library_fs;
 
 /// Immutable Rumoca diagram snapshots and their component-graph projection.
 pub mod diagram;

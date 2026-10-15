@@ -1084,3 +1084,12 @@ request an external source library. Use Rumoca’s
 `compile::source_root_dependencies` for lexical/import-aware dependency facts,
 then admit those namespaces through the shared source-root registry. Do not
 scan type strings or special-case import aliases such as `SI`.
+
+For documentation/Bitmap resources, use the admitted package URI and the shared
+asset resource path. Scheme matching is case-insensitive; percent-encode standard
+URI components. A nested package keeps its qualified resource directory even when
+stored in its parent's `.mo` file. `OpenAssetResource { uri }` opens the common
+preview and displays pending/missing/invalid outcomes. Verify the rendered result
+in an owned windowed session; compiler or byte-read success alone does not prove
+an image was displayed. Do not derive a resource path from the source cache or
+from the component palette, which does not enumerate package declarations.

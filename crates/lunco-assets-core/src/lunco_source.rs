@@ -16,7 +16,7 @@
 //! See `docs/architecture/56-asset-resolution-and-cache.md`.
 //!
 //! **One resolver, every platform.** Every root is read through Bevy's own
-//! platform reader, which yields a file reader natively and Bevy's maintained
+//! platform reader, with shared native containment and Bevy's maintained
 //! HTTP reader on wasm. HTTP requests encode literal filename components through
 //! its request mapper. The browser resolves the same chain over HTTP as
 //! native resolves over directories — the fallback is not a native-only
@@ -41,7 +41,7 @@ pub const LUNCO_SCHEME: &str = "lunco";
 /// the engine library" — what a caller re-rooting an id back onto disk needs.
 pub fn parse_lunco_uri(uri: &str) -> Option<&str> {
     let (scheme, rel) = crate::asset_path::split_scheme(uri)?;
-    (scheme == LUNCO_SCHEME).then_some(rel)
+    (scheme.eq_ignore_ascii_case(LUNCO_SCHEME)).then_some(rel)
 }
 
 /// The directory name the shipped asset library lives under (`assets`). The
@@ -435,7 +435,7 @@ mod tests {
 /// USD consumers never perform their own filesystem access.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
-    std::fs::read(path)
+    read_native_asset(path.to_path_buf(), None)
 }
 
 /// Read authored UTF-8 text through the asset boundary.
@@ -482,7 +482,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
 fn library_asset_reader(root: &str) -> Box<dyn ErasedAssetReader> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetSource::get_default_reader(root.to_string())()
+        Box::new(crate::NativeAssetReader::new(root))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -494,10 +494,9 @@ fn library_asset_reader(root: &str) -> Box<dyn ErasedAssetReader> {
     }
 }
 
-/// The default browser source uses the same filename transport mapping as
-/// `lunco://`, with its configured root and Bevy's platform capabilities.
-#[cfg(target_arch = "wasm32")]
-pub fn web_asset_source(root: &Path) -> AssetSourceBuilder {
+/// One directory source with the shared native containment or browser filename
+/// transport and Bevy's platform watcher. This source has no cache search tier.
+pub fn directory_asset_source(root: &Path) -> AssetSourceBuilder {
     let root = root.to_string_lossy().into_owned();
     AssetSourceBuilder::platform_default(&root, None)
         .with_reader(move || library_asset_reader(&root))
@@ -525,7 +524,8 @@ mod browser_transport_tests {
     // from its owned working directory; setup is documented in asset I/O.
     #[wasm_bindgen_test(async)]
     async fn browser_readers_preserve_literal_filename_payloads_and_missing_errors() {
-        let mut default_source = web_asset_source(Path::new("assets/http-path-fixture/default"));
+        let mut default_source =
+            directory_asset_source(Path::new("assets/http-path-fixture/default"));
         let mut library_source = lunco_asset_source(Path::new("assets/http-path-fixture/library"));
         let readers = [(default_source.reader)(), (library_source.reader)()];
         let fixtures = [
@@ -595,19 +595,92 @@ struct FallbackReader {
     roots: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn local_root_allows(root: &str, path: &Path) -> std::io::Result<bool> {
-    let root = Path::new(root);
-    let candidate = root.join(path);
-    if !candidate.exists() {
-        return Ok(true);
-    }
-    crate::existing_path_within_root(root, path).map(|resolved| resolved.is_some())
-}
+#[cfg(all(test, unix))]
+mod native_reader_contract_tests {
+    use super::*;
 
-#[cfg(target_arch = "wasm32")]
-fn local_root_allows(_root: &str, _path: &Path) -> std::io::Result<bool> {
-    Ok(true)
+    #[test]
+    fn asset_resolution_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("root");
+        let later = folder.path().join("later");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&later).unwrap();
+        let outside = folder.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("payload"), b"outside").unwrap();
+        std::fs::write(root.join("literal # %.bin"), b"inside").unwrap();
+        std::fs::write(later.join("fallback"), b"later").unwrap();
+        std::fs::create_dir(later.join("escape")).unwrap();
+        std::fs::write(later.join("escape/payload"), b"wrong owner").unwrap();
+        std::fs::write(later.join("literal # %.bin.meta"), b"wrong owner").unwrap();
+        std::os::unix::fs::symlink(outside.join("payload"), root.join("literal # %.bin.meta"))
+            .unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        let roots = [root, later]
+            .map(|root| root.to_str().unwrap().to_owned())
+            .to_vec();
+        let reader = FallbackReader {
+            readers: roots
+                .iter()
+                .map(|root| library_asset_reader(root))
+                .collect(),
+            roots,
+        };
+        bevy::tasks::futures_lite::future::block_on(async {
+            let mut source = directory_asset_source(Path::new(&reader.roots[0]));
+            let default = (source.reader)();
+            assert!(
+                ErasedAssetReader::is_directory(default.as_ref(), Path::new(""))
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                AssetReader::read_directory(&reader, Path::new(""))
+                    .await
+                    .is_ok()
+            );
+            assert!(
+                matches!(ErasedAssetReader::read_meta(default.as_ref(), Path::new("literal # %.bin")).await,
+                Err(AssetReaderError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
+            );
+            let relative_root = crate::NativeAssetReader::new("relative");
+            assert!(
+                AssetReader::read(&relative_root, Path::new("payload"))
+                    .await
+                    .is_err()
+            );
+            let mut stream = AssetReader::read(&reader, Path::new("literal # %.bin"))
+                .await
+                .unwrap();
+            let mut bytes = Vec::new();
+            Reader::read_to_end(&mut stream, &mut bytes).await.unwrap();
+            assert_eq!(bytes, b"inside");
+            assert!(
+                AssetReader::read(&reader, Path::new("fallback"))
+                    .await
+                    .is_ok()
+            );
+            assert!(
+                matches!(AssetReader::read(&reader, Path::new("escape/payload")).await,
+                Err(AssetReaderError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
+            );
+            assert!(
+                matches!(AssetReader::read_meta(&reader, Path::new("literal # %.bin")).await,
+                Err(AssetReaderError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
+            );
+            assert!(
+                AssetReader::is_directory(&reader, Path::new("escape"))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                AssetReader::read_directory(&reader, Path::new("escape"))
+                    .await
+                    .is_err()
+            );
+        });
+    }
 }
 
 /// Try each root in order; the first non-`NotFound` answer wins.
@@ -616,20 +689,7 @@ macro_rules! try_both {
         // `readers` is non-empty by construction (`assets/` is always first),
         // so the loop always assigns before the unwrap.
         let mut last = None;
-        for (reader, root) in $self.readers.iter().zip($self.roots.iter()) {
-            match local_root_allows(root, $path) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(AssetReaderError::from(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!(
-                            "asset path `{}` escapes library root `{root}`",
-                            $path.display()
-                        ),
-                    )));
-                }
-                Err(error) => return Err(AssetReaderError::from(error)),
-            }
+        for reader in &$self.readers {
             match reader.$method($path).await {
                 Err(AssetReaderError::NotFound(_)) => {
                     last = Some(Err(AssetReaderError::NotFound($path.to_path_buf())))

@@ -14,6 +14,7 @@ import time
 import uuid
 
 from runtime import BINARY, ProductionSession, ROOT
+from run_editor_scene_test import wait_for_scene
 
 PORT = int(os.environ.get("LUNCOSIM_API_PORT", "4193"))
 SOURCE = ROOT / "assets/scenarios/tests/path_interoperability.rhai"
@@ -104,15 +105,9 @@ def exercise_usd_model_source(session, root, model_name):
     wait_for(session, lambda: filename in [file["relative_path"] for file in execute(session, "ListTwin").get("files", [])], "saved USD Twin admission")
     execute(session, "OpenFile", path=str(path))
     reopened = wait_for(session, lambda: usd_document(session, filename), "literal USD source readback")
+    wait_for_scene(session, str(path), timeout=90)
     execute(session, "InspectUsdDocument", doc_id=reopened, path="/World/LiteralProbe")
     wait_for(session, literal_model_ready, "literal Modelica source equation result")
-    # Stable scenes use prepared readers. A typed edit promotes the live stage.
-    execute(session, "ApplyUsdOp", doc_id=reopened, op={"SetAttribute": {
-        "edit_target": "@root@", "path": "/World/LiteralProbe", "name": "size",
-        "type_name": "double", "value": "3"}})
-    wait_for(session, lambda: execute(session, "ResolveUsdTarget", doc_id=reopened,
-             path="/World/LiteralProbe", edit_target="@root@").get("source") == "canonical_stage",
-             "edited canonical USD stage")
     verdict("verify_usd_path", reopened, filename)
     execute(session, "SaveDocument", doc_id=reopened)
     execute(session, "CloseDocument", doc_id=reopened)

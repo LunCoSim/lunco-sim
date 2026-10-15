@@ -859,6 +859,7 @@ pub fn handle_modelica_responses(
                         root_id,
                         operation_id,
                         result.loaded_source_root_namespaces.clone(),
+                        result.loaded_source_root_packages.clone(),
                         result.error.clone(),
                     ) {
                         match roots.state(root_id) {

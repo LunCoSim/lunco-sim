@@ -25,20 +25,22 @@ pub async fn load_library_class(
     admission: lunco_workspace::FileDocumentAdmission,
 ) -> Result<(ModelicaDocument, lunco_workspace::DocumentRuntimeOwner), String> {
     #[cfg(target_arch = "wasm32")]
-    lunco_modelica_library::source_library::ensure_library_source_unpacked();
+    lunco_modelica_library::source_library::ensure_library_source_unpacked()?;
 
-    let (resolved, full_source) =
-        if let Some(bytes) = lunco_assets_runtime::library::library_read(path) {
-            (
-                lunco_workspace::ResolvedFileDocument {
-                    path: path.to_path_buf(),
-                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
-                },
-                String::from_utf8(bytes).map_err(|e| format!("non-UTF-8 source: {e}"))?,
-            )
-        } else {
-            lunco_modelica_runtime::source_asset::read_admitted_file(path, admission).await?
-        };
+    let (resolved, full_source) = if let Some(bytes) =
+        lunco_assets_runtime::library::library_read(path)
+            .map_err(|error| format!("source library read `{}`: {error}", path.display()))?
+    {
+        (
+            lunco_workspace::ResolvedFileDocument {
+                path: path.to_path_buf(),
+                runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+            },
+            String::from_utf8(bytes).map_err(|e| format!("non-UTF-8 source: {e}"))?,
+        )
+    } else {
+        lunco_modelica_runtime::source_asset::read_admitted_file(path, admission).await?
+    };
     let path = resolved.path.as_path();
     let key = path.to_string_lossy().to_string();
     let bundled_ast =

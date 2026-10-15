@@ -97,7 +97,7 @@ Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact. Canonical URI construction, separator normalization,
-and traversal validation come from the dependency-free `lunco-assets-path` crate;
+and traversal validation come from `lunco-assets-path`;
 source roots and bytes are admitted by `lunco-assets-runtime` using the identity
 and cache contracts from `lunco-assets-core`. For reopened Twins, use the
 authority returned by the current mount, never reconstruct it from the
@@ -363,3 +363,33 @@ in their own layers. A tutorial only projects metadata from that stage.
 - ❌ Adding a Rust struct for a specific vehicle/part/material. It is a file.
 - ❌ Assuming the web build picked up a new asset without re-running
   `build_web.sh`.
+
+## Language resources use the same reader
+
+Interpret a language reference once, then return a typed asset location. Use
+`lunco-assets-core::registered_read` for bounded source/directory bytes and the
+optional `lunco-assets-runtime::ui_loader::AssetBytesLoader` for egui. Do not add
+per-language byte readers, cache searches, percent decoders or pending-load
+caches. Standard URI components decode at their boundary; literal internal
+asset addresses do not. Scheme case normalizes without changing name/path case.
+
+Installed source stores use `library_read`/`library_open` with `Result<Option<_>>`:
+only absence permits another root. Registered `library://` addresses pin one
+installed source and remain runtime addresses, not authored cache locations.
+Keep native source traversal under its admitted absolute root; an escaped or
+repeated entry is a source-set admission error.
+
+For Modelica, use `resource_uri` language facts and `SourceRootRegistry`'s
+resource context. Package declarations come from admitted parsed sources, not
+palette entries. Preserve the qualified resource hierarchy when packages share
+one file. UI links dispatch `OpenAssetResource`; documentation and Bitmap
+painting consume the same asynchronous asset/image pipeline.
+
+Admit filesystem source roots through `canonical_directory_root` and the shared
+store installer. Invalid configured roots reject visibly; do not substitute the
+cache. Source stores are immutable for the application lifetime and repeated
+installation must retain the same identities. Settings views read resident roots,
+not filesystem probes. Explicit native file URIs retain native filename semantics;
+portable asset paths and exact UTF-8 language source identities keep their own
+validated representations. Use the shared resource reload action after an external
+file edit; do not introduce a language-specific retry or cache reset.

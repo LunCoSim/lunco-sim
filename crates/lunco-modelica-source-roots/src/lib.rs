@@ -94,17 +94,17 @@ pub enum SourceRootKind {
     SessionDocument { id: String },
 }
 
-/// One source root the workbench knows about. Keyed by the
-/// external namespace returned by Rumoca’s source dependency query.
+/// One admitted source set. Its identity is distinct from the namespaces
+/// declared by its parsed sources.
 #[derive(Debug, Clone)]
 pub struct SourceRoot {
-    /// Root segment of qualified names that resolve into this source.
-    /// A package rooted at `Modelica` or another authored package name uses
-    /// that name here; bundled examples use their own authored root.
+    /// Stable registration identity; document and Twin sets include their owner.
     pub id: String,
     /// Parsed authored namespaces installed by the current load operation.
     /// Scoped source-set IDs remain the authoritative lifetime owner.
     pub namespaces: Vec<String>,
+    pub package_sources: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
+    pub origin_document: Option<lunco_doc::DocumentId>,
     /// How to actually load this root when the gate decides to.
     pub kind: SourceRootKind,
     /// Scope that owns this registration. Shared application roots survive
@@ -119,10 +119,11 @@ pub struct SourceRoot {
 }
 
 /// Lifetime owner for one compiler source set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRootOwner {
     Application,
     Twin(lunco_workspace::TwinId),
+    Replicated(lunco_workspace::ReplicationOwner),
 }
 
 /// Process-wide registry of every named source root. Owned by the
@@ -132,7 +133,7 @@ pub enum SourceRootOwner {
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
 /// only when a compile or class lookup actually references it.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct SourceRootRegistry {
     /// Map of root id → entry. The dep-scanner looks up qualified-
     /// path roots here; the gate transitions state on each entry.
@@ -181,6 +182,8 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: id.to_string(),
                     namespaces: Vec::new(),
+                    package_sources: Vec::new(),
+                    origin_document: None,
                     kind: SourceRootKind::Bundled { filename },
                     owner: SourceRootOwner::Application,
                     operation_id: 0,
@@ -220,6 +223,8 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: root_name,
                     namespaces: Vec::new(),
+                    package_sources: Vec::new(),
+                    origin_document: None,
                     kind,
                     owner: SourceRootOwner::Application,
                     operation_id: 0,
@@ -262,6 +267,8 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 namespaces: Vec::new(),
+                package_sources: Vec::new(),
+                origin_document: None,
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Application,
                 operation_id: 0,
@@ -283,6 +290,8 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 namespaces: Vec::new(),
+                package_sources: Vec::new(),
+                origin_document: None,
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Twin(twin),
                 operation_id: 0,
@@ -291,43 +300,42 @@ impl SourceRootRegistry {
         );
     }
 
-    /// Insert / refresh an entry for a workspace-or-document-backed
-    /// source root and mark it `Ready`. Used by the doc-opened
-    /// observer to register every open doc's top-level package
-    /// names as already-loaded — they're synced into the rumoca
-    /// session by `engine_resource::drive_engine_sync` immediately
-    /// on install, so the dep gate should treat them as Ready
-    /// without a worker round-trip.
-    ///
-    /// Idempotent: re-registering an existing entry keeps the
-    /// existing `kind` if it's an explicit disk root (a workspace doc
-    /// must not shadow it), otherwise overwrites with the new
-    /// metadata. Always flips state to `Ready`.
-    pub fn register_open_doc_root(&mut self, id: String, path: Option<PathBuf>) {
-        // Don't let an opened document shadow an explicit disk root.
-        if let Some(existing) = self.roots.get(&id) {
-            if matches!(
-                existing.kind,
-                SourceRootKind::Disk { .. } | SourceRootKind::SourceLibrary
-            ) {
-                return;
+    /// Register a document-backed namespace without replacing an admitted asset
+    /// root. Document facts carry their exact owner and retire with that document.
+    pub fn register_open_doc_root(
+        &mut self,
+        namespace: String,
+        path: Option<PathBuf>,
+        document: lunco_doc::DocumentId,
+        owner: SourceRootOwner,
+    ) -> Option<String> {
+        // A document view does not replace an explicitly admitted asset root.
+        if let Some(existing) = self.roots.get(&namespace) {
+            if existing.origin_document.is_none() {
+                return None;
             }
         }
+        let id = format!("document:{document}:{namespace}");
         let kind = match path {
             Some(p) => SourceRootKind::WorkspaceFile { path: p },
-            None => SourceRootKind::SessionDocument { id: id.clone() },
+            None => SourceRootKind::SessionDocument {
+                id: namespace.clone(),
+            },
         };
         self.roots.insert(
             id.clone(),
             SourceRoot {
-                id,
-                namespaces: Vec::new(),
+                id: id.clone(),
+                namespaces: vec![namespace],
+                package_sources: Vec::new(),
+                origin_document: Some(document),
                 kind,
-                owner: SourceRootOwner::Application,
+                owner,
                 operation_id: 0,
                 state: LoadState::Ready,
             },
         );
+        Some(id)
     }
 
     /// Borrow an entry's load state.
@@ -342,6 +350,7 @@ impl SourceRootRegistry {
         id: &str,
         operation_id: u64,
         mut namespaces: Vec<String>,
+        package_sources: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
         error: Option<String>,
     ) -> bool {
         let Some(entry) = self
@@ -364,10 +373,12 @@ impl SourceRootRegistry {
         match error {
             Some(error) => {
                 entry.namespaces.clear();
+                entry.package_sources.clear();
                 entry.state = LoadState::Failed(error);
             }
             None => {
                 entry.namespaces = namespaces;
+                entry.package_sources = package_sources;
                 entry.state = LoadState::Ready;
             }
         }
@@ -394,7 +405,21 @@ impl SourceRootRegistry {
             )),
             _ => Err(format!(
                 "Modelica namespace `{namespace}` has multiple registered source-set owners: {}",
-                owners.join(", ")
+                owners
+                    .iter()
+                    .map(|id| match &self.roots[id].kind {
+                        SourceRootKind::WorkspaceFile { path } => path.display().to_string(),
+                        SourceRootKind::Disk { root_dir } => root_dir.display().to_string(),
+                        SourceRootKind::SessionDocument { id } =>
+                            format!("unsaved document `{id}`"),
+                        SourceRootKind::Bundled { filename } =>
+                            lunco_assets_core::engine_asset_uri(&format!("models/{filename}")),
+                        SourceRootKind::BundledPackage { root } =>
+                            lunco_assets_core::engine_asset_uri(&format!("models/{root}")),
+                        SourceRootKind::SourceLibrary => "installed source library".to_owned(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
         }
     }
@@ -533,6 +558,8 @@ fn register_indexed_library_source_root(
         SourceRoot {
             id: id.to_owned(),
             namespaces,
+            package_sources: Vec::new(),
+            origin_document: None,
             kind: SourceRootKind::SourceLibrary,
             owner: SourceRootOwner::Application,
             operation_id: 0,
@@ -558,7 +585,14 @@ impl Plugin for ModelicaSourceRootsPlugin {
             app.insert_resource(SourceRootRegistry::build());
         }
         app.init_resource::<PendingSourceRootUnloads>();
+        app.init_resource::<resources::ResourceContextHandle>();
+        app.add_systems(
+            Update,
+            resources::publish_resource_context.run_if(resource_changed::<SourceRootRegistry>),
+        );
         app.add_observer(register_open_document_source_root);
+        app.add_observer(refresh_document_source_roots);
+        app.add_observer(retire_document_source_roots);
         app.add_observer(register_indexed_library_source_root);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -605,22 +639,107 @@ pub fn register_open_document_source_root(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
     registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
     source_roots: Option<ResMut<SourceRootRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    refresh_document_roots(
+        trigger.event().doc,
+        &registry,
+        source_roots,
+        workspace.as_deref(),
+    );
+}
+
+fn refresh_document_source_roots(
+    trigger: On<lunco_doc_bevy::DocumentChanged>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    source_roots: Option<ResMut<SourceRootRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    refresh_document_roots(
+        trigger.event().doc,
+        &registry,
+        source_roots,
+        workspace.as_deref(),
+    );
+}
+
+fn retire_document_source_roots(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut roots: ResMut<SourceRootRegistry>,
+) {
+    roots
+        .roots
+        .retain(|_, root| root.origin_document != Some(trigger.event().doc));
+}
+
+fn refresh_document_roots(
+    id: lunco_doc::DocumentId,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
+    source_roots: Option<ResMut<SourceRootRegistry>>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
     let Some(mut source_roots) = source_roots else {
         return;
     };
-    let id = trigger.event().doc;
     let Some(host) = registry.host(id) else {
         return;
     };
     let document = host.document();
+    source_roots
+        .roots
+        .retain(|_, root| root.origin_document != Some(id));
+    let owner = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        id,
+        workspace.map(|workspace| &workspace.0),
+    ) {
+        Ok(pin) => match pin.runtime {
+            lunco_workspace::DocumentRuntimeOwner::Application => SourceRootOwner::Application,
+            lunco_workspace::DocumentRuntimeOwner::LocalTwin(twin) => SourceRootOwner::Twin(twin),
+            lunco_workspace::DocumentRuntimeOwner::Replicated(owner) => {
+                SourceRootOwner::Replicated(owner)
+            }
+        },
+        Err(error) => {
+            bevy::log::warn!("cannot admit document source roots: {error}");
+            return;
+        }
+    };
     let path = match document.origin() {
         lunco_doc::DocumentOrigin::File { path, .. } => Some(path.clone()),
         _ => None,
     };
+    if path.as_ref().is_some_and(|path| {
+        lunco_assets_runtime::library::global_library_sources()
+            .iter()
+            .any(|source| source.contains(path))
+    }) {
+        return;
+    }
+    // Opening a view of an admitted directory source preserves that source's
+    // identity, including while its compiler admission is still in flight.
+    if path.as_ref().is_some_and(|path| source_roots.roots.values().any(|root|
+        root.origin_document.is_none() && matches!(&root.kind, SourceRootKind::Disk { root_dir } if path.starts_with(root_dir)))) { return; }
+    let source_uri = path
+        .as_ref()
+        .map(|path| lunco_assets_path::slashed(path))
+        .unwrap_or_default();
+    let packages = document
+        .strict_ast()
+        .map(|ast| lunco_modelica_ast::resource_uri::package_sources(&ast, &source_uri))
+        .unwrap_or_default();
     for class in document.index().classes.values() {
         if rumoca_core::qualified_name_segments(&class.name).count() == 1 {
-            source_roots.register_open_doc_root(class.name.clone(), path.clone());
+            let registration = source_roots.register_open_doc_root(
+                class.name.clone(),
+                path.clone(),
+                id,
+                owner.clone(),
+            );
+            if let Some(entry) = registration.and_then(|id| source_roots.roots.get_mut(&id)) {
+                if entry.origin_document == Some(id) {
+                    entry.package_sources = packages.clone();
+                }
+            }
         }
     }
 }
@@ -1170,6 +1289,8 @@ mod tests {
         SourceRoot {
             id: id.to_owned(),
             namespaces: Vec::new(),
+            package_sources: Vec::new(),
+            origin_document: None,
             kind: SourceRootKind::Disk {
                 root_dir: PathBuf::from("/inline/test/root"),
             },
@@ -1193,6 +1314,8 @@ mod tests {
             SourceRoot {
                 id: "application:control".into(),
                 namespaces: Vec::new(),
+                package_sources: Vec::new(),
+                origin_document: None,
                 kind: SourceRootKind::Disk {
                     root_dir: PathBuf::from("/inline/application"),
                 },
@@ -1233,16 +1356,16 @@ mod tests {
             .roots
             .insert(first.into(), twin_root(first, twin, 1));
         assert!(registry.resolve_source_root("Shared").is_err());
-        assert!(!registry.complete_load(first, 0, vec!["Stale".into()], None));
+        assert!(!registry.complete_load(first, 0, vec!["Stale".into()], Vec::new(), None));
         assert!(registry.resolve_source_root("Stale").is_err());
-        assert!(registry.complete_load(first, 1, vec!["Shared".into()], None));
+        assert!(registry.complete_load(first, 1, vec!["Shared".into()], Vec::new(), None));
         assert_eq!(registry.resolve_source_root("Shared").unwrap(), first);
         assert!(matches!(registry.state(first), Some(LoadState::Ready)));
 
         registry
             .roots
             .insert(second.into(), twin_root(second, twin, 2));
-        assert!(registry.complete_load(second, 2, vec!["Shared".into()], None));
+        assert!(registry.complete_load(second, 2, vec!["Shared".into()], Vec::new(), None));
         assert!(
             registry
                 .resolve_source_root("Shared")
@@ -1251,7 +1374,7 @@ mod tests {
         );
         registry.take_twin_roots(twin).unwrap();
         assert!(registry.resolve_source_root("Shared").is_err());
-        assert!(!registry.complete_load(first, 1, vec!["Shared".into()], None));
+        assert!(!registry.complete_load(first, 1, vec!["Shared".into()], Vec::new(), None));
     }
 
     #[test]
@@ -1262,7 +1385,7 @@ mod tests {
             id.into(),
             twin_root(id, lunco_workspace::TwinId::new(17), 1),
         );
-        assert!(registry.complete_load(id, 1, Vec::new(), None));
+        assert!(registry.complete_load(id, 1, Vec::new(), Vec::new(), None));
         assert!(matches!(registry.state(id), Some(LoadState::Failed(error))
             if error.contains("namespace identities")));
     }
@@ -1321,3 +1444,5 @@ mod tests {
         assert_eq!(attempts.get(), 1, "a terminal failure is not retried");
     }
 }
+
+pub mod resources;

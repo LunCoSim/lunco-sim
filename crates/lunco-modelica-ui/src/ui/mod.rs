@@ -119,17 +119,8 @@ pub mod session_codec;
 
 use lunco_modelica_runtime::ModelicaModel;
 
-/// Shadow-sync observer: Modelica doc opened → register entry in the
-/// Workspace session. The Workspace list is populated from the Modelica
-/// document lifecycle, while the Modelica registry remains the domain owner.
-/// Invalidate every source-derived memo when any doc changes — the merged icons in
-/// `ModelicaEngine` and the decoded bitmap textures on the paint side.
-///
-/// Costs one atomic increment; the memos drop themselves lazily on next access, so
-/// a change nobody paints after is free. This used to clear a paint-side port-icon
-/// cache that was, in fact, dead — while the bitmap textures it *should* have been
-/// clearing were never invalidated at all. See
-/// [`lunco_modelica_ast::source_memo`].
+/// Advance the source epoch when a document changes. Source-derived memos and
+/// shared resource image caches consume this revision before rendering.
 fn invalidate_source_memos_on_doc_changed(_trigger: On<lunco_doc_bevy::DocumentChanged>) {
     lunco_modelica_ast::source_memo::invalidate_source_memos();
 }
@@ -668,8 +659,7 @@ impl Plugin for ModelicaUiPlugin {
             // parse scheduler (before it reads them this frame).
             .add_systems(
                 Update,
-                core_observers::feed_parse_pacing
-                    .before(crate::engine_resource::drive_engine_sync),
+                core_observers::feed_parse_pacing.before(crate::engine_resource::drive_engine_sync),
             )
             // Reactive UI: project terminal experiment-run events into console,
             // plot auto-pick, and SignalRegistry playback.
@@ -699,8 +689,14 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, panels::experiments::populate_experiments_view_model)
             .insert_resource(crate::package_tree::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
-            .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
-            .add_systems(Update, panels::package_browser::reconcile_library_roots_on_ready)
+            .add_systems(
+                Update,
+                panels::package_browser::handle_package_loading_tasks,
+            )
+            .add_systems(
+                Update,
+                panels::package_browser::reconcile_library_roots_on_ready,
+            )
             // Reactive: fires once, the frame source library enters the engine session —
             // re-projects open canvas tabs (so std-lib icons resolve), rebuilds
             // the bundled-examples tree, reconciles library roots. Previously
@@ -743,13 +739,16 @@ impl Plugin for ModelicaUiPlugin {
             // Bevy stops calling us entirely.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                install_image_loaders_once.run_if(
-                    bevy::ecs::schedule::common_conditions::not(
+                (
+                    refresh_resource_image_cache,
+                    install_image_loaders_once.run_if(bevy::ecs::schedule::common_conditions::not(
                         bevy::ecs::schedule::common_conditions::resource_exists::<
                             ImageLoadersInstalled,
                         >,
-                    ),
-                ),
+                    )),
+                )
+                    .chain()
+                    .before(lunco_workbench_core::WorkbenchRenderSet),
             )
             .init_resource::<panels::welcome::ExamplePathRegistry>()
             .init_resource::<panels::welcome::ExamplePathCatalogState>()
@@ -807,17 +806,44 @@ impl Plugin for ModelicaUiPlugin {
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "F5", description: "Compile & run the active model" },
-                        HelpShortcut { keys: "Ctrl+N", description: "New untitled model" },
-                        HelpShortcut { keys: "Ctrl+S", description: "Save the active model" },
-                        HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
-                        HelpShortcut { keys: "Ctrl+Shift+Z", description: "Redo" },
-                        HelpShortcut { keys: "F2", description: "Rename selected item in browser" },
+                        HelpShortcut {
+                            keys: "F5",
+                            description: "Compile & run the active model",
+                        },
+                        HelpShortcut {
+                            keys: "Ctrl+N",
+                            description: "New untitled model",
+                        },
+                        HelpShortcut {
+                            keys: "Ctrl+S",
+                            description: "Save the active model",
+                        },
+                        HelpShortcut {
+                            keys: "Ctrl+Z",
+                            description: "Undo",
+                        },
+                        HelpShortcut {
+                            keys: "Ctrl+Shift+Z",
+                            description: "Redo",
+                        },
+                        HelpShortcut {
+                            keys: "F2",
+                            description: "Rename selected item in browser",
+                        },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Drag", description: "Move components · drag a part onto the diagram" },
-                        HelpMouse { interaction: "Drag port → port", description: "Connect two component ports" },
-                        HelpMouse { interaction: "Scroll", description: "Zoom the diagram canvas" },
+                        HelpMouse {
+                            interaction: "Drag",
+                            description: "Move components · drag a part onto the diagram",
+                        },
+                        HelpMouse {
+                            interaction: "Drag port → port",
+                            description: "Connect two component ports",
+                        },
+                        HelpMouse {
+                            interaction: "Scroll",
+                            description: "Zoom the diagram canvas",
+                        },
                     ],
                 },
             );
@@ -1083,7 +1109,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/library/`, or a user-supplied override.
-    let root = lunco_modelica_library::source_library::source_library_root_path();
+    let root = lunco_assets_runtime::library::primary_filesystem_library_root();
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
@@ -1287,16 +1313,26 @@ struct ImageLoadersInstalled;
 fn install_image_loaders_once(
     mut commands: bevy::prelude::Commands,
     mut contexts: bevy_egui::EguiContexts,
+    server: Res<bevy::asset::AssetServer>,
+    resources: Res<lunco_modelica_source_roots::resources::ResourceContextHandle>,
+    settings: Res<lunco_assets_runtime::ui_loader::AssetUiSettings>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         // Context not ready yet — the run_if keeps scheduling us so
         // we get another shot next frame.
         return;
     };
-    // The graphics package owns both the raster decoder and the custom
-    // `modelica://Package/Resources/…` loader used by source library Documentation.
-    lunco_modelica_icon_ui::install_image_loaders(ctx);
-    bevy::log::info!("[ModelicaImageLoader] installed Modelica image loaders");
+    // The language supplies package facts to the common asset byte loader.
+    let resources = resources.clone();
+    ctx.add_bytes_loader(std::sync::Arc::new(
+        lunco_assets_runtime::ui_loader::AssetBytesLoader::new(
+            "modelica",
+            server.clone(),
+            settings.max_resource_bytes,
+            move |uri| resources.resolve(uri),
+        ),
+    ));
+    bevy::log::info!("installed shared asset byte loading for Modelica resources");
 
     commands.insert_resource(ImageLoadersInstalled);
 }
@@ -1404,5 +1440,22 @@ mod tests {
             "the dead entity must still be unlinked — this system is the only unlinker, \
              so leaking it would hand panels a despawned entity via `simulator_for`"
         );
+    }
+}
+
+/// Resource scope and source revisions invalidate bytes, decoded images and
+/// textures together. Detached workers retain discarded slots, so old results
+/// cannot repopulate a replacement context's cache.
+fn refresh_resource_image_cache(
+    mut contexts: bevy_egui::EguiContexts,
+    resources: Res<lunco_modelica_source_roots::resources::ResourceContextHandle>,
+    mut epoch: Local<Option<u64>>,
+) {
+    let current = lunco_modelica_ast::source_memo::source_epoch();
+    if resources.is_changed() || *epoch != Some(current) {
+        if let Ok(ctx) = contexts.ctx_mut() {
+            lunco_assets_runtime::ui_loader::invalidate_resource_images(ctx);
+            *epoch = Some(current);
+        }
     }
 }

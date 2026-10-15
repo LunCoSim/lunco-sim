@@ -74,6 +74,7 @@ use std::sync::Arc;
 
 mod layout_render;
 mod render;
+mod resource_preview;
 mod session;
 mod twin_settings;
 mod viewport;
@@ -674,6 +675,7 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
+        resource_preview::install(app);
         app.register_settings_section::<WorkbenchAppearanceSettings>();
         #[cfg(debug_assertions)]
         app.add_systems(

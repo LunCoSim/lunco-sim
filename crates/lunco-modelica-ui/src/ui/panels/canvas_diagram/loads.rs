@@ -605,15 +605,22 @@ pub fn drill_into_class(
     // tree (or a canvas drill-in) silently no-ops on web. Unpack now;
     // it's idempotent and one-time. Native already has the sources on disk.
     #[cfg(target_arch = "wasm32")]
-    lunco_modelica_library::source_library::ensure_library_source_unpacked();
+    if let Err(message) = lunco_modelica_library::source_library::ensure_library_source_unpacked() {
+        bevy::log::warn!("{message}");
+        world.commands().trigger(lunco_core::RuntimeError {
+            name: "source-library-unpack-failed".into(),
+            message,
+        });
+        return;
+    }
 
     // Try source library paths first (resolves Modelica.* and any other source library-rooted
     // qualified path). Fallback: scan the open document registry for a
     // doc whose AST contains the requested class — handles non-source library
     // user-opened files (e.g. `assets/models/AnnotatedRocketStage.mo`)
     // where the qualified name lives only in a workspace document.
-    let file_path = crate::library_fs::resolve_class_path_indexed(qualified)
-        .or_else(|| crate::library_fs::locate_library_file(qualified));
+    let file_path = lunco_modelica_library::package_paths::resolve_class_path_indexed(qualified)
+        .or_else(|| lunco_modelica_library::package_paths::locate_library_file(qualified));
     if let Some(file_path) = file_path {
         open_drill_in_tab(world, qualified, &file_path, admission);
         return;

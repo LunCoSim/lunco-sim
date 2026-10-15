@@ -466,7 +466,7 @@ pub(crate) fn open_class(
             // for system libraries: it owns the file lookup, the
             // class-slice extraction, the tab plumbing, and the
             // `DocumentOpenings` busy state. Pass the absolute qualified
-            // name so its `library_fs::resolve_class_path_indexed`
+            // name so its `package_paths::resolve_class_path_indexed`
             // can find the owning .mo file.
             crate::ui::panels::canvas_diagram::drill_into_class(
                 world,

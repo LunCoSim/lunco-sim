@@ -965,25 +965,19 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
 
 /// Paint a Bitmap primitive.
 ///
-/// Supports `filename="modelica://Package.Name/path/img.png"` (resolved
-/// via the source library asset source) and `filename="modelica://Package.Name/file.png"`
-/// (same). Base64 `imageSource` is not yet wired — decoding inline
-/// buffers every frame is the wrong shape; when we need it, the
-/// base64 will be decoded once and cached by hash.
-///
-/// If the image fails to load (missing asset, decode error), the
-/// Bitmap renders as a labelled placeholder so users see a visible
-/// marker where the image should be — easier to debug than a silent
-/// blank.
+/// Bitmap filenames use the same shared asynchronous asset loaders and image
+/// decoders as documentation. Pending or failed loads retain a labelled marker.
 fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
     let p1 = xf.to_screen_rotated(b.extent.p1, b.origin, b.rotation);
     let p2 = xf.to_screen_rotated(b.extent.p2, b.origin, b.rotation);
     let rect = egui::Rect::from_two_pos(p1, p2);
 
     if let Some(name) = b.filename.as_ref() {
-        if let Some(tex) = texture_for_bitmap(painter.ctx(), name) {
+        if let Ok(egui::load::TexturePoll::Ready { texture }) =
+            egui::Image::new(name.as_str()).load_for_size(painter.ctx(), rect.size())
+        {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            painter.image(tex.id(), rect, uv, egui::Color32::WHITE);
+            painter.image(texture.id, rect, uv, egui::Color32::WHITE);
             return;
         }
     }
@@ -1009,79 +1003,6 @@ fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
         egui::FontId::monospace(font_size),
         egui::Color32::from_gray(100),
     );
-}
-
-/// Texture cache for Bitmap primitives. Keyed by the raw filename
-/// string so `modelica://Pkg/icon.png` and a plain `icon.png` hit
-/// different slots (they resolve differently).
-fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::TextureHandle> {
-    use lunco_modelica_ast::source_memo::SourceMemo;
-    use std::sync::{Mutex, OnceLock};
-    // The memo stores `Option<TextureHandle>` so a failed load is remembered and not
-    // retried every frame (failure is usually a missing asset, not a transient
-    // error) — and it is a `SourceMemo` so that remembered failure is DROPPED when
-    // the library changes. It previously had no invalidation of any kind: a bitmap
-    // missing at first paint stayed blank for the life of the process, which is the
-    // state every source library bitmap is in on wasm (the bundle ships no `Resources/`).
-    static CACHE: OnceLock<Mutex<SourceMemo<egui::TextureHandle>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(SourceMemo::default()));
-    if let Ok(mut memo) = cache.lock() {
-        if let Some(slot) = memo.peek(filename) {
-            return slot;
-        }
-    }
-
-    let Some(bytes) = load_bitmap_bytes(filename) else {
-        // Remember the miss — but as a SourceMemo entry, so a library reload retries.
-        if let Ok(mut memo) = cache.lock() {
-            memo.insert(filename, None);
-        }
-        return None;
-    };
-    let img = match image::load_from_memory(&bytes) {
-        Ok(i) => i.to_rgba8(),
-        Err(_) => {
-            if let Ok(mut memo) = cache.lock() {
-                memo.insert(filename, None);
-            }
-            return None;
-        }
-    };
-    let size = [img.width() as usize, img.height() as usize];
-    let pixels: Vec<egui::Color32> = img
-        .pixels()
-        .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
-        .collect();
-    let color_img = egui::ColorImage {
-        size,
-        pixels,
-        source_size: egui::vec2(size[0] as f32, size[1] as f32),
-    };
-    let handle = ctx.load_texture(
-        format!("modelica-bitmap:{filename}"),
-        color_img,
-        egui::TextureOptions::LINEAR,
-    );
-    if let Ok(mut memo) = cache.lock() {
-        memo.insert(filename, Some(handle.clone()));
-    }
-    Some(handle)
-}
-
-/// Resolve a Modelica `fileName` value to raw bytes on disk.
-///
-/// - `modelica://Pkg/path/img.png` → the source library virtual path `Pkg/path/img.png`.
-/// - Plain relative path → the same source library-root-relative path (best effort).
-fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
-    let rel = match filename.strip_prefix("modelica://") {
-        Some(tail) => tail.strip_prefix('/').unwrap_or(tail),
-        None => filename,
-    };
-    // Read through the source library virtual source. This keeps bitmap resolution on the
-    // same asset boundary as documentation images and works for both the native
-    // filesystem source and the browser's in-memory bundle.
-    let path = lunco_assets_path::relative_path(rel)?;
-    lunco_assets_runtime::library::library_read(&path)
 }
 
 // ---------------------------------------------------------------------------

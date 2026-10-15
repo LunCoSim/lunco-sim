@@ -159,3 +159,11 @@ the first entity, a fabricated value, or an older behavior.
 
 Report: owner and why, existing capability reused, files changed, dependency
 impact, focused checks, and any deliberate diagnostic/hold behavior.
+
+Asset resolution follows the same ownership rule: USD supplies contributing-layer
+anchors, Rhai supplies importing-source identity and suffix rules, and Modelica
+supplies package/declaration facts. These adapters return typed locations to the
+shared asset owner. They must not own filesystem/cache searches, URI percent
+decoding, byte readers or UI load-state caches. Modelica resource consumers use
+`SourceRootRegistry`'s immutable context and the common asynchronous asset/image
+loaders; keep source-set operation and document/Twin retirement checks intact.

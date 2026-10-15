@@ -6,18 +6,12 @@ license.workspace = true
 description = "Reusable egui renderer for Modelica icon and diagram graphics"
 
 [dependencies]
-lunco-assets-runtime = { path = "../lunco-assets-runtime" }
-bevy = { workspace = true }
 egui = { workspace = true }
-egui_extras = { version = "0.35", features = ["image"] }
-image = { workspace = true }
 lyon_geom = "1"
 lyon_path = "1"
 lyon_tessellation = "1"
-lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-theme = { path = "../lunco-theme" }
-web-time = { workspace = true }
 
 [lints]
 workspace = true
