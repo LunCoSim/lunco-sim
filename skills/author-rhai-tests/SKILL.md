@@ -164,6 +164,12 @@ the runner's `sim` duration measures completed physics time. Cover default
 Modelica exchange, explicit subrates, pause/rate changes and telemetry with the
 `modelica_initialization_network` gate at a different manual update cadence.
 
+For manual admission, run `shared_simulation_step` through the production
+scene-test host. Its presentation task observes exact shared physics/Modelica
+cycles, frozen clocks, preserved user pause/rate, and atomic rejection of zero
+or ambiguously running step requests. Presentation waits use their typed owner
+clock; simulation-only time helpers must remain rejected outside that cycle.
+
 For an intentional owner-contract repair that changes initialized state, first
 demonstrate the fault and trace state differences to the authored inputs and
 equations. Compare complete selected rows across Compute widths and jitter

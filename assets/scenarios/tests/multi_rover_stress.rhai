@@ -162,7 +162,8 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
         clocks.fixed_elapsed_s, expected_fixed_elapsed, 0.000000001)
         && close_scalar(clocks.fixed_delta_s, expected_fixed_delta, 0.000000001)
         && close_scalar(clocks.physics_elapsed_s, expected_physics_elapsed, 0.000000001)
-        && clocks.physics_paused == false
+        && clocks.clock_contract_ok
+        && clocks.physics_paused == clocks.virtual_paused
         && no_physics_holds;
     let valid = clocks_synchronized;
     let hold_names = "";

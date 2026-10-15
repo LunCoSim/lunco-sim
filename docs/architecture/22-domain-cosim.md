@@ -96,7 +96,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   source reordering, same-size replacement, clear, clone and compaction cannot
   route a value to another name. Only sample/topology changes mark the component
   changed; hint maintenance does not. Modelica's reflected variable map and the
-  fixed-step publication boundary remain the source contract.
+  completion-admission publication boundary remain the source contract.
   Structural publication uses `PortTopologyState::observe_if_changed` for
   auxiliary declarations and Modelica unit contracts. Their fingerprints are
   derived on first observation, their own component changes, and participant
@@ -238,16 +238,18 @@ not named scalar `SimConnection` wires. Keeping that distinction prevents a
 second scalar propagation implementation while preserving the transform
 system's own schedule and invalidation rules.
 
-All cosim and physics systems run in `FixedUpdate` at a shared fixed timestep
-so every engine advances with the same `dt`:
+Co-simulation exchange and physics run on the shared fixed timestep. Accepted
+Modelica snapshots publish at completion admission, which advances no clock:
 
 ```
-First:
+SimulationCompletions (before clock projection and on driver response readiness):
   ModelicaSet::HandleResponses      — validate async results and release completed causal holds
+  validate_usd_modelica_port_contracts → sync_modelica_outputs
+                                   — initial/later committed snapshots and status → shared ports
+First:
   ClockProjectionSet               — project remaining holds before sampling virtual time
-
 FixedUpdate:
-  1. sync_modelica_outputs          — completed Modelica results → SimComponent.outputs
+  1. script/native output sampling — committed physical observations on the shared boundary
   2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
                                        (force_* → PendingForces; joint angle/displacement → motor)
   3. CosimApplySet::ApplyForces     — apply_pending_forces: drain PendingForces into Avian Forces
@@ -329,8 +331,12 @@ due set; its last committed output is held between those points.
 connection propagation, Modelica input sampling, and Avian. Results are consumed
 by the single `SimulationCompletions` schedule before clock projection. The
 native driver also services that schedule on response readiness between app
-updates; readiness never consumes a receipt or advances a clock. Partial
-receipts do not require another complete application update.
+updates; readiness never consumes a receipt or advances a clock. The same
+completion boundary validates USD port contracts and publishes accepted Modelica
+outputs/status. Initialized participants expose `Idle` and real initial outputs
+while held; no physics tick is needed to observe readiness. Fixed propagation
+and presentation read that one committed surface. Partial receipts do not require
+another complete application update.
 
 While a running solver is pending, elapsed pacing demand remains in the fixed
 accumulator. User pause and scene preparation freeze demand. Rate changes alter

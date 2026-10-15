@@ -3173,7 +3173,7 @@ mod visual_product_tests {
         let mut faults = lunco_core::RuntimeFaults::default();
         let mut holds = lunco_physics::PhysicsHolds::default();
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, true);
-        holds.set(lunco_physics::PhysicsHolds::CINEMATIC, true);
+        holds.set(lunco_physics::PhysicsHolds::READINESS, true);
 
         mark_dem_build_failed(
             &mut faults,
@@ -3186,7 +3186,7 @@ mod visual_product_tests {
         assert_eq!(fault.kind, TERRAIN_BUILD_FAULT_KIND);
         assert_eq!(fault.entity, Some(entity));
         assert!(!holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
-        assert!(holds.holds(lunco_physics::PhysicsHolds::CINEMATIC));
+        assert!(holds.holds(lunco_physics::PhysicsHolds::READINESS));
     }
 
     #[test]

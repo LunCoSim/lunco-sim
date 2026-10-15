@@ -438,8 +438,12 @@ simulation or another runtime cycle.
 `dt()` reads the configured physics timestep, including a simulation-cycle
 startup call before the first tick; pause and rate changes do not rescale it.
 Persistent scenarios may declare
-`// @peer host|client|both` and `// @timing simulation`; these validate the
-scenario's execution target and fixed-step requirements while Rust retains schedule
+`// @peer host|client|both` and `// @timing simulation|presentation`; omitted
+timing is simulation. Both cadences share one lifecycle and task interpreter.
+Presentation tasks use their owner-provided frame time for waits, receive an
+independent event delivery queue, and submit typed commands rather than direct
+world mutations. Simulation helpers retain their simulation-only contract.
+These directives select the scenario's execution target and cadence while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a
 source-revision diagnostic. The driver reparses metadata when the document
 generation changes, so edits cannot leave stale routing attached to a program.

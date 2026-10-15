@@ -206,15 +206,7 @@ impl Plugin for LunCoMobilityPlugin {
                         // system already skips those. So host/standalone simulate every
                         // rover (unchanged) and a client simulates only its owned one.
                         //
-                        // `physics_is_live`, NOT a bare `Time<Virtual>` check. These systems
-                        // write into avian's force accumulator, which only the physics step
-                        // clears — and a physics HOLD (a frozen cinematic beat) deliberately
-                        // leaves virtual time running, so the old virtual-clock gate was open
-                        // for exactly the window that must be closed. Gating on the physics
-                        // CLOCK rather than the holds resource also keeps stepped cinematics
-                        // drivable: a granted `PhysicsStepRequest` frame unpauses the clock
-                        // for exactly the ticks that integrate. It still covers the virtual
-                        // pause/speed case it was written for; see `physics_is_live`.
+                        // Transient forces are consumed only by an admitted native step.
                         lunco_physics::physics_is_live,
                     ),
             );

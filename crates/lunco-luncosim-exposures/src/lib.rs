@@ -634,6 +634,12 @@ fn simulation_progress_facts(
             .map(|blocker| {
                 let owner = match blocker.key.owner {
                     lunco_core_runtime::SimulationProgressOwner::SceneLifecycle => "SceneLifecycle",
+                    lunco_core_runtime::SimulationProgressOwner::PhysicsIntegration => {
+                        "PhysicsIntegration"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::SceneInteraction => {
+                        "SceneInteraction"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::SceneReferences => {
                         "SceneReferences"
                     }

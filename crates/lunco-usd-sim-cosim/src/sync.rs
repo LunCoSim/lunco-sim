@@ -1,4 +1,4 @@
-//! Fixed-step participant synchronization and authored event projection.
+//! Participant snapshot publication, fixed-step exchange and authored events.
 //!
 //! This module is the runtime exchange boundary after USD participant
 //! discovery has published the generic [`SimComponent`] surface.  It owns the
@@ -65,9 +65,9 @@ fn upsert_ports<'a>(
     changed
 }
 
-/// Publish changed Modelica snapshots to `SimComponent.outputs` before
-/// propagation. New shared surfaces receive their initial snapshot, and stable
-/// outputs remain available to every physics step.
+/// Publish accepted Modelica snapshots at the completion-admission boundary.
+/// Initial outputs and lifecycle status are available while time is held;
+/// fixed propagation and presentation read the same committed surface.
 pub fn sync_modelica_outputs(
     mut q: Query<
         (

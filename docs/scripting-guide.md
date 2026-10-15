@@ -205,8 +205,11 @@ act with `cmd`/`set`.
 The runtime assigns persistent scenario hooks to the cycles owned by the
 selected application plugins. Use `// @peer host|client|both` to choose the
 network peer. `host` includes the standalone authoritative process. Continuous
-behavior may declare `// @timing simulation`; this records its fixed-step
-requirement and does not install a schedule from Rhai. Neither directive
+behavior uses `// @timing simulation` by default. Explicit
+`// @timing presentation` programs run the same task interpreter on application
+frames with presentation-clock waits, including during a simulation pause or
+manual hold. They submit typed domain commands and cannot perform direct
+reflection/structural world writes. Timing metadata does not install schedules. Neither directive
 chooses the script's `Core`, `Application`, or `Twin` owner; Rust assigns that
 owner and the schedules that invoke it.
 `on_visualization` runs once in `PreUpdate`, after lifecycle, document, and

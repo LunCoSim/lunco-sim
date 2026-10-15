@@ -169,6 +169,16 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             )
             .add_systems(
                 Update,
+                lunco_scripting_rhai_world::world_bridge::tick_rhai_presentation_scenarios
+                    .run_if(|inbox: Res<lunco_scripting::scenario::ScriptEventInbox>| {
+                        inbox.has_presentation_consumers(lunco_scripting::doc::ScriptLanguage::Rhai)
+                    })
+                    .in_set(lunco_core::RuntimeCycleSet::Visualization)
+                    .run_if(lunco_scripting::scenario::scenario_execution_enabled)
+                    .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready),
+            )
+            .add_systems(
+                Update,
                 lunco_scripting_rhai_world::world_bridge::tick_rhai_scenarios_while_paused
                     .in_set(lunco_core::RuntimeCycleSet::Lifecycle)
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)

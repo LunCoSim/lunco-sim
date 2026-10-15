@@ -492,8 +492,10 @@ Which disposition is right depends on who owns the value:
 `SceneTeardown` grep-lists everything a reload restores. If you add
 scene-derived state and do not register it, you have added a leak.
 
-The shared physics owner clears `PhysicsHolds` and `PhysicsStepRequest` and
-restores a zero-delta `Time<Physics>` at this boundary. The time owner keeps
+The shared physics owner clears `PhysicsHolds`, releases its own shared
+admission key and restores a zero-delta `Time<Physics>` at this boundary.
+The time owner retires `SimulationStepControl` manual holds and pending cycles;
+the gizmo owner releases its independent scene-interaction key. The time owner keeps
 `SimTick` and `Time<Fixed>` continuous across scene changes; it reanchors the
 new mission epoch at the current tick and holds fixed cycles until the new scene
 is ready. Any admitted fixed-time balance remains with that shared clock and

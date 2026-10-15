@@ -675,8 +675,8 @@ fn validate_simulation_target_dependency(
     Ok(())
 }
 
-/// Keep dependency planning free of commands and direct world mutations.
-pub fn ensure_script_mutation_allowed() -> Result<(), String> {
+/// Read-only lifecycle phases cannot issue effects, independent of cadence.
+pub fn ensure_script_effect_allowed() -> Result<(), String> {
     match execution_context().phase {
         lunco_core::RuntimePhase::DependencyPlan => Err(
             "simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into(),
@@ -688,17 +688,24 @@ pub fn ensure_script_mutation_allowed() -> Result<(), String> {
     }
 }
 
-/// Gate typed commands to presentation-only updates during visualization.
+/// Direct world writes require a mutable phase and a non-presentation caller.
+pub fn ensure_script_mutation_allowed() -> Result<(), String> {
+    ensure_script_effect_allowed()?;
+    if execution_context().clock == lunco_core::RuntimeClock::Presentation {
+        return Err("presentation programs must dispatch typed commands instead of mutating simulation state directly".into());
+    }
+    Ok(())
+}
+
+/// Typed commands retain their owner validation and authority at both cadences.
 pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
-    // These are presentation owners: one journals transient @view@ opinions;
-    // the other queues a revision-fenced render mesh update without touching
-    // USD or authoritative simulation state.
+    // Visualization preparation can update only disposable owner-managed views.
     if execution_context().phase == lunco_core::RuntimePhase::Visualization
         && matches!(name, "ApplyUsdTransientOps" | "UpdateUsdCurveView")
     {
         Ok(())
     } else {
-        ensure_script_mutation_allowed()
+        ensure_script_effect_allowed()
     }
 }
 
@@ -1823,8 +1830,8 @@ pub fn hash_str(s: &str) -> u64 {
 /// was in scope.
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
-        if ensure_script_mutation_allowed().is_err() {
-            return;
+        if ensure_script_effect_allowed().is_err() {
+            return false;
         }
         world.trigger(TelemetryEvent {
             name: name.to_string(),
@@ -1838,8 +1845,9 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
             sim_secs: 0.0,
             sim_tick: 0,
         });
+        true
     })
-    .is_some()
+    .unwrap_or(false)
 }
 
 /// Build the `{ name, value, severity, timestamp, sim_secs, sim_tick }` event

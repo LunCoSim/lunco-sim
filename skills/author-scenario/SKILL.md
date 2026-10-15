@@ -17,7 +17,12 @@ telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica. Runtime plugins install their own cycles from
 the selected application composition. A scenario may declare its peer-role
 execution target with `// @peer host|client|both` and its cadence with
-`// @timing simulation`; `host` includes standalone authoritative mode. These
+`// @timing simulation|presentation`; omitted timing is simulation. Presentation
+programs use the same lifecycle and task interpreter on the application-frame
+clock, including while simulation is held. They submit typed domain commands
+instead of reflection/structural writes. Native waits inherit the caller's
+clock; simulation helpers `sim_tick()`, `dt()` and `elapsed_seconds()` remain
+simulation-only. `host` includes standalone authoritative mode. These
 directives do not choose its Core/Application/Twin owner or install schedules.
 Rust assigns the owner route and retains schedule ownership.
 Unsupported metadata disables only that program and publishes a document

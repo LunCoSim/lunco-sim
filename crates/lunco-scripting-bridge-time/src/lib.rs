@@ -90,6 +90,31 @@ pub fn elapsed_seconds() -> Result<f64, String> {
     .ok_or_else(|| "elapsed_seconds() requires an active script WorldScope".to_owned())?
 }
 
+/// Time sample supplied by the owner of a native behavior task invocation.
+/// The task interpreter consumes this sample for waits; it never selects a clock.
+pub fn execution_time_seconds() -> Result<f64, String> {
+    let context = execution_context();
+    let timed_route = context.route.is_some_and(|route| {
+        matches!(
+            (route.cycle, context.clock),
+            (
+                lunco_core::RuntimeCycle::Simulation,
+                lunco_core::RuntimeClock::Simulation
+            ) | (
+                lunco_core::RuntimeCycle::Visualization,
+                lunco_core::RuntimeClock::Presentation
+            )
+        )
+    });
+    if timed_route && let Some(time) = context.time_seconds.filter(|time| time.is_finite()) {
+        return Ok(time);
+    }
+    Err(
+        "native task execution requires its owner's finite simulation or presentation time sample"
+            .into(),
+    )
+}
+
 fn require_simulation_context(function: &str) -> Result<(), String> {
     let context = execution_context();
     if context
@@ -274,6 +299,21 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                     time.is_paused(),
                 )
             });
+        let step_control = world.get_resource::<lunco_time::SimulationStepControl>();
+        let manual_hold = step_control.map(lunco_time::SimulationStepControl::is_held);
+        let queued_steps = step_control.map(lunco_time::SimulationStepControl::remaining);
+        let cycle_active =
+            step_control.is_some_and(lunco_time::SimulationStepControl::is_cycle_active);
+        let physics_clock_error = world
+            .get_resource::<Time<lunco_physics::Physics>>()
+            .zip(world.get_resource::<Time<bevy::time::Fixed>>())
+            .and_then(|(physics, fixed)| {
+                lunco_physics::validate_physics_clock(physics, fixed, cycle_active).err()
+            });
+        if let Some(error) = physics_clock_error {
+            clock_contract_error.push_str(&error);
+            report_runtime_contract_fault(world, "simulation-physics-clock-diverged", error);
+        }
         let physics_substep_dt = world
             .get_resource::<Time<lunco_physics::Substeps>>()
             .map(|time| time.delta_secs_f64());
@@ -509,6 +549,15 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 b.bool(transport.is_running()),
             ),
             ("transport_rate".to_owned(), b.float(transport.rate)),
+            (
+                "manual_simulation_hold".to_owned(),
+                manual_hold.map_or_else(|| b.unit(), |held| b.bool(held)),
+            ),
+            (
+                "queued_simulation_steps".to_owned(),
+                queued_steps.map_or_else(|| b.unit(), |count| b.uint(count as u64)),
+            ),
+            ("simulation_cycle_active".to_owned(), b.bool(cycle_active)),
             ("barrier_held".to_owned(), b.bool(barrier.held)),
             (
                 "barrier_active_participants".to_owned(),

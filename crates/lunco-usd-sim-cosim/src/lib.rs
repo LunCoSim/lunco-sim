@@ -2484,9 +2484,10 @@ fn tag_cosim_opaque(
     }
 }
 
-/// Per-tick ordering inside `FixedUpdate` matches the cosim master
-/// algorithm:
-///   `ModelicaSet::HandleResponses (First) → sync_*_outputs →
+/// Committed Modelica output/status publication follows response admission in
+/// `SimulationCompletions`, including initialization while time is held.
+/// Per-tick ordering inside `FixedUpdate` then follows the cosim master:
+///   script/native output sampling →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {
@@ -2764,10 +2765,16 @@ impl Plugin for UsdSimCosimPlugin {
                 .in_set(CosimUpdateSet::Projection),
         );
 
-        app.add_systems(
-            lunco_cosim_core::schedule::InitializationSampling,
-            sync::sync_modelica_outputs,
-        );
+        app.init_schedule(lunco_core_runtime::SimulationCompletions)
+            .add_systems(
+                lunco_core_runtime::SimulationCompletions,
+                (
+                    validate_usd_modelica_port_contracts,
+                    sync::sync_modelica_outputs,
+                )
+                    .chain()
+                    .after(ModelicaSet::HandleResponses),
+            );
 
         // Wiring is derived from native `connectionPaths`: rebuilds the
         // `SimConnection` set whenever prims spawn/despawn (structural) or a
@@ -2858,16 +2865,6 @@ impl Plugin for UsdSimCosimPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                validate_usd_modelica_port_contracts.before(sync::sync_modelica_outputs),
-                // Scenario hooks read the public SimComponent surface directly.
-                // Make the publication edge explicit: without this dependency a
-                // fast cached compile could open the scenario gate and let Rhai
-                // observe the wrapper before the first Modelica snapshot had been
-                // copied into it. Cold runs happened to order the two systems the
-                // other way, which made the first telemetry sample nondeterministic.
-                sync::sync_modelica_outputs
-                    .before(lunco_scripting::ScriptingSet)
-                    .before(PropagateCosimSet::Propagate),
                 // Script backends consume the input snapshot and publish their
                 // output snapshot as one fixed-step transaction. Script outputs
                 // are published before the propagation phase, then the backend
@@ -2893,7 +2890,6 @@ impl Plugin for UsdSimCosimPlugin {
                 // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
                 sync::fire_connected_events
                     .after(lunco_core_runtime::SimTickSet)
-                    .after(sync::sync_modelica_outputs)
                     .after(sync::sync_script_outputs)
                     .after(lunco_scripting::ScriptingSet)
                     .run_if(lunco_time::simulation_is_running),

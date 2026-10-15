@@ -5,23 +5,17 @@
 // keeps its own state (which shot, which camera) and calls these; nothing here
 // holds state, so the flat prelude namespace stays safe.
 //
-// Two invariants live here rather than in each scenario, because getting either
-// wrong is silent and looks like a hang:
-//
-//   * **Shot timing is the RECORDER's `frame_index`, never a local tick counter.**
-//     Offline recording advances virtual time by `1/fps` per CAPTURED frame, and
-//     several `FixedUpdate` ticks elapse per frame — counting ticks ends every shot
-//     early and desyncs the voiceover.
-//   * **Freezing a shot is a PHYSICS hold, never a world-clock pause.** Pausing the
-//     world clock stops `FixedUpdate`, so the scenario that paused it cannot run
-//     again to unpause itself: the shot hangs and the recorder spools frames until
-//     the process is killed. A physics hold leaves the scenario ticking.
+// Shot duration comes from the recorder's frame index. Presentation programs
+// continue sequencing while shared simulation admission is held; every explicit
+// step advances physics, Modelica and simulation timers together.
 
-/// Open a shot: start capturing into `dir` at `fps`, and freeze or run physics for
-/// the beat. `frozen` shots hold still under the voiceover; the rest simulate.
+/// Open a shot from a `// @timing presentation` scenario.
 fn shot_begin(dir, fps, frozen) {
+    if execution_context().clock != "presentation" {
+        throw("shot sequencing requires // @timing presentation");
+    }
     cmd("StartOfflineRecording", #{ output_dir: dir, fps: fps });
-    cmd("StepPhysics", #{ hold: frozen });
+    cmd("StepSimulation", #{ hold: frozen });
 }
 
 /// Frames captured so far in the current shot, or `-1` if nothing is recording.
@@ -33,16 +27,18 @@ fn shot_begin(dir, fps, frozen) {
 fn shot_frame() {
     let st = query("GetOfflineRecordingStatus");
     if type_of(st) == "()" || st.active != true { return -1; }
-    return st.frame_index;
+    return st.frame_index.to_int();
 }
 
-/// Advance a held world by exactly one physics frame.
+/// Advance a held simulation by exactly one shared fixed cycle.
 ///
 /// Call once per captured frame on an animated beat: motion is then locked to
 /// captured frames, so the result is identical regardless of machine speed. The
 /// step is spent inside the fixed loop, where physics actually integrates.
 fn shot_step() {
-    cmd("StepPhysics", #{ steps: 1 });
+    let result = cmd("StepSimulation", #{ steps: 1 });
+    if result.ok != true { throw(result.to_string()); }
+    result
 }
 
 /// Close the current shot.
@@ -50,10 +46,10 @@ fn shot_end() {
     cmd("StopOfflineRecording", #{});
 }
 
-/// Finish the episode: release the physics hold so the scene is left simulating
+/// Finish the episode: release the simulation hold so the scene is left simulating
 /// normally, then exit the app so an unattended run terminates on its own.
 fn recording_finish() {
-    cmd("StepPhysics", #{ hold: false });
+    cmd("StepSimulation", #{ hold: false });
     cmd("CloseWindow", #{});
 }
 

@@ -1020,8 +1020,10 @@ fn install_dynamic_headless_runner(app: &mut App) {
             if previous_mode != Some(mode) {
                 match mode {
                     lunco_core_runtime::SimulationExecutionMode::Realtime => {
-                        app.world_mut()
-                            .insert_resource(bevy::time::TimeUpdateStrategy::Automatic);
+                        lunco_time::set_time_update_strategy(
+                            app.world_mut(),
+                            bevy::time::TimeUpdateStrategy::Automatic,
+                        );
                     }
                     lunco_core_runtime::SimulationExecutionMode::MaxSpeed => {
                         app.world_mut().insert_resource(

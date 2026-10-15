@@ -505,8 +505,15 @@ Nested Rhai functions inherit the current phase. Runtime owner scope
 independent of cycle and clock. The authored `@peer host|client|both` directive
 selects the network peer for a scenario; it does not select the runtime owner
 scope. Continuous scenario behavior may state its required
-cadence with `@timing simulation`; Rust still installs and invokes the scenario
-from its owning schedules. Lifecycle hooks receive the lifecycle or simulation
+cadence with `@timing simulation` (the default) or `@timing presentation`.
+Both use one lifecycle FSM and native task interpreter. Presentation behavior
+receives `Time<Real>` frame samples and a frame sequence; waits use that typed
+context. Its independent bounded event queue prevents a paused simulation pass
+from consuming presentation events. Subscription exists only while the language
+has presentation actors, avoiding event clones in simulation-only hosts.
+Presentation programs submit typed commands; direct world writes are rejected.
+Rust installs and invokes both cadences from their owning schedules. Lifecycle
+hooks receive the lifecycle, presentation or simulation
 context of the pass that invokes them. Unknown execution targets, timing values, or
 metadata directives skip only that scenario and publish document diagnostics
 once for the source revision. The scenario driver refreshes these directives

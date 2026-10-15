@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "ModelicaRuntimeContracts"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 60000.0
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/shared_simulation_step.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def Cube "CaptureTarget"
+    {
+        double size = 2.0
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.699999988079071, 0.8999999761581421)]
+    }
+}

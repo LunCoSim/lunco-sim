@@ -744,14 +744,6 @@ impl PhysicsHolds {
     /// this reason; integration resumes only after the complete pending
     /// admission set is ready.
     pub const BODY_ADMISSION: &'static str = "body-admission";
-    /// A scripted cutscene / offline recording is choosing when the world moves.
-    ///
-    /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —
-    /// and the scenario script driving the shot — stays alive. That is the whole
-    /// point: pausing the *world* clock (`lunco_time::TimeTransport`) also stops the
-    /// script, so a paused scene can never run the script that would unpause it.
-    /// Advance the world from a script with [`PhysicsStepRequest`] instead.
-    pub const CINEMATIC: &'static str = "cinematic";
     /// A terminal runtime fault has invalidated the simulation state.
     pub const SAFETY_FAILURE: &'static str = "runtime-safety-failure";
     /// The explicitly bound Avian frame is missing or a physical entity is
@@ -794,36 +786,6 @@ impl PhysicsHolds {
     }
 }
 
-/// Frames of physics owed to a caller that is otherwise holding the clock.
-///
-/// The step half of "hold, then step": with [`PhysicsHolds::CINEMATIC`] raised, a
-/// script advances the world deliberately — one frame per step — instead of
-/// play/pausing it. Each queued step lets exactly one frame of physics through.
-///
-/// Stepping exists because pause/unpause is unusable from inside a script: pausing
-/// the world clock stops `FixedUpdate`, so the script that paused it cannot run
-/// again to unpause itself. A physics hold keeps the script running, and stepping
-/// gives it deterministic control over motion — the same guarantee frame-by-frame
-/// capture wants, since the recorder advances virtual time by exactly `1/fps` per
-/// captured frame.
-#[derive(Resource, Debug, Clone, Default)]
-pub struct PhysicsStepRequest {
-    /// Frames of physics still owed. Decremented as each is granted.
-    pub steps: u32,
-}
-
-impl PhysicsStepRequest {
-    /// Queue `n` more frames of physics.
-    pub fn request(&mut self, n: u32) {
-        self.steps = self.steps.saturating_add(n);
-    }
-
-    /// Drop any owed frames (e.g. when the hold is released outright).
-    pub fn clear(&mut self) {
-        self.steps = 0;
-    }
-}
-
 /// Run condition: **the solver will consume forces applied this tick.**
 ///
 /// Every system that writes into Avian's transient force accumulator (suspension,
@@ -837,10 +799,9 @@ impl PhysicsStepRequest {
 /// the clock the solver actually integrates, so this is also correct for anything
 /// that pauses physics out of band, exactly as [`apply_physics_holds`] is.
 ///
-/// `Time<Virtual>` is not a substitute: a physics hold does not pause virtual
-/// time, so a virtual-clock gate can remain open while the solver is stopped.
-/// Both clocks are checked here because a paused world clock must stop transient
-/// force application too.
+/// Native admission and the shared pacing clock must both be live before a
+/// transient force can be written. Shared manual steps open both clocks for
+/// their admitted cycle.
 pub fn physics_is_live_state(
     physics_time: &Time<Physics>,
     virtual_time: &Time<Virtual>,
@@ -873,8 +834,21 @@ pub fn apply_physics_holds(
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut physics_time: ResMut<Time<Physics>>,
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
+    virtual_time: Option<Res<Time<Virtual>>>,
 ) {
+    if let Some(progress) = progress.as_mut() {
+        let key = lunco_core_runtime::SimulationProgressKey::physics_integration();
+        if holds.is_held() != progress.contains(key) {
+            if holds.is_held() {
+                progress.acquire(key, "Native physics integration is held");
+            } else {
+                progress.release(key);
+            }
+        }
+    }
     let held = holds.is_held()
+        || virtual_time.is_some_and(|time| time.is_paused())
         || coupling.is_some_and(|state| state.held)
         || faults.is_some_and(|state| state.active());
     if held {
@@ -882,98 +856,72 @@ pub fn apply_physics_holds(
         // `Time<Physics>` delta intact. Its nested driver would then execute
         // one stale solver pass on the first held FixedPostUpdate. A hold is
         // therefore a paused *and zero-delta* boundary.
-        physics_time.pause();
-        physics_time.advance_by(Duration::ZERO);
+        if !physics_time.is_paused() || !physics_time.delta().is_zero() {
+            physics_time.pause();
+            physics_time.advance_by(Duration::ZERO);
+        }
     } else if physics_time.is_paused() {
         physics_time.unpause();
     }
 }
 
-/// Enforce a user transport pause at the last boundary before Avian's solver.
-///
-/// `SetTimeTransport` can be triggered from `FixedUpdate`, after
-/// `apply_physics_holds` has already run for the frame. The virtual clock is the
-/// authoritative whole-simulation pause projection; mirror that state here so
-/// Avian cannot integrate the fixed iteration that follows the acknowledgement.
-/// Physics holds and coupling barriers remain owned by `apply_physics_holds` and
-/// are never released by this transport-only check.
-pub fn apply_transport_pause_before_physics(
-    virtual_time: Option<Res<Time<Virtual>>>,
-    mut physics_time: Option<ResMut<Time<Physics>>>,
+/// Validate the native clock against the shared fixed cycle. Before native
+/// integration, an active cycle may still expose the preceding completed time.
+/// Completed boundaries require exact agreement in the clocks' native Duration.
+pub fn validate_physics_clock(
+    physics_time: &Time<Physics>,
+    fixed_time: &Time<Fixed>,
+    cycle_in_progress: bool,
+) -> Result<(), String> {
+    let upper = fixed_time.elapsed();
+    let lower = if cycle_in_progress {
+        upper.saturating_sub(fixed_time.timestep())
+    } else {
+        upper
+    };
+    let actual = physics_time.elapsed();
+    if actual < lower || actual > upper {
+        return Err(format!(
+            "native physics time {actual:?} is outside the shared fixed-cycle interval [{lower:?}, {upper:?}]"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_completed_physics_clock(
+    physics_time: Res<Time<Physics>>,
+    fixed_time: Res<Time<Fixed>>,
+    control: Option<Res<lunco_time::SimulationStepControl>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
-    if virtual_time.is_some_and(|time| time.is_paused()) {
-        if let Some(mut physics_time) = physics_time.take() {
-            physics_time.pause();
-            physics_time.advance_by(Duration::ZERO);
-        }
+    if control.is_none() || faults.active() {
+        return;
+    }
+    if let Err(error) = validate_physics_clock(&physics_time, &fixed_time, false) {
+        error!("[physics] {error}");
+        faults.raise(
+            "simulation-physics-clock-diverged",
+            None,
+            "shared physics clock",
+            error,
+        );
     }
 }
 
 /// Clear all scene-owned physics admission state before the outgoing entities
 /// are reclaimed. The replacement scene rebuilds its readiness/hold decisions
-/// from its own authored and runtime state; carrying a hold or a queued step
-/// across that boundary can either freeze the new scene or admit stale motion.
+/// from its own authored and runtime state. A hold must not cross that boundary.
 fn reset_scene_physics_state(
     mut holds: ResMut<PhysicsHolds>,
-    mut steps: ResMut<PhysicsStepRequest>,
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
     mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
     *holds = PhysicsHolds::default();
-    steps.clear();
+    if let Some(progress) = progress.as_deref_mut() {
+        progress.release(lunco_core_runtime::SimulationProgressKey::physics_integration());
+    }
     if let Some(mut physics_time) = physics_time.take() {
         physics_time.unpause();
-        physics_time.advance_by(Duration::ZERO);
-    }
-}
-
-/// Release exactly one queued [`PhysicsStepRequest`] frame through a hold.
-///
-/// Runs in `FixedPreUpdate`, **inside** the fixed loop — the same clock domain that
-/// steps physics (avian integrates in `FixedPostUpdate` off `Time<Fixed>`). A step
-/// granted from a render-frame schedule is not equivalent: `Time<Fixed>` only
-/// accumulates on frames where virtual time advanced, so a grant landing on a
-/// zero-delta frame is consumed without any physics running at all. Offline
-/// recording makes that the common case, since it alternates advance and capture
-/// frames. Consuming the debt here means one granted step is always exactly one
-/// integrated step.
-pub fn grant_physics_step(
-    holds: Res<PhysicsHolds>,
-    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    mut steps: ResMut<PhysicsStepRequest>,
-    mut physics_time: ResMut<Time<Physics>>,
-) {
-    if faults.is_some_and(|state| state.active()) {
-        steps.clear();
-        physics_time.pause();
-        physics_time.advance_by(Duration::ZERO);
-        return;
-    }
-    if coupling.is_some_and(|state| state.held) {
-        // Modelica owns a solver barrier, not the caller's recording clock.
-        // Keep queued cinematic steps until the in-flight model result releases
-        // the barrier; dropping them makes a deterministic recorder capture the
-        // same pose repeatedly while its Rhai frame index continues advancing.
-        physics_time.pause();
-        physics_time.advance_by(Duration::ZERO);
-        return;
-    }
-    if !holds.is_held() {
-        // Nothing to step past. Drop the debt rather than let it fire later against
-        // an unrelated hold (a terrain bake, say).
-        if steps.steps > 0 {
-            steps.clear();
-        }
-        return;
-    }
-
-    if steps.steps > 0 {
-        steps.steps -= 1;
-        if physics_time.is_paused() {
-            physics_time.unpause();
-        }
-    } else if !physics_time.is_paused() {
-        physics_time.pause();
         physics_time.advance_by(Duration::ZERO);
     }
 }
@@ -1108,27 +1056,22 @@ impl Plugin for PhysicsGatePlugin {
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsComputeProfile>()
             .init_resource::<PhysicsHolds>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<joint_solver::JointSolverOrder>()
             .init_resource::<PhysicsInitializationExternalValidator>()
-            .init_resource::<PhysicsStepRequest>()
             .init_resource::<lunco_core::RuntimeDiagnostics>()
             .add_systems(
                 Update,
                 validate_surface_independent_initialization.in_set(PhysicsSupportSet::Consume),
             )
-            .add_systems(PreUpdate, apply_physics_holds)
+            .add_systems(
+                PreUpdate,
+                apply_physics_holds.in_set(lunco_time::SimulationAdmissionSet),
+            )
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
-            // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
-            // so a granted step coincides with a step that actually runs.
-            .add_systems(
-                bevy::prelude::FixedPreUpdate,
-                (apply_physics_holds, grant_physics_step).chain(),
-            )
-            .add_systems(
-                bevy::prelude::FixedPostUpdate,
-                apply_transport_pause_before_physics
-                    .before(avian3d::prelude::PhysicsSystems::StepSimulation),
-            )
+            .add_systems(FixedLast, verify_completed_physics_clock)
+            // Refresh native admission at the shared fixed-cycle boundary.
+            .add_systems(bevy::prelude::FixedPreUpdate, apply_physics_holds)
             .add_plugins(escape::EscapeDiagnosticPlugin)
             // Same reasoning: a readiness decision that nothing enforces is a
             // hold that silently does not hold.
@@ -1443,14 +1386,10 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
         app.init_resource::<PhysicsHolds>()
-            .init_resource::<PhysicsStepRequest>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<Time<Physics>>()
             .init_resource::<Time<Virtual>>()
-            .add_systems(
-                FixedPreUpdate,
-                (apply_physics_holds, grant_physics_step).chain(),
-            );
+            .add_systems(FixedPreUpdate, apply_physics_holds);
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimulationBarrier>()
             .held = true;
@@ -1472,149 +1411,31 @@ mod tests {
         assert!(!app.world_mut().run_system_once(physics_is_live).unwrap());
     }
 
-    /// A queued step lets exactly ONE frame of physics through a hold, then the
-    /// clock re-freezes. This is what lets a cutscene script advance the world
-    /// deliberately instead of play/pausing it — pausing the world clock would stop
-    /// `FixedUpdate` and the script could never run again to unpause itself.
     #[test]
-    fn step_grants_exactly_one_frame_through_a_hold() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
-        world.insert_resource(Time::<Physics>::default());
-
-        world
-            .resource_mut::<PhysicsHolds>()
-            .set(PhysicsHolds::CINEMATIC, true);
-        world.run_system_once(apply_physics_holds).unwrap();
-        assert!(
-            world.resource::<Time<Physics>>().is_paused(),
-            "held ⇒ frozen"
-        );
-
-        world.resource_mut::<PhysicsStepRequest>().request(1);
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(
-            !world.resource::<Time<Physics>>().is_paused(),
-            "the step frame runs"
-        );
-
-        // Debt paid: the next fixed step is frozen again without touching the hold.
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(world.resource::<Time<Physics>>().is_paused(), "re-freezes");
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+    fn shared_clock_validation_distinguishes_active_and_completed_cycles() {
+        let mut fixed = Time::<Fixed>::from_hz(60.0);
+        let mut physical = Time::<Physics>::default();
+        let quantum = fixed.timestep();
+        fixed.advance_by(quantum);
+        assert!(validate_physics_clock(&physical, &fixed, true).is_ok());
+        assert!(validate_physics_clock(&physical, &fixed, false).is_err());
+        physical.advance_by(quantum);
+        assert!(validate_physics_clock(&physical, &fixed, false).is_ok());
+        physical.advance_by(Duration::from_nanos(1));
+        assert!(validate_physics_clock(&physical, &fixed, true).is_err());
     }
 
-    /// The step is consumed in the FIXED loop, not on a render frame. Physics
-    /// integrates off `Time<Fixed>`, which only accumulates when virtual time
-    /// advanced — so a grant made on a zero-delta render frame would be spent
-    /// without any physics running. `apply_physics_holds` (render frame) must
-    /// therefore leave the debt alone; only `grant_physics_step` may spend it.
     #[test]
-    fn render_frame_projection_does_not_spend_the_step_debt() {
+    fn native_hold_projects_shared_admission_and_releases_only_its_key() {
         use bevy::ecs::system::RunSystemOnce;
-
         let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
-        world.insert_resource(Time::<Physics>::default());
-
+        world.init_resource::<PhysicsHolds>();
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        world.init_resource::<Time<Physics>>();
+        let independent = lunco_core_runtime::SimulationProgressKey::scene_interaction();
         world
-            .resource_mut::<PhysicsHolds>()
-            .set(PhysicsHolds::CINEMATIC, true);
-        world.resource_mut::<PhysicsStepRequest>().request(1);
-
-        // Several render frames pass with no fixed step in between.
-        for _ in 0..3 {
-            world.run_system_once(apply_physics_holds).unwrap();
-        }
-        assert_eq!(
-            world.resource::<PhysicsStepRequest>().steps,
-            1,
-            "render frames must not burn the step"
-        );
-
-        // The fixed step finally runs and spends it.
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(!world.resource::<Time<Physics>>().is_paused());
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
-    }
-
-    /// A Modelica result barrier delays a deliberate recording step; it must not
-    /// erase that step. Otherwise the capture clock advances while the physical
-    /// pose repeats until the next solver result happens to arrive.
-    #[test]
-    fn modelica_barrier_preserves_cinematic_step_debt() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
-        world.insert_resource(Time::<Physics>::default());
-        world.insert_resource(lunco_core_runtime::SimulationBarrier {
-            held: true,
-            ..Default::default()
-        });
-
-        world
-            .resource_mut::<PhysicsHolds>()
-            .set(PhysicsHolds::CINEMATIC, true);
-        world.resource_mut::<PhysicsStepRequest>().request(1);
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(world.resource::<Time<Physics>>().is_paused());
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 1);
-
-        world
-            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
-            .held = false;
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(!world.resource::<Time<Physics>>().is_paused());
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
-    }
-
-    /// Steps queued with nothing holding are dropped, not banked — otherwise they
-    /// would fire later against an unrelated hold (a terrain bake, say) and leak a
-    /// frame of motion into whatever that hold was protecting.
-    #[test]
-    fn steps_do_not_bank_against_a_future_hold() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
-        world.insert_resource(Time::<Physics>::default());
-
-        world.resource_mut::<PhysicsStepRequest>().request(3);
-        world.run_system_once(grant_physics_step).unwrap();
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
-
-        world
-            .resource_mut::<PhysicsHolds>()
-            .set(PhysicsHolds::TERRAIN_READY, true);
-        world.run_system_once(apply_physics_holds).unwrap();
-        world.run_system_once(grant_physics_step).unwrap();
-        assert!(
-            world.resource::<Time<Physics>>().is_paused(),
-            "the later hold is not stepped past by stale debt"
-        );
-    }
-
-    /// The contract: a hold pauses the PHYSICS clock and leaves the virtual clock
-    /// (tick → epoch → ephemeris → animation) running. This is what stopped the
-    /// sandbox from booting paused, and what keeps the planets moving while a
-    /// heightfield bakes.
-    #[test]
-    fn hold_pauses_physics_clock_only_and_releases_cleanly() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
-        world.insert_resource(Time::<Physics>::default());
-        world.insert_resource(Time::<Virtual>::default());
-
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(independent, "editor");
         world
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::TERRAIN_READY, true);
@@ -1624,14 +1445,26 @@ mod tests {
         world.run_system_once(apply_physics_holds).unwrap();
         assert!(world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
-        // The virtual clock — and so the tick, the epoch and the celestial chain —
-        // is untouched by a physics hold.
-        assert!(!world.resource::<Time<Virtual>>().is_paused());
-
+        let key = lunco_core_runtime::SimulationProgressKey::physics_integration();
+        assert!(
+            world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .contains(key)
+        );
         world
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::TERRAIN_READY, false);
         world.run_system_once(apply_physics_holds).unwrap();
+        assert!(
+            !world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .contains(key)
+        );
+        assert!(
+            world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .contains(independent)
+        );
         assert!(!world.resource::<Time<Physics>>().is_paused());
     }
 
@@ -1662,10 +1495,11 @@ mod tests {
     }
 
     #[test]
-    fn transport_pause_reaches_physics_before_the_solver_boundary() {
+    fn native_admission_observes_the_shared_clock_pause() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
+        world.init_resource::<PhysicsHolds>();
         world.insert_resource(Time::<Virtual>::default());
         world.insert_resource(Time::<Physics>::default());
         world
@@ -1673,32 +1507,27 @@ mod tests {
             .advance_by(Duration::from_millis(16));
         world.resource_mut::<Time<Virtual>>().pause();
 
-        world
-            .run_system_once(apply_transport_pause_before_physics)
-            .unwrap();
+        world.run_system_once(apply_physics_holds).unwrap();
 
         assert!(world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
     }
 
     #[test]
-    fn scene_teardown_clears_physics_holds_and_step_debt() {
+    fn scene_teardown_retires_native_physics_admission() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
         world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(PhysicsStepRequest::default());
         world.insert_resource(Time::<Physics>::default());
         world
             .resource_mut::<PhysicsHolds>()
-            .set(PhysicsHolds::CINEMATIC, true);
-        world.resource_mut::<PhysicsStepRequest>().request(4);
+            .set(PhysicsHolds::READINESS, true);
         world.resource_mut::<Time<Physics>>().pause();
 
         world.run_system_once(reset_scene_physics_state).unwrap();
 
         assert!(!world.resource::<PhysicsHolds>().is_held());
-        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
     }

@@ -117,6 +117,11 @@ application updates. Windowed completion admission still depends on application
 updates until its simulation owner is isolated. The default
 communication period is one physics tick; longer periods must be authored
 explicitly.
+For deliberately frozen captures use `StepSimulation` and presentation-timed
+sequencing. Manual demand uses the same fixed runner as paced execution and
+still respects preparation and solver barriers. A native hold gates the entire
+simulation; compare `clock_snapshot().physics_elapsed_s` and `fixed_elapsed_s`
+at completed-cycle boundaries before interpreting throughput measurements.
 Attribute numerical service separately from transaction dispatch and result
 admission. Live workers pass the exact communication point to the existing
 `LiveStepper::advance_to` boundary; adaptive Rumoca sessions and fixed

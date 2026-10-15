@@ -30,6 +30,12 @@ use std::time::Duration;
 
 use lunco_core_runtime::{SECS_PER_TICK, SimTick};
 
+pub mod stepping;
+pub use stepping::{SimulationStepControl, StepSimulation};
+
+mod realtime;
+pub use realtime::set_time_update_strategy;
+
 pub mod domain;
 pub use domain::*;
 
@@ -473,11 +479,7 @@ fn begin_fixed_tick_timing(
 ) {
     start.tick_started_at = Some(Instant::now());
     start.tick_started = tick.0;
-    start.tick_service_budget_secs = if input.running {
-        fixed_time.timestep().as_secs_f64() / input.effective_rate
-    } else {
-        0.0
-    };
+    start.tick_service_budget_secs = fixed_time.timestep().as_secs_f64() / input.effective_rate;
 }
 
 fn finish_fixed_tick_timing(
@@ -521,7 +523,15 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
         .get_resource::<SceneTimeState>()
         .is_none_or(SceneTimeState::is_ready);
 
-    transport_running && virtual_running && !coupling_held && !progress_held && scene_time_ready
+    let control = world.get_resource::<SimulationStepControl>();
+    let manual_step = control.is_some_and(|control| control.remaining() > 0);
+    let automatic = transport_running
+        && virtual_running
+        && !control.is_some_and(SimulationStepControl::is_held);
+    let faulted = world
+        .get_resource::<lunco_core::RuntimeFaults>()
+        .is_some_and(lunco_core::RuntimeFaults::active);
+    (manual_step || automatic) && !coupling_held && !progress_held && scene_time_ready && !faulted
 }
 
 /// Next wall-clock deadline for servicing the fixed accumulator, bounded by a
@@ -530,6 +540,12 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
 pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
     if !fixed_simulation_is_admitted(world) {
         return latest;
+    }
+    if world
+        .get_resource::<SimulationStepControl>()
+        .is_some_and(|control| control.remaining() > 0)
+    {
+        return Instant::now();
     }
     let fixed = world.resource::<Time<Fixed>>();
     let virtual_time = world.resource::<Time<Virtual>>();
@@ -551,6 +567,9 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// hold. The per-update work budget also retains time rather than clipping the
 /// input delta or discarding pending fixed cycles.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
+    if world.resource::<lunco_core::RuntimeFaults>().active() {
+        world.resource_mut::<SimulationStepControl>().cancel();
+    }
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
@@ -566,7 +585,16 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         else {
             break;
         };
-        if world.resource::<Time<Fixed>>().overstep() < timestep {
+        let manual_step = world.resource::<SimulationStepControl>().remaining() > 0;
+        if manual_step {
+            world.resource_mut::<SimulationStepControl>().consume();
+            world
+                .resource_mut::<Time<Fixed>>()
+                .accumulate_overstep(timestep);
+            let mut virtual_time = world.resource_mut::<Time<Virtual>>();
+            virtual_time.unpause();
+            virtual_time.advance_by(timestep);
+        } else if world.resource::<Time<Fixed>>().overstep() < timestep {
             break;
         }
         let mut fixed = world.resource_mut::<Time<Fixed>>();
@@ -577,8 +605,27 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         fixed.advance_by(timestep);
         drop(fixed);
         *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
-        let _ =
+        world.resource_mut::<SimulationStepControl>().active_cycle = true;
+        let outcome =
             world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| schedule.run(world));
+        world.resource_mut::<SimulationStepControl>().active_cycle = false;
+        if let Err(error) = outcome {
+            world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+                "simulation-fixed-schedule-missing",
+                None,
+                "shared simulation step",
+                error.to_string(),
+            );
+        }
+        if world.resource::<lunco_core::RuntimeFaults>().active() {
+            world.resource_mut::<SimulationStepControl>().cancel();
+        }
+        if manual_step {
+            project_time_transport(world);
+            world
+                .resource_mut::<Time<Virtual>>()
+                .advance_by(Duration::ZERO);
+        }
     }
 
     *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
@@ -927,20 +974,21 @@ pub fn advance_world_clock(
 
 /// Project transport and scene preparation onto the pacing clock. Coupling
 /// gates fixed execution while its elapsed demand remains queued.
-fn project_time_transport(
-    transport: Res<TimeTransport>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
-    scene_time: Option<Res<SceneTimeState>>,
-) {
-    // Preparation and user pauses consume no running time. A running solver
-    // barrier instead holds FixedMain without discarding elapsed demand.
-    let admission_held = progress.is_some_and(|state| state.is_held());
-    let scene_time_pending = scene_time.is_some_and(|state| !state.is_ready());
+pub fn project_time_transport(world: &mut World) {
+    let transport = *world.resource::<TimeTransport>();
+    let admission_held = world
+        .get_resource::<lunco_core_runtime::SimulationProgress>()
+        .is_some_and(lunco_core_runtime::SimulationProgress::is_held);
+    let scene_time_pending = world
+        .get_resource::<SceneTimeState>()
+        .is_some_and(|state| !state.is_ready());
+    let held = world.resource::<SimulationStepControl>().is_held();
+    let faulted = world.resource::<lunco_core::RuntimeFaults>().active();
+    let mut virtual_time = world.resource_mut::<Time<Virtual>>();
     project_transport_state(
         &transport,
         &mut virtual_time,
-        admission_held || scene_time_pending,
+        admission_held || scene_time_pending || held || faulted,
     );
 }
 
@@ -1022,6 +1070,7 @@ impl Plugin for TimePlugin {
             .resource_mut::<Time<Virtual>>()
             .set_max_delta(Duration::MAX);
 
+        app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<SimTick>()
             .init_resource::<SimulationTimingProfile>()
             .init_resource::<TimeUpdateTimingInput>()
@@ -1081,6 +1130,7 @@ impl Plugin for TimePlugin {
                 .before(bevy::transform::TransformSystems::Propagate),
         );
 
+        stepping::install(app);
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
         // resolve into `ResolvedDomains` (in `DomainResolveSet`, `Update`).
         domain::build_domain_tree(app);
@@ -1226,6 +1276,106 @@ mod tests {
 
     fn count_fixed_runs(mut count: ResMut<FixedRunCount>) {
         count.0 += 1;
+    }
+
+    #[test]
+    fn manual_cycles_use_the_shared_runner_and_preserve_admission_barriers() {
+        fn cycle(
+            mut count: ResMut<FixedRunCount>,
+            mut tick: ResMut<SimTick>,
+            mut barrier: ResMut<lunco_core_runtime::SimulationBarrier>,
+            mut control: ResMut<SimulationStepControl>,
+        ) {
+            assert!(control.is_cycle_active());
+            count.0 += 1;
+            tick.0 += 1;
+            if count.0 == 1 {
+                barrier.held = true;
+            }
+            if count.0 == 5 {
+                control.request(Some(false), None, true).unwrap();
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::ZERO,
+            ))
+            .init_resource::<FixedRunCount>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .add_systems(FixedUpdate, cycle);
+        app.update();
+        let quantum = app.world().resource::<Time<Fixed>>().timestep();
+        app.world_mut()
+            .resource_mut::<SimulationStepControl>()
+            .request(Some(true), Some(3), true)
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 1);
+        assert_eq!(
+            app.world().resource::<SimulationStepControl>().remaining(),
+            2
+        );
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 1);
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = false;
+        let hold = lunco_core_runtime::SimulationProgressKey::scene_interaction();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(hold, "edit");
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 1);
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .release(hold);
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 3);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), quantum * 3);
+        assert_eq!(
+            app.world().resource::<Time<Virtual>>().elapsed(),
+            quantum * 3
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        assert!(
+            app.world_mut()
+                .resource_mut::<SimulationStepControl>()
+                .request(None, Some(0), true)
+                .is_err()
+        );
+        app.world_mut()
+            .resource_mut::<SimulationStepControl>()
+            .request(None, Some(2), true)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise("test-stop", None, "step admission", "stop");
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimulationStepControl>().remaining(),
+            0
+        );
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 3);
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<SimulationStepControl>()
+            .request(None, Some(2), true)
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 5);
+        assert_eq!(app.world().resource::<Time<Fixed>>().elapsed(), quantum * 5);
+        assert_eq!(
+            app.world().resource::<SimulationStepControl>().remaining(),
+            0
+        );
+        assert!(
+            !app.world()
+                .resource::<SimulationStepControl>()
+                .is_cycle_active()
+        );
     }
 
     fn fixed_runs_after_manual_frames(rate: f64) -> u32 {
@@ -1590,6 +1740,8 @@ mod tests {
             (TransportMode::Playing, 0.0), // rate 0 is also "frozen"
         ] {
             let mut world = bevy::prelude::World::new();
+            world.init_resource::<SimulationStepControl>();
+            world.init_resource::<lunco_core::RuntimeFaults>();
             world.insert_resource(lunco_core_runtime::SimTick(0));
             world.insert_resource(TimeTransport { mode, rate });
             world.insert_resource(MissionClock::default());
@@ -1617,6 +1769,8 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = bevy::prelude::World::new();
+        world.init_resource::<SimulationStepControl>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
         world.insert_resource(lunco_core_runtime::SimTick(0));
         world.insert_resource(TimeTransport {
             mode: TransportMode::Playing,
@@ -1723,6 +1877,8 @@ mod tests {
         use lunco_core_runtime::{SimulationProgress, SimulationProgressKey};
 
         let mut world = bevy::prelude::World::new();
+        world.init_resource::<SimulationStepControl>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
         world.insert_resource(TimeTransport {
             mode: TransportMode::Playing,
             rate: 4.0,

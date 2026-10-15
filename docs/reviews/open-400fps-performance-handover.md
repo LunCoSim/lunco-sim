@@ -9736,24 +9736,67 @@ evidence. Both fresh Tracy runs pass all 16 full mission checks and that
 four-case gate through the real production API. The continuous-contact baseline
 scene passes all 12 checks. No root or Twin push is performed.
 
-### Verified remaining physics-only stepping defect — 2026-10-15
+### Shared simulation stepping review — 2026-10-15
 
-An owned headless production session at API 4353 passes the 34-check Modelica
-clock gate, then exercises `StepPhysics` through the public API. While its
-cinematic hold is raised, physical step number remains 60 while fixed tick
-advances from 68 to 93. FeedbackA's solver time advances from 0.966667 to
-1.383333 seconds. Requesting one physical step advances physical step number
-to 61 while fixed tick reaches 119 and that solver reaches 1.816667 seconds.
-The app exits zero through `Exit` and releases its port. Evidence is
-`target/physics-hold-audit{.json,-context.json,-driver.log,.log}`.
+Explicit fixed-cycle control belongs to `lunco-time::SimulationStepControl` and
+`StepSimulation`. The shared fixed runner admits both paced and manual cycles;
+physics, Modelica and simulation timers consume the same admitted quantum.
+Native physics holds acquire a shared `PhysicsIntegration` admission key.
+Editor dragging owns a separate `SceneInteraction` key, released on completion
+and scene teardown. These holds cannot release each other.
 
-This active path is owned by `StepPhysics` in `lunco-scene-commands` and
-`PhysicsStepRequest`/`PhysicsHolds::CINEMATIC` in `lunco-physics`. Recording
-prelude helpers and editor dragging consume it. Their clocks must be reviewed
-and migrated to shared simulation admission and explicit whole-simulation
-stepping, preserving the owners of wall/presentation work and independent
-holds. Removing the API requires all callers, docs and tests to migrate in
-the same cutover. The current clock snapshot also reports `clock_contract_ok`
-despite this divergence, so that diagnostic is insufficient as an acceptance
-oracle. This defect, full simulation/presentation isolation, 200 FPS,
-sub-1 ms physics and external FMU interoperability remain open.
+Recording programs declare `@timing presentation` and use the existing scenario
+FSM and native task interpreter. The owner-provided clock controls waits, while
+frame-index edges control shot callbacks. Simulation-only programs keep their
+fixed cadence and incur no presentation-event cloning. The clock snapshot checks
+native physics against the current shared cycle interval and surfaces divergence
+as a terminal runtime fault.
+
+The production `shared_simulation_step` gate passes all 28 checks headless and
+in an owned windowed session (API 4355), including presentation event delivery,
+exact three/two-cycle admission, user pause/rate retention, frozen Modelica and
+native clocks, and atomic rejection. The windowed screenshot shows its PASS
+verdict. The native physics owner also validates completed clocks directly at
+`FixedLast`; snapshot reads delegate to the same validator. Modelica output and
+status publication belongs to `SimulationCompletions` after response admission,
+including initial `Idle` observations while time is held. Its fixed-step and
+initialization-sampling copies are removed.
+
+The manual-runner resource test, 33 Rhai-enabled lifecycle tests and four focused
+physics mechanism tests pass. Six production regressions pass: initialization/
+clock exchange at 120 Hz update pacing, variable projection, expected terminal
+observation/initialization failures, native task semantics and continuous
+contacts. Evidence uses the `target/shared-stepping-*` prefix. All owned
+controllable sessions exit through the API and release their ports.
+
+The stored exact-state reference reports an articulated-state mismatch at tick
+11. A freshly built pre-change HEAD (`07d9b5f93`) reproduces the identical first
+mismatch. Its selected 56 physics, Modelica, articulated and final state rows
+were captured without changing simulation inputs. The candidate passes the
+production exact comparison against those rows in serial and default Compute
+profiles, with the startup native-pause bit reflecting shared preparation. The
+canonical reference changes only that startup pause field; its numerical rows
+remain unchanged. The 0.25-jitter serial profile also passes the same 24-check
+production comparison through tick 780. Evidence is
+`target/shared-clock-{original-head,candidate-paired}*`; the archived candidate
+executable is restored with its exact SHA-256 verified. The historical-reference
+discrepancy remains open. The stock editor gate fails document-generation
+admission on pre-change HEAD, so editor visual acceptance remains unproven and
+its authored observer is unchanged.
+
+Full simulation/presentation isolation, 200 FPS, sub-1 ms physics and external
+FMU interoperability remain open. No performance improvement is claimed here.
+
+The rebuilt production app also passes 24 recording checks: four-frame and
+one-frame stepped takes retain shared physics/Modelica receipts, and a two-frame
+motionless take advances neither owner. ffprobe confirms exact encoded counts
+4/1/2. A four-check mesh-free readiness fixture verifies that cancelling an
+armed request restores realtime simulation and presentation-task timers.
+`lunco-time::set_time_update_strategy` reanchors the native real-time sample on
+manual-to-automatic transitions without changing elapsed time; its focused test
+covers manual time both ahead of and behind computer time. Recording restores
+its saved update source on cancellation, completion and activation failure, and
+the headless realtime transition reuses the same time owner. Evidence is
+`target/shared-clock-handoff-*` and `target/shared-recording-cancel-*`;
+the fresh shared-step gate passes 28 checks headless and windowed. Owned API
+4357 exits successfully through `Exit` and releases its port.

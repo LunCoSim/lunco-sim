@@ -23,9 +23,14 @@ that decouples Bevy's update loop from the system clock, and the rhai surface
 
 Recording off the wall clock drops and duplicates frames: the renderer is at the mercy of
 whatever else the machine is doing, and a stall becomes a visible hitch in the output.
-Offline recording inverts the relationship — **virtual time is advanced by the recorder,
-one `1/fps` step per frame it actually captures**, so the output is a function of the
-frame index and nothing else.
+Offline recording supplies one `1/fps` input duration per frame through the shared
+transport. A held simulation advances only through explicit `StepSimulation`
+requests. Frame numbering and capture completion determine shot sequencing.
+
+The recorder saves the native update source before arming and restores it on
+completion or cancellation, including requests cancelled before visual readiness.
+Returning to automatic sampling uses the time owner's reanchoring operation:
+elapsed time stays continuous and recording wall time creates no catch-up debt.
 
 > **Wall-clock rate and output frame rate are fully decoupled.** Rendering faster changes
 > only how long a capture takes, never what the video looks like — the output is locked to
@@ -189,16 +194,14 @@ Fired from rhai as `cmd(name, #{…})` / `query(name)`; the full generated surfa
 | Command | Params | Effect |
 |---|---|---|
 | `StartOfflineRecording` | `#{ output_dir: String, fps: i64 }` | Take over the virtual clock and begin step-by-step capture. `output_dir` ending in `.mp4`/`.mkv`/`.mov` streams to video (§3); else a PNG-sequence directory. |
-| `StopOfflineRecording` | `#{}` | End capture, restore automatic real-time ticking. |
-| `StepPhysics` | `#{ hold: bool }` / `#{ steps: i64 }` | `hold` freezes/releases physics integration; `steps` advances a held world by exactly that many fixed steps. |
+| `StopOfflineRecording` | `#{}` | End or cancel capture and restore the prior native update source. |
+| `StepSimulation` | `#{ hold: bool }` / `#{ steps: i64 }` | `hold` freezes/releases shared automatic admission; positive `steps` admit exact complete fixed cycles while held or user-paused, including physics, Modelica and simulation timers. |
 | `ToggleInputOverlay` | `#{ enabled: bool }` | Show/hide the key-press readout (it is burnt into captured frames). |
 | `CloseWindow` | `#{}` | Close the window and exit cleanly — what lets an unattended run terminate. |
 
 ```rhai
 query("GetOfflineRecordingStatus")
-// #{ active, frame_index, is_waiting_for_frame, video,
-//    outstanding_captures,   // GPU readbacks not yet delivered
-//    pending_saves }         // encode/write workers still running
+// #{ active, frame_index, is_waiting_for_frame, last_capture_sim_tick }
 ```
 
 > [!WARNING]
@@ -215,14 +218,18 @@ query("GetOfflineRecordingStatus")
 Both live in `prelude/recording.rhai` rather than in each scenario, because getting either
 wrong looks exactly like a hang.
 
-**1. Shot timing is the recorder's `frame_index`, never a local tick counter.** Virtual
-time advances `1/fps` per *captured* frame and several fixed ticks elapse per frame — a
-tick counter ends every shot early and desyncs any narration cut against the shot list.
+**1. Shot timing uses the recorder's completed-frame count.** The recorder
+supplies one `1/fps` presentation interval per image. Automatic simulation uses
+the shared accumulator; a frozen shot advances only by explicit fixed-cycle
+requests. Callbacks run once for each pending image and never after the requested
+count is complete. Capture waits for queued cycles and participant receipts.
 
-**2. Freezing a beat is a PHYSICS hold, never a world-clock pause.** Pausing the world
-clock stops `FixedUpdate`, so the scenario that paused it cannot run again to unpause
-itself: the shot hangs and the recorder spools frames until the process is killed. A
-physics hold leaves the scenario ticking.
+**2. Shot sequencing uses `// @timing presentation`.** Its tasks, waits and
+frame callbacks run on the presentation clock, including while shared simulation
+admission is held. `StepSimulation` freezes physics, Modelica and simulation
+timers together. Requested cycles use the normal fixed runner and honor scene
+preparation, editor holds, participant barriers and terminal faults. Releasing
+the manual hold retires pending requests; it does not alter user pause or rate.
 
 ---
 
@@ -230,11 +237,11 @@ physics hold leaves the scenario ticking.
 
 | Verb | Meaning |
 |---|---|
-| `shot_begin(dir, fps, frozen)` | `StartOfflineRecording` into `dir` at `fps`, then `StepPhysics { hold: frozen }`. |
+| `shot_begin(dir, fps, frozen)` | `StartOfflineRecording` into `dir` at `fps`, then `StepSimulation { hold: frozen }`. |
 | `shot_frame()` | Frames captured so far in this shot, or `-1` if nothing is recording. |
-| `shot_step()` | `StepPhysics { steps: 1 }` — advance a held world by exactly one physics frame. |
+| `shot_step()` | `StepSimulation { steps: 1 }` — advance a held world by exactly one shared simulation cycle. |
 | `shot_end()` | `StopOfflineRecording`. |
-| `recording_finish()` | Release the physics hold, then `CloseWindow`. |
+| `recording_finish()` | Release the shared simulation hold, then `CloseWindow`. |
 | `shot_dir(out, idx)` | `<out>/shot_NN/raw_frames` — **1-based and zero-padded** (`idx` 0 ⇒ `shot_01`). |
 
 ---
@@ -284,6 +291,7 @@ An episode is a `seq` of shots on the native task-tree kernel
 **There is no `on_tick`** — the kernel advances the tree. `fn on_start(me, ctx)` still runs once.
 
 ```rhai
+// @timing presentation
 fn task(me, ctx) {
     import "/scripting/lib/shots" as shots;
     let out = "<episode>/shots";
@@ -311,12 +319,21 @@ fn task(me, ctx) {
 
 `shots::episode(list)` runs the shots in order, then appends `recording_finish()`.
 
-### A shot ends at `frames - 1`
+### A shot ends after `frames` completed captures
 
-Frame indices `0..frames-1` are captured, so a 200-frame shot writes **199** files. This
-matches the hand-rolled advance the module replaced. **Do not "fix" this off-by-one** — a
-complete shot is `frames - 1` files, and any verification that counts frames must expect
-that.
+The recorder increments `frame_index` after saving each image. A shot requesting
+200 frames therefore writes exactly 200 images, numbered 0 through 199. The
+per-frame callback receives those same indices, with no extra callback after
+completion. A one-frame shot captures once before closing.
+
+Production clock/capture checks use `shared_simulation_step.usda`, followed by
+`RunScenarioAsset` for `shared_simulation_recording.rhai` in the same owned GPU
+session. It checks coupled frame receipts for four-frame and one-frame takes,
+plus a two-frame motionless take; inspect the encoded frame counts with ffprobe.
+For cancellation before readiness, open and load the mesh-free
+`modelica_initialization_network.usda` fixture, then run
+`shared_simulation_recording_cancel.rhai`. It verifies the visual wait freezes
+simulation and cancellation restores realtime task and simulation progress.
 
 ### Shot handoff is a handshake, not a bet on ordering
 

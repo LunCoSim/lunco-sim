@@ -7,10 +7,9 @@
 //! Two effects, matching the two scopes of [`Action`](lunco_readiness::Action):
 //!
 //! - **World** — [`ReadinessState::world_hold`] raises the
-//!   [`PhysicsHolds::READINESS`] hold, which pauses `Time<Physics>` exactly like a
-//!   terrain bake does. Everything else — the tick, the epoch, scripts — keeps
-//!   running, so the script that is waiting on something can still run to see it
-//!   arrive.
+//!   [`PhysicsHolds::READINESS`] hold, projected to shared simulation admission and `Time<Physics>`.
+//!   Physics, Modelica and simulation timers wait together. Preparation and
+//!   presentation work continue on their owning schedules.
 //! - **Entity** — an entity marked [`HeldForReadiness`] has its rigid bodies and
 //!   its colliders disabled, itself and throughout its subtree.
 //!

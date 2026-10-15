@@ -2660,7 +2660,7 @@ fn build_world_engine_base(
     engine.register_fn(
         "emit",
         |name: ImmutableString, value: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            bridge_core::ensure_script_effect_allowed().map_err(script_runtime_error)?;
             let value = rhai_to_telemetry(&value).map_err(script_runtime_error)?;
             Ok(bridge_core::emit(name.as_str(), value))
         },
@@ -2669,7 +2669,7 @@ fn build_world_engine_base(
     engine.register_fn(
         "emit",
         |name: ImmutableString| -> Result<bool, Box<EvalAltResult>> {
-            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            bridge_core::ensure_script_effect_allowed().map_err(script_runtime_error)?;
             Ok(bridge_core::emit(name.as_str(), TelemetryValue::Bool(true)))
         },
     );
@@ -4668,6 +4668,14 @@ pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
     );
 }
 
+/// Advance explicitly authored presentation programs on their frame clock.
+pub fn tick_rhai_presentation_scenarios(world: &mut World) {
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_presentation(
+        world,
+        ScriptLanguage::Rhai,
+    );
+}
+
 /// Run one-shot authored visualization hooks after scene, document, and terrain
 /// preparation. Modelica holds do not block presentation-only work.
 pub fn tick_rhai_scenario_visualization(world: &mut World) {
@@ -4991,7 +4999,7 @@ fn tick_native_task(
     if ct.done {
         return None;
     }
-    let now = match time_bridge::elapsed_seconds() {
+    let now = match time_bridge::execution_time_seconds() {
         Ok(now) => now,
         Err(error) => return Some((error, rhai::Position::NONE)),
     };

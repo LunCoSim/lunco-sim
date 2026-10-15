@@ -13,8 +13,9 @@ description: >
 
 # Record a deterministic video
 
-The recorder advances virtual time exactly `1/fps` per captured frame — output
-is a function of frame index, never machine speed. Full design:
+The recorder supplies `1/fps` per frame through the shared transport. A held
+simulation advances only through explicit `StepSimulation` requests. Output
+sequencing uses frame index, independent of machine speed. Full design:
 [`docs/offline-recording.md`](../../docs/offline-recording.md).
 
 ## The one-command take (start here)
@@ -69,20 +70,22 @@ is a function of frame index, never machine speed. Full design:
 
 Multi-shot episodes run on the shot sequencer — `shot_begin`/`shot_frame`/
 `shot_end` from `prelude/recording.rhai`, sequenced by `lib/shots.rhai`. Shot
-timing MUST use the recorder's `frame_index` (never a tick counter), and beats
-freeze via a PHYSICS hold (never a clock pause). Both traps + the sequencer
+timing uses the recorder's `frame_index`. Declare `// @timing presentation`
+so sequencing continues while `StepSimulation` holds the shared physics, Modelica
+and simulation-timer clock. Explicit steps use the normal fixed-cycle runner
+and respect all admission barriers. The sequencer
 contract: [`docs/offline-recording.md`](../../docs/offline-recording.md) §5–§9.
 
 ## Check progress / diagnose
 
 ```rhai
 query("GetOfflineRecordingStatus")
-// #{ active, frame_index, video, outstanding_captures, pending_saves, … }
+// #{ active, frame_index, is_waiting_for_frame, last_capture_sim_tick }
 ```
 
-- **Stalled?** `outstanding_captures`/`pending_saves` pinned at their caps means
-  back-pressure (slow disk/encoder) — the clock pauses advancing by design and
-  resumes when the pipeline drains.
+- **Stalled?** Check `active`, `frame_index`, `is_waiting_for_frame` and the
+  readiness/encoder log. A pending readback holds the frame; a pending shared
+  cycle or Modelica receipt holds capture until that cycle completes.
 - **Black video?** Almost always "no rendering camera": offscreen without an
   authored `SceneCamera`, or every camera `is_active: false`. Check the log for
   the offscreen camera warning. Alpha-0 frames (white in PNG viewers, black in
@@ -91,6 +94,9 @@ query("GetOfflineRecordingStatus")
   sequence up to it is intact. Disk-full is the usual cause.
 - A killed run may leave `.tmp` files next to frames — litter, not corruption;
   writes are atomic.
+- Stop through `StopOfflineRecording`, including an armed request still waiting
+  for visuals. It restores the prior native update source through `lunco-time`;
+  returning to realtime admits no capture wall-time gap.
 
 ## Rules
 

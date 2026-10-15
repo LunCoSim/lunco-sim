@@ -25,7 +25,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
 - [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (25 commands)
-- [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (4 commands)
 
 **USD / scenes**
 
@@ -63,7 +63,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Time & clock**
 
-- [`lunco-time`](#lunco-time) (5 commands)
+- [`lunco-time`](#lunco-time) (6 commands)
 
 **Celestial, environment & comms**
 
@@ -556,30 +556,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `name` | `String` |  Attribute name (e.g. `inputs:angle` or `inputs:earth_azimuth`). |
 | `type_name` | `String` |  Attribute type name (e.g. `float`). Defaults to `float`. |
 | `sources` | `Vec < String >` |  Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`). |
-
-#### `StepPhysics`
-
- Freeze physics and advance it deliberately, one frame at a time.
-
- The verb a cutscene or an offline recording wants, and the reason it is NOT
- `SetTimeTransport`: pausing the world clock also stops `FixedUpdate`, so the
- scenario script that paused it never runs again to unpause itself — the shot
- hangs and a recording spools frames forever. A physics hold freezes
- `Time<Physics>` while `Time<Virtual>` (and so the script) keeps running.
-
- * `{"hold": true}` — freeze the world; the script keeps ticking.
- * `{"steps": 1}` — let exactly one frame of physics through, then re-freeze.
- * `{"hold": false}` — hand the world back to normal simulation.
-
- Steps only apply while held; queued with nothing holding they are dropped rather
- than banked against an unrelated hold (a terrain bake, say).
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `hold` | `Option < bool >` |  Raise (`Some(true)`) / release (`Some(false)`) the cinematic hold; `None`  leaves it as-is so a step can be sent on its own. |
-| `steps` | `Option < u32 >` |  Frames of physics to let through the hold. `None` = 0. |
 
 ## USD / scenes
 
@@ -1560,6 +1536,18 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it. |
 | `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for  the causal live transport); `None` leaves it. |
+
+#### `StepSimulation`
+
+ Hold/release automatic simulation advancement or request exact fixed cycles.
+ Each requested cycle uses the same physics, Modelica and scenario schedule.
+
+- *defined in:* `crates/lunco-time/src/stepping.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hold` | `Option < bool >` |  Explicit manual hold. Releasing it also retires unspent step requests. |
+| `steps` | `Option < u32 >` |  Positive number of shared fixed cycles to admit while held or paused. |
 
 ## Celestial, environment & comms
 
@@ -4147,7 +4135,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 273 commands from the runtime schema; scanned 993 .rs files for docs (0 parse failure(s) skipped).
+<!-- 273 commands from the runtime schema; scanned 995 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestEcho
 -->
