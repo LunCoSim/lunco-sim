@@ -911,6 +911,7 @@ fn query_sweep_jobs(
         scratch.resize_with(workers, avian3d::parry::query::epa::EPA::new);
     }
     let evaluate_chunk = |jobs: &mut [SweepJob], epa: &mut avian3d::parry::query::epa::EPA| {
+        let _span = bevy::log::debug_span!("ccd_query_chunk", queries = jobs.len()).entered();
         jobs.iter_mut()
             .map(|job| {
                 let pair = &pairs[job.pair_index];

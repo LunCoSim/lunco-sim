@@ -1199,6 +1199,10 @@ the sweep's preparation, native broad phase and candidate work. To profile
 these stages without millions of support/witness zones, use
 `RUST_LOG=info,lunco_physics::ccd=debug,lunco_physics::ccd::support=info,lunco_physics::ccd::minimum=info`.
 The disabled spans are diagnostic only; physics still evaluates their bounds.
+Compare `ccd_query_dispatch` with each `ccd_query_chunk` on its actual thread.
+Dispatch self time can include waiting for scoped workers; it is not a measure
+of dispatch overhead. Chunk lifetimes expose scheduling gaps and imbalance
+without changing candidate assignment or deterministic result consumption.
 Keep fresh native geometry, whole-arc certification, stable part order and joint
 closure when optimizing these queries. Compare separate unprofiled runs over
 the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`

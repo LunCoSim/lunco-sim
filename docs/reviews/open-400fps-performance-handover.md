@@ -10118,3 +10118,22 @@ physics and external FMU interoperability remain open. The next audit must
 also reconcile shader port declarations with normalized names and verify exact
 integer-to-f64 reads; their current naming/type resource fixtures need checking
 against the live metadata contract before claiming the full shader suite.
+
+### Continuous-query cost attribution — 2026-10-16
+
+Two fresh native exports of the existing `ccd-batch-current-tracy` capture
+complete successfully. In its recorded 146.558–153.558 s window, 420 physics
+cycles contain 4,028 continuous geometry sweeps. Their inclusive total is
+808.532 ms (1.925 ms per physics cycle); nested scoped query dispatch accounts
+for 522.818 ms (1.245 ms/cycle). Leaf trajectories account for 131.549 ms
+(0.313 ms/cycle) and swept BVH work for 45.371 ms (0.108 ms/cycle). These nested
+totals must not be added. Triangle/cylinder initial native contacts consume
+231.635 ms summed across workers, which is not an additional main-thread cost.
+Evidence is `target/ccd-cost-attribution{.json,-driver.log,-export.log,.py}`.
+
+Dispatch self time includes scoped worker waits. `ccd_query_chunk` now marks
+each actual immutable chunk evaluation, including direct serial execution, so
+the next capture can distinguish worker lifetimes from dispatch gaps. It does
+not change query assignment, correction order or geometry. The native
+`SubstepSchedule` already uses Bevy's single-threaded executor. This older
+instrumented cohort is diagnostic evidence, not candidate FPS acceptance.
