@@ -3,13 +3,15 @@
     defaultPrim = "NoiseContinuity"
     upAxis = "Y"
     metersPerUnit = 1.0
-    documentation = "GPU value and analytic-gradient noise continuity across negative integer lattice boundaries; green panel is success."
+    documentation = "GPU lattice continuity and per-octave value/gradient footprint filtering in 2D and 3D; green panel is success."
 )
 
 def Xform "NoiseContinuity" (
     kind = "assembly"
+    prepend apiSchemas = ["LunCoEpochAPI"]
 )
 {
+    double lunco:time:epochJd = 2461302.91528
     def Scope "Test" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
@@ -57,5 +59,9 @@ def Xform "NoiseContinuity" (
         token lunco:activeCamera.timeSamples = {
             0.0: "Camera",
         }
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1.0
     }
 }

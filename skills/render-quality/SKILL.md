@@ -78,7 +78,10 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    See `docs/architecture/terrain-layered-rendering.md` for the production
    gates. Do not infer whole-body night occlusion from a finite DEM.
    The layered shader keeps measured landform normals and adds filtered
-   sub-metre clump/grain normals; unresolved slopes contribute to roughness.
+   sub-metre clump/grain normals. Each noise octave fades independently between
+   two and four pixels per period, and its removed slope variance contributes
+   to roughness. Inspect the fine-grain band as well as broad clumps in close
+   views; a whole-stack cutoff can hide resolvable grain while leaving blobs.
    Relief remaps have continuous slopes at their clipping thresholds. The
    DEM normal-map weight selects the landform band without erasing the grain
    tangent slope; use full weight when the measured map owns those slopes.
@@ -214,8 +217,10 @@ Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 budget does not by itself prove that detail was refused. High currently uses
 depth 9 with a 256-tile budget and 65 vertices per tile (about 3 cm per
 interval at the deepest level over a 1 km crop). The shared terrain kernel
-evaluates bump gradients analytically and transfers unresolved slope variance
-into roughness. Apply lunar
+evaluates bump gradients analytically, filters each octave by its pixel
+footprint, and transfers unresolved slope variance into roughness. The
+`noise_continuity` GPU fixture checks fully resolved, partially resolved, and
+unresolved spectra in both 2D and 3D. Apply lunar
 photometry to the engine-selected Sun contribution only; putting it in
 `base_color` also changes fill and earthshine.
 

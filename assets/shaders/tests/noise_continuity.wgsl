@@ -1,8 +1,8 @@
-// GPU regression for the shared value/gradient noise at lattice boundaries.
-// Green is the numerical contract; red identifies a discontinuity or a
-// disagreement between the scalar and analytic-gradient implementations.
+// GPU regression for lattice continuity and octave footprint filtering.
+// Green is the numerical contract; red identifies a value/gradient mismatch
+// or an incorrectly filtered octave spectrum.
 #import bevy_pbr::forward_io::VertexOutput
-#import lunco::noise::{vnoise, vnoise_gradient, vnoise2d, vnoise2d_gradient}
+#import lunco::noise::{vnoise, vnoise_gradient, vnoise2d, vnoise2d_gradient, fbm_rot, fbm_rot_gradient, fbm2d, fbm2d_gradient}
 
 struct Material {
     unused: f32,
@@ -38,5 +38,26 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             && length(left.yz - right.yz) < 0.06
             && abs(vnoise2d(p) - vnoise2d_gradient(p).x) < 0.0001;
     }
+    // An unresolved octave becomes its mean with zero slope. A half-resolved
+    // base octave keeps exactly half its contrast and slope; higher octaves
+    // are already unresolved, and must not amplify the surviving base octave.
+    let p = origin + vec3(0.37, 0.43, 0.61);
+    let filter_window = vec2(2.0, 2.0);
+    let resolved = fbm_rot_gradient(p, 3, 0.5, 0.0, filter_window);
+    let unresolved = fbm_rot_gradient(p, 3, 0.5, 1.0, filter_window);
+    let partial = fbm_rot_gradient(p, 3, 0.5, 1.0 / 3.0, filter_window);
+    let base = vnoise_gradient(p);
+    valid = valid && abs(resolved.x - fbm_rot(p, 3, 0.5)) < 0.0001
+        && length(unresolved - vec4(0.5, 0.0, 0.0, 0.0)) < 0.0001
+        && abs(partial.x - (0.5 + 0.5 * (base.x - 0.5) / 1.75)) < 0.0001
+        && length(partial.yzw - 0.5 * base.yzw / 1.75) < 0.0001;
+    let resolved2 = fbm2d_gradient(p.xz, 3, 0.5, 0.0, filter_window);
+    let unresolved2 = fbm2d_gradient(p.xz, 3, 0.5, 1.0, filter_window);
+    let partial2 = fbm2d_gradient(p.xz, 3, 0.5, 1.0 / 3.0, filter_window);
+    let base2 = vnoise2d_gradient(p.xz);
+    valid = valid && abs(resolved2.x - fbm2d(p.xz, 3, 0.5)) < 0.0001
+        && length(unresolved2 - vec3(0.5, 0.0, 0.0)) < 0.0001
+        && abs(partial2.x - (0.5 + 0.5 * (base2.x - 0.5) / 1.75)) < 0.0001
+        && length(partial2.yz - 0.5 * base2.yz / 1.75) < 0.0001;
     return select(vec4(1.0, 0.0, 0.0, 1.0), vec4(0.0, 1.0, 0.0, 1.0), valid);
 }

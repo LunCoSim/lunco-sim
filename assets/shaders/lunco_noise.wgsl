@@ -119,20 +119,9 @@ fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     return sum / total;
 }
 
-/// `fbm` with the domain ROTATED about +Y by the golden angle (≈2.4 rad) each
-/// octave — the 3D counterpart of `fbm2d`'s rotation, and for the same reason.
-///
-/// Value noise is axis-aligned, so un-rotated octaves stack into diagonal grid
-/// streaks that read as static under grazing lunar light. `fbm2d` has rotated
-/// since it was written; the 3D `fbm` above never did, so every native terrain
-/// shader that used it inherited the streaks while its own `_web` twin (on
-/// `fbm2d`) did not.
-///
-/// The rotated form keeps each terrain material's value-noise octaves isotropic
-/// around the vertical axis, avoiding persistent diagonal streaks under grazing
-/// illumination.
-///
-/// `fbm` is left as-is: non-terrain callers were authored against its output.
+/// Terrain FBM rotates the domain about +Y by the golden angle each octave.
+/// This decorrelates the axes of successive value-noise grids under grazing
+/// illumination. Non-terrain `fbm` callers use the unrotated domain above.
 fn fbm_rot(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     var sum = 0.0;
     var amp = 1.0;
@@ -150,11 +139,20 @@ fn fbm_rot(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     return sum / total;
 }
 
+/// Resolution weight for a noise period. `footprint` is noise units per pixel;
+/// `filter_window` gives the cutoff and transition width in pixels per period.
+fn noise_footprint_weight(footprint: f32, filter_window: vec2<f32>) -> f32 {
+    return saturate((1.0 / max(footprint, 1e-6) - filter_window.x) / filter_window.y);
+}
+
 /// `fbm_rot` with its analytic gradient in the original input coordinate
 /// system. Each octave applies a 2x scale and one fixed XZ rotation; the
 /// accumulated inverse rotation and scale apply the chain rule without extra
-/// noise samples.
-fn fbm_rot_gradient(p: vec3<f32>, octaves: i32, gain: f32) -> vec4<f32> {
+/// noise samples. Each octave filters its own footprint. Faded values converge
+/// to the noise mean without renormalizing the surviving octave amplitudes.
+fn fbm_rot_gradient(
+    p: vec3<f32>, octaves: i32, gain: f32, footprint: f32, filter_window: vec2<f32>,
+) -> vec4<f32> {
     var sum = 0.0;
     var gradient = vec3<f32>(0.0);
     var amp = 1.0;
@@ -167,15 +165,19 @@ fn fbm_rot_gradient(p: vec3<f32>, octaves: i32, gain: f32) -> vec4<f32> {
     let rs = sin(2.399963);
     let count = max(octaves, 1);
     for (var o = 0; o < count; o++) {
-        let sample = vnoise_gradient(q);
-        sum += amp * sample.x;
+        let weight = noise_footprint_weight(footprint * octave_scale, filter_window);
+        var sample = vec4(0.5, 0.0, 0.0, 0.0);
+        if (weight > 0.0) {
+            sample = vnoise_gradient(q);
+        }
+        sum += amp * (0.5 + weight * (sample.x - 0.5));
         let local_gradient = sample.yzw;
         let input_gradient = vec3(
             rot_c * local_gradient.x + rot_s * local_gradient.z,
             local_gradient.y,
             -rot_s * local_gradient.x + rot_c * local_gradient.z,
         ) * octave_scale;
-        gradient += amp * input_gradient;
+        gradient += amp * weight * input_gradient;
         total += amp;
         amp *= gain;
         octave_scale *= 2.0;
@@ -238,8 +240,10 @@ fn fbm2d(p: vec2<f32>, octaves: i32, gain: f32) -> f32 {
     return sum / total;
 }
 
-/// `fbm2d` with its analytic gradient in the original input coordinate system.
-fn fbm2d_gradient(p: vec2<f32>, octaves: i32, gain: f32) -> vec3<f32> {
+/// `fbm2d` with the same octave-footprint and gradient contract as the 3D path.
+fn fbm2d_gradient(
+    p: vec2<f32>, octaves: i32, gain: f32, footprint: f32, filter_window: vec2<f32>,
+) -> vec3<f32> {
     var sum = 0.0;
     var gradient = vec2<f32>(0.0);
     var amp = 1.0;
@@ -252,14 +256,18 @@ fn fbm2d_gradient(p: vec2<f32>, octaves: i32, gain: f32) -> vec3<f32> {
     let rs = sin(2.399963);
     let count = max(octaves, 1);
     for (var o = 0; o < count; o++) {
-        let sample = vnoise2d_gradient(q);
-        sum += amp * sample.x;
+        let weight = noise_footprint_weight(footprint * octave_scale, filter_window);
+        var sample = vec3(0.5, 0.0, 0.0);
+        if (weight > 0.0) {
+            sample = vnoise2d_gradient(q);
+        }
+        sum += amp * (0.5 + weight * (sample.x - 0.5));
         let local_gradient = sample.yz;
         let input_gradient = vec2(
             rot_c * local_gradient.x + rot_s * local_gradient.y,
             -rot_s * local_gradient.x + rot_c * local_gradient.y,
         ) * octave_scale;
-        gradient += amp * input_gradient;
+        gradient += amp * weight * input_gradient;
         total += amp;
         amp *= gain;
         octave_scale *= 2.0;

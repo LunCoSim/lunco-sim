@@ -23,19 +23,15 @@
 #else
 #import lunco::noise::{fbm_rot, fbm_rot_gradient}
 #endif
+#import lunco::noise::noise_footprint_weight
 
 // Footprint fade thresholds, in screen pixels per noise period.
 //
-// A layer fades out once its period shrinks below `AA_CUT_PX`, because value-noise
-// detail finer than ~5 px stops reading as relief and starts reading as shimmer.
-// The fade filters shading detail below its visible pixel footprint. `bump_layer`
-// uses one analytic-gradient FBM evaluation per layer; unresolved normal energy
-// moves into the shared roughness response instead of disappearing abruptly.
-//
-// The baked normal/AO/tone maps take over past the near field, which makes this
-// tight anti-aliasing ramp safe for both static and streamed terrain materials.
-const AA_CUT_PX: f32 = 5.0;
-const AA_RAMP_PX: f32 = 7.0;
+// Filter each octave between two and four pixels per period. This retains
+// resolved close grain while removing subpixel slopes independently of the
+// coarser octaves. Unresolved slope energy moves into GGX roughness.
+const AA_CUT_PX: f32 = 2.0;
+const AA_RAMP_PX: f32 = 2.0;
 const BUMP_MAX_SLOPE: f32 = 0.65;
 
 /// Linear, clamped remap for authored colour layers. Relief applies its own
@@ -51,8 +47,7 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 /// Note this is a HIGH-pass on period, not a distance fade: up close `pw` is small,
 /// so the result saturates at 1 and every layer is fully on.
 fn aa_fade(scale: f32, pw: f32) -> f32 {
-    let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    return saturate((px_per_period - AA_CUT_PX) / AA_RAMP_PX);
+    return noise_footprint_weight(scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
 }
 
 /// The platform octave budget. Call sites pass the native octave count; the web
@@ -335,16 +330,18 @@ fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: 
 /// Colour-only layers retain the linear `ramp`; relief needs a continuous normal.
 /// The gradient is with respect to the input position in inverse metres.
 fn layer_gradient(
-    p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
+    p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32, pw: f32,
 ) -> vec4<f32> {
     var raw_height = 0.0;
     var raw_gradient = vec3<f32>(0.0);
 #ifdef LUNCO_NOISE_2D
-    let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain);
+    let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain,
+        scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
     raw_height = sample.x;
     raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
 #else
-    let sample = fbm_rot_gradient(p * scale, oct(octaves), gain);
+    let sample = fbm_rot_gradient(p * scale, oct(octaves), gain,
+        scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
     raw_height = sample.x;
     raw_gradient = sample.yzw * scale;
 #endif
@@ -354,15 +351,26 @@ fn layer_gradient(
     return vec4(height, gradient);
 }
 
-/// Fold unresolved bump variance into the GGX roughness width. `resolved` is
-/// the footprint fade used by the matching geometric-normal perturbation, so
-/// normal energy transitions continuously from explicit shading into the
-/// filtered material response as the camera moves away.
+/// Fold an estimate of each octave's removed slope variance into GGX roughness.
+/// The squared resolution weight matches the explicit gradient's energy;
+/// normalization uses the complete authored spectrum, just like the FBM.
 fn filter_detail_roughness(
-    perceptual_roughness: f32, amplitude_m: f32, scale_per_m: f32, resolved: f32,
+    perceptual_roughness: f32, amplitude_m: f32, scale_per_m: f32,
+    octaves: i32, gain: f32, pw: f32,
 ) -> f32 {
-    let unresolved = 1.0 - clamp(resolved, 0.0, 1.0);
-    let unresolved_rms_slope = 0.5 * amplitude_m * scale_per_m * sqrt(unresolved);
+    var variance = 0.0;
+    var amp = 1.0;
+    var frequency = 1.0;
+    var total = 0.0;
+    for (var o = 0; o < oct(octaves); o++) {
+        let weight = aa_fade(scale_per_m * frequency, pw);
+        let slope = amp * frequency;
+        variance += slope * slope * (1.0 - weight * weight);
+        total += amp;
+        amp *= gain;
+        frequency *= 2.0;
+    }
+    let unresolved_rms_slope = 0.5 * amplitude_m * scale_per_m * sqrt(variance) / total;
     let alpha = clamp(perceptual_roughness, 0.05, 1.0);
     let alpha_sq = alpha * alpha;
     let filtered_alpha_sq = alpha_sq * alpha_sq
@@ -380,9 +388,9 @@ fn filter_detail_roughness(
 fn bump_layer(
     n: vec3<f32>, p: vec3<f32>,
     scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
-    strength: f32, out_h: ptr<function, f32>,
+    strength: f32, pw: f32, out_h: ptr<function, f32>,
 ) -> vec3<f32> {
-    let sample = layer_gradient(p, scale, octaves, gain, lo, hi);
+    let sample = layer_gradient(p, scale, octaves, gain, lo, hi, pw);
     *out_h = sample.x;
     var surface_gradient = sample.yzw;
 #ifdef VERTEX_UVS_A

@@ -151,8 +151,11 @@ diagnostic replacement:
    interpolation from the landform band.
    Analytic noise gradients evaluate each layer once. Relief uses a cubic height
    remap with continuous slopes at its clipping thresholds; colour-only ramps
-   remain linear. Unresolved slope variance
-   transfers into GGX roughness over the same pixel-footprint fade. Authored
+   remain linear. Each FBM octave filters its own footprint between two and four
+   pixels per noise period, retaining resolvable close grain while suppressing
+   finer slopes. Filtered octaves converge to their mean without renormalizing
+   the remaining spectrum. An estimate of the removed per-octave slope variance
+   transfers into GGX roughness using the same squared resolution weights. Authored
    `inputs:roughness` owns the base, with centred clump variation. The mid
    procedural hummock band is restricted to non-measured surfaces, so it cannot
    duplicate measured landforms.
