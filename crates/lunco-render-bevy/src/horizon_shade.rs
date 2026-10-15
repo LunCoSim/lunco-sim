@@ -54,15 +54,18 @@ fn terrain_material_needs_engine_inputs(
         || material
             .get_scalar("shadow_cache_on")
             .is_none_or(|value| (value - inputs.shadow_cache_on).abs() > 1.0e-3)
-        || material
-            .get_vec3("sun_dir")
-            .is_none_or(|value| (value - inputs.sun_dir).length() > SUN_DIR_EPSILON)
+        || material.get_vec3("sun_dir").is_none_or(|value| {
+            // The local horizon is a shader branch, so crossing it must
+            // publish even when the angular change is visually subpixel.
+            (value.y <= 0.0) != (inputs.sun_dir.y <= 0.0)
+                || (value - inputs.sun_dir).length() > SUN_DIR_EPSILON
+        })
         || material
             .get_vec3("sun_dir_world")
             .is_none_or(|value| (value - inputs.sun_dir_world).length() > SUN_DIR_EPSILON)
         || material
             .get_scalar("sun_tan_radius")
-            .is_none_or(|value| (value - inputs.sun_tan_radius).abs() > 1.0e-6)
+            .is_none_or(|value| value != inputs.sun_tan_radius)
         || material.get("hf_size").is_none_or(|value| {
             let ParamValue::Vec2(value) = value else {
                 return true;
@@ -244,7 +247,10 @@ pub fn wire_terrain_materials(
             Option<&MeshMaterial3d<ShaderMaterial>>,
         ),
         (
-            With<lunco_terrain_surface::DemTerrainSurface>,
+            Or<(
+                With<lunco_terrain_surface::DemTerrainSurface>,
+                With<HorizonMap>,
+            )>,
             Without<RenderLayers>,
         ),
     >,
@@ -299,18 +305,9 @@ pub fn wire_terrain_materials(
         }
         return;
     };
-    // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — inside it the configured live march is
-    // skipped (CSM owns the near field), and "march everywhere" turned low
-    // flight into a slideshow. (Streamed tiles DO get a baked cache on
-    // native — `lunco-luncosim-ui` samples the oracle
-    // into a `HorizonMap` and mirrors the cache to tiles — but the cache
-    // fades in on the same `csm_far` boundary.) The cost of the fade is
-    // that the CSM volume (~1.5 km) cannot contain multi-km ridge occluders,
-    // so near terrain can read slightly lighter than the same ground seen from
-    // altitude. We deliberately do not compensate with a terrain-only fill:
-    // it would make the terrain obey a different illumination model from every
-    // dynamic PBR object and would incorrectly look like bounced light.
+    // Static meshes fade heightfield visibility in beyond native cascade range.
+    // Cached streamed tiles sample visibility at every distance. Both retain
+    // native terrain casting and reception of object shadows.
     let Some(to_sun_world) = render_sun
         .as_deref()
         .and_then(|state| state.direction_to_sun_world)
@@ -494,7 +491,7 @@ impl NonTerrainSunBindingState {
         match (self.applied, next) {
             (Some(applied), Some(next)) => {
                 (applied.direction - next.direction).length() > SUN_DIR_EPSILON
-                    || (applied.tan_radius - next.tan_radius).abs() > 1.0e-6
+                    || applied.tan_radius != next.tan_radius
             }
             (None, None) => false,
             _ => true,
@@ -529,7 +526,7 @@ fn wire_non_terrain_sun_uniforms<'a>(
                 .is_none_or(|value| (value - sun.direction).length() > SUN_DIR_EPSILON)
                 || material
                     .get_scalar("sun_tan_radius")
-                    .is_none_or(|value| (value - sun.tan_radius).abs() > 1.0e-6)
+                    .is_none_or(|value| value != sun.tan_radius)
         });
         if needs {
             if let Some(mut material) = shader_mats.get_mut(&handle.0) {
@@ -635,10 +632,9 @@ pub fn wire_blueprint_origin(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-/// Minimum change in a stored sun DIRECTION before the material carrying it is
-/// repacked. On a unit vector this is ~0.006° — three orders of magnitude finer
-/// than a visible shadow-direction change. Its job is to keep a *continuously*
-/// moving sun from repacking every terrain material every frame.
+/// Coalesce small directional drift (~0.006°) between material uploads.
+/// Local horizon-side changes bypass this tolerance. Authored angular radius
+/// is compared exactly, preserving zero and small positive values.
 const SUN_DIR_EPSILON: f32 = 1e-4;
 
 #[cfg(test)]

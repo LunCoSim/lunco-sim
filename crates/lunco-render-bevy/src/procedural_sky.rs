@@ -289,7 +289,7 @@ fn wire_directional_sun_inputs(
         let current_radius = material.get_scalar("sun_tan_radius");
         if current_direction
             .is_some_and(|current| (current - direction).length_squared() <= 1.0e-10)
-            && current_radius.is_some_and(|current| (current - tan_radius).abs() <= 1.0e-7)
+            && current_radius == Some(tan_radius)
         {
             continue;
         }

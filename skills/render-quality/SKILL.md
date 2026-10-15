@@ -94,7 +94,15 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    Keep a committed cache bound across night; run the `sunrise_shadow_cache`
    editor fixture to verify repeated crossings, upload acknowledgements and one
    resident GPU allocation. Pending bakes retain a sampled presentation value;
-   they must not block fixed physics. Cache UVs must map
+   they must not block fixed physics. CPU light/cache agreement alone does not
+   prove shader uniform freshness. Run `scripts/api/test_sun_material_precision.py`
+   with an isolated `--output` directory; repeat for
+   `--scene assets/scenes/tests/sun_material_precision_dem.usda` to cover streamed
+   materials. `--windowed` uses the same gate in a desktop view. The GPU compares
+   horizon signs with the native light and tests zero/positive angular radius.
+   Retain daytime coalescing while always publishing local horizon crossings;
+   static `HorizonMap` owners must enter the same material feed as DEM owners.
+   Cache UVs must map
    the CPU bake nodes to texel centres before filtering.
    For panel power, read the wired probe's `sun_visibility`,
    `sun_irradiance_w_m2` and panel `available_power_w`.

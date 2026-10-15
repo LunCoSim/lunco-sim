@@ -32,13 +32,19 @@ Production verification on the normal binary:
   restoring two degrees restores the passing pixels.
 - The existing Summer `route_surface_annotation` consumer passes twelve checks,
   including sparse uploads, retained binding and terminal invalid-input recovery.
+- The live Sun material GPU driver passes five phases on a static heightfield
+  and five on a streamed DEM, including a sub-tolerance sunrise and zero/positive
+  authored angular size. Static heightfield owners and DEM owners share the
+  terrain uniform feed. The shader compares its horizon side against the native
+  light; CPU cache agreement alone is insufficient for this contract.
 - Focused typed-upload coalescing/retirement and angular precision tests pass.
 - Six headful Griffin day/night/return views complete. Sampled frame durations
   remain below 15 ms in those windows; this is bounded observation, not a Tracy
   attribution or an exhaustive stall guarantee. Physical transport is paused
   for those directed views; the authored cache gate supplies cadence evidence.
 
-Evidence is under `.lunco/terrain-lines/sunrise-fix/`. Owned API 4286 sessions
+Evidence is under `.lunco/terrain-lines/sunrise-fix/` and
+`.lunco/terrain-lines/final-pass/`. Owned API 4286 sessions
 close through Exit or the recorder's normal ExitAfterRecording path. The full
 render wrapper remains blocked by an unrelated missing `twin_search_paths`
 scenario source; direct production fixtures supply the scoped GPU evidence.

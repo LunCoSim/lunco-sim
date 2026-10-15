@@ -239,9 +239,9 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
-    if [[ -z "$reason" && "$name" == "vertex_shadow_alignment" ]]; then
-        # Both probes must be visible: green at the vacated caster position,
-        # cyan under the displaced caster. A mismatched native shadow is red.
+    if [[ -z "$reason" && "$name" =~ ^(vertex_shadow_alignment|sun_material_precision|sun_material_precision_dem)$ ]]; then
+        # Both numerical probes must be visible; disagreement with native
+        # rendering state turns a probe red.
         green_coverage=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' \
             -format '%[fx:mean]' info: 2>/dev/null)
         cyan_coverage=$(convert "$last" -fx 'g > 0.8 && b > 0.8 && r < 0.2' \
@@ -251,7 +251,7 @@ for scene in "${SCENES[@]}"; do
         if ! awk -v green="${green_coverage:-0}" -v cyan="${cyan_coverage:-0}" \
             -v red="${red_coverage:-1}" \
             'BEGIN { exit !(green > 0.0001 && cyan > 0.0001 && red < 0.00001) }'; then
-            reason="vertex/shadow alignment probes failed or are missing (green=${green_coverage:-unavailable} cyan=${cyan_coverage:-unavailable} red=${red_coverage:-unavailable})"
+            reason="native rendering probes failed or are missing (green=${green_coverage:-unavailable} cyan=${cyan_coverage:-unavailable} red=${red_coverage:-unavailable})"
         fi
     fi
 
@@ -320,6 +320,16 @@ for scene in "${SCENES[@]}"; do
             reason="terrain relief bands are black, flat, or tonally indistinguishable (mean=${terrain_mean:-unavailable} std=${terrain_std:-unavailable} far=${far_std:-unavailable} middle=${middle_std:-unavailable} near=${near_std:-unavailable})"
         else
             echo "    pixels — terrain mean=${terrain_mean} std=${terrain_std} far=${far_mean}/${far_std} middle=${middle_mean}/${middle_std} near=${near_mean}/${near_std}"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$RENDER_QUALITY" == "high" && "$name" =~ ^sun_material_precision(_dem)?$ ]]; then
+        # Keep the material resident while crossing the horizon and changing
+        # the authored angle; an initial frame alone cannot exercise coalescing.
+        if ! python3 scripts/api/test_sun_material_precision.py \
+            --port "$RENDER_API_PORT" --scene "$REPO_ROOT/assets/scenes/tests/${name}.usda" \
+            --output "$output/transitions" >"$output/transitions.log" 2>&1; then
+            reason="live Sun material GPU transitions failed; see $output/transitions.log"
         fi
     fi
 

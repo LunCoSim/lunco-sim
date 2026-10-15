@@ -242,6 +242,12 @@ covers every distance without a fragment march. Native shadow-map resolution,
 range, and cascade count remain owned by Graphics. Static materials retain
 their native CSM range.
 
+The terrain uniform feed covers both DEM owners and static meshes carrying a
+`HorizonMap`. Ordinary meshes without a heightfield use the separate global Sun
+feed. Daytime angular drift is coalesced, but a change across local `sun_dir.y = 0`
+always reaches the material because it changes the shader's night branch.
+Authored angular-radius changes compare exact GPU values, including zero.
+
 The visibility cache stores an endpoint-inclusive nodal grid, matching the CPU
 bake's `i / (resolution - 1)` footprint coordinates. Its shader maps those nodes
 to texel centres before bilinear sampling and clamps at the footprint boundary;
@@ -271,6 +277,12 @@ Procedural sky disc radius and heightfield penumbra use the same authored
 viewer's position; terrain shadow visibility never hides the sky globally.
 The `sun_disc_occlusion` graphics fixture checks the authored angular size and
 an opaque half-disc occluder.
+`sun_material_precision` and its DEM counterpart compare the terrain uniform's
+horizon side to Bevy's native light on the GPU. Their live driver
+`scripts/api/test_sun_material_precision.py` exercises tiny crossings and the
+zero/positive authored-angle boundary while keeping material bindings resident.
+The High render gate invokes that driver after the initial-frame pixel check.
+
 
 Physical illumination is independent of the camera and GPU shadow cache.
 `LunCoEnvironmentProbeAPI.outputs:sun_visibility` is the fraction of explicitly

@@ -266,9 +266,8 @@ pub(crate) fn register(app: &mut App) {
             .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
             .in_set(lunco_core::RuntimeCycleSet::Visualization),
     );
-    // The cache validity test converts the semantic sun into terrain-local
-    // render space. Run it only after BigSpace has finalized GlobalTransform,
-    // then publish before the terrain-surface tile binder consumes the result.
+    // Publish cache residency before tile binding. Direction-dependent shader
+    // uniforms use the finalized render frame in the renderer's horizon feed.
     app.add_systems(
         PostUpdate,
         wire_tile_shadow_cache
