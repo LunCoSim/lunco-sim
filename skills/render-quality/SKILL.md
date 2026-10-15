@@ -72,6 +72,15 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    uniform bound in depth-only passes. Run the `vertex_shadow_alignment`
    graphics fixture: both lit-vacated and shadowed-displaced probes must appear,
    with no red disagreement pixels.
+   Enable `DepthPrepass`, `NormalPrepass`, and `MotionVectorPrepass` through the
+   existing reflected `add` interface when checking optional camera passes.
+   Declare the camera dependency in the scenario. The terrain appearance and
+   vertex-shadow fixtures exercise these variants; shader compilation errors
+   fail the graphics gate. Motion-vector view flags occur on forward pipelines
+   too, so previous-position varyings/bindings need the prepass guard as well.
+   For scaled terrain lighting, run `terrain_normal_transform`: world-to-local
+   normals use the transpose of the local-to-world linear transform, rather
+   than the inverse used for positions.
    For measured shadow cost, use the diagnostics-enabled render owner's four
    `lunco_shadow_*` GPU spans described in `performance-profiling`. Confirm
    timestamp coverage and keep profiler attribution separate from unprofiled

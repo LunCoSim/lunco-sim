@@ -31,9 +31,11 @@ fn vertex(in: Vertex) -> VertexOutput {
 #else
     out.world_normal = mesh_functions::mesh_normal_local_to_world(in.normal, in.instance_index);
 #endif
+#ifdef PREPASS_PIPELINE
 #ifdef MOTION_VECTOR_PREPASS
     out.previous_world_position = mesh_functions::mesh_position_local_to_world(
         mesh_functions::get_previous_world_from_local(in.instance_index), vec4(local_position, 1.0));
+#endif
 #endif
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = in.instance_index;

@@ -30,8 +30,12 @@
 #else
 #import bevy_pbr::forward_io::VertexOutput
 #endif
+// Motion-vector view flags also occur on forward pipelines, whose output and
+// view bindings contain no previous-position data.
+#ifdef PREPASS_PIPELINE
 #ifdef MOTION_VECTOR_PREPASS
 #import bevy_pbr::prepass_bindings::previous_view_uniforms
+#endif
 #endif
 
 // Keep this layout byte-for-byte compatible with terrain_layered.wgsl. The
@@ -150,6 +154,7 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 #else
     out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
 #endif
+#ifdef PREPASS_PIPELINE
 #ifdef MOTION_VECTOR_PREPASS
     // Recover the previous camera origin from its rigid view transform, then
     // evaluate the same morph band in the previous render frame.
@@ -164,6 +169,7 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
     out.previous_world_position = mesh_functions::mesh_position_local_to_world(
         previous_transform, vec4(mix(vertex.position, vertex.morph_target, previous_m), 1.0));
+#endif
 #endif
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;

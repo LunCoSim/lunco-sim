@@ -62,10 +62,24 @@ same surface in every pass. The `vertex_shadow_alignment` GPU fixture displaces
 an authored caster and requires its native shadow at the displaced position,
 with the vacated position lit.
 
+Native depth, normal, and motion-vector components are registered by the camera
+binder and can be enabled through the shared reflected component interface.
+Motion-vector definitions also occur on forward pipelines; previous-position
+outputs and previous-view bindings belong only to `PREPASS_PIPELINE`. The terrain
+appearance and vertex-shadow fixtures enable all three native prepasses and
+reject shader compilation failures as well as missing image probes.
+
 Static and streamed terrain therefore differ only in geometry delivery. A
 static mesh is effectively the non-morphing/root LOD of the same appearance
 contract; the streamed ECS quadtree may still manage residency, colliders, and
 LOD selection independently.
+
+Procedural relief operates in the terrain-local normal frame. Bevy's
+inverse-transpose maps a local normal to world space; the reverse mapping uses
+the transpose of the mesh's local-to-world linear transform. This preserves the
+normal direction under nonuniform scale as well as rotation. The
+`terrain_normal_transform` GPU fixture checks that round trip on a rotated,
+nonuniformly scaled mesh.
 
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.

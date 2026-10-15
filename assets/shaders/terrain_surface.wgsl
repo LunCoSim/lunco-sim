@@ -308,8 +308,11 @@ fn terrain_detail_position(uv: vec2<f32>, half_extent: f32) -> vec3<f32> {
 // render normal through the same mesh instance before bumping it, then cross the
 // one boundary back to render-world once the local perturbation is complete.
 fn terrain_detail_normal_to_local(world_normal: vec3<f32>, instance_index: u32) -> vec3<f32> {
-    return normalize((mesh_functions::get_local_from_world(instance_index)
-        * vec4<f32>(world_normal, 0.0)).xyz);
+    // Bevy maps local normals with inverse-transpose(M). Its inverse is
+    // transpose(M), including when the terrain has nonuniform scale.
+    let transform = mesh_functions::get_world_from_local(instance_index);
+    let linear = mat3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
+    return normalize(transpose(linear) * world_normal);
 }
 
 fn terrain_detail_normal_to_world(local_normal: vec3<f32>, instance_index: u32) -> vec3<f32> {
