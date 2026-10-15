@@ -9340,3 +9340,15 @@ about 5.13 ms per HUD publication to the exposure owner, predominantly Rhai
 visibility/properties policies. It is profiler evidence, not product FPS.
 The 200 FPS, sub-1 ms physics and independent simulation/presentation targets
 remain open; ancestor prim resyncs still cause subtree asset discovery.
+
+### Removal within a native notice batch — 2026-10-15
+
+The live consumer resolves prim existence before projecting a property or
+transform notice. Structural reconciliation owns prims removed later in the
+same complete batch. This prevents stale property notices from selecting a
+whole-scene refresh and retiring unrelated running programs. The windowed
+`route_lifecycle` production gate exposes that failure, then passes all 111
+checks after the fix, including live UI projection and route editing. Its
+owned API 4320 process exits zero. Evidence is
+`target/runtime-ui-narrow-route-windowed.log` (failing) and
+`target/usd-removed-prim-route-windowed.log` (passing).

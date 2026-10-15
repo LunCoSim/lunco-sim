@@ -830,6 +830,9 @@ pub(crate) fn apply_transform_edits_live(
             .iter()
             .filter_map(|(path, channels)| {
                 let sp = SdfPath::new(path).ok()?;
+                if !view.has_prim(&sp) {
+                    return None;
+                }
                 match lunco_usd_bevy_stage::local_transform_at(&view, &sp, 0.0) {
                     Ok(Some(transform)) => Some((path.clone(), *channels, transform)),
                     Ok(None) => None,
@@ -1168,6 +1171,10 @@ pub(crate) fn refresh_edited_prims_live(
             let Ok(sp) = SdfPath::new(&prim) else {
                 continue;
             };
+            // Structural reconciliation owns a prim removed later in this batch.
+            if !view.has_prim(&sp) {
+                continue;
+            }
             match view.type_name(&sp).as_deref() {
                 // Already handled in place by the light projection.
                 Some(ltok::DOME_LIGHT) => {}

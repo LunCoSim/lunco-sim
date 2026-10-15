@@ -617,7 +617,9 @@ the right behaviour is for it to visibly do nothing.
    been authored; the writer must not also refresh ECS state. Property resyncs
    use the same attribute consumer and prepare only that property's asset
    values. Prim resyncs retain structural subtree preparation; native USD asset
-   types select provenance/time-sample reads. Billboard edits reuse their initial reader
+   types select provenance/time-sample reads. Property/transform notices for a
+   prim removed in the completed batch leave deletion to structural reconciliation.
+   Billboard edits reuse their initial reader
    and preserve child state; exercise `usd_billboard_live.usda` when changing
    that boundary. Owners also promote a local subtree reset
    to a stage reset when their runtime topology crosses that subtree. Before a

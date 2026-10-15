@@ -228,6 +228,8 @@ their native property identity and enter the attribute consumer; they never
 create separate property entities. Attribute authoring only changes the native
 stage. The notice consumer applies each complete batch once, with ordered,
 unique prim paths supplied to registered live-edit owners.
+When a complete batch removes a prim, structural reconciliation owns that
+removal; earlier property and transform notices cannot recreate its subtree.
 Native asset preparation uses the same property scope: a property resync reads
 only that property's asset defaults and time samples; prim resyncs traverse the
 affected subtree. USD attribute types gate asset value-resolution work, so scalar
