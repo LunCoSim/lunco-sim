@@ -209,6 +209,11 @@ fn on_event(me, evt, ctx) { ... }   // optional next-scenario-pass event reactio
 fn on_stop(me, ctx) { ... }         // optional teardown
 ```
 
+Attachment removal stops execution during the removal flush, including API
+scripts attached to scene hierarchy entities. During reload this precedes final
+scene resource resets. Independent source documents remain open until their
+document owner closes them; they do not keep a removed host's program running.
+
 State rule (rhai-specific, important): script `fn`s are **pure** — an indirect
 task helper must receive its configuration as arguments. The native task kernel
 owns the cursor, dwell timing, and event waits; user policy does not maintain a

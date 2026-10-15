@@ -103,6 +103,14 @@ generation, so its final `on_stop` still routes to the outgoing Twin after the
 workspace has switched. Pending asset and compiler work is canceled or fenced
 at that same owner boundary.
 
+The backend registers `ScenarioDriver::retire_removed_model` for attachment
+removal. Interactive/API programs attached to retiring hierarchy entities stop
+during the removal flush, before registered scene resources reset, even though
+their source documents remain independently open. Stable application hosts keep
+their explicit application lifetime. Attachment removal reuses the driver's
+idempotent stop operation; it cannot defer an outgoing `on_stop` into the next
+scene's driver tick.
+
 `TwinClosed` closes every document whose stored runtime owner is that
 `LocalTwin`: the workspace owner dispatches `CloseDocument` to the domain owners,
 then removes the metadata. Workspace replacement drains these handlers before
@@ -144,9 +152,14 @@ documents: tabs and queued filesystem opens under the closed Twin root are
 retired, including files opened directly by path without an explicit Twin origin.
 
 Core and application scripts keep their own owner scope and stable generation
-across Twin scene transitions. Scene teardown clears the old guided presentation
-but only closes programs explicitly marked as scene-owned; Twin teardown only
-closes programs explicitly marked with that Twin ID. A shared source or a
+across Twin scene transitions. Guided presentation clears at transition start
+and registers `GuidedOverlay` as a scene resource, so its final reset also drains
+writes from shutdown and entity-removal callbacks. Runtime dropdown state uses
+the same final reset; only active `TwinClosed` clears it immediately. Objectives
+visibility remains an application preference. Scene teardown closes source
+documents explicitly marked as scene-owned, and removal of any retiring host
+stops its execution. Twin teardown closes programs explicitly marked with that
+Twin ID. A shared source or a
 currently active Twin does not make an unmarked application script Twin-owned.
 The application Tutorials menu captures the active Twin at selection time and
 starts that tutorial instance under that Twin's lifecycle owner; this does not
@@ -489,12 +502,15 @@ app registers its own start-up value as the baseline:
 case. Carried into the next scene it would make a fresh `PhysicsScene` look like
 a conflicting duplicate of a prim that no longer exists.
 
-## Adding scene-derived state
+## Verification
 
-If you add a resource, cache or external handle that a scene load writes, you
-have added a leak until you register its reset. There is no automatic
-detection — the schedule is the review surface, and an unregistered resource is
-visible as an absence from it.
+Generic `scene_lifecycle` tests at the core, scripting, guided UI and runtime UI
+owners cover repeated reset, removal/shutdown callbacks, independent documents,
+pending preparation and preserved application state. These are engine ownership
+invariants; authored Rhai retains control over script behavior. The production
+`scripts/api/test_twin_session_retirement.py` driver exercises Twin replacement
+and full reload through the public API with verdicts in
+`assets/scenarios/tests/twin_session_retirement.rhai`.
 
 ## See also
 

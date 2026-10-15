@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -52,6 +53,13 @@ struct RuntimeUiDropdownState {
     ignore_opening_click: bool,
 }
 
+impl SceneResource for RuntimeUiDropdownState {}
+
+fn install_runtime_ui_dropdown_state(app: &mut App) {
+    app.init_scene_resource::<RuntimeUiDropdownState>()
+        .add_observer(reset_runtime_ui_dropdowns_on_twin_closed);
+}
+
 impl RuntimeUiDropdownState {
     fn toggle(&mut self, key: &str) {
         if self.open.as_deref() == Some(key) {
@@ -63,8 +71,7 @@ impl RuntimeUiDropdownState {
     }
 
     fn close(&mut self) {
-        self.open = None;
-        self.ignore_opening_click = false;
+        self.clear_scene();
     }
 
     fn consume_opening_click(&mut self, clicked: bool) {
@@ -253,9 +260,7 @@ impl Plugin for LunCoSimUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_usd_bevy_camera::camera_switch::StandalonePresentationState>()
             .enabled = true;
-        app.init_resource::<RuntimeUiDropdownState>()
-            .add_systems(lunco_core::SceneTeardown, reset_runtime_ui_dropdowns)
-            .add_observer(reset_runtime_ui_dropdowns_on_twin_closed);
+        install_runtime_ui_dropdown_state(app);
         dataset_provisioning::install(app);
         app.insert_resource(lunco_workbench_guided_ui::GuidedObjectivesVisibility {
             visible_in_perspective: Some(lunco_workbench_core::PerspectiveId("sandbox_view")),
@@ -749,15 +754,13 @@ fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
     lunco_core::trigger_runtime_error(commands, "runtime-ui-action-failed", message);
 }
 
-fn reset_runtime_ui_dropdowns(mut dropdowns: ResMut<RuntimeUiDropdownState>) {
-    dropdowns.close();
-}
-
 fn reset_runtime_ui_dropdowns_on_twin_closed(
-    _trigger: On<lunco_workspace::TwinClosed>,
+    trigger: On<lunco_workspace::TwinClosed>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
 ) {
-    dropdowns.close();
+    if trigger.was_active {
+        dropdowns.close();
+    }
 }
 
 /// Labels for the native Camera menu remain authored camera-domain commands.
@@ -1822,6 +1825,53 @@ mod tests {
     };
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
+
+    #[test]
+    fn scene_lifecycle_retires_dropdown_state_and_preserves_inactive_twin_closure() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        super::install_runtime_ui_dropdown_state(&mut app);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            |mut state: ResMut<RuntimeUiDropdownState>| {
+                state.toggle("shutdown_dropdown");
+            },
+        );
+        for _ in 0..3 {
+            app.world_mut()
+                .resource_mut::<RuntimeUiDropdownState>()
+                .toggle("active_dropdown");
+            let closed = lunco_workspace::TwinClosed {
+                twin: lunco_workspace::TwinId::new(7),
+                root: Default::default(),
+                was_active: false,
+            };
+            app.world_mut().trigger(closed.clone());
+            assert_eq!(
+                app.world()
+                    .resource::<RuntimeUiDropdownState>()
+                    .open
+                    .as_deref(),
+                Some("active_dropdown")
+            );
+            lunco_core::run_scene_teardown(app.world_mut());
+            assert_eq!(
+                *app.world().resource::<RuntimeUiDropdownState>(),
+                RuntimeUiDropdownState::default()
+            );
+            app.world_mut()
+                .resource_mut::<RuntimeUiDropdownState>()
+                .toggle("active_dropdown");
+            app.world_mut().trigger(lunco_workspace::TwinClosed {
+                was_active: true,
+                ..closed
+            });
+            assert_eq!(
+                *app.world().resource::<RuntimeUiDropdownState>(),
+                RuntimeUiDropdownState::default()
+            );
+        }
+    }
 
     #[derive(bevy::prelude::Resource, Default)]
     struct GuidedStopTarget(Option<bevy::prelude::Entity>);

@@ -25,7 +25,7 @@
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
@@ -90,10 +90,12 @@ pub struct GuidedOverlay {
     pub recovery: Option<GuidedRecovery>,
 }
 
+impl SceneResource for GuidedOverlay {}
+
 impl GuidedOverlay {
     /// Clear every presentation field and its owner identity together.
     pub fn clear(&mut self) {
-        *self = Self::default();
+        self.clear_scene();
     }
 }
 
@@ -1430,7 +1432,7 @@ pub struct GuidedOverlayPlugin;
 
 impl Plugin for GuidedOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GuidedOverlay>()
+        app.init_scene_resource::<GuidedOverlay>()
             .init_resource::<GuidedObjectivesVisibility>()
             .add_observer(clear_twin_overlay_on_close)
             .add_observer(clear_overlay_on_scene_transition);
@@ -1467,6 +1469,77 @@ impl Plugin for GuidedOverlayPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Component)]
+    struct PublishesGuidanceOnRemoval;
+
+    #[test]
+    fn scene_lifecycle_retires_guidance_after_shutdown_and_removal_callbacks() {
+        let mut app = App::new();
+        app.add_plugins(GuidedOverlayPlugin)
+            .add_systems(lunco_core::SceneTeardown, |mut commands: Commands| {
+                commands.trigger(SetHint {
+                    text: "outgoing shutdown hint".into(),
+                });
+                commands.trigger(SetTourStep {
+                    index: 0,
+                    total: 1,
+                    anchor: String::new(),
+                    title: "Outgoing tour".into(),
+                    body: "Retiring".into(),
+                });
+            })
+            .add_observer(
+                |_: On<Remove, PublishesGuidanceOnRemoval>, mut commands: Commands| {
+                    commands.trigger(SetObjectives {
+                        text: "outgoing removal objective".into(),
+                    });
+                    commands.trigger(SetGuidedHudActions {
+                        tool: "outgoing_tool".into(),
+                        hook: "advance".into(),
+                        actions: vec![GuidedHudAction {
+                            id: "next".into(),
+                            label: "Next".into(),
+                            enabled: true,
+                        }],
+                    });
+                },
+            );
+        let preference = Some(PerspectiveId("application_preference"));
+        app.world_mut()
+            .resource_mut::<GuidedObjectivesVisibility>()
+            .visible_in_perspective = preference;
+        for _ in 0..3 {
+            app.world_mut().resource_mut::<GuidedOverlay>().clear();
+            let entity = app
+                .world_mut()
+                .spawn((lunco_core::SceneOwned, PublishesGuidanceOnRemoval))
+                .id();
+            lunco_core::run_scene_teardown(app.world_mut());
+            assert!(app.world().get_entity(entity).is_err());
+            let hud = app.world().resource::<GuidedOverlay>();
+            assert!(
+                hud.hint.is_empty(),
+                "shutdown must not repopulate the outgoing HUD"
+            );
+            assert!(
+                hud.objectives.is_empty(),
+                "removal callbacks must retire before presentation reset"
+            );
+            assert!(hud.actions.is_empty());
+            assert!(hud.action_tool.is_empty());
+            assert!(hud.action_hook.is_empty());
+            assert!(hud.tour.is_none());
+            assert!(hud.owner_script.is_none());
+            assert!(hud.owner_twin.is_none());
+            assert_eq!(
+                app.world()
+                    .resource::<GuidedObjectivesVisibility>()
+                    .visible_in_perspective,
+                preference
+            );
+        }
+    }
 
     #[test]
     fn menu_target_stays_in_titlebar_when_expansion_crosses_content_boundary() {

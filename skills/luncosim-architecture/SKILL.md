@@ -198,6 +198,10 @@ entities and their removal callbacks retire, then registered resources reset. Ta
 scene-owned entities outside the structural scene hierarchy with `SceneOwned`.
 Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
 owners use `run_scene_teardown`. Both share the replacement/reload boundary.
+Script backends register `ScenarioDriver::retire_removed_model` so interactive
+attachments on retiring entities stop during the removal flush before scene
+resources reset. Independent source-document lifetime does not extend the
+running program's entity lifetime; stable application hosts remain explicit.
 Derived clock entities follow their scene source through linked ECS ownership;
 `TimeDomain.parent` selects a clock and does not establish entity lifetime.
 Visualization history buffers, async tasks and queued canvas actions use
@@ -212,6 +216,11 @@ Experiment history and active playback have separate lifetimes: preserve complet
 trajectories in the experiment registry, but register playback maps as scene
 resources, tag playback entities `SceneOwned`, and release a closed document's
 playback at its publisher.
+Guided presentation and runtime dropdown state use registered scene resources,
+so their final reset follows shutdown and entity-removal callbacks. Clearing a
+HUD only at transition start cannot prevent terminal callbacks from repopulating
+it. Immediate active-session cleanup at `TwinClosed` checks `was_active`;
+closing an inactive Twin preserves the active session's presentation state.
 Keep scene-derived panel state in registered resources instead of panel fields;
 hidden panels must release rows, drafts and workers without repainting. Cursor
 modes and tool names are scene intent. Scene interaction adapters set

@@ -84,7 +84,12 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         .register_deferred_command::<commands::RunRhaiToolHook>()
         .init_resource::<lunco_scripting::scenario::ScenarioDriver<
             lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
-        >>();
+        >>()
+        .add_observer(
+            lunco_scripting::scenario::ScenarioDriver::<
+                lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+            >::retire_removed_model,
+        );
 
         let sources = app
             .world()

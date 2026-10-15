@@ -324,6 +324,11 @@ Document-private viewport mounts retire at `DocumentClosed`, or when their
 final preview lease ends with no workspace projection owner. Mount-set changes
 prune their catalog entries before replacement scans; closing a preview must
 not unregister a shared workspace authority.
+Guided HUDs and runtime dropdown state register their scene lifetime at
+initialization, including final cleanup after shutdown/removal callbacks.
+Keep objectives visibility as an application preference. Immediate cleanup of
+active-session controls on `TwinClosed` checks `was_active`; an inactive Twin
+closure must preserve those controls.
 Inspector parameter drafts pin their document and preview identity. Document
 closure and preview removal retire them without painting; an unrelated scene
 reload preserves drafts for surviving document previews. Live readouts use

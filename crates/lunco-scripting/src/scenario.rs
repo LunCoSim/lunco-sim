@@ -1837,14 +1837,18 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         entities
     }
 
-    /// Stop one scenario synchronously at an ownership boundary.
-    ///
-    /// The ordinary dead-entity path runs during the next driver tick. That is
-    /// correct for an entity disappearing during normal ECS work, but it is too
-    /// late for a scene transition: the old `on_stop` must run before the old
-    /// scene is despawned, otherwise its cleanup commands can target the next
-    /// scene. Scene and tutorial teardown call this method before removing the
-    /// owning entity.
+    /// Retire execution when its attachment is removed, including interactive
+    /// scripts on entities reclaimed through a scene hierarchy. The queued
+    /// stop runs during the removal flush, before final scene resource resets.
+    /// Independent script documents retain their document-owned lifetime.
+    pub fn retire_removed_model(event: On<Remove, ScriptedModel>, mut commands: Commands) {
+        let entity = event.entity;
+        commands.queue(move |world: &mut World| Self::stop_entity(world, entity));
+    }
+
+    /// Stop one scenario synchronously at an ownership boundary. Scene and
+    /// tutorial owners stop programs before reclaiming their hosts; attachment
+    /// removal also retires execution before final scene resource resets.
     pub fn stop_entity(world: &mut World, entity: Entity) {
         Self::stop_entity_with_twin_owner(world, entity, None);
     }
@@ -1861,6 +1865,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         entity: Entity,
         twin: Option<lunco_workspace::TwinId>,
     ) {
+        if world.contains_resource::<ScenarioPreparationAdmissions>() {
+            cancel_scenario_preparation_admission(world, entity);
+        }
         let owner_twin = twin.or_else(|| {
             world
                 .get::<crate::TwinOwnedScript>(entity)
@@ -4483,6 +4490,142 @@ mod lifecycle_readiness_tests {
             world,
             ScriptLanguage::Rhai,
         );
+    }
+
+    #[test]
+    fn scene_lifecycle_stops_interactive_attachments_before_final_reset() {
+        use lunco_core::{AppSceneExt, SceneResource};
+
+        #[derive(Resource, Default)]
+        struct ResetProbe {
+            calls: Arc<Mutex<Vec<RecordedCall>>>,
+            expected_stops: usize,
+        }
+
+        impl SceneResource for ResetProbe {
+            fn clear_scene(&mut self) {
+                assert_eq!(
+                    self.calls.lock().unwrap().len(),
+                    self.expected_stops,
+                    "removed hosts must stop before final scene state reset"
+                );
+            }
+        }
+
+        let mut app = App::new();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            Default::default(),
+            Default::default(),
+        )))
+        .init_resource::<ScriptRegistry>()
+        .init_resource::<ScenarioPreparationAdmissions>()
+        .init_resource::<lunco_core_runtime::SimulationProgress>()
+        .init_scene_resource::<ResetProbe>()
+        .add_observer(ScenarioDriver::<RecordingRuntime>::retire_removed_model);
+        app.world_mut().resource_mut::<ResetProbe>().calls = calls.clone();
+        let survivor = app.world_mut().spawn(ScriptedModel::default()).id();
+        app.world_mut()
+            .resource_mut::<ScenarioDriver<RecordingRuntime>>()
+            .fsm
+            .insert(
+                survivor,
+                Fsm {
+                    started: true,
+                    compiled: true,
+                    ..Default::default()
+                },
+            );
+
+        for cycle in 1..=3 {
+            let document_id = DocumentId::new(cycle);
+            app.world_mut()
+                .resource_mut::<ScriptRegistry>()
+                .insert_document(
+                    document_id,
+                    ScriptDocument::new(cycle, ScriptLanguage::Rhai, "interactive"),
+                );
+            let root = app.world_mut().spawn_empty().id();
+            let attached = app
+                .world_mut()
+                .spawn((
+                    ChildOf(root),
+                    ScriptedModel {
+                        document_id: Some(cycle),
+                        language: Some(ScriptLanguage::Rhai),
+                        ..Default::default()
+                    },
+                ))
+                .id();
+            app.world_mut()
+                .resource_mut::<ScenarioDriver<RecordingRuntime>>()
+                .fsm
+                .insert(
+                    attached,
+                    Fsm {
+                        document_id: Some(cycle),
+                        started: true,
+                        compiled: true,
+                        ..Default::default()
+                    },
+                );
+            let pending = app
+                .world_mut()
+                .spawn((ChildOf(root), ScriptedModel::default()))
+                .id();
+            let pending_key = app.world_mut().resource_scope(
+                |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
+                    admissions.reserve(
+                        pending,
+                        cycle,
+                        0,
+                        0,
+                        0,
+                        &mut world.resource_mut::<lunco_core_runtime::SimulationProgress>(),
+                    )
+                },
+            );
+            app.world_mut().resource_mut::<ResetProbe>().expected_stops = cycle as usize;
+            lunco_core::run_scene_teardown_with_entities(app.world_mut(), [root]);
+            assert!(
+                calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|call| *call == RecordedCall::Stop)
+            );
+            assert!(
+                !app.world()
+                    .resource::<ScenarioDriver<RecordingRuntime>>()
+                    .fsm
+                    .contains_key(&attached)
+            );
+            assert!(
+                app.world()
+                    .resource::<ScriptRegistry>()
+                    .documents
+                    .contains_key(&document_id)
+            );
+            assert!(app.world().get_entity(survivor).is_ok());
+            assert!(
+                app.world()
+                    .resource::<ScenarioDriver<RecordingRuntime>>()
+                    .fsm
+                    .contains_key(&survivor)
+            );
+            assert!(
+                app.world()
+                    .resource::<ScenarioPreparationAdmissions>()
+                    .pending
+                    .is_empty()
+            );
+            assert!(
+                !app.world()
+                    .resource::<lunco_core_runtime::SimulationProgress>()
+                    .contains(pending_key)
+            );
+        }
     }
 
     #[test]
