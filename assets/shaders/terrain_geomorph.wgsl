@@ -23,9 +23,17 @@
 #import bevy_pbr::{
     mesh_functions,
     view_transformations::position_world_to_clip,
-    forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::prepass_io::VertexOutput
+#else
+#import bevy_pbr::forward_io::VertexOutput
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+#import bevy_pbr::prepass_bindings::previous_view_uniforms
+#endif
+
 // Keep this layout byte-for-byte compatible with terrain_layered.wgsl. The
 // fragment stage owns the reflected UI/default/engine annotations; this stage
 // only needs the final morph fields, but the uniform is shared by both stages.
@@ -92,28 +100,16 @@ struct GeoVertex {
     @location(10) edge_mask: vec4<f32>,
 };
 
-@vertex
-fn vertex(vertex: GeoVertex) -> VertexOutput {
-    var out: VertexOutput;
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
-
-    // Camera distance from the un-morphed world position (big_space rebases both
-    // view and mesh into the same render frame → true eye→vertex distance).
-    let base_world = mesh_functions::mesh_position_local_to_world(
-        world_from_local,
-        vec4<f32>(vertex.position, 1.0),
-    );
-    let dist = distance(base_world.xyz, view.world_position);
-
+// The same morph/stitch law is used by the color, depth, normal, and shadow
+// passes. `eye` is the viewing camera, including in Bevy's shadow views.
+fn morph_weight(vertex: GeoVertex, world_position: vec3<f32>, eye: vec3<f32>) -> f32 {
+    let dist = distance(world_position, eye);
     // CDLOD morph: 0 near (own LOD) → 1 far (collapse onto parent lattice). Root
     // tiles pass morph_end <= morph_start → no morph.
     var morph = 0.0;
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    // `morph` alone — deliberately. A per-tile term here (the old `reveal` settle)
-    // makes two neighbours at the same depth and distance disagree at their shared
-    // edge, cracking the seam. Keep this a pure function of world position.
     // Restricted quadtree selection guarantees that a resident neighbour is
     // either the same depth or one level coarser. On the latter boundary the
     // fine edge uses its parent lattice immediately, the exact surface sampled
@@ -122,13 +118,20 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         max(vertex.edge_mask.x * mat.stitch_edges.x, vertex.edge_mask.y * mat.stitch_edges.y),
         max(vertex.edge_mask.z * mat.stitch_edges.z, vertex.edge_mask.w * mat.stitch_edges.w),
     );
-    let m = max(morph, edge_stitch);
+    return max(morph, edge_stitch);
+}
+
+@vertex
+fn vertex(vertex: GeoVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let base_world = mesh_functions::mesh_position_local_to_world(
+        world_from_local, vec4(vertex.position, 1.0));
+    // Shadow-view origins are light cameras. Bevy carries the viewing camera's
+    // LOD origin separately so every cascade deforms the same visible surface.
+    let m = morph_weight(vertex, base_world.xyz, view.lod_view_world_position);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
-    // Shade the surface we actually DRAW: the position lerps toward the parent
-    // lattice, so the normal must lerp with it. Leaving the fine normal here made
-    // a fully-morphed tile shade with detail its geometry no longer has — up to
-    // ~22 deg of error, flipping N.L negative on some quads and making new LOD
-    // tiles appear black.
+    // Position and shading normal follow the same parent-lattice interpolation.
     let local_normal = normalize(mix(vertex.normal, vertex.morph_normal, m));
 
     out.world_position = mesh_functions::mesh_position_local_to_world(
@@ -136,7 +139,32 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         vec4<f32>(local_pos, 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+#ifdef PREPASS_PIPELINE
+#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
     out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
+#endif
+#else
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    // Recover the previous camera origin from its rigid view transform, then
+    // evaluate the same morph band in the previous render frame.
+    let previous_view = previous_view_uniforms.view_from_world;
+    let previous_eye = -vec3(
+        dot(previous_view[0].xyz, previous_view[3].xyz),
+        dot(previous_view[1].xyz, previous_view[3].xyz),
+        dot(previous_view[2].xyz, previous_view[3].xyz));
+    let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
+    let previous_base = mesh_functions::mesh_position_local_to_world(
+        previous_transform, vec4(vertex.position, 1.0));
+    let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
+    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+        previous_transform, vec4(mix(vertex.position, vertex.morph_target, previous_m), 1.0));
+#endif
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;
 #endif

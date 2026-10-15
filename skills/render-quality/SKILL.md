@@ -65,6 +65,13 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   For terrain shadows that separate at LOD transitions, verify that the
+   authored vertex stage runs in both forward and `PREPASS_PIPELINE` variants.
+   Use Bevy's `lod_view_world_position` for morph distance in shadow views;
+   their ordinary view origin belongs to the light. Keep the shared material
+   uniform bound in depth-only passes. Run the `vertex_shadow_alignment`
+   graphics fixture: both lit-vacated and shadowed-displaced probes must appear,
+   with no red disagreement pixels.
    For measured shadow cost, use the diagnostics-enabled render owner's four
    `lunco_shadow_*` GPU spans described in `performance-profiling`. Confirm
    timestamp coverage and keep profiler attribution separate from unprofiled

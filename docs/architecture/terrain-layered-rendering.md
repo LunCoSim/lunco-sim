@@ -52,6 +52,16 @@ one `ShaderLook`; Rust does not contain a terrain shader selector or a hidden
 default for this production path. The explicit `SpawnDemTerrain` command
 remains a generic tool API and requires its caller to provide a look.
 
+The authored vertex stage runs in the main, depth/normal, and native shadow
+passes. It selects Bevy's forward or prepass output interface using
+`PREPASS_PIPELINE`; the material group remains bound in depth-only passes so
+the same morph uniforms are available. CDLOD distance uses
+`view.lod_view_world_position`, the viewing camera's origin shared with its
+shadow cascades. Edge stitching and morph interpolation therefore describe the
+same surface in every pass. The `vertex_shadow_alignment` GPU fixture displaces
+an authored caster and requires its native shadow at the displaced position,
+with the vacated position lit.
+
 Static and streamed terrain therefore differ only in geometry delivery. A
 static mesh is effectively the non-morphing/root LOD of the same appearance
 contract; the streamed ECS quadtree may still manage residency, colliders, and

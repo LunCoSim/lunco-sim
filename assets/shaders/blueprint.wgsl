@@ -30,6 +30,9 @@
 #import lunco::pbr_lit::lit_n_occluded_sun_response
 #import lunco::lunar::regolith_factor
 #import bevy_pbr::{pbr_functions, mesh_view_bindings::view}
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::prepass_io
+#endif
 
 #ifdef LUNCO_GLOBE_DIRECTION
 struct GlobeVertex {
@@ -58,6 +61,7 @@ struct GlobeVertexOutput {
 #endif
 };
 
+#ifndef PREPASS_PIPELINE
 @vertex
 fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
     var out: GlobeVertexOutput;
@@ -86,6 +90,40 @@ fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
 #endif
     return out;
 }
+#else
+// Globe positions are already resolved by the mesh owner. Adapt the same
+// geometry to Bevy's native depth/normal/shadow interface.
+@vertex
+fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
+    var out: prepass_io::VertexOutput;
+    let transform = mesh_functions::get_world_from_local(vertex.instance_index);
+    out.world_position = mesh_functions::mesh_position_local_to_world(
+        transform, vec4(vertex.position, 1.0));
+    out.position = position_world_to_clip(out.world_position.xyz);
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
+#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+        mesh_functions::get_previous_world_from_local(vertex.instance_index), vec4(vertex.position, 1.0));
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+        vertex.instance_index, transform[3]);
+#endif
+    return out;
+}
+#endif
 
 fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
     var out: VertexOutput;

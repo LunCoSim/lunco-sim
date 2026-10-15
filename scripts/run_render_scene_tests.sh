@@ -214,6 +214,22 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" == "vertex_shadow_alignment" ]]; then
+        # Both probes must be visible: green at the vacated caster position,
+        # cyan under the displaced caster. A mismatched native shadow is red.
+        green_coverage=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        cyan_coverage=$(convert "$last" -fx 'g > 0.8 && b > 0.8 && r < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        red_coverage=$(convert "$last" -fx 'r > 0.8 && g < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        if ! awk -v green="${green_coverage:-0}" -v cyan="${cyan_coverage:-0}" \
+            -v red="${red_coverage:-1}" \
+            'BEGIN { exit !(green > 0.0001 && cyan > 0.0001 && red < 0.00001) }'; then
+            reason="vertex/shadow alignment probes failed or are missing (green=${green_coverage:-unavailable} cyan=${cyan_coverage:-unavailable} red=${red_coverage:-unavailable})"
+        fi
+    fi
+
     if [[ -z "$reason" && "$name" =~ ^(six_wheel_visual|rocker_bogie_antenna_visual|parts_attached_visual)$ ]]; then
         # These fixtures are authored visual reviews, so a successful process
         # and a PNG are not enough: reject black or empty captures by checking
