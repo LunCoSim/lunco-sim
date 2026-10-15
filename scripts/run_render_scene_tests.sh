@@ -204,7 +204,7 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
-    if [[ -z "$reason" && "$name" =~ ^(noise_continuity|terrain_normal_transform)$ ]]; then
+    if [[ -z "$reason" && "$name" =~ ^(noise_continuity|terrain_normal_transform|shadow_cache_sampling)$ ]]; then
         # Numerical GPU panels turn red on a contract violation. Ignore the
         # frame margin; the authored panel covers the central half.
         read -r green_min red_max < <(

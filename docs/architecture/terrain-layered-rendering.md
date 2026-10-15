@@ -240,6 +240,13 @@ covers every distance without a fragment march. Native shadow-map resolution,
 range, and cascade count remain owned by Graphics. Static materials retain
 their native CSM range.
 
+The visibility cache stores an endpoint-inclusive nodal grid, matching the CPU
+bake's `i / (resolution - 1)` footprint coordinates. Its shader maps those nodes
+to texel centres before bilinear sampling and clamps at the footprint boundary;
+raw normalized UVs would shift shadow edges by up to half a cache texel. The
+`shadow_cache_sampling` graphics fixture checks nodes, fractional interpolation,
+and borders against independent integer texel loads on a rectangular grid.
+
 Physical illumination is independent of the camera and GPU shadow cache.
 `LunCoEnvironmentProbeAPI.outputs:sun_visibility` is the fraction of explicitly
 authored sampling points with a clear ray to the Sun centre. A point probe is

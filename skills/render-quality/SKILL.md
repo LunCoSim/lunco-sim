@@ -88,8 +88,12 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    Static and streamed terrain remain native CSM casters and receivers so
    terrain shades objects and objects shade ground. The heightfield cache
    supplies ground self-shadow; cached tiles use `csm_far = 0` to avoid a
-   fragment march at every distance. For panel power, read the wired probe's
-   `sun_visibility`, `sun_irradiance_w_m2` and panel `available_power_w`.
+   fragment march at every distance. The `shadow_cache_sampling` fixture checks
+   the GPU cache's endpoint-inclusive grid, including fractional interpolation
+   and border clamping. Cache UVs must map
+   the CPU bake nodes to texel centres before filtering.
+   For panel power, read the wired probe's `sun_visibility`,
+   `sun_irradiance_w_m2` and panel `available_power_w`.
    Physical samples use the f64 terrain oracle and selected optical proxies.
    See `docs/architecture/terrain-layered-rendering.md` for the production
    gates. Do not infer whole-body night occlusion from a finite DEM.

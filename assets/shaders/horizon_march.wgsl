@@ -118,7 +118,11 @@ fn sun_visibility_resolved(
     res: f32,
 ) -> f32 {
     if (use_cache > 0.5) {
-        return textureSampleLevel(cache, cache_samp, uv, 0.0).r;
+        // CPU bake nodes span both footprint endpoints: i / (dimensions - 1).
+        // Normalized texture sampling addresses texel centres at (i + 0.5) / dimensions.
+        let dimensions = vec2<f32>(textureDimensions(cache));
+        let cache_uv = (clamp(uv, vec2(0.0), vec2(1.0)) * (dimensions - 1.0) + 0.5) / dimensions;
+        return textureSampleLevel(cache, cache_samp, cache_uv, 0.0).r;
     }
     return sun_visibility(
         height_tex, uv, sun_local, tan_sun_r, march_steps, size, res);
