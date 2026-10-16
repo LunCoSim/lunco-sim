@@ -250,7 +250,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-sysml`** | SysML source asset/document lifecycle and journal integration; owns `CloseDocument` retirement for clean and dirty SysML documents; pending opens are fenced by their admitted runtime owner. Prepares manifest-selected Twin snapshots and open-document parser/resolver snapshots through shared async admission, fenced by Twin/root/operation or document-generation/origin. It consumes the pure AST projection and exposes typed state through the API adapter; it does not own Rhai policy. |
 | **`lunco-sysml-rhai`** | Native Rhai adapter for immutable typed SysML snapshots, handles, expressions, and requirement/verification reports. It does not parse source or query USD; domain feature mappings and constraint policies are authored in Rhai. |
 | **`lunco-sysml-ui`** | Twin-scoped requirements browser, source editor, and verification runner view. It presents independent evidence, test-execution, and model-coverage status with requirement-linked check provenance; edits through canonical document commands; and runs Twin-mapped verification cases through the production headless scene-test runner. |
-| **`lunco-scripting-bridge-core`** | Interpreter-free reflected world mechanism: native value construction, ECS reads/writes, typed `HookValue` command/query dispatch, hierarchy, authority, and capability facts. Its optional workspace bridge resolves active Twin source identity through `lunco-assets-core`. It has no JSON transport dependency. Clock and domain projections are isolated in dedicated adapters. |
+| **`lunco-scripting-bridge-core`** | Interpreter-free reflected world mechanism: native value construction, ECS reads/writes, typed `HookValue` command/query dispatch, hierarchy, authority, capability facts, and explicit tool-hook bindings with surface or invocation retention. Its optional workspace bridge resolves active Twin source identity through `lunco-assets-core`. It has no JSON transport dependency. Clock and domain projections are isolated in dedicated adapters. |
 | **`lunco-scripting-bridge-spatial`** | Domain adapter for active-frame pose, rotation, navigation, geolocation, and entity enumeration. It owns the BigSpace, celestial, Avian, and steering dependencies needed by those projections. |
 | **`lunco-scripting-bridge-time`** | Domain adapter for deterministic simulation-clock reads and the clock-domain snapshot. It owns the physics and time-domain dependencies needed by those projections. |
 | **`lunco-scripting-bridge-usd`** | Domain adapter for composed USD document generations and prim-path identity lookups, including document-scoped lookup for paths that may repeat across mounted stages. It owns the USD document/scene dependencies needed by those projections. |
@@ -1299,6 +1299,8 @@ consumers. It depends on
 `lunco-luncosim-edit-core` and composes the focused
 `lunco-luncosim-edit-gizmo-ui` package; the core package does not depend back on
 either UI package.
+Scene context menus consume `lunco-scripting-bridge-core` callback leases and
+transfer selected invocation ownership to the shared scripting queue.
 
 **`lunco-luncosim-edit-gizmo-ui`**
 Focused transform-gizmo capability. It owns the `transform-gizmo-bevy`
@@ -1462,6 +1464,7 @@ Language-neutral, interpreter-free world bridge for scripting backends. It owns
 native value construction, reflected ECS reads/writes, typed `HookValue`
 command/query dispatch, hierarchy, authority, capabilities, and the resolved
 scenario audience. It also defines explicit `ToolHookBinding` callback leases
+with surface or invocation retention
 and the `ScriptInstanceRetired` lifecycle edge. Scene transaction validation
 remains owned by `lunco-core`. It has no JSON transport dependency. Rhai and Python
 provide only their native value builders and language bindings. Clock,

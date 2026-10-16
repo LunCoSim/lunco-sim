@@ -5228,11 +5228,14 @@ impl PendingWorldScripts {
         self.ui_queue.drain(..count).collect()
     }
 
-    fn take_twin_owned(&mut self, twin: lunco_workspace::TwinId) -> Vec<PendingWorldScript> {
+    fn take_matching(
+        &mut self,
+        mut matches: impl FnMut(&PendingWorldScript) -> bool,
+    ) -> Vec<PendingWorldScript> {
         let mut retired = Vec::new();
         for queue in [&mut self.queue, &mut self.ui_queue] {
             for request in std::mem::take(queue) {
-                if request.twin_owner() == Some(twin) {
+                if matches(&request) {
                     retired.push(request);
                 } else {
                     queue.push(request);
@@ -5384,6 +5387,17 @@ impl WorldToolOwner {
         Ok(())
     }
 
+    /// Release a selected one-shot endpoint on every terminal queue path.
+    pub fn retire_invocation(&self, world: &mut World) {
+        if let Some((entity, binding)) = &self.callback {
+            if binding.retention == bridge_core::ToolHookBindingRetention::Invocation
+                && world.get::<bridge_core::ToolHookBinding>(*entity) == Some(binding)
+            {
+                world.despawn(*entity);
+            }
+        }
+    }
+
     /// Pin the exact callback lease before placing work on the interaction queue.
     pub fn bind_callback(
         &mut self,
@@ -5510,24 +5524,40 @@ impl PendingWorldScript {
 pub fn retire_twin_world_scripts(world: &mut World, twin: lunco_workspace::TwinId) {
     let retired = world
         .resource_mut::<PendingWorldScripts>()
-        .take_twin_owned(twin);
+        .take_matching(|request| request.twin_owner() == Some(twin));
+    finish_retired_world_scripts(world, retired, format!("Twin {} closed", twin.raw()));
+}
+
+/// Retire scene-bound tool work at the transition boundary, even while the
+/// interpreter is preparing and cannot drain its interaction queue.
+pub fn retire_scene_world_scripts(world: &mut World) {
+    let retired = world
+        .resource_mut::<PendingWorldScripts>()
+        .take_matching(|request| matches!(request, PendingWorldScript::Tool { .. }));
+    finish_retired_world_scripts(world, retired, "scene transition started".into());
+}
+
+fn finish_retired_world_scripts(
+    world: &mut World,
+    retired: Vec<PendingWorldScript>,
+    reason: String,
+) {
     if !retired.is_empty() {
         warn!(
-            "[rhai] retiring {} queued requests from closed Twin {}",
-            retired.len(),
-            twin.raw()
+            "[rhai] retiring {} queued requests: {reason}",
+            retired.len()
         );
     }
     for request in retired {
         let (id, correlation_id) = request.request_ids();
+        if let PendingWorldScript::Tool { owner, .. } = &request {
+            owner.retire_invocation(world);
+        }
         lunco_api::executor::finish_command_result(
             world,
             (id != 0).then_some(id),
             correlation_id,
-            Err(format!(
-                "queued Rhai request was retired because Twin {} closed",
-                twin.raw()
-            )),
+            Err(format!("queued Rhai request was retired because {reason}")),
             lunco_api_core::ApiErrorCode::CommandRejected,
         );
     }
@@ -5660,6 +5690,9 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
         if let Err(error) = ownership {
             warn!("[rhai] {error}");
             let (id, correlation_id) = request.request_ids();
+            if let PendingWorldScript::Tool { owner, .. } = &request {
+                owner.retire_invocation(world);
+            }
             lunco_api::executor::finish_command_result(
                 world,
                 (id != 0).then_some(id),
@@ -5683,14 +5716,13 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 authority,
                 correlation_id,
                 workspace: _,
-            } => (
-                id,
-                correlation_id,
-                match &engine {
+            } => {
+                let outcome = match &engine {
                     Ok(engine) => eval_with_engine(world, engine, &code, authority),
                     Err(error) => Err(error.clone()),
-                },
-            ),
+                };
+                (id, correlation_id, outcome)
+            }
             PendingWorldScript::Tool {
                 id,
                 tool,
@@ -5699,10 +5731,8 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 authority,
                 correlation_id,
                 owner,
-            } => (
-                id,
-                correlation_id,
-                match &engine {
+            } => {
+                let outcome = match &engine {
                     Ok(engine) => {
                         let _span = bevy::log::info_span!(
                             "world_script_tool_eval",
@@ -5727,8 +5757,10 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                         )
                     }
                     Err(error) => Err(error.clone()),
-                },
-            ),
+                };
+                owner.retire_invocation(world);
+                (id, correlation_id, outcome)
+            }
         };
         let outcome = match outcome {
             Ok(stdout) => Ok(lunco_api::executor::ack_with_string_field(
@@ -6372,6 +6404,7 @@ mod tests {
 
         let mut world = World::new();
         let binding = bridge_core::ToolHookBinding {
+            retention: bridge_core::ToolHookBindingRetention::Surface,
             tool: "probe".into(),
             hook: "apply".into(),
             owner_twin_id: None,
@@ -6385,6 +6418,11 @@ mod tests {
             .bind_callback(entity, &binding, "probe", "apply", None)
             .unwrap();
         assert!(owner.validate_callback(&world).is_ok());
+        owner.retire_invocation(&mut world);
+        assert!(
+            world.get_entity(entity).is_ok(),
+            "surface owns a persistent lease"
+        );
         assert!(
             owner
                 .bind_callback(entity, &binding, "other", "apply", None)
@@ -6400,6 +6438,73 @@ mod tests {
         world.despawn(entity);
         world.spawn(binding);
         assert!(owner.validate_callback(&world).is_err());
+    }
+
+    #[test]
+    fn scene_retirement_completes_invocations_without_interpreter_readiness() {
+        use super::{World, WorldToolOwner, bridge_core};
+        let mut world = World::new();
+        world.init_resource::<PendingWorldScripts>();
+        world.init_resource::<lunco_core::CommandResults>();
+        let limits = WorldScriptExecutionLimits::default();
+        let binding = bridge_core::ToolHookBinding {
+            retention: bridge_core::ToolHookBindingRetention::Invocation,
+            tool: "probe".into(),
+            hook: "apply".into(),
+            owner_twin_id: None,
+            scene_generation: None,
+            tool_scope: lunco_tools::ToolScope::Application,
+        };
+        let entity = world.spawn(binding.clone()).id();
+        let mut owner =
+            WorldToolOwner::from_scope(lunco_tools::ToolScope::Application, None, None).unwrap();
+        owner
+            .bind_callback(entity, &binding, "probe", "apply", None)
+            .unwrap();
+        let duplicate = owner.clone();
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .enqueue_ui(
+                PendingWorldScript::Tool {
+                    id: 41,
+                    tool: "probe".into(),
+                    hook: "apply".into(),
+                    args: TelemetryValue::Bool(true),
+                    authority: None,
+                    correlation_id: None,
+                    owner,
+                },
+                limits,
+            )
+            .unwrap();
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .enqueue(
+                PendingWorldScript::Code {
+                    id: 42,
+                    code: "diagnostic".into(),
+                    authority: None,
+                    correlation_id: None,
+                    workspace: super::WorldScriptWorkspace::Detached,
+                },
+                limits,
+            )
+            .unwrap();
+        super::retire_scene_world_scripts(&mut world);
+        assert!(world.get_entity(entity).is_err());
+        assert!(duplicate.validate_callback(&world).is_err());
+        let pending = world.resource::<PendingWorldScripts>();
+        assert!(!pending.has_ui_pending());
+        assert!(
+            pending.has_pending(),
+            "application REPL work retains its workspace lifetime"
+        );
+        assert!(matches!(
+            world.resource::<lunco_core::CommandResults>().get(41),
+            Some(lunco_core::CommandOutcome::Rejected(_))
+        ));
+        duplicate.retire_invocation(&mut world);
+        super::retire_scene_world_scripts(&mut world);
     }
 
     #[test]
@@ -6505,7 +6610,7 @@ mod tests {
                 limits,
             )
             .expect("application tool admission");
-        let retired = pending.take_twin_owned(first);
+        let retired = pending.take_matching(|request| request.twin_owner() == Some(first));
         assert!(matches!(
             retired.as_slice(),
             [
@@ -6527,7 +6632,11 @@ mod tests {
             [PendingWorldScript::Tool { id: 3, .. }]
         ));
         assert!(!pending.has_ui_pending());
-        assert!(pending.take_twin_owned(first).is_empty());
+        assert!(
+            pending
+                .take_matching(|request| request.twin_owner() == Some(first))
+                .is_empty()
+        );
     }
 
     #[test]

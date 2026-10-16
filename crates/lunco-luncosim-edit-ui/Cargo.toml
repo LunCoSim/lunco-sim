@@ -82,6 +82,7 @@ lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [dev-dependencies]

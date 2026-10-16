@@ -2,10 +2,21 @@
 
 use bevy::prelude::*;
 
-/// A callback lease. Its owner despawns it on replacement or teardown; queued
-/// tool invocations retain the exact entity and endpoint, never a name-only lookup.
+/// The owner of a callback lease after it has been selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolHookBindingRetention {
+    /// The publishing surface retains the lease until replacement or teardown.
+    Surface,
+    /// Selection transfers the lease to one queued invocation, which retires it.
+    Invocation,
+}
+
+/// A callback lease retired by its surface or selected invocation. Queued tool
+/// work retains the exact entity and endpoint, never a name-only lookup.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub struct ToolHookBinding {
+    /// Whether the publishing surface or the selected invocation owns retirement.
+    pub retention: ToolHookBindingRetention,
     /// Registered tool namespace.
     pub tool: String,
     /// Registered one-argument hook.
@@ -24,6 +35,7 @@ impl ToolHookBinding {
         tool: String,
         hook: String,
         owner_twin_id: Option<u64>,
+        retention: ToolHookBindingRetention,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<Self, String> {
         if owner_twin_id == Some(0) {
@@ -36,6 +48,7 @@ impl ToolHookBinding {
             }
         }
         let binding = Self {
+            retention,
             tool,
             hook,
             owner_twin_id,

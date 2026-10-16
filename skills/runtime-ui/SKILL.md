@@ -312,7 +312,14 @@ a scenario host. `ClearGuidedOverlay` clears the calling script's card and the
 active coach/spotlight presentation, preserving other cards. Inspect the admitted
 scope, content, and visibility through `InspectGuidedHud`.
 Script-opened scene menus retain the same captured scope while open and clear
-on scene transition or owning Twin close; stop hooks cannot open menus.
+on scene transition or owning Twin close; stop hooks cannot open menus. Each
+popup has its own widget identity and child callback leases. Replacement or
+dismissal retires unselected leases; selection transfers one `Invocation`
+binding to the queue, which releases it on execution or rejection. HUD rows
+use `Surface` retention. Scene transitions retire queued tools even while the
+interpreter is preparing. Never leave a selected popup endpoint unowned.
+Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
+production popup input, dismissal, reset, and Twin-replacement gate.
 
 Run `assets/scripting/tests/test_guided_hud.rhai` with
 `scripts/api/run_rhai_test.sh PORT FILE` in an owned windowed production session.

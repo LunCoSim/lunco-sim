@@ -304,45 +304,62 @@ fn on_run_rhai_tool_hook(
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     bindings: Query<&lunco_scripting_bridge_core::ToolHookBinding>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let mut owner = WorldToolOwner::capture(
-        &cmd.tool,
-        &cmd.hook,
-        cmd.owner_twin_id,
-        workspace.as_deref(),
-        scene.as_deref(),
-    )
-    .inspect_err(|error| warn!("[rhai] {error}"))?;
-    if let Some(entity) = cmd.binding {
-        let binding = bindings
-            .get(entity)
-            .map_err(|_| "UI callback binding has been retired".to_owned())
-            .inspect_err(|error| warn!("[rhai] {error}"))?;
-        owner
-            .bind_callback(entity, binding, &cmd.tool, &cmd.hook, scene.as_deref())
-            .inspect_err(|error| warn!("[rhai] {error}"))?;
+    let retirement = cmd.binding.filter(|entity| {
+        bindings.get(*entity).is_ok_and(|binding| {
+            binding.retention == lunco_scripting_bridge_core::ToolHookBindingRetention::Invocation
+                && binding.tool == cmd.tool
+                && binding.hook == cmd.hook
+                && binding.owner_twin_id == cmd.owner_twin_id
+        })
+    });
+    let result = (|| {
+        let mut owner = WorldToolOwner::capture(
+            &cmd.tool,
+            &cmd.hook,
+            cmd.owner_twin_id,
+            workspace.as_deref(),
+            scene.as_deref(),
+        )
+        .inspect_err(|error| warn!("[rhai] {error}"))?;
+        if let Some(entity) = cmd.binding {
+            let binding = bindings
+                .get(entity)
+                .map_err(|_| "UI callback binding has been retired".to_owned())
+                .inspect_err(|error| warn!("[rhai] {error}"))?;
+            owner
+                .bind_callback(entity, binding, &cmd.tool, &cmd.hook, scene.as_deref())
+                .inspect_err(|error| warn!("[rhai] {error}"))?;
+        }
+        let id = active.get().unwrap_or(0);
+        let authority = guard.and_then(|g| g.0);
+        let correlation_id =
+            (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
+        pending.enqueue_ui(
+            PendingWorldScript::Tool {
+                id,
+                tool: cmd.tool.clone(),
+                hook: cmd.hook.clone(),
+                args: cmd.args.clone(),
+                authority,
+                correlation_id,
+                owner,
+            },
+            *limits,
+        )?;
+        Ok(Ack::with_data(
+            OpId::new(),
+            lunco_api_core::api_value!({ "status": "queued" }),
+        ))
+    })();
+    if result.is_err() {
+        if let Some(entity) = retirement {
+            commands.entity(entity).try_despawn();
+        }
     }
-    let id = active.get().unwrap_or(0);
-    let authority = guard.and_then(|g| g.0);
-    let correlation_id =
-        (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.enqueue_ui(
-        PendingWorldScript::Tool {
-            id,
-            tool: cmd.tool.clone(),
-            hook: cmd.hook.clone(),
-            args: cmd.args.clone(),
-            authority,
-            correlation_id,
-            owner,
-        },
-        *limits,
-    )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    result
 }
 
 /// Attach a persistent rhai scenario to an entity — the scenario-loading entry

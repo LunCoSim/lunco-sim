@@ -338,6 +338,7 @@ fn on_set_guided_hud_actions(
                 cmd.tool.clone(),
                 cmd.hook.clone(),
                 twin.map(|id| id.raw()),
+                lunco_scripting_bridge_core::ToolHookBindingRetention::Surface,
                 scene.as_deref(),
             )
             .inspect_err(|error| warn!("[guided-hud] {error}"))?,

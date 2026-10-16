@@ -161,7 +161,10 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   `RunRhaiToolHook.binding` entity lease (`ToolHookBinding`). Admission checks its
   endpoint, tool scope, Twin, and scene; execution also requires the exact entity
   and binding value to remain live. Replacing or tearing down a UI binding
-  despawns that lease. Ordinary tool calls omit the binding and retain the same
+  despawns that lease. Surface bindings are retained by their publisher; a
+  popup selection transfers an invocation binding to the queue for terminal
+  cleanup. `SceneTransitionStarted` retires queued tools without waiting for
+  interpreter readiness. Ordinary tool calls omit the binding and retain the same
   scene/registration/ownership checks. General
   `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
   arguments use `TelemetryValue` and are

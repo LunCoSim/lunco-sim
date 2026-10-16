@@ -31,7 +31,7 @@
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
 mod tool_binding;
-pub use tool_binding::ToolHookBinding;
+pub use tool_binding::{ToolHookBinding, ToolHookBindingRetention};
 
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::math::DVec3;

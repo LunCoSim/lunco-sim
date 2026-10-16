@@ -711,8 +711,26 @@ the replacement Twin's identity from handler timing.
 
 Script-opened scene context menus retain this same scope while open, validate it
 before painting or dispatch, and clear on scene transition or owning Twin close.
-Their selected commands carry the captured Twin into the shared tool queue.
+Each popup owns a fresh ECS root and child `ToolHookBinding` leases. Its root
+scopes egui widget identity, so replacing a popup also retires any held gesture.
+Dismissal arms after the opening pointer transaction ends and uses egui's
+layer-aware outside-click contract.
+Replacement and dismissal despawn all unselected endpoints. Selection transfers
+only its endpoint to the shared tool queue with `ToolHookBindingRetention::Invocation`;
+the queue retires it after execution or rejection. HUD rows use `Surface`
+retention and keep their binding until their owner replaces or clears it.
+Scene transitions retire queued tool work immediately, including while the
+interpreter is preparing; application REPL work retains its workspace lifetime.
 Stop hooks cannot open menus.
+
+Run `scripts/api/test_guided_ui_callbacks.py --port PORT` against the production
+binary for held-press popup replacement, fresh selection, outside dismissal,
+scene teardown and Twin replacement. The wrapper drives window input; the
+isolated Twin's `hud_binding_probe.rhai` library supplies the runtime verdicts.
+Injected input acknowledgements mean queued input, not completed callbacks.
+The driver waits for a rendered input frame, then completes an authored no-op
+hook on the same FIFO interaction queue before running its verdict. A REPL
+query alone does not establish that the preceding UI callback has executed.
 
 The API dispatcher scopes each deferred request's correlation around its typed
 handler and uses registered command type identity to select deferral. Admission
