@@ -1154,8 +1154,8 @@ impl Plugin for UsdSimPlugin {
         // Bodies and constraints can become admissible on different updates
         // after asynchronous scene projection. Do not let early bodies enter
         // the solver while another part of that authored admission set is
-        // still pending; the hold affects physics only, so preparation, UI,
-        // telemetry, and authored readiness clocks continue to run.
+        // still pending. The native hold gates shared simulation admission;
+        // preparation, presentation and telemetry delivery continue independently.
         app.add_systems(
             PreUpdate,
             sync_physics_body_admission_hold

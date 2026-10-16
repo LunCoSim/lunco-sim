@@ -5,6 +5,9 @@
 //! live controller; arrival comes from the flag's generic Avian sensor event.
 //! The engine auto-publishes the objectives checklist to the tutorial HUD.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.

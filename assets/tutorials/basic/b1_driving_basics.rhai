@@ -12,6 +12,8 @@ fn simulation_dependencies(me, ctx) {
        entity_reads: vessel_descendants(find_path("/DrivingBasics")),
        entity_writes: [rover], query_reads: [], required_inputs: [] }
 }
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
 
 fn on_start(me, ctx) {
     // The application catalog selects the scene before this scenario starts.

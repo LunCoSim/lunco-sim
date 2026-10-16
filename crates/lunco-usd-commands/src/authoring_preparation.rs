@@ -15,7 +15,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 type Commit = Box<dyn FnOnce(&mut World) -> Result<Ack, String> + Send + Sync>;
 
+#[derive(Clone, Copy)]
+enum OperationLifetime {
+    Document,
+    Scene(Option<u64>),
+}
+
 pub(super) struct DocumentLease {
+    lifetime: OperationLifetime,
     owner: PinnedDocumentRuntimeOwner,
     generation: u64,
     revisions: (u64, u64, u64),
@@ -37,6 +44,17 @@ impl DocumentLease {
             .and_then(|backed| lunco_usd_bevy_twin::stage_asset_for_document(backed, doc));
         let canonical = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc);
         Ok(Self {
+            lifetime: if stage
+                .is_some_and(|stage| lunco_usd_bevy_scene::is_mounted_scene_stage(world, stage))
+            {
+                OperationLifetime::Scene(
+                    world
+                        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+                        .and_then(|scene| scene.completed_generation()),
+                )
+            } else {
+                OperationLifetime::Document
+            },
             owner: PinnedDocumentRuntimeOwner::for_document(
                 doc,
                 world
@@ -60,6 +78,10 @@ impl DocumentLease {
         self.owner.document
     }
 
+    pub(super) fn is_scene_owned(&self) -> bool {
+        matches!(self.lifetime, OperationLifetime::Scene(_))
+    }
+
     pub(super) fn is_current(&self, world: &World) -> bool {
         let Some(host) = world
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -71,12 +93,22 @@ impl DocumentLease {
         let replication = lunco_core_session::current_replication_owner_in(world);
         let canonical =
             lunco_usd_bevy_twin::canonical_stage_for_document(world, self.owner.document);
-        self.owner.is_current(
-            world
-                .get_resource::<WorkspaceResource>()
-                .map(|workspace| &workspace.0),
-            replication.as_ref(),
-        ) && host.generation() == self.generation
+        let lifetime_current = match self.lifetime {
+            OperationLifetime::Document => true,
+            OperationLifetime::Scene(generation) => lunco_core::scene::validate_interaction_scene(
+                generation,
+                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+            )
+            .is_ok(),
+        };
+        lifetime_current
+            && self.owner.is_current(
+                world
+                    .get_resource::<WorkspaceResource>()
+                    .map(|workspace| &workspace.0),
+                replication.as_ref(),
+            )
+            && host.generation() == self.generation
             && document.origin() == &self.origin
             && (
                 document.base_revision(),
@@ -119,8 +151,10 @@ struct PendingAuthoring {
 
 impl SceneResource for PendingAuthoring {
     fn clear_scene(&mut self) {
-        self.edits.clear();
-        self.completed = Arc::default();
+        self.edits.retain(|_, edit| !edit.lease.is_scene_owned());
+        if self.edits.is_empty() {
+            self.completed = Arc::default();
+        }
         // Operation identity belongs to the application, including workers
         // that may finish after this scene has retired.
     }
@@ -133,7 +167,8 @@ pub(super) fn install(app: &mut App) {
     app.init_scene_resource::<PendingAuthoring>()
         .add_systems(Update, drain)
         .add_systems(SceneTeardown, retire)
-        .add_observer(close_document);
+        .add_observer(close_document)
+        .add_observer(close_twin);
 }
 
 fn release(world: &mut World, operation: u64) {
@@ -172,35 +207,75 @@ fn cancel(world: &mut World, edit: PendingEdit, reason: &str) {
 }
 
 fn retire(world: &mut World) {
-    let edits = std::mem::take(&mut world.resource_mut::<PendingAuthoring>().edits);
-    for (_, edit) in edits {
+    let operations = world
+        .resource::<PendingAuthoring>()
+        .edits
+        .iter()
+        .filter_map(|(operation, edit)| edit.lease.is_scene_owned().then_some(*operation))
+        .collect::<Vec<_>>();
+    for operation in operations {
+        let edit = world
+            .resource_mut::<PendingAuthoring>()
+            .edits
+            .remove(&operation)
+            .expect("collected scene edit");
         cancel(world, edit, "USD edit cancelled because its scene retired");
     }
 }
 
 fn close_document(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
+    commands.queue(move |world: &mut World| retire_document(world, doc));
+}
+
+fn close_twin(trigger: On<lunco_workspace::TwinClosed>, mut commands: Commands) {
+    let twin = trigger.event().twin;
     commands.queue(move |world: &mut World| {
-        let operations = world
+        let mut documents = world
             .resource::<PendingAuthoring>()
             .edits
-            .iter()
-            .filter_map(|(operation, edit)| (edit.lease.document() == doc).then_some(*operation))
-            .collect::<Vec<_>>();
-        for operation in operations {
-            let edit = world
-                .resource_mut::<PendingAuthoring>()
-                .edits
-                .remove(&operation)
-                .expect("collected pending edit");
-            cancel(
-                world,
-                edit,
-                "USD edit cancelled because its document closed",
-            );
+            .values()
+            .filter_map(|edit| {
+                (edit.lease.owner.runtime.local_twin() == Some(twin))
+                    .then_some(edit.lease.document())
+            })
+            .collect::<BTreeSet<_>>();
+        documents.extend(
+            world
+                .resource::<PendingUsdDiscards>()
+                .tasks
+                .iter()
+                .filter_map(|discard| {
+                    (discard.lease.owner.runtime.local_twin() == Some(twin))
+                        .then_some(discard.lease.document())
+                }),
+        );
+        for doc in documents {
+            retire_document(world, doc);
         }
-        retire_pending_usd_discards(world, Some(doc));
     });
+}
+
+fn retire_document(world: &mut World, doc: DocumentId) {
+    let operations = world
+        .resource::<PendingAuthoring>()
+        .edits
+        .iter()
+        .filter_map(|(operation, edit)| (edit.lease.document() == doc).then_some(*operation))
+        .collect::<Vec<_>>();
+    for operation in operations {
+        let edit = world
+            .resource_mut::<PendingAuthoring>()
+            .edits
+            .remove(&operation)
+            .expect("collected pending edit");
+        cancel(
+            world,
+            edit,
+            "USD edit cancelled because its document closed",
+        );
+    }
+    retire_pending_usd_discards(world, Some(doc));
 }
 
 fn drain(world: &mut World) {
@@ -581,20 +656,87 @@ fn prepare(
     }
     let recipe = lunco_usd_compose::fetch_recipe_with_roots(recipe, assets_root, twin_root, limits)
         .map_err(|error| error.to_string())?;
-    if !recipe.dependency_diagnostics.is_empty() {
-        return Err(recipe
-            .dependency_diagnostics
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; "));
-    }
     Ok(recipe)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_document_work_keeps_its_completion_across_scene_teardown() {
+        let mut app = App::new();
+        app.init_resource::<AsyncWorkAdmission>()
+            .init_resource::<CommandResults>()
+            .init_resource::<DocumentRegistry<UsdDocument>>()
+            .init_scene_resource::<PendingAuthoring>()
+            .add_systems(SceneTeardown, retire);
+        let doc = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .allocate(
+                "#usda 1.0\ndef Xform \"Scratch\" {}\n".into(),
+                lunco_doc::PathlessOrigin::untitled("scratch.usda"),
+            );
+        let lease = DocumentLease::capture(app.world(), doc).unwrap();
+        assert!(!lease.is_scene_owned());
+        let snapshot = app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .unwrap()
+            .document()
+            .clone();
+        let committed = Arc::new(AtomicBool::new(false));
+        let committed_result = committed.clone();
+        let completion = Arc::new(Mutex::new(None));
+        let destination = Arc::downgrade(&completion);
+        let mut pending = app.world_mut().resource_mut::<PendingAuthoring>();
+        let wake = Arc::downgrade(&pending.completed);
+        pending.next = 1;
+        pending.edits.insert(
+            1,
+            PendingEdit {
+                lease,
+                snapshot,
+                operation: 1,
+                key: AsyncWorkKey::new(
+                    AsyncWorkKind::UsdDocumentAuthoring,
+                    0,
+                    u128::from(doc.raw()),
+                    0,
+                    1,
+                ),
+                command_id: Some(31),
+                correlation_id: None,
+                completion,
+                commit: Box::new(move |_| {
+                    committed_result.store(true, Ordering::Release);
+                    Ok(Ack::new(OpId::new()))
+                }),
+            },
+        );
+        lunco_core::run_scene_teardown(app.world_mut());
+        *destination
+            .upgrade()
+            .expect("document still owns its result slot")
+            .lock()
+            .unwrap() = Some(Ok(StageRecipe::new(
+            "mem://scratch/root.usda",
+            Default::default(),
+        )));
+        wake.upgrade()
+            .expect("retained document work keeps its wake channel")
+            .ready
+            .store(true, Ordering::Release);
+        drain(app.world_mut());
+        assert!(committed.load(Ordering::Acquire));
+        assert!(destination.upgrade().is_none());
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(31),
+            Some(lunco_core::CommandOutcome::Succeeded(_))
+        ));
+    }
 
     #[test]
     fn teardown_rejects_pending_edits_and_releases_their_owned_values() {
@@ -632,6 +774,7 @@ mod tests {
             operation,
             PendingEdit {
                 lease: DocumentLease {
+                    lifetime: OperationLifetime::Scene(None),
                     owner: PinnedDocumentRuntimeOwner {
                         document: doc,
                         runtime: DocumentRuntimeOwner::Application,

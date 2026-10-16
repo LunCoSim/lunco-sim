@@ -262,7 +262,7 @@ impl Plugin for LunCoSimUiPlugin {
             .enabled = true;
         install_runtime_ui_dropdown_state(app);
         dataset_provisioning::install(app);
-        app.insert_resource(lunco_workbench_guided_ui::GuidedObjectivesVisibility {
+        app.insert_resource(lunco_workbench_guided_ui::GuidedHudVisibility {
             visible_in_perspective: Some(lunco_workbench_core::PerspectiveId("sandbox_view")),
         });
         // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
@@ -329,12 +329,14 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 install_viewport_placeholder_actions(app.world_mut());
+                app.init_resource::<scripted_menus::ScriptedMenuBindings>();
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_guided_hud_action)
                     .add_observer(on_guided_stop_requested)
                     .add_observer(on_runtime_error_warning)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
+                    .add_observer(scripted_menus::invoke_scripted_menu)
                     .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed);
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
@@ -503,7 +505,17 @@ fn on_runtime_ui_action(
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) {
+    if let Err(error) = trigger
+        .event()
+        .scope
+        .validate(workspace.as_deref(), scene.as_deref())
+    {
+        warn!("[runtime-ui] {error}");
+        return;
+    }
     match trigger.event().action.as_str() {
         "view.surface" => {
             if let Ok(target) = q_avatar.single() {
@@ -571,11 +583,11 @@ fn on_runtime_ui_action(
                 ("parameters".to_owned(), parameters),
             ]));
             commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+                binding: None,
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
                 args: action_args.clone(),
-                owner_twin_id: None,
-                scene_bound: false,
+                owner_twin_id: trigger.event().scope.owner_twin_id,
             });
             commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
@@ -595,15 +607,20 @@ fn on_runtime_ui_action(
 /// from the scripting runtime and carries only the semantic action id.
 fn on_guided_hud_action(
     trigger: On<lunco_workbench_guided_ui::GuidedHudActionRequested>,
+    bindings: Query<&lunco_scripting_bridge_core::ToolHookBinding>,
     mut commands: Commands,
 ) {
     let action = trigger.event();
+    let Ok(binding) = bindings.get(action.binding) else {
+        warn!("[guided-hud] callback binding has been retired");
+        return;
+    };
     commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-        tool: action.tool.clone(),
-        hook: action.hook.clone(),
+        binding: Some(action.binding),
+        tool: binding.tool.clone(),
+        hook: binding.hook.clone(),
         args: lunco_telemetry_core::TelemetryValue::String(action.action.clone()),
-        owner_twin_id: None,
-        scene_bound: false,
+        owner_twin_id: binding.owner_twin_id,
     });
 }
 
@@ -853,6 +870,8 @@ fn draw_runtime_ui_dropdowns(
     theme: Option<Res<lunco_theme::Theme>>,
     mut pick_gate: ResMut<lunco_workbench_core::scene_pick::ScenePickGate>,
     mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) {
     if !layout.is_some_and(|layout| {
         layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
@@ -960,6 +979,10 @@ fn draw_runtime_ui_dropdowns(
     }
     if let Some(action) = selected_action {
         commands.trigger(runtime_ui::RuntimeUiAction {
+            scope: runtime_ui::RuntimeUiActionScope::capture(
+                workspace.as_deref(),
+                scene.as_deref(),
+            ),
             action,
             source,
             parameters: lunco_hooks::HookValue::Map(Vec::new()),
@@ -1019,7 +1042,12 @@ fn register_camera_menu(world: &mut World) {
                 if let Some(action) =
                     runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref())
                 {
+                    let scope = runtime_ui::RuntimeUiActionScope::capture(
+                        ctx.resource::<lunco_workspace::WorkspaceResource>(),
+                        ctx.resource::<lunco_core::SceneTransitionCoordinator>(),
+                    );
                     ctx.trigger(runtime_ui::RuntimeUiAction {
+                        scope,
                         action,
                         source: Entity::PLACEHOLDER,
                         parameters: lunco_hooks::HookValue::Map(Vec::new()),
@@ -1037,7 +1065,12 @@ fn register_camera_menu(world: &mut World) {
         ];
         for (label, action) in actions {
             if ui.button(label).clicked() {
+                let scope = runtime_ui::RuntimeUiActionScope::capture(
+                    ctx.resource::<lunco_workspace::WorkspaceResource>(),
+                    ctx.resource::<lunco_core::SceneTransitionCoordinator>(),
+                );
                 ctx.trigger(runtime_ui::RuntimeUiAction {
+                    scope,
                     action: action.to_owned(),
                     source: Entity::PLACEHOLDER,
                     parameters: lunco_hooks::HookValue::Map(Vec::new()),

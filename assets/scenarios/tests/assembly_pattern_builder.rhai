@@ -81,6 +81,33 @@ fn on_tick(me, ctx) {
         fail(this, "pattern-builder fixture did not expose a document generation");
         return;
     }
+    if this.phase == 2 {
+        let proposal = this.proposal_request;
+        if proposal.status == "pending" { proposal = command_result(proposal.id); }
+        if proposal == () || proposal.status == "pending" { return; }
+        if proposal.ok != true {
+            fail(this, "pattern/mirror preparation failed: " + proposal.to_string());
+            return;
+        }
+        let review = assembly_edit::review_session(this.doc);
+        if !query_ok(review) || review.proposals == () || review.proposals.len() != 1
+            || review.proposals[0].diagnostics.len() != 0 {
+            fail(this, "pattern/mirror proposal was not visible for clean review: " + review.to_string());
+            return;
+        }
+        this.commit_request = assembly_edit::commit_proposal(review.proposals[0].id);
+        this.phase = 3;
+    }
+    if this.phase == 3 {
+        let result = this.commit_request;
+        if result.status == "pending" { result = command_result(result.id); }
+        if result == () || result.status == "pending" { return; }
+        if result.ok != true {
+            fail(this, "pattern/mirror commit failed: " + result.to_string());
+            return;
+        }
+        this.phase = 1;
+    }
     if this.phase == 1 {
         if current.generation <= this.wait_generation {
             if this.elapsed > 8.0 { fail(this, "pattern/mirror edit did not reach its inspected generation"); }
@@ -199,17 +226,7 @@ fn on_tick(me, ctx) {
         fail(this, "pattern/mirror proposal was rejected: " + proposal.error);
         return;
     }
-    let review = assembly_edit::review_session(this.doc);
-    if !query_ok(review) || review.proposals == () || review.proposals.len() != 1
-        || review.proposals[0].diagnostics.len() != 0 {
-        fail(this, "pattern/mirror proposal was not visible for clean review");
-        return;
-    }
-    let committed = assembly_edit::commit_proposal(review.proposals[0].id);
-    if !query_ok(committed) {
-        fail(this, "pattern/mirror proposal could not be committed: " + committed.error);
-        return;
-    }
+    this.proposal_request = proposal;
     this.wait_generation = current.generation;
-    this.phase = 1;
+    this.phase = 2;
 }

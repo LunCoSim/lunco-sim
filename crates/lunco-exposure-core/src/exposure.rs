@@ -48,14 +48,42 @@ impl ExposureValue {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct ExposureSurface {
+    /// Whether a validated projection is available for this source cohort.
+    pub state: ExposureState,
     pub visible: bool,
     /// Canonical entity identity represented by this surface, when it is
     /// subject-scoped. Presentation policy uses this typed identity instead of
     /// matching names or serialised payloads.
     pub subject: Option<GlobalEntityId>,
     pub properties: HashMap<String, ExposureValue>,
+}
+
+/// Publication state of a retained capability view. Pending and failed views
+/// carry no fabricated properties; ready views retain their last valid sample.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum ExposureState {
+    /// The source cohort has no validated view yet.
+    Pending,
+    /// A complete validated view is retained.
+    #[default]
+    Ready,
+    /// Preparation stopped with an actionable owner diagnostic.
+    Failed(String),
+}
+
+impl ExposureSurface {
+    /// Build a value in an immutable preparation transaction.
+    pub fn set_property(&mut self, name: impl AsRef<str>, value: impl Into<ExposureValue>) -> bool {
+        let name = name.as_ref();
+        let value = value.into();
+        if self.properties.get(name) == Some(&value) {
+            return false;
+        }
+        self.properties.insert(name.to_owned(), value);
+        true
+    }
 }
 
 /// Retained named exposure snapshots shared by engine and presentation
@@ -166,7 +194,15 @@ impl EngineExposures {
         self.application_surfaces.insert(namespace.into());
     }
 
-    /// Withdraw a retired surface and all of its retained data.
+    /// Publish a complete view in one revision, including removal of retired keys.
+    pub fn replace_surface(&mut self, namespace: &str, surface: ExposureSurface) {
+        if self.surfaces.get(namespace) != Some(&surface) {
+            self.surfaces.insert(namespace.to_owned(), surface);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Retire a source identity before its name can be reused.
     pub fn remove_surface(&mut self, namespace: &str) {
         if self.surfaces.remove(namespace).is_some() {
             self.revision = self.revision.wrapping_add(1);
@@ -191,10 +227,7 @@ impl ExposureWriter<'_> {
     }
 
     pub fn property(&mut self, name: impl AsRef<str>, value: impl Into<ExposureValue>) {
-        let name = name.as_ref();
-        let value = value.into();
-        if self.surface.properties.get(name) != Some(&value) {
-            self.surface.properties.insert(name.to_owned(), value);
+        if self.surface.set_property(name, value) {
             *self.revision = self.revision.wrapping_add(1);
         }
     }
@@ -310,6 +343,43 @@ mod tests {
             let refresh = app.world().resource::<ExposureRefresh>();
             assert!(refresh.first_update && refresh.any_dirty());
         }
+    }
+
+    #[test]
+    fn complete_surface_publication_is_atomic_and_retains_equal_revisions() {
+        let mut registry = EngineExposures::default();
+        registry.replace_surface(
+            "subject",
+            ExposureSurface {
+                state: ExposureState::Pending,
+                ..Default::default()
+            },
+        );
+        let pending = registry.revision;
+        let mut ready = ExposureSurface {
+            visible: true,
+            ..Default::default()
+        };
+        ready.set_property("value", 1.25);
+        registry.replace_surface("subject", ready);
+        assert!(registry.revision > pending);
+        let revision = registry.revision;
+        let mut same = ExposureSurface {
+            visible: true,
+            ..Default::default()
+        };
+        same.set_property("value", 1.25);
+        registry.replace_surface("subject", same);
+        assert_eq!(registry.revision, revision);
+        registry.replace_surface(
+            "subject",
+            ExposureSurface {
+                state: ExposureState::Failed("invalid policy".into()),
+                ..Default::default()
+            },
+        );
+        assert!(registry.surfaces["subject"].properties.is_empty());
+        assert!(!registry.surfaces["subject"].visible);
     }
 
     #[test]

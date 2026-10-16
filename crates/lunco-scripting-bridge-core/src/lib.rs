@@ -30,6 +30,9 @@
 //! only for the duration of one evaluation. Single-threaded (FixedUpdate / wasm)
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
+mod tool_binding;
+pub use tool_binding::{ToolHookBinding, ToolHookBindingLifetime, ToolHookBindingRetention};
+
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -408,31 +411,38 @@ thread_local! {
 }
 
 /// RAII guard that publishes a `&mut World` to the thread-local for the lifetime
-/// of a script evaluation, and clears it on drop (even on panic).
-pub struct WorldScope;
+/// of a script evaluation, restoring the caller on drop (even on panic).
+pub struct WorldScope {
+    previous_world: *mut World,
+    previous_context: lunco_core::RuntimeExecutionContext,
+    previous_authority: Option<SessionId>,
+    previous_client_local: bool,
+    previous_actor: u64,
+    previous_rejects: Vec<String>,
+}
 
 impl WorldScope {
     /// Publish `world` and its owning cycle context for the guard's lifetime.
     pub fn enter(world: &mut World, context: lunco_core::RuntimeExecutionContext) -> Self {
-        WORLD_PTR.with(|p| p.set(world as *mut World));
-        EXECUTION_CONTEXT.with(|current| current.set(context));
-        SCRIPT_AUTHORITY.with(|a| a.set(None));
-        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
-        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
-        CURRENT_SELF.with(|c| c.set(0));
-        WorldScope
+        Self {
+            previous_world: WORLD_PTR.with(|p| p.replace(world as *mut World)),
+            previous_context: EXECUTION_CONTEXT.with(|c| c.replace(context)),
+            previous_authority: SCRIPT_AUTHORITY.with(|a| a.replace(None)),
+            previous_client_local: SCRIPT_CLIENT_LOCAL.with(|c| c.replace(false)),
+            previous_actor: CURRENT_SELF.with(|c| c.replace(0)),
+            previous_rejects: SCRIPT_REJECTS.with(|r| std::mem::take(&mut *r.borrow_mut())),
+        }
     }
 }
 
 impl Drop for WorldScope {
     fn drop(&mut self) {
-        WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
-        EXECUTION_CONTEXT
-            .with(|current| current.set(lunco_core::RuntimeExecutionContext::unclassified()));
-        SCRIPT_AUTHORITY.with(|a| a.set(None));
-        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
-        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
-        CURRENT_SELF.with(|c| c.set(0));
+        WORLD_PTR.with(|p| p.set(self.previous_world));
+        EXECUTION_CONTEXT.with(|c| c.set(self.previous_context));
+        SCRIPT_AUTHORITY.with(|a| a.set(self.previous_authority));
+        SCRIPT_CLIENT_LOCAL.with(|c| c.set(self.previous_client_local));
+        CURRENT_SELF.with(|c| c.set(self.previous_actor));
+        SCRIPT_REJECTS.with(|r| *r.borrow_mut() = std::mem::take(&mut self.previous_rejects));
     }
 }
 
@@ -675,8 +685,8 @@ fn validate_simulation_target_dependency(
     Ok(())
 }
 
-/// Keep dependency planning free of commands and direct world mutations.
-pub fn ensure_script_mutation_allowed() -> Result<(), String> {
+/// Read-only lifecycle phases cannot issue effects, independent of cadence.
+pub fn ensure_script_effect_allowed() -> Result<(), String> {
     match execution_context().phase {
         lunco_core::RuntimePhase::DependencyPlan => Err(
             "simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into(),
@@ -688,17 +698,24 @@ pub fn ensure_script_mutation_allowed() -> Result<(), String> {
     }
 }
 
-/// Gate typed commands to presentation-only updates during visualization.
+/// Direct world writes require a mutable phase and a non-presentation caller.
+pub fn ensure_script_mutation_allowed() -> Result<(), String> {
+    ensure_script_effect_allowed()?;
+    if execution_context().clock == lunco_core::RuntimeClock::Presentation {
+        return Err("presentation programs must dispatch typed commands instead of mutating simulation state directly".into());
+    }
+    Ok(())
+}
+
+/// Typed commands retain their owner validation and authority at both cadences.
 pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
-    // These are presentation owners: one journals transient @view@ opinions;
-    // the other queues a revision-fenced render mesh update without touching
-    // USD or authoritative simulation state.
+    // Visualization preparation can update only disposable owner-managed views.
     if execution_context().phase == lunco_core::RuntimePhase::Visualization
         && matches!(name, "ApplyUsdTransientOps" | "UpdateUsdCurveView")
     {
         Ok(())
     } else {
-        ensure_script_mutation_allowed()
+        ensure_script_effect_allowed()
     }
 }
 
@@ -995,6 +1012,8 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                 context: execution_context(),
                 actor: (current_self() != 0)
                     .then(|| lunco_core::GlobalEntityId::from_raw(current_self())),
+                authority: script_authority(),
+                client_local: script_is_client_local(),
             }),
         });
         // The dispatcher and the typed handler both use `commands.queue`: the
@@ -1749,6 +1768,14 @@ pub fn current_self() -> u64 {
     CURRENT_SELF.with(|c| c.get())
 }
 
+/// Published by the script lifecycle owner after an instance is stopped or
+/// invalidated for recompilation. Presentation consumers retire instance leases.
+#[derive(bevy::prelude::Event, Clone, Copy, Debug)]
+pub struct ScriptInstanceRetired {
+    /// Stable identity of the outgoing script instance's host.
+    pub script: lunco_core::GlobalEntityId,
+}
+
 /// Temporarily bind bridge operations to one executing script entity.
 ///
 /// The scenario owner enters this around each backend evaluation so access
@@ -1823,8 +1850,8 @@ pub fn hash_str(s: &str) -> u64 {
 /// was in scope.
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
-        if ensure_script_mutation_allowed().is_err() {
-            return;
+        if ensure_script_effect_allowed().is_err() {
+            return false;
         }
         world.trigger(TelemetryEvent {
             name: name.to_string(),
@@ -1838,8 +1865,9 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
             sim_secs: 0.0,
             sim_tick: 0,
         });
+        true
     })
-    .is_some()
+    .unwrap_or(false)
 }
 
 /// Build the `{ name, value, severity, timestamp, sim_secs, sim_tick }` event
@@ -2080,6 +2108,8 @@ mod tests {
             lunco_core::CommandOrigin::Rhai {
                 context: lunco_core::RuntimeExecutionContext::unclassified(),
                 actor: Some(lunco_core::GlobalEntityId::from_raw(77)),
+                authority: None,
+                client_local: false,
             }
         )));
     }

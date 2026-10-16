@@ -489,11 +489,17 @@ Which disposition is right depends on who owns the value:
   Gravity is the type case: a scene SHOULD override it, and must not leave the
   override behind. Removing it would leave the world with no value at all.
 
-`SceneTeardown` grep-lists everything a reload restores. If you add
-scene-derived state and do not register it, you have added a leak.
+Initialize scene-derived resources through `AppSceneExt::init_scene_resource`
+and implement `SceneResource` at their owner. Initialization installs final
+cleanup after shutdown and entity-removal callbacks; detached scene entities use
+`SceneOwned`. Keep explicit early shutdown only where a domain must cancel or
+release work before entity removal.
 
-The shared physics owner clears `PhysicsHolds` and `PhysicsStepRequest` and
-restores a zero-delta `Time<Physics>` at this boundary. The time owner keeps
+The shared physics owner clears `PhysicsHolds`, releases its own shared
+admission key and restores a zero-delta `Time<Physics>` at this boundary.
+The time owner registers `SimulationStepControl` as scene state so its final
+reset retires manual holds and pending cycles after terminal callbacks;
+the gizmo owner releases its independent scene-interaction key. The time owner keeps
 `SimTick` and `Time<Fixed>` continuous across scene changes; it reanchors the
 new mission epoch at the current tick and holds fixed cycles until the new scene
 is ready. Any admitted fixed-time balance remains with that shared clock and

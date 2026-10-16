@@ -15,6 +15,8 @@ fn simulation_dependencies(me, ctx) {
        entity_reads: vessel_descendants(find_path("/SlopeTest")),
        entity_writes: [rover], query_reads: [], required_inputs: [] }
 }
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
 
 fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic

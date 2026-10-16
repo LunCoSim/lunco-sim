@@ -10,12 +10,52 @@ fn simulation_dependencies(me, ctx) {
             find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry"),
             find_path("/LanderPlumeActivity/Lander/AttitudePropulsion"),
         ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: [find_path("/LanderPlumeActivity/Lander/Flame")],
+        entity_writes: [find_path("/LanderPlumeActivity/Lander/Flame")],
+        query_reads: ["ListPorts", "GetPort"], required_inputs: [],
     }
 }
 
 fn number_or_zero(value) {
     if value == () { 0.0 } else { value }
+}
+
+// Exercise the same material-owned port contract with and without rendering.
+// This runs on the simulation clock: writes commit in this callback and the
+// connected photometry source resumes ownership on the following cycle.
+fn shader_port_checks(target) {
+    let checks = [];
+    let initial = ();
+    try {
+        let listed = false;
+        for port in query("ListPorts", #{api_id: target}).ports {
+            if port.name == "plume_length_fraction" && port.direction == "in"
+                && port.metadata.source == "shader parameter" && port.metadata.writable {
+                listed = true;
+            }
+        }
+        checks.push(t_true(listed, "the shader owner publishes its canonical writable input"));
+        initial = query("GetPort", #{api_id: target, name: "plume_length_fraction"}).value;
+        if initial == () { throw "the declared shader input has no scalar sample"; }
+        let undeclared = query("GetPort", #{api_id: target, name: "plumeLengthFraction"});
+        checks.push(t_true(undeclared.ok == false && undeclared.code == 422,
+            "an undeclared shader spelling has no runtime port"));
+        let write = cmd("SetPorts", #{target: target, writes: [["plume_length_fraction", 0.375]]});
+        let sample = query("GetPort", #{api_id: target, name: "plume_length_fraction"}).value;
+        checks.push(t_true(write.ok && sample == 0.375,
+            "the published shader name writes its resolved input"));
+        let invalid = cmd("SetPorts", #{target: target, writes: [["plume_length_fraction", 1.0e100]]});
+        let retained = query("GetPort", #{api_id: target, name: "plume_length_fraction"}).value;
+        checks.push(t_true(!invalid.ok && retained == sample,
+            "the GPU scalar range rejects an oversized value without changing the input"));
+    } catch (error) {
+        checks.push("shader port contract failed: " + error);
+    }
+    if initial != () {
+        let released = cmd("ReleasePort", #{target: target, name: "plume_length_fraction"});
+        checks.push(t_true(released.ok, "the shader input hold is released"));
+    }
+    checks
 }
 
 fn print_metrics(s) {
@@ -36,10 +76,11 @@ fn on_start(me, ctx) {
     this.main = find_path("/LanderPlumeActivity/Lander/MainPropulsion");
     this.photometry = find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry");
     this.rcs = find_path("/LanderPlumeActivity/Lander/AttitudePropulsion");
+    this.flame = find_path("/LanderPlumeActivity/Lander/Flame");
     this.done = false;
     this.elapsed = 0.0;
     this.subject_ok = this.lander >= 0 && this.main >= 0 && this.photometry >= 0
-        && this.rcs >= 0;
+        && this.rcs >= 0 && this.flame >= 0;
     this.command_ok = false;
     this.activity = 0.0;
     this.intensity = 0.0;
@@ -54,6 +95,7 @@ fn on_start(me, ctx) {
     this.rcs_length_fraction = 0.0;
     this.zero_command_ok = false;
     this.phase = 0;
+    this.failures = [];
     this.zero_activity = 1.0;
     this.zero_intensity = 1.0;
     this.zero_length = 1.0;
@@ -76,6 +118,18 @@ fn on_start(me, ctx) {
 
 fn on_tick(me, ctx) {
     if this.done { return; }
+    if this.phase == 2 {
+        let sample = query("GetPort", #{api_id: this.flame, name: "plume_length_fraction"}).value;
+        let source = get(this.photometry, "visual_length_fraction");
+        // The shader slot stores f32 at the GPU boundary. Compare its widened
+        // sample with the connected f64 source within that storage precision.
+        this.failures.push(t_true(sample != () && source != ()
+            && abs(sample - source) <= 1.0e-6 && abs(source - 0.375) > 1.0e-5,
+            "the next physics tick replaces the test setpoint with the connected source"));
+        this.done = true;
+        report_verdict(this.failures, "LANDER PLUME ACTIVITY", "LANDER_PLUME_ACTIVITY");
+        return;
+    }
     this.elapsed += dt();
     if this.phase == 0 {
         if this.elapsed < 1.0 { return; }
@@ -132,7 +186,6 @@ fn on_tick(me, ctx) {
         this.zero_intensity = get(this.photometry, "intensity");
         this.zero_length = get(this.photometry, "length");
     }
-    this.done = true;
     print_metrics(this);
     let failures = [];
     if !this.subject_ok { failures.push("production plume topology did not materialize"); }
@@ -169,5 +222,7 @@ fn on_tick(me, ctx) {
         || this.zero_length == () || !this.zero_length.is_finite() || this.zero_length > this.length * 0.15 {
         failures.push("zero command did not decay the physical spool tail and its plume");
     }
-    report_verdict(failures, "LANDER PLUME ACTIVITY", "LANDER_PLUME_ACTIVITY");
+    failures += shader_port_checks(this.flame);
+    this.failures = failures;
+    this.phase = 2;
 }

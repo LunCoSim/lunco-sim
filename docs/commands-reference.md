@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**273 commands** across **57** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**276 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -25,7 +25,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
 - [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (25 commands)
-- [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (4 commands)
 
 **USD / scenes**
 
@@ -51,7 +51,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scripting & scenarios**
 
-- [`lunco-scripting`](#lunco-scripting) (2 commands)
+- [`lunco-scripting`](#lunco-scripting) (3 commands)
 
 **Documents & twins**
 
@@ -63,7 +63,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Time & clock**
 
-- [`lunco-time`](#lunco-time) (5 commands)
+- [`lunco-time`](#lunco-time) (6 commands)
 
 **Celestial, environment & comms**
 
@@ -121,7 +121,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (11 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -557,30 +557,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `type_name` | `String` |  Attribute type name (e.g. `float`). Defaults to `float`. |
 | `sources` | `Vec < String >` |  Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`). |
 
-#### `StepPhysics`
-
- Freeze physics and advance it deliberately, one frame at a time.
-
- The verb a cutscene or an offline recording wants, and the reason it is NOT
- `SetTimeTransport`: pausing the world clock also stops `FixedUpdate`, so the
- scenario script that paused it never runs again to unpause itself — the shot
- hangs and a recording spools frames forever. A physics hold freezes
- `Time<Physics>` while `Time<Virtual>` (and so the script) keeps running.
-
- * `{"hold": true}` — freeze the world; the script keeps ticking.
- * `{"steps": 1}` — let exactly one frame of physics through, then re-freeze.
- * `{"hold": false}` — hand the world back to normal simulation.
-
- Steps only apply while held; queued with nothing holding they are dropped rather
- than banked against an unrelated hold (a terrain bake, say).
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `hold` | `Option < bool >` |  Raise (`Some(true)`) / release (`Some(false)`) the cinematic hold; `None`  leaves it as-is so a step can be sent on its own. |
-| `steps` | `Option < u32 >` |  Frames of physics to let through the hold. `None` = 0. |
-
 ## USD / scenes
 
 ### `lunco-usd-commands` <a id="lunco-usd-commands"></a>
@@ -592,7 +568,7 @@ actually call, with the fields the deserializer actually accepts. See the
  image-based lighting.
 
  **This is the only way to change the environment at runtime.** It lowers to
- [`UsdOp`]s and goes through [`apply_ops_as_change_set`], so the edit saves,
+ [`UsdOp`]s and goes through [`apply_ops_as_change_set_result`], so the edit saves,
  journals, undoes as ONE unit, and replicates — exactly like any other USD
  edit. Writing to the `Skybox`/`GeneratedEnvironmentMapLight` components
  directly would light the local viewport and be invisible to all four of
@@ -607,13 +583,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc_id` | `Option < DocumentId >` |  Document to author into. `None` = the workspace's active document. |
-| `path` | `Option < String >` |  Prim path of the dome. `None` = `/World/Sky`.   It must live **under the stage's `defaultPrim` subtree** (`/World` in  every scene here) — a prim authored outside it composes into the layer  but is never mounted, so the sky would silently not appear. |
+| `doc_id` | `Option < DocumentId >` |  Document to author into. `None` uses the authoritative mounted scene's document. |
+| `path` | `Option < String >` |  Prim path of the dome. `None` selects `Sky` below the authoritative  mounted root. Documents outside that scene require an explicit path. |
 | `texture` | `Option < String >` |  `inputs:texture:file` — the HDRI, resolved relative to the stage layer  (e.g. `../hdri/lunar_horizon_2k.hdr`). Equirectangular (`.hdr`, `.png`)  or a `.ktx2` cubemap. |
 | `intensity` | `Option < f32 >` |  `inputs:intensity` — multiplier on the image (1.0 = as authored). |
 | `exposure` | `Option < f32 >` |  `inputs:exposure` — stops, applied as intensity × 2^exposure. |
 | `color` | `Option < [f32 ; 3] >` |  `inputs:color` — linear RGB tint multiplied into the image. |
-| `rotation` | `Option < [f32 ; 3] >` |  `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case  is yaw only (`[0, heading, 0]`). |
+| `rotation` | `Option < [f64 ; 3] >` |  `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case  is yaw only (`[0, heading, 0]`). |
 | `skybox` | `Option < bool >` |  `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves  the sky black. The lunar case: real bounce light, no visible sky. |
 
 ## Modelica modeling & simulation
@@ -1233,6 +1209,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-scripting` <a id="lunco-scripting"></a>
 
+#### `RunPython`
+
+*(no description — add a `///` doc on the struct)*
+
+- *defined in:* `crates/lunco-scripting/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | `String` |   |
+
 #### `SetScenarioPaused`
 
  Pause or resume the scenario attached to `target`.
@@ -1560,6 +1546,18 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it. |
 | `rate` | `Option < f64 >` |  Speed multiplier vs realtime (1.0 = realtime, bounded to 0.1–64.0 for  the causal live transport); `None` leaves it. |
+
+#### `StepSimulation`
+
+ Hold/release automatic simulation advancement or request exact fixed cycles.
+ Each requested cycle uses the same physics, Modelica and scenario schedule.
+
+- *defined in:* `crates/lunco-time/src/stepping.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hold` | `Option < bool >` |  Explicit manual hold. Releasing it also retires unspent step requests. |
+| `steps` | `Option < u32 >` |  Positive number of shared fixed cycles to admit while held or paused. |
 
 ## Celestial, environment & comms
 
@@ -2993,7 +2991,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `tool` | `String` |  Registered tool namespace, for example `recover` or `waypoint_editor`. |
 | `args` | `TelemetryValue` |  Structured argument passed as the single `on_click(context)` argument. |
-| `scene_bound` | `bool` |  Pin this invocation to the active scene and retire it on scene teardown.  Omitted/false keeps the tool's application or Twin invocation lifetime. |
 
 #### `RunRhaiToolHook`
 
@@ -3009,11 +3006,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
+| `binding` | `Option < Entity >` |  Explicit UI callback lease. Retired/replaced bindings reject at admission  and again before queued execution. Omitted for ordinary tool calls. |
 | `tool` | `String` |  Registered tool namespace, for example `waypoint_editor`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `args` | `TelemetryValue` |  Structured argument passed to the hook. |
 | `owner_twin_id` | `Option < u64 >` |  Twin owning an interaction flow, when explicitly supplied by its caller.  Twin-scoped tools also pin their registered owner when this is omitted.  A supplied owner must match a Twin-scoped tool's actual registration. |
-| `scene_bound` | `bool` |  Pin this invocation to the active scene and retire it on scene teardown.  Omitted/false keeps the tool's application or Twin invocation lifetime. |
 
 #### `RunScenario`
 
@@ -3886,8 +3883,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ClearGuidedOverlay`
 
- Clear every field of the current guided presentation while retaining its
- execution owner. Rhai tutorial launchers use this before replacing a lesson.
+ Clear the calling script card and active coach presentation. Other HUD
+ cards retain their own content, callback bindings, and perspective scope.
 
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `ClearGuidedOverlay` (no params)
@@ -3929,29 +3926,50 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `GuidedSkip` (no params)
 
+#### `InspectGuidedHud`
+
+ Inspect authored cards and the same visibility/input decision used by rendering.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
+- *fields:* none — call with `InspectGuidedHud` (no params)
+
 #### `SetGuidedHudActions`
 
  Replace the HUD's authored action buttons. All buttons dispatch their id to
  one registered one-argument Rhai tool hook; an empty `actions` list clears
  the buttons.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `tool` | `String` |  Registered Rhai tool namespace, e.g. `griffin_surface_ops`. |
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
+| `tool` | `String` |  Registered Rhai tool namespace, e.g. `mission_controls`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `actions` | `Vec < GuidedHudAction >` |  Current button set in display order. |
+
+#### `SetGuidedHudPerspectives`
+
+ Set the whole card's perspective scope. Empty `perspectives` allows all.
+ Unknown perspective ids reject without changing the card.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
+| `perspectives` | `Vec < String >` |  Registered workbench perspective ids allowed to display this card. |
 
 #### `SetHint`
 
  Set the persistent one-line hint. Empty `text` clears it. Rhai: `hint(msg)`
  / `clear_hint()`.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
 | `text` | `String` |  Instruction text; empty hides the hint line. |
 
 #### `SetObjectives`
@@ -3961,10 +3979,11 @@ actually call, with the fields the deserializer actually accepts. See the
  the prelude formats the list into this block and also auto-publishes it from
  declarative `mission(me, ctx)` state.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
 | `text` | `String` |  Pre-formatted checklist block; empty hides the objectives card. |
 
 #### `SetTourStep`
@@ -4149,7 +4168,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 273 commands from the runtime schema; scanned 993 .rs files for docs (0 parse failure(s) skipped).
+<!-- 276 commands from the runtime schema; scanned 1002 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred
 -->

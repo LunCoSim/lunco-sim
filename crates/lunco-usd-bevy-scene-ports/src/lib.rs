@@ -100,6 +100,26 @@ enum ScenePropertySlot {
 }
 
 impl ScenePropertySlot {
+    /// Resolve ownership from native component membership without sampling a value.
+    fn has_target(self, world: &World, entity: Entity) -> bool {
+        match self {
+            Self::LightIntensity
+            | Self::LightRadius
+            | Self::LightColorR
+            | Self::LightColorG
+            | Self::LightColorB => {
+                world.get::<PointLight>(entity).is_some()
+                    || world.get::<SpotLight>(entity).is_some()
+            }
+            Self::TranslationX
+            | Self::TranslationY
+            | Self::TranslationZ
+            | Self::ScaleX
+            | Self::ScaleY
+            | Self::ScaleZ => world.get::<Transform>(entity).is_some(),
+        }
+    }
+
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "light_intensity" => Self::LightIntensity,
@@ -175,8 +195,7 @@ fn read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
 
 fn resolve_input_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
     let slot = ScenePropertySlot::from_name(name)?;
-    read_value_slot(world, entity, slot)?;
-    Some(slot as u64)
+    slot.has_target(world, entity).then_some(slot as u64)
 }
 
 fn write_light_slot(
@@ -408,6 +427,15 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
         })
     },
     declare_ports: |world, entity, out| {
+        if !out.accepts_direction(PortDirection::In) {
+            return;
+        }
+        if let Some(name) = out.requested_name() {
+            if resolve_input_slot(world, entity, name).is_some() {
+                out.declare(name, PortDirection::In);
+            }
+            return;
+        }
         // Listing exactly what the entity HAS is what keeps `ListPorts` and
         // the resolved slot writer telling the same story: every name reported here is one a
         // write would be accepted for, and no name is hidden because it currently

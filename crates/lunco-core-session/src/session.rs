@@ -785,7 +785,7 @@ impl SessionInputProducer {
                 }
                 Ok(Self::LocalUser { session_id })
             }
-            Some(lunco_core::CommandOrigin::Rhai { context, actor }) => {
+            Some(lunco_core::CommandOrigin::Rhai { context, actor, .. }) => {
                 let route = context.route.ok_or_else(|| {
                     format!("{verb} from Rhai requires a classified runtime route")
                 })?;

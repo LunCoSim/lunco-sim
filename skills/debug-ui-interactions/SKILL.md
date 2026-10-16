@@ -21,6 +21,17 @@ part of the failure.
 
 ## Use the real application input path
 
+Launch timed synthetic gestures with `--no-throttle` when the owned window may
+be unfocused. Power-save frame pacing can stretch a press/release beyond the
+native click-duration limit. For an ordinary click after layout settles, use
+`input_click`: its native press/release transitions share one input phase, so
+slow frames cannot turn the click into a long hold. Use separate phases for
+drags and held-gesture assertions; measure their wall duration when a click is
+expected. `InjectWindowInput` exposes the individual transitions directly.
+After publishing or switching a surface, capture its rendered layout before
+injecting pointer input. A command acknowledgement precedes widget layout and
+does not establish a hit target.
+
 Build or resolve the production binary as `LUNCOSIM_BIN`, launch exactly one
 windowed `luncosim` process with an explicit free API port, and wait for
 `/api/ready` before injecting input. The `InjectWindowInput` command and
@@ -32,6 +43,10 @@ Rhai tools process the injected Bevy events. Injected events do not mutate the
 native window cursor. Bevy Picking's `PointerLocation` is the shared application
 cursor state; cursor-driven consumers such as the transform gizmo read it
 through `PrimaryMousePointer` in `lunco-interaction-core`.
+
+Authored pointer automation uses `// @timing presentation`, so each gesture
+phase occupies a host frame even when one frame admits several simulation
+ticks. Use `execution_context().delta_seconds` for its timeouts.
 
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:
@@ -103,6 +118,20 @@ and menu policy in those tool hooks rather than sending it through the general
 REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
+Persistent scene popups bind endpoints before publication and scope widget ids
+to their popup root. On selection, detach only the selected `Invocation` lease
+before despawning the popup; the shared queue owns its terminal cleanup. Use
+`python3 scripts/api/test_guided_ui_callbacks.py --port PORT` to check a held
+press across replacement, then a fresh click, dismissal, scene teardown and a
+replacement Twin. Installed workbench menu endpoints belong to a provider root;
+selection creates a scene-bound invocation child. Provider replacement revokes
+the child before or after queue admission, while scene reset preserves the
+installed endpoint for fresh input. Verify completed deferred stop verdicts as
+well as input. Nested commands keep their caller's phase and capabilities;
+physical queue placement cannot grant a new authoring context. Its Rhai library
+supplies the assertions. The wrapper uses
+`--no-throttle --no-vsync` and rejects gestures that exceed the click-duration
+limit, so a stretched gesture cannot produce a false pass.
 When a UI hook reads a collection of USD prims, request the member list once
 and use `QueryUsdPrims` for their needed attributes, schemas, or relationships;
 declare that provider in the caller's `query_reads`. Avoid per-member
@@ -122,7 +151,11 @@ on other documents, perform the lightweight document lookup and drop the hit
 before coordinate conversion or terrain work. For an active interaction, a
 fallback terrain raycast runs at most once per pointer per picking frame;
 direct analytic surface hits do not need that fallback. Queue one typed hook
-after resolution. Clear the subscription when the interaction ends; document
+after resolution with the subscription's exact scene-bound `ToolHookBinding`
+lease. Refreshing context replaces that lease; clear and teardown despawn it so
+already queued samples also reject. Do not dispatch retained subscriptions by
+tool name alone. New subscriptions reject during stop hooks and scene
+transitions. Clear the subscription when the interaction ends; document
 close, Twin close, and scene teardown own cleanup.
 Enter provides the first sample after a scene hit replaces a popup's
 previous-frame capture hit. Bevy can emit move events for both the pass-through
@@ -150,9 +183,9 @@ next primary click commits a moved route point through the canonical
 `@runtime@` USD edit path, whose projected change updates the ribbon once. The
 `route_interaction` production gate verifies that Move selects and retains the
 target, the live ghost follows a coalesced injected terrain cursor trace, and
-document generation stays unchanged during preview. It sequences typed Bevy
-press/release events on separate task ticks and waits for observable state with
-the Rhai behavior tree. It does not verify OS, compositor, or winit input
+document generation stays unchanged during preview. It observes application
+frame boundaries and authoritative state through the Rhai behavior tree.
+It does not verify OS, compositor, or winit input
 delivery; actual headful input remains a separate check. Do not use
 simulation-time sleeps or encode progression as numeric phase state.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
@@ -160,7 +193,9 @@ run by `scripts/run_editor_scene_tests.sh`; it uses `InjectWindowInput` to send
 typed Bevy window events through picking and verifies the mounted fixture,
 waypoint hit, semantic context intent, unchanged pre-menu selection, live scene
 selection in the focused editor owner, explicit Move menu action, ghost
-placement, and deletion. This gate does not exercise physical OS mouse input.
+placement, and deletion. Ordinary menu clicks use `input_click`; pointer
+movement and layout are observed before each click. This gate does not exercise
+physical OS mouse input.
 Bevy emits one click observer per entity in its previous hover map, whose
 iteration order is unspecified. The runtime scene router resolves from that
 same event-source map by hit depth and the authored policy for the actual button

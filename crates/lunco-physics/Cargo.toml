@@ -3,7 +3,7 @@ name = "lunco-physics"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "Physics readiness gate: suspend rigid-body integration (avian's Time<Physics>) while colliders bake — without touching the world clock or the user's transport"
+description = "Native physics admission, continuous contacts, deterministic ordering, and joint mechanisms"
 
 [features]
 # OFF by default — a DIAGNOSTIC, not a runtime setting. Turns on avian's own

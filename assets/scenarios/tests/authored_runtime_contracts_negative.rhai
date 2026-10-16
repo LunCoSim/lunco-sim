@@ -52,9 +52,21 @@ fn on_tick(me, ctx) {
         from: 10.0,
         max: 20.0,
     });
+    let native_rejected = false;
+    try {
+        query("Raycast", #{
+            origin: [0.0, 1..3, 0.0],
+            dir: vec3(0.0, -1.0, 0.0),
+            max: 20.0,
+        });
+    } catch (error) {
+        native_rejected = error.to_string().contains("unsupported Rhai hook return type");
+    }
 
     this.done = true;
     report_verdict([
+        t_true(native_rejected,
+            "unsupported nested native values must reject visibly before query dispatch"),
         t_true(missing(camera), "missing camera was fabricated by the runtime"),
         t_true(missing(sun), "missing light was fabricated by the runtime"),
         t_true(body != () && body.ok != false

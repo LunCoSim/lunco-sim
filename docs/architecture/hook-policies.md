@@ -37,6 +37,18 @@ is distinct from a fault in an installed function. The owner decides whether
 an absent optional policy is valid; a required seam reports a structured fault.
 No invalid result is converted into a guessed value.
 
+The Rhai binding owns one `Dynamic`-to-`HookValue` traversal. It borrows native
+maps, arrays and blobs through Rhai's read accessors, preserving container order
+and scalar types while constructing the owned ABI result. It does not clone
+input container trees. `dynamic_to_hook_with_native` lets an embedding owner
+lower otherwise opaque native leaves during that same traversal; it cannot
+replace the canonical scalar/container rules. An unhandled native type or
+lowering error terminates conversion visibly. `lunco-scripting-rhai-core`
+supplies finite `DVec3`/`DQuat` lowering to f64 arrays for world-bound command
+and query parameters. Pure policy hooks retain the closed default ABI.
+This is value conversion at the interpreter boundary, with no policy selection,
+new execution context or additional scheduling path.
+
 ## When behavior should be a hook
 
 Hook candidacy is part of every design review. Use a hook when behavior is
@@ -212,7 +224,12 @@ unrequested datasets remain quiet. `SceneTransitionStarted` retires outstanding 
 `SceneTeardown` removes domain data derived from the outgoing scene.
 
 Rust also validates the generic menu tree and replaces that provider's
-contribution; selected actions route through the existing Rhai tool hook. Twin
+contribution. The UI host binds every leaf to an explicit provider-owned
+`ToolHookBinding` lease before publishing it. Each installation has a fresh
+widget identity; replacement retires that root and its endpoints. Selection
+creates a scene-bound invocation child, so application menus can remain
+installed across resets while old input and queued work are revoked.
+Selected actions route through the shared bound Rhai tool queue. Twin
 contributions are cleared on `TwinClosed`, and a late contribution for an
 already-closed Twin is discarded. An absent optional hook clears its
 contribution; a fault or malformed action map is warned and queues no asset
@@ -412,14 +429,21 @@ after retained UI placement when its owner revisions change; its production
 hook-policy test rejects REPL invocation, and the focused owner test verifies
 the scheduled call's context and selected visible surface.
 
-The `runtime.ui.visibility` and `runtime.ui.properties` policies receive
-`Application/Ui/Preparation` from the `publish_exposure` owner. Camera-status
-properties receive `Application/Presentation/Initialization` at startup and
-`Application/Presentation/Event` when camera status changes. Their production
-hook-policy checks reject unowned REPL calls, and the camera exposure owner
-test covers the startup projection. The production `route_lifecycle` gate also
-checks the visible `program-browser` exposure and its typed program collection
-after authored UI metadata is admitted.
+The `lunco-luncosim-exposures` owner captures immutable UI facts and their
+`Application/Ui/Preparation` context at the bounded `Time<Real>` cadence.
+Camera properties capture `Application/Presentation/Initialization` at startup
+and `Application/Presentation/Event` on camera changes or policy replacement.
+The owner retains the selected hook registrations and prepares complete views
+through `AsyncWorkAdmission`. `RegisteredHook::invoke` applies the same context,
+argument and result validation to captured and registry-dispatched calls.
+No live World, USD reader or authoritative mutation crosses this boundary.
+
+Retained views, bounded admission, source fencing and failure recovery follow
+[the publication contract](runtime-authored-ui.md). `runtime_ui_preparation`
+exercises failure and recovery while physics is held in both headless and
+windowed production sessions; `route_lifecycle` checks the authored
+`program-browser` consumer.
+
 The default runtime UI policies pass only status, progress blockers and input
 maps to their internal helpers. The public typed fact map remains available to
 the policy; helper evaluation does not copy unrelated participant/output trees.

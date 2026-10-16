@@ -207,7 +207,10 @@ publishes path lookups for those identities. `ClockProjectionSet` runs in
 admission uses the core runtime's `SimulationCompletions` schedule, serviced
 after message rotation and before `ClockProjectionSet` in `First`. The native
 driver also services that same schedule on response readiness while waiting for
-the next fixed deadline; partial receipts do not rerun the application update.
+the next fixed deadline. The shared fixed runner services it once before checking
+a held pending cycle, so receipts completed during native integration can release
+the next cycle in the same update. Neither path waits on unfinished work or
+reruns the application update.
 The completion systems retain one state and their existing session, source,
 step, and communication-endpoint fences. Readiness does not consume or apply
 results, advance clocks, or choose commit order. Only a fully
@@ -398,6 +401,15 @@ on representative scenes before changing the serialized Modelica worker or
 introducing a parallel solver; use Tracy to determine whether solver service or
 other owner work dominates.
 
+Deferred world-bound Rhai calls snapshot their typed `CommandOrigin::Rhai`
+into `WorldScriptExecution` at admission. That origin carries the caller's
+runtime context, actor, session authority and client-local restriction across
+reflected dispatch as well as queue execution. UI/REPL queue membership is a
+scheduling choice and cannot change the nested call's phase, clock, sequence or
+producer stamp. Host submissions without a Rhai origin receive the owning
+UI/REPL cycle context. Nested synchronous world scopes restore all caller
+bridge state on exit, including after an evaluation error.
+
 Every cross-domain callback receives an immutable `RuntimeExecutionContext`
 from its owning Rust cycle with:
 
@@ -512,8 +524,15 @@ Nested Rhai functions inherit the current phase. Runtime owner scope
 independent of cycle and clock. The authored `@peer host|client|both` directive
 selects the network peer for a scenario; it does not select the runtime owner
 scope. Continuous scenario behavior may state its required
-cadence with `@timing simulation`; Rust still installs and invokes the scenario
-from its owning schedules. Lifecycle hooks receive the lifecycle or simulation
+cadence with `@timing simulation` (the default) or `@timing presentation`.
+Both use one lifecycle FSM and native task interpreter. Presentation behavior
+receives `Time<Real>` frame samples and a frame sequence; waits use that typed
+context. Its independent bounded event queue prevents a paused simulation pass
+from consuming presentation events. Subscription exists only while the language
+has presentation actors, avoiding event clones in simulation-only hosts.
+Presentation programs submit typed commands; direct world writes are rejected.
+Rust installs and invokes both cadences from their owning schedules. Lifecycle
+hooks receive the lifecycle, presentation or simulation
 context of the pass that invokes them. Unknown execution targets, timing values, or
 metadata directives skip only that scenario and publish document diagnostics
 once for the source revision. The scenario driver refreshes these directives
@@ -1295,16 +1314,18 @@ clock sampled from `Time<Real>`. It runs in the UI owner's `PostUpdate` chain
 only when the exposure, policy, or recording revision changes; it does not
 create a second UI cadence. Its Rhai policy rejects off-cycle calls.
 
-The authored runtime-surface visibility and property policies receive
-`Application/Ui/Preparation` from the `publish_exposure` owner, which is
-explicitly placed in `RuntimeCycleSet::Ui`. Camera-status properties are
-published at startup and on camera-status events with
-`Application/Presentation/Initialization` and
-`Application/Presentation/Event` respectively. Their Rhai policy accepts only
-those owner contexts; the visibility policy accepts only the UI refresh owner.
-The production `route_lifecycle` gate queries `ReadExposures` after authoring
-its `program-browser` surface and checks the scheduled visibility and program
-collection output.
+Runtime-surface policies consume immutable snapshots prepared by the shared
+headless/windowed exposure owner. Native pure policy evaluation runs through
+bounded async admission; the page host uses the same kernel with cooperative
+local task execution, without claiming browser worker isolation. Captured hooks
+retain the caller's typed execution context. Completion servicing runs every
+application update independently of the real-time capture cadence or physics
+holds. One in-flight job and one latest pending input per surface bound work;
+source epochs and identity checks reject retired results. Publication changes
+only non-authoritative presentation state and never advances simulation time.
+Live-World scripts remain serial. The complete state and failure contract lives
+in [runtime UI architecture](runtime-authored-ui.md); the production
+`runtime_ui_preparation` gate covers held-physics failure and recovery.
 
 The whole-simulation guarantee remains open because:
 
@@ -1440,8 +1461,13 @@ The whole-simulation guarantee remains open because:
    `scripts/test-deterministic-physics-profiles.sh` and
    `scripts/test-deterministic-physics-profiles.ps1` invoke production
    `luncosim test` processes and check their exit statuses. They leave
-   `--tick-hz` unset, so the fixed step remains 60 Hz; the runner advances the
-   manual clock without wall-time pacing. This remains fixture-specific evidence, not
+   `--tick-hz` unset, supplying one nominal physics interval per manual update.
+   The production composition owns the fixed timestep in every host; scene
+   tests change only manual wall-clock input duration through `--tick-hz` and
+   `--jitter`. Update count and completed tick count are independent. Reported
+   simulation duration comes from completed `Time<Fixed>` elapsed time, so a
+   different driver cadence cannot relabel physics or Modelica time. The runner
+   advances without wall-time pacing. This remains fixture-specific evidence, not
    whole-simulation replay determinism. The current profile
    records effective pool width but does not select a deterministic Avian
    solver profile; that guarantee still needs a measured production choice or

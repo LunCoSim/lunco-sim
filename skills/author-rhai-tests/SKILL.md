@@ -88,6 +88,11 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    diagnostic/verdict boundary without crashing or silently substituting a
    default. A historical regression example alone is not sufficient reason
    to add a negative test.
+   Script helpers that receive a state map return the updated map, and callers
+   assign it back to `this`; argument mutation does not update the caller's
+   bound state. Keep the terminal verdict latched in that state so stop hooks
+   cannot emit a contradictory second result. Timeout diagnostics preserve an
+   earlier failure and identify the current awaited operation.
 4. For requirements, read the mounted SysML snapshot and evaluate composed USD
    evidence. Keep the requirement ID/limit in SysML and emit structured check
    evidence (name, measured value, units, criterion, source revision, and
@@ -130,6 +135,10 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    state. The production test wrappers give each process a run-scoped
    `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as
    ephemeral settings and runtime overlays.
+   Discovery resolves source assets through the same owning Twin and prepared
+   asset paths as runtime. A source search path may resolve from the Twin root
+   after a layer miss; `./` paths require the layer-relative source. Do not copy
+   a script beside its scene to satisfy discovery or bypass a failing fixture.
 7. Repeat with deterministic clocks and explicit seeds. Record the clock
    contract, timestep/substeps, source revision, and finite-state result. A
    repeatability check compares the same sampled evidence, not merely a zero
@@ -169,6 +178,17 @@ Review drift from an older fixture against the current physics/Modelica owners;
 a fresh capture alone is not proof that the candidate preserves behavior.
 Record pool width from `clock_snapshot().physics_compute_threads` with
 `physics_profile_known=true`; CLI `threads=0` alone does not observe the width.
+For update-cadence sensitivity, vary `--tick-hz` or jitter while retaining the
+production physics clock. `clock_snapshot().fixed_dt_s` observes its quantum;
+the runner's `sim` duration measures completed physics time. Cover default
+Modelica exchange, explicit subrates, pause/rate changes and telemetry with the
+`modelica_initialization_network` gate at a different manual update cadence.
+
+For manual admission, run `shared_simulation_step` through the production
+scene-test host. Its presentation task observes exact shared physics/Modelica
+cycles, frozen clocks, preserved user pause/rate, and atomic rejection of zero
+or ambiguously running step requests. Presentation waits use their typed owner
+clock; simulation-only time helpers must remain rejected outside that cycle.
 
 For an intentional owner-contract repair that changes initialized state, first
 demonstrate the fault and trace state differences to the authored inputs and

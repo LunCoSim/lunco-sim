@@ -17,7 +17,12 @@ telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica. Runtime plugins install their own cycles from
 the selected application composition. A scenario may declare its peer-role
 execution target with `// @peer host|client|both` and its cadence with
-`// @timing simulation`; `host` includes standalone authoritative mode. These
+`// @timing simulation|presentation`; omitted timing is simulation. Presentation
+programs use the same lifecycle and task interpreter on the application-frame
+clock, including while simulation is held. They submit typed domain commands
+instead of reflection/structural writes. Native waits inherit the caller's
+clock; simulation helpers `sim_tick()`, `dt()` and `elapsed_seconds()` remain
+simulation-only. `host` includes standalone authoritative mode. These
 directives do not choose its Core/Application/Twin owner or install schedules.
 Rust assigns the owner route and retains schedule ownership.
 Unsupported metadata disables only that program and publishes a document
@@ -306,10 +311,14 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
   The native task driver binds `this` while invoking those closures, and owns
   the task cursor/dwell/event state. Named callbacks are also supported as
   `Fn("name")` when declared `fn name(me)`; the driver binds the same
-  persistent state map as `this`.
+  persistent state map as `this`. Both forms borrow it directly; a callback
+  error reports a diagnostic and retains mutations already made to that map.
 - Rhai map arguments are value/copy-on-write values. A helper that assigns a
   persistent field must return the updated map, and the lifecycle callback must
   assign it back to `this`; helper-side field assignments alone do not persist.
+- Function locals end with their invocation, including error unwinding. Keep
+  persistent callback state in `this` or captured closures; the interpreter
+  retains only the initialized top-level scope between calls.
 - Hot-reload runs `on_stop` before installing the new program state; initialize
   all required `this` fields in the new run.
 - Scenario initialization and readiness already have distinct owners:
@@ -361,7 +370,7 @@ Twin's scene generation changed.
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, and `usd_path` reads stable USD identity metadata and is available during dependency planning |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
 | `emit(name, value?)` | fire a `TelemetryEvent` stamped with the simulator `sim_secs` and `sim_tick` (fixed-step delivery waits for a later `SimTick`; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During a world-level readiness hold, the shared scenario gate is closed and events are not queued. |
-| `sim_tick()` / `dt()` / `elapsed_seconds()` | available only in simulation-cycle calls; each returns a Rhai error in paused lifecycle and one-shot REPL/tool calls |
+| `sim_tick()` / `dt()` / `elapsed_seconds()` | available only in simulation-cycle calls, including startup before the first tick; `dt()` is the configured physics timestep, independent of transport rate. Each returns a Rhai error in paused lifecycle and one-shot REPL/tool calls |
 | `execution_context()` | read-only owner scope, cycle, phase, clock sample, logical sequence, and event producer stamp |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a sequence-free seed) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position, producer_id?})` — no generic spawn. Twin Rhai uses its actor identity; actorless Rhai supplies a stable producer id. |

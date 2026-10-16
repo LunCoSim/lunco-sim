@@ -411,6 +411,7 @@ impl Plugin for SceneEditUiPlugin {
             .init_scene_resource::<crate::script_tools::ScenePointerDispatch>()
             .init_scene_resource::<crate::script_tools::PendingUsdCurveViews>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
+        app.add_systems(lunco_core::SceneTeardown, crate::script_tools::reset_scene_pointer_move_hooks);
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hook_on_document_closed);
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hooks_on_twin_closed);
         app.world_mut()
@@ -477,6 +478,8 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(crate::script_tools::on_scene_pointer_move_event);
         app.add_observer(crate::script_tools::on_scene_pointer_enter_event);
         app.add_observer(scene_context_menu::on_script_ui_request);
+        app.add_observer(scene_context_menu::clear_on_scene_transition);
+        app.add_observer(scene_context_menu::clear_on_twin_closed);
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);
         crate::diagnostic_visuals::register_all_commands(app);

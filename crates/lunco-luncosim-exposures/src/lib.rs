@@ -25,7 +25,7 @@ use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealth
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureSurface, ExposureValue,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -38,6 +38,12 @@ use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
+
+mod policy_projection;
+use policy_projection::{
+    InputIdentity, ProjectionInput, RuntimeExposurePreparation, begin_preparation, on_twin_closed,
+    submit_preparation,
+};
 
 /// Registers the renderer-independent runtime exposure projection.
 ///
@@ -53,16 +59,27 @@ impl Plugin for RuntimeExposuresPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         install_exposure_state(app);
         app.add_systems(Startup, publish_initial_camera_exposure)
             .add_observer(on_camera_selection_status_changed)
-            .add_systems(Update, mark_exposure_dirty)
+            .add_observer(on_twin_closed)
+            .add_systems(
+                lunco_core::SceneTeardown,
+                retire_runtime_exposure_preparation,
+            )
             .add_systems(
                 Update,
-                publish_exposure
-                    .after(mark_exposure_dirty)
-                    .in_set(lunco_core::RuntimeCycleSet::Ui)
-                    .run_if(exposure_publish_due),
+                (
+                    begin_preparation,
+                    mark_exposure_dirty,
+                    publish_exposure.run_if(exposure_publish_due),
+                    submit_preparation,
+                )
+                    .chain()
+                    .in_set(lunco_core::RuntimeCycleSet::Ui),
             )
             .add_systems(
                 PostUpdate,
@@ -80,6 +97,7 @@ impl Plugin for RuntimeExposuresPlugin {
 fn install_exposure_state(app: &mut App) {
     app.init_scene_resource::<EngineExposures>()
         .init_scene_resource::<ExposureRefresh>()
+        .init_scene_resource::<RuntimeExposurePreparation>()
         .init_scene_resource::<RuntimeSurfaceRootCache>()
         .init_scene_resource::<SeminarExposureTrace>();
 }
@@ -220,147 +238,53 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-/// Ask the active Twin's Rhai policy whether a subject-scoped surface is
-/// visible. The engine passes one owned, typed fact map; no product or model
-/// name is interpreted here.
-fn runtime_ui_visibility(
-    facts: &HookValue,
-    surface_id: &str,
-    context: lunco_core::RuntimeExecutionContext,
-) -> bool {
-    match lunco_hooks::invoke_with_context(
-        RUNTIME_UI_VISIBILITY_HOOK,
-        std::slice::from_ref(facts),
-        context,
-    ) {
-        Some(Ok(HookValue::Map(values))) => {
-            let visible = values
-                .iter()
-                .find(|(key, _)| key == "visible")
-                .and_then(|(_, value)| match value {
-                    HookValue::Bool(value) => Some(*value),
-                    _ => None,
-                });
-            match visible {
-                Some(visible) => visible,
-                _ => {
-                    warn!(
-                        surface_id,
-                        "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden"
-                    );
-                    false
-                }
-            }
-        }
-        Some(Ok(value)) => {
-            warn!(
-                surface_id,
-                returned = ?value,
-                "[runtime-ui] visibility policy must return a typed result map; surface hidden"
-            );
-            false
-        }
-        Some(Err(error)) => {
-            warn!(
-                surface_id,
-                "[runtime-ui] visibility policy failed: {error}; surface hidden"
-            );
-            false
-        }
-        None => {
-            warn!(
-                surface_id,
-                hook = RUNTIME_UI_VISIBILITY_HOOK,
-                "[runtime-ui] no visibility policy is registered; surface hidden"
-            );
-            false
-        }
-    }
-}
-
-/// Ask the active Twin's Rhai policy for presentation properties. Scalar values
-/// drive ordinary template bindings; arrays and maps remain typed so generic
-/// HUI collection hosts can reconcile authored rows without numbered slots.
-fn runtime_ui_properties(
-    facts: &HookValue,
-    surface_id: &str,
-    context: lunco_core::RuntimeExecutionContext,
-) -> Vec<(String, ExposureValue)> {
-    let Some(result) = lunco_hooks::invoke_with_context(
-        RUNTIME_UI_PROPERTIES_HOOK,
-        std::slice::from_ref(facts),
-        context,
-    ) else {
-        warn!(
-            surface_id,
-            hook = RUNTIME_UI_PROPERTIES_HOOK,
-            "[runtime-ui] no properties policy is registered; surface has no presentation values"
-        );
-        return Vec::new();
-    };
-    let result = match result {
-        Ok(HookValue::Map(values)) => values,
-        Ok(value) => {
-            warn!(
-                surface_id,
-                returned = ?value,
-                "[runtime-ui] properties policy must return a typed map; surface has no presentation values"
-            );
-            return Vec::new();
-        }
-        Err(error) => {
-            warn!(surface_id, "[runtime-ui] properties policy failed: {error}");
-            return Vec::new();
-        }
-    };
-    result
-        .into_iter()
-        .filter_map(|(name, value)| {
-            hook_value_to_exposure(value, surface_id, &name).map(|value| (name, value))
-        })
-        .collect()
-}
-
+/// Convert a complete policy view model; invalid leaves fail the transaction.
 fn hook_value_to_exposure(
     value: HookValue,
     surface_id: &str,
     property: &str,
-) -> Option<ExposureValue> {
+) -> Result<ExposureValue, String> {
     match value {
-        HookValue::Unit => Some(ExposureValue::Text(String::new())),
-        HookValue::Str(value) => Some(ExposureValue::Text(value)),
-        HookValue::Bool(value) => Some(ExposureValue::Bool(value)),
-        HookValue::Int(value) => Some(ExposureValue::Number(value as f64)),
-        HookValue::UInt(value) => Some(ExposureValue::Number(value as f64)),
-        HookValue::Float(value) if value.is_finite() => Some(ExposureValue::Number(value)),
-        HookValue::Float(_) => {
-            warn!(
-                surface_id,
-                property, "[runtime-ui] ignored non-finite policy value"
-            );
-            None
+        HookValue::Unit => Ok(ExposureValue::Text(String::new())),
+        HookValue::Str(value) => Ok(ExposureValue::Text(value)),
+        HookValue::Bool(value) => Ok(ExposureValue::Bool(value)),
+        HookValue::Int(value) => {
+            let number = value as f64;
+            if number as i128 != value as i128 {
+                return Err(format!(
+                    "surface {surface_id} property {property} exceeds exact f64 integer range"
+                ));
+            }
+            Ok(ExposureValue::Number(number))
         }
-        HookValue::Bytes(_) => {
-            warn!(
-                surface_id,
-                property, "[runtime-ui] ignored binary policy value"
-            );
-            None
+        HookValue::UInt(value) => {
+            let number = value as f64;
+            if number as u128 != value as u128 {
+                return Err(format!(
+                    "surface {surface_id} property {property} exceeds exact f64 integer range"
+                ));
+            }
+            Ok(ExposureValue::Number(number))
         }
-        HookValue::Array(values) => Some(ExposureValue::Array(
-            values
-                .into_iter()
-                .filter_map(|value| hook_value_to_exposure(value, surface_id, property))
-                .collect(),
+        HookValue::Float(value) if value.is_finite() => Ok(ExposureValue::Number(value)),
+        HookValue::Float(_) => Err(format!(
+            "surface {surface_id} property {property} is non-finite"
         )),
-        HookValue::Map(values) => Some(ExposureValue::Map(
-            values
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    hook_value_to_exposure(value, surface_id, property).map(|value| (key, value))
-                })
-                .collect(),
+        HookValue::Bytes(_) => Err(format!(
+            "surface {surface_id} property {property} is binary"
         )),
+        HookValue::Array(values) => values
+            .into_iter()
+            .map(|value| hook_value_to_exposure(value, surface_id, property))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ExposureValue::Array),
+        HookValue::Map(values) => values
+            .into_iter()
+            .map(|(key, value)| {
+                hook_value_to_exposure(value, surface_id, property).map(|value| (key, value))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(ExposureValue::Map),
     }
 }
 
@@ -642,6 +566,12 @@ fn simulation_progress_facts(
             .map(|blocker| {
                 let owner = match blocker.key.owner {
                     lunco_core_runtime::SimulationProgressOwner::SceneLifecycle => "SceneLifecycle",
+                    lunco_core_runtime::SimulationProgressOwner::PhysicsIntegration => {
+                        "PhysicsIntegration"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::SceneInteraction => {
+                        "SceneInteraction"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::SceneReferences => {
                         "SceneReferences"
                     }
@@ -1552,59 +1482,6 @@ mod exposure_tests {
     }
 
     #[test]
-    fn camera_exposure_projects_authoritative_fact_and_compact_label() {
-        let status = lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus {
-            cameras: vec!["/World/Wide".into(), "/World/Close".into()],
-            active_name: Some("/World/Close".into()),
-            owner: lunco_usd_bevy_camera::camera_switch::CameraSelectionOwner::User,
-            avatar_available: true,
-            director_available: true,
-            last_error: None,
-        };
-        let mut exposures = EngineExposures::default();
-        let time = Time::<Real>::default();
-        publish_camera_exposure(
-            &mut exposures,
-            &status,
-            presentation_execution_context(&time, lunco_core::RuntimePhase::Initialization),
-        );
-        let surface = exposures
-            .surfaces
-            .get("camera-status")
-            .expect("camera status exposure");
-        assert!(surface.visible);
-        assert_eq!(surface.properties["active_name"].render(), "/World/Close");
-        assert_eq!(surface.properties["active_label"].render(), "Close");
-        assert!(!surface.properties.contains_key("mode"));
-        assert!(!surface.properties.contains_key("camera_count"));
-        assert!(!surface.properties.contains_key("owner"));
-        assert!(!surface.properties.contains_key("error"));
-    }
-
-    #[test]
-    fn camera_status_event_updates_the_retained_exposure() {
-        let mut app = App::new();
-        app.init_resource::<EngineExposures>()
-            .insert_resource(Time::<Real>::default())
-            .insert_resource(
-                lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus {
-                    active_name: Some("/World/Close".into()),
-                    ..default()
-                },
-            )
-            .add_observer(on_camera_selection_status_changed);
-
-        app.world_mut()
-            .trigger(lunco_usd_bevy_camera::camera_switch::CameraSelectionStatusChanged);
-
-        let exposures = app.world().resource::<EngineExposures>();
-        assert_eq!(
-            exposures.surfaces["camera-status"].properties["active_name"].render(),
-            "/World/Close"
-        );
-    }
-
-    #[test]
     fn scene_lifecycle_releases_authored_projection_caches() {
         let mut app = App::new();
         install_exposure_state(&mut app);
@@ -1745,6 +1622,14 @@ pub(crate) fn mark_exposure_dirty(
     }
 }
 
+/// Cancel the scene's policy jobs before the final registered resource reset.
+fn retire_runtime_exposure_preparation(
+    mut preparation: ResMut<RuntimeExposurePreparation>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+) {
+    preparation.invalidate(&mut admission);
+}
+
 /// Run the exposure publisher on its existing bounded cadence while preserving
 /// the first publication at startup. The condition owns only scheduling; the
 /// publisher still uses [`ExposureRefresh`] to decide whether its snapshot
@@ -1774,6 +1659,7 @@ fn exposure_publish_due_at(timer: &mut Option<Timer>, delta: Duration) -> bool {
 pub(crate) struct ExposureRuntime<'w, 's> {
     refresh: ResMut<'w, ExposureRefresh>,
     exposures: ResMut<'w, EngineExposures>,
+    preparation: ResMut<'w, RuntimeExposurePreparation>,
     signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
     scene_mount: Res<'w, SceneMountState>,
@@ -1863,9 +1749,8 @@ pub(crate) fn publish_exposure(
     // Authored surface metadata is part of the driven-body projection. A USD
     // edit can change its identity or visibility mode without changing pose,
     // so refresh the driven projection with the same invalidation boundary.
-    let update_driven =
+    let update_control =
         first_update || runtime.refresh.driven_vessel_dirty || runtime.refresh.control_dirty;
-    let update_control = first_update || runtime.refresh.control_dirty;
     let update_schema = first_update || runtime.refresh.schema_dirty;
     let update_celestial = first_update || runtime.refresh.celestial_dirty;
     let update_overlay = first_update || runtime.refresh.overlay_dirty;
@@ -1896,8 +1781,9 @@ pub(crate) fn publish_exposure(
         } = &mut *runtime_surface_roots;
         {
             let _span = bevy::log::info_span!("exposure_publish_runtime_surfaces").entered();
-            publish_runtime_surface_exposures(
+            queue_runtime_surfaces(
                 &mut runtime.exposures,
+                &mut runtime.preparation,
                 &queries.name,
                 &queries.callsign,
                 &queries.catalog_id,
@@ -1927,7 +1813,7 @@ pub(crate) fn publish_exposure(
         retired_surface_ids.clear();
     }
 
-    if update_driven {
+    if update_control {
         let _driven_span = bevy::log::info_span!("exposure_publish_driven").entered();
         let vessel = {
             let _span = bevy::log::info_span!("exposure_resolve_driven_vessel").entered();
@@ -2008,78 +1894,11 @@ pub(crate) fn publish_exposure(
                 }
             }
 
-            let RuntimeSurfaceRootCache {
-                roots,
-                public_output_names,
-                ..
-            } = &mut *runtime_surface_roots;
+            let RuntimeSurfaceRootCache { roots, .. } = &mut *runtime_surface_roots;
             if let Some(surface) = roots.iter().find(|surface| surface.entity == vessel.entity) {
-                let mut ui = runtime.exposures.writer(&surface.surface_id);
-                let subject = queries.gid.get(vessel.entity).ok().copied();
-                ui.subject(subject);
-                let control_claimed =
-                    subject.is_some_and(|gid| runtime.sessions.owner_of(gid.get()).is_some());
-                let control_owner = subject
-                    .and_then(|gid| runtime.sessions.owner_of(gid.get()))
-                    .map(|owner| {
-                        if owner == runtime.local_session.0 {
-                            "local"
-                        } else {
-                            "remote"
-                        }
-                    })
-                    .unwrap_or("none");
-                let facts = {
-                    let _span = bevy::log::info_span!("exposure_build_runtime_ui_facts").entered();
-                    runtime_ui_facts(
-                        &surface.surface_id,
-                        Some(vessel.entity),
-                        subject,
-                        control_owner,
-                        control_claimed,
-                        &surface.visibility_mode,
-                        &surface.programs,
-                        public_output_names,
-                        &queries.name,
-                        &queries.callsign,
-                        &queries.catalog_id,
-                        &queries.gid,
-                        &queries.sim,
-                        &queries.inputs,
-                        &queries.parents,
-                        &queries.velocity,
-                        &runtime.angular_velocity,
-                        &runtime.rotation,
-                        &queries.grids,
-                        &queries.spatial,
-                        &queries.usd_paths,
-                        &runtime.stages,
-                        &runtime.canonical,
-                        &[],
-                        overlays.simulation_progress.as_deref(),
-                    )
-                };
-                {
-                    let _span =
-                        bevy::log::info_span!("exposure_evaluate_runtime_ui_visibility").entered();
-                    ui.visible(runtime_ui_visibility(
-                        &facts,
-                        &surface.surface_id,
-                        runtime_context,
-                    ));
-                }
-                let telemetry = {
-                    let _span =
-                        bevy::log::info_span!("exposure_resolve_authored_telemetry").entered();
-                    resolve_authored_telemetry(
-                        vessel.entity,
-                        &runtime.signals,
-                        &queries.parents,
-                        &queries.channels,
-                    )
-                };
-                let _span = bevy::log::info_span!("exposure_publish_vessel_values").entered();
-                publish_vessel_values(&mut ui, &vessel, &telemetry);
+                runtime
+                    .preparation
+                    .attach_driven(&surface.surface_id, vessel);
             }
         } else {
             seminar.current_vessel = None;
@@ -2556,8 +2375,9 @@ impl RuntimeSurfaceRootCache {
 /// Surface identity and visibility mode come from composed USD. This keeps the
 /// engine independent of a fixed set of product models, surface names, or
 /// surface slots.
-fn publish_runtime_surface_exposures(
+fn queue_runtime_surfaces(
     exposures: &mut EngineExposures,
+    preparation: &mut RuntimeExposurePreparation,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -2588,7 +2408,7 @@ fn publish_runtime_surface_exposures(
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     for surface_id in retired_surface_ids {
-        exposures.remove_surface(surface_id);
+        preparation.retire(surface_id, exposures);
     }
 
     for root in roots {
@@ -2608,17 +2428,18 @@ fn publish_runtime_surface_exposures(
             let _span = bevy::log::info_span!("exposure_runtime_surface_telemetry").entered();
             resolve_authored_telemetry(root.entity, signals, q_parents, q_channels)
         };
-        publish_selected_control_exposure(
+        queue_runtime_surface(
             exposures,
+            preparation,
             &root.surface_id,
-            Some(root.entity),
+            root.entity,
             subject,
             control_owner,
             control_claimed,
             &root.visibility_mode,
             &root.programs,
             public_output_names,
-            &telemetry,
+            telemetry,
             q_name,
             q_callsign,
             q_catalog_id,
@@ -2640,17 +2461,18 @@ fn publish_runtime_surface_exposures(
     }
 }
 
-fn publish_selected_control_exposure(
+fn queue_runtime_surface(
     exposures: &mut EngineExposures,
+    preparation: &mut RuntimeExposurePreparation,
     namespace: &str,
-    root: Option<Entity>,
+    root: Entity,
     subject: Option<GlobalEntityId>,
     control_owner: &str,
     control_claimed: bool,
     visibility_mode: &str,
     authored_programs: &[AuthoredRuntimeProgram],
     public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
-    telemetry: &[PublicTelemetryValue],
+    telemetry: Vec<PublicTelemetryValue>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -2673,7 +2495,7 @@ fn publish_selected_control_exposure(
         let _span = bevy::log::info_span!("exposure_runtime_surface_facts").entered();
         runtime_ui_facts(
             namespace,
-            root,
+            Some(root),
             subject,
             control_owner,
             control_claimed,
@@ -2695,28 +2517,25 @@ fn publish_selected_control_exposure(
             q_paths,
             stages,
             canonical,
-            telemetry,
+            &telemetry,
             progress,
         )
     };
-    let visible = {
-        let _span = bevy::log::info_span!("exposure_runtime_surface_visibility").entered();
-        runtime_ui_visibility(&facts, namespace, runtime_context)
-    };
-    let properties = {
-        let _span = bevy::log::info_span!("exposure_runtime_surface_properties").entered();
-        runtime_ui_properties(&facts, namespace, runtime_context)
-    };
-    let mut ui = exposures.writer(namespace);
-    {
-        let _span = bevy::log::info_span!("exposure_runtime_surface_write").entered();
-        ui.subject(subject);
-        ui.visible(visible);
-        ui.clear_properties();
-        for (name, value) in properties {
-            ui.property(name, value);
-        }
-    }
+    preparation.queue(
+        ProjectionInput {
+            namespace: namespace.to_owned(),
+            identity: InputIdentity::Runtime {
+                entity: root,
+                subject,
+                control_owner: control_owner.to_owned(),
+            },
+            facts,
+            context: runtime_context,
+            telemetry,
+            driven: None,
+        },
+        exposures,
+    );
 }
 
 /// Discover roots that explicitly opt into a runtime surface.
@@ -2993,11 +2812,14 @@ pub(crate) fn on_camera_selection_status_changed(
     time: Res<Time<Real>>,
     status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
+    mut preparation: ResMut<RuntimeExposurePreparation>,
 ) {
-    publish_camera_exposure(
+    queue_camera_exposure(
+        &mut preparation,
         &mut exposures,
         &status,
         presentation_execution_context(&time, lunco_core::RuntimePhase::Event),
+        status.last_changed().get(),
     );
 }
 
@@ -3007,18 +2829,23 @@ pub(crate) fn publish_initial_camera_exposure(
     time: Res<Time<Real>>,
     status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
+    mut preparation: ResMut<RuntimeExposurePreparation>,
 ) {
-    publish_camera_exposure(
+    queue_camera_exposure(
+        &mut preparation,
         &mut exposures,
         &status,
         presentation_execution_context(&time, lunco_core::RuntimePhase::Initialization),
+        status.last_changed().get(),
     );
 }
 
-fn publish_camera_exposure(
+fn queue_camera_exposure(
+    preparation: &mut RuntimeExposurePreparation,
     exposures: &mut EngineExposures,
     status: &lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus,
     runtime_context: lunco_core::RuntimeExecutionContext,
+    source_revision: u32,
 ) {
     // Keep the full path as the authoritative fact for Rhai/diagnostics, and
     // derive one deterministic identity label for compact status surfaces.
@@ -3060,16 +2887,18 @@ fn publish_camera_exposure(
                 .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
         ),
     ]);
-    let properties = runtime_ui_properties(&facts, "camera-status", runtime_context);
     exposures.retain_across_scenes("camera-status");
-    let mut ui = exposures.writer("camera-status");
-    ui.visible(true);
-    ui.clear_properties();
-    ui.property("active_name", active_name);
-    ui.property("active_label", active_label);
-    for (name, value) in properties {
-        ui.property(name, value);
-    }
+    preparation.queue(
+        ProjectionInput {
+            namespace: "camera-status".to_owned(),
+            identity: InputIdentity::Camera(source_revision),
+            facts,
+            context: runtime_context,
+            telemetry: Vec::new(),
+            driven: None,
+        },
+        exposures,
+    );
 }
 
 fn percent(value: f32) -> String {
@@ -3134,7 +2963,7 @@ fn link_snapshot(
 /// properties and CSS state variables; no HUI, Flair, egui, or Bevy UI component
 /// is touched here.
 fn publish_vessel_values(
-    ui: &mut ExposureWriter<'_>,
+    ui: &mut ExposureSurface,
     v: &DrivenVessel,
     telemetry: &[PublicTelemetryValue],
 ) {
@@ -3152,15 +2981,15 @@ fn publish_vessel_values(
         "generic limits".into()
     };
 
-    ui.property("tilt_color", tilt_color);
-    ui.property("tilt_marker", percent(v.tilt_deg / 45.0 * 100.0));
-    ui.property("caution_width", percent(v.caution_deg / 45.0 * 100.0));
-    ui.property("danger_start", percent(v.caution_deg / 45.0 * 100.0));
-    ui.property("danger_width", percent(danger_width));
-    ui.property("label", v.label.clone());
-    ui.property("tilt", format!("{:.0}°", v.tilt_deg));
-    ui.property("tilt_limits", limits);
-    ui.property(
+    ui.set_property("tilt_color", tilt_color);
+    ui.set_property("tilt_marker", percent(v.tilt_deg / 45.0 * 100.0));
+    ui.set_property("caution_width", percent(v.caution_deg / 45.0 * 100.0));
+    ui.set_property("danger_start", percent(v.caution_deg / 45.0 * 100.0));
+    ui.set_property("danger_width", percent(danger_width));
+    ui.set_property("label", v.label.clone());
+    ui.set_property("tilt", format!("{:.0}°", v.tilt_deg));
+    ui.set_property("tilt_limits", limits);
+    ui.set_property(
         "tilt_status",
         if v.tilt_deg >= v.danger_deg {
             "DANGER"
@@ -3170,22 +2999,22 @@ fn publish_vessel_values(
             "STABLE"
         },
     );
-    ui.property(
+    ui.set_property(
         "speed",
         v.speed
             .map_or_else(|| "—".into(), |speed| format!("{speed:.1}")),
     );
-    ui.property("altitude", format!("{:.1}", v.pose.altitude()));
-    ui.property("roll", format!("{:+.0}°", v.roll_deg));
-    ui.property("pitch", format!("{:+.0}°", v.pitch_deg));
-    ui.property("heading", format!("{:.0}°", v.heading_deg));
+    ui.set_property("altitude", format!("{:.1}", v.pose.altitude()));
+    ui.set_property("roll", format!("{:+.0}°", v.roll_deg));
+    ui.set_property("pitch", format!("{:+.0}°", v.pitch_deg));
+    ui.set_property("heading", format!("{:.0}°", v.heading_deg));
 
     if let Some(geo) = v.pose.geodetic() {
-        ui.property("geo_display", "flex");
-        ui.property("local_display", "none");
+        ui.set_property("geo_display", "flex");
+        ui.set_property("local_display", "none");
         let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
         let lon = if geo.lon_deg >= 0.0 { "E" } else { "W" };
-        ui.property(
+        ui.set_property(
             "geographic",
             format!(
                 "{:.4}° {lat}  ·  {:.4}° {lon}",
@@ -3194,9 +3023,9 @@ fn publish_vessel_values(
             ),
         );
     } else {
-        ui.property("geo_display", "none");
-        ui.property("local_display", "flex");
-        ui.property(
+        ui.set_property("geo_display", "none");
+        ui.set_property("local_display", "flex");
+        ui.set_property(
             "local_position",
             format!(
                 "E {:+.0}  ·  N {:+.0}",
@@ -3220,20 +3049,20 @@ fn publish_vessel_values(
         "var(--ok-color)",
         "var(--danger-color)",
     );
-    ui.property("comms_display", comms_display);
-    ui.property("comms_status", comms_status);
-    ui.property("comms_peer", comms_peer);
-    ui.property("comms_range", comms_range);
-    ui.property("comms_elevation", comms_elevation);
-    ui.property("comms_los_display", comms_los_display);
-    ui.property("comms_color", comms_color);
+    ui.set_property("comms_display", comms_display);
+    ui.set_property("comms_status", comms_status);
+    ui.set_property("comms_peer", comms_peer);
+    ui.set_property("comms_range", comms_range);
+    ui.set_property("comms_elevation", comms_elevation);
+    ui.set_property("comms_los_display", comms_los_display);
+    ui.set_property("comms_color", comms_color);
 
     if telemetry.is_empty() {
-        ui.property("telemetry_display", "none");
-        ui.property("telemetry_summary", "TELEMETRY UNAVAILABLE");
+        ui.set_property("telemetry_display", "none");
+        ui.set_property("telemetry_summary", "TELEMETRY UNAVAILABLE");
     } else {
-        ui.property("telemetry_display", "flex");
-        ui.property("telemetry_summary", format_telemetry_summary(telemetry));
+        ui.set_property("telemetry_display", "flex");
+        ui.set_property("telemetry_summary", format_telemetry_summary(telemetry));
     }
 }
 

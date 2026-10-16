@@ -15,47 +15,41 @@ use rhai::{Dynamic, Map};
 /// hook ABI intentionally has no Bevy dependency. The canonical scalar/map
 /// conversion is owned by `lunco-hooks-rhai`.
 pub fn dynamic_to_hook_value(value: &Dynamic) -> Result<HookValue, String> {
-    let normalized = normalize_native_value(value)?;
-    lunco_hooks_rhai::dynamic_to_hook(&normalized).map_err(|error| error.to_string())
+    lunco_hooks_rhai::dynamic_to_hook_with_native(value, &native_math_value)
+        .map_err(|error| error.to_string())
 }
 
-fn normalize_native_value(value: &Dynamic) -> Result<Dynamic, String> {
-    if let Some(vector) = value.clone().try_cast::<DVec3>() {
+/// Lower engine-native leaves without taking ownership of Rhai containers.
+fn native_math_value(value: &Dynamic) -> Result<Option<HookValue>, lunco_hooks::HookError> {
+    if let Some(vector) = value.read_lock::<DVec3>() {
         if !vector.is_finite() {
-            return Err("Vec3 contains a non-finite component".to_string());
+            return Err(lunco_hooks::HookError(
+                "Vec3 contains a non-finite component".into(),
+            ));
         }
-        return Ok(Dynamic::from_array(vec![
-            Dynamic::from_float(vector.x),
-            Dynamic::from_float(vector.y),
-            Dynamic::from_float(vector.z),
-        ]));
+        return Ok(Some(HookValue::Array(
+            vector
+                .to_array()
+                .into_iter()
+                .map(HookValue::Float)
+                .collect(),
+        )));
     }
-    if let Some(quaternion) = value.clone().try_cast::<DQuat>() {
+    if let Some(quaternion) = value.read_lock::<DQuat>() {
         if !quaternion.is_finite() {
-            return Err("Quat contains a non-finite component".to_string());
+            return Err(lunco_hooks::HookError(
+                "Quat contains a non-finite component".into(),
+            ));
         }
-        return Ok(Dynamic::from_array(vec![
-            Dynamic::from_float(quaternion.x),
-            Dynamic::from_float(quaternion.y),
-            Dynamic::from_float(quaternion.z),
-            Dynamic::from_float(quaternion.w),
-        ]));
+        return Ok(Some(HookValue::Array(
+            quaternion
+                .to_array()
+                .into_iter()
+                .map(HookValue::Float)
+                .collect(),
+        )));
     }
-    if let Some(array) = value.clone().try_cast::<rhai::Array>() {
-        return array
-            .iter()
-            .map(normalize_native_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map(Dynamic::from_array);
-    }
-    if let Some(map) = value.clone().try_cast::<Map>() {
-        let mut normalized = Map::new();
-        for (key, item) in map {
-            normalized.insert(key, normalize_native_value(&item)?);
-        }
-        return Ok(Dynamic::from_map(normalized));
-    }
-    Ok(value.clone())
+    Ok(None)
 }
 
 /// Turn a typed-boundary error into a Rhai evaluation error.

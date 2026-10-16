@@ -518,6 +518,10 @@ pub enum SimulationProgressOwner {
     ScriptSourcePreparation,
     /// Active Twin Rhai policy source preparation.
     TwinPolicyPreparation,
+    /// Native physics integration cannot consume this shared cycle.
+    PhysicsIntegration,
+    /// A scene interaction owns an uncommitted physical edit.
+    SceneInteraction,
 }
 
 /// Stable owner and operation identity for one simulation-progress hold.
@@ -528,6 +532,22 @@ pub struct SimulationProgressKey {
 }
 
 impl SimulationProgressKey {
+    /// Key native physics admission to this World's single Avian integration owner.
+    pub const fn physics_integration() -> Self {
+        Self {
+            owner: SimulationProgressOwner::PhysicsIntegration,
+            operation_id: 0,
+        }
+    }
+
+    /// Key the application scene interaction's atomic physical edit session.
+    pub const fn scene_interaction() -> Self {
+        Self {
+            owner: SimulationProgressOwner::SceneInteraction,
+            operation_id: 0,
+        }
+    }
+
     /// Key the hold to the scene lifecycle transaction that owns preparation.
     pub const fn scene_transition(id: lunco_core::SceneTransitionId) -> Self {
         Self {
@@ -621,8 +641,8 @@ pub struct SimulationProgressBlocker {
     pub reason: String,
 }
 
-/// Reason-keyed admission gate for asynchronous work that changes which state
-/// exists at a simulation boundary.
+/// Reason-keyed admission gate for preparation, native readiness and uncommitted
+/// scene interactions that change which state exists at a simulation boundary.
 ///
 /// The gate is event driven: each owner acquires one key when its operation is
 /// admitted and releases that exact key after a committed or failed terminal

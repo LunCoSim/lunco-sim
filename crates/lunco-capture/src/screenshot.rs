@@ -779,13 +779,11 @@ use bevy::time::TimeUpdateStrategy;
 
 // ─── Offline Frame-by-Frame recording mode ───────────────────────────────────
 //
-// Recording touches three independent knobs. Each has exactly ONE writer — the
-// bug this design exists to prevent is two systems writing the same knob and the
-// last one each frame silently winning:
+// Recording controls three independent resources:
 //
 // * **How far virtual time advances** — `TimeUpdateStrategy`, written only by
-//   `drive_offline_clock`. Exactly `1/fps` per captured frame, so the output is
-//   locked to `fps` no matter how fast or slow the machine renders.
+//   `drive_offline_clock` during a take. It supplies `1/fps` through the shared
+//   transport; holds and explicit cycle requests remain owned by `lunco-time`.
 // * **Whether the app may sleep** — `WinitSettings`, written only by the pacer
 //   (`lunco-modelica-core`'s `sim_focus_pace`). Recording states intent by holding a
 //   continuous `lunco_core_runtime::FramePacingDemand` request; it never writes
@@ -797,15 +795,18 @@ use bevy::time::TimeUpdateStrategy;
 // faster changes only how long a capture takes, never what the video looks like.
 
 /// State for the lock-step offline frame recording.
-#[derive(Resource, Default, Debug, Clone)]
+#[derive(Resource, Default)]
 pub struct OfflineRecordingState {
     /// Whether the recording is active.
     pub active: bool,
-    /// Sequential frame index.
+    /// Number of completed captures; also the next image index.
     pub frame_index: u64,
+    /// Shared simulation tick sampled when the latest image was requested.
+    /// None when the host has no simulation clock or no image has been requested.
+    pub last_capture_sim_tick: Option<u64>,
     /// Destination directory.
     pub output_dir: std::path::PathBuf,
-    /// Video target FPS (determines delta virtual time step per frame).
+    /// Video target FPS (determines input duration per frame).
     pub fps: u32,
     /// Lock-step frame latch.
     pub is_waiting_for_frame: bool,
@@ -820,6 +821,9 @@ pub struct OfflineRecordingState {
     pub prev_present_mode: Option<bevy::window::PresentMode>,
     /// Host execution policy as it was before this deterministic take.
     pub prev_execution_mode: Option<lunco_core_runtime::SimulationExecutionMode>,
+    /// Native update source before the request was armed, restored even when
+    /// the request is cancelled before visual readiness.
+    pub prev_time_update_strategy: Option<TimeUpdateStrategy>,
     /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
     /// sequence (destination named a video file — see [`output_is_video`]).
     /// Demoted back to a PNG sequence at activation if `ffmpeg` is not
@@ -1085,29 +1089,16 @@ impl VideoSink {
     }
 }
 
-/// **Arms** the recorder; it does not start it.
-///
-/// Starting here is what the readiness gate exists to prevent: scene loading is
-/// asynchronous (USD layers compose, meshes/materials resolve, textures stream,
-/// pipelines compile), so a shot that began the instant it was asked captured its
-/// opening frames from an unfinished scene — untextured placeholder geometry, a
-/// missing DomeLight starfield, a texture that pops in three frames later. Those
-/// frames are permanent: the recorder writes a fixed-rate sequence, and the only
-/// remedy was re-recording the whole ~10 minute episode.
-///
-/// So this validates the destination, stashes the config in [`PendingShotStart`],
-/// and returns. [`start_recording_when_scene_ready`] does the actual activation
-/// once [`scene_visuals_ready`] says so.
-///
-/// **The clock is deliberately left alone here.** `TimeUpdateStrategy` has exactly
-/// ONE writer — `drive_offline_clock` — and that is load-bearing (two writers once
-/// produced a 3380-frame runaway). The clock owner freezes an already-running
-/// offscreen shot immediately, while a CLI shot at startup remains automatic only
-/// until its authored scenario binds the presentation camera. Neither path consumes
-/// recorded frames, so deterministic capture still begins at step 0 with N frames == N
-/// steps.
+/// Validate and arm a request, saving its native clock source before any hold.
+/// `drive_offline_clock` freezes input while readiness is pending, and
+/// `start_recording_when_scene_ready` activates the take after visual admission.
 #[on_command(StartOfflineRecording)]
-fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: Commands) {
+fn on_start_offline_recording(
+    trigger: On<StartOfflineRecording>,
+    mut state: ResMut<OfflineRecordingState>,
+    time_strategy: Res<TimeUpdateStrategy>,
+    mut commands: Commands,
+) {
     let cmd = trigger.event();
     commands.remove_resource::<OfflineRecordingFailure>();
     let dir = if cmd.output_dir.is_empty() {
@@ -1144,6 +1135,18 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
         dir.display(),
         cmd.fps.max(1)
     );
+    if state.prev_time_update_strategy.is_none() {
+        state.prev_time_update_strategy = Some(match *time_strategy {
+            TimeUpdateStrategy::Automatic => TimeUpdateStrategy::Automatic,
+            TimeUpdateStrategy::ManualInstant(instant) => {
+                TimeUpdateStrategy::ManualInstant(instant)
+            }
+            TimeUpdateStrategy::ManualDuration(duration) => {
+                TimeUpdateStrategy::ManualDuration(duration)
+            }
+            TimeUpdateStrategy::FixedTimesteps(count) => TimeUpdateStrategy::FixedTimesteps(count),
+        });
+    }
     commands.insert_resource(PendingShotStart {
         output_dir: dir,
         fps: cmd.fps.max(1),
@@ -1166,6 +1169,7 @@ fn activate_recording(
     let dir = pending.output_dir.clone();
     state.active = true;
     state.frame_index = 0;
+    state.last_capture_sim_tick = None;
     state.video = output_is_video(&dir);
     state.output_dir = dir;
     state.fps = pending.fps;
@@ -1226,9 +1230,8 @@ fn activate_recording(
     // fast as the machine can render them. Under `Fifo` (vsync) the render loop is
     // pinned to the display's refresh, and the lock-step spends two render frames
     // per captured frame — a hard ~30 captured FPS ceiling on a 60 Hz panel, for
-    // output whose playback rate is `fps` regardless. Virtual time still advances
-    // exactly `1/fps` per captured frame, so rendering faster changes only how long
-    // the capture takes, never what the video looks like.
+    // output whose playback rate is `fps` regardless. Input duration and explicit
+    // simulation steps remain independent of rendering throughput.
     if let Ok(mut window) = windows.single_mut() {
         state.prev_present_mode = Some(window.present_mode);
         window.present_mode = bevy::window::PresentMode::AutoNoVsync;
@@ -1258,7 +1261,7 @@ fn activate_recording(
 }
 
 /// Wind an active recording down: release the wake token, restore the present
-/// mode, and hand the clock back to `Automatic`. EVERY path that ends a recording
+/// mode, and restore the saved clock source. Every path that ends a recording
 /// — the stop command and the failed-write abort alike — must run this; skipping
 /// it leaves the last-written `ManualDuration(ZERO)` in place with nothing to
 /// replace it, freezing virtual time until the process restarts.
@@ -1288,8 +1291,15 @@ fn teardown_recording(
     if let Some(prev) = state.prev_execution_mode.take() {
         *execution_mode = prev;
     }
-    // Restore automatic realtime ticking
-    commands.insert_resource(TimeUpdateStrategy::Automatic);
+    restore_recording_clock(state, commands);
+}
+
+fn restore_recording_clock(state: &mut OfflineRecordingState, commands: &mut Commands) {
+    if let Some(strategy) = state.prev_time_update_strategy.take() {
+        commands.queue(move |world: &mut World| {
+            lunco_time::set_time_update_strategy(world, strategy);
+        });
+    }
 }
 
 #[on_command(StopOfflineRecording)]
@@ -1317,6 +1327,8 @@ fn on_stop_offline_recording(
             &mut commands,
         );
         info!("[offline-record] stopped recording");
+    } else {
+        restore_recording_clock(&mut state, &mut commands);
     }
 }
 
@@ -1568,6 +1580,9 @@ fn start_recording_when_scene_ready(
         &mut commands,
         capture_target.is_some(),
     );
+    if !state.active {
+        restore_recording_clock(&mut state, &mut commands);
+    }
     commands.remove_resource::<PendingShotStart>();
 }
 
@@ -1579,14 +1594,8 @@ fn start_recording_when_scene_ready(
 /// lock-step deterministic: exactly one strategy write per frame, decided after
 /// every other system — including the `deliver_offline_frame` observer — has run.
 ///
-/// A second writer of `TimeUpdateStrategy` breaks this outright: whichever system
-/// runs later in the frame wins, and re-freezing to ZERO after a step is scheduled
-/// means virtual time never advances, `FixedUpdate` never runs, and a scenario
-/// script sequencing the shots is starved — it can never reach its
-/// `StopOfflineRecording`, so recording spools frames until the process is killed.
-///
 /// The cycle alternates two render frames per captured frame:
-///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
+///   1. **advance** — supply `1/fps` through the shared transport, then render.
 ///   2. **capture** — request the screenshot, clock frozen until it lands.
 ///
 /// Freezing while a capture is in flight is what keeps a slow (multi-frame)
@@ -1594,9 +1603,7 @@ fn start_recording_when_scene_ready(
 fn drive_offline_clock(
     mut state: ResMut<OfflineRecordingState>,
     // Armed-but-not-started is a clock phase like any other, so it is owned HERE.
-    // Freezing from the readiness gate instead would make that gate a SECOND writer
-    // of `TimeUpdateStrategy`, which is the exact failure this system's doc warns
-    // about.
+    // The readiness gate does not advance or freeze the clock.
     pending: Option<Res<PendingShotStart>>,
     // `--offscreen` mode: capture the offscreen render target, not the
     // (nonexistent) primary window.
@@ -1611,6 +1618,9 @@ fn drive_offline_clock(
     // its active readiness projection is present on the shared status bus.
     status_bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
     fixed_time: Res<Time<bevy::time::Fixed>>,
+    virtual_time: Res<Time<bevy::time::Virtual>>,
+    step_control: Option<Res<lunco_time::SimulationStepControl>>,
+    sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. A CLI request can arrive before
@@ -1620,16 +1630,7 @@ fn drive_offline_clock(
     // active, freeze virtual time while the visual readiness gate waits for
     // meshes, materials, and GPU pipelines.
     //
-    // MEASURED: without this, two runs of episode_02 differed at EVERY frame of
-    // EVERY shot starting at frame 0 (viewport-crop RMSE 0.019-0.030, well clear of
-    // the perf-HUD text burnt into the frame). The readiness wait is a REAL-TIME
-    // window of variable length — 0.81 s vs 1.69 s for shot_01, 6.48 s vs 0.51 s for
-    // shot_02 across two runs — and `Time<Virtual>` ran throughout it. The camera
-    // path is a curve evaluated on the sim clock, and animated beats release the
-    // physics hold, so a longer wait meant a differently-framed, differently-posed
-    // frame 0 and therefore a different film.
-    //
-    // Freezing here restores the contract: the wait costs real time only, and the
+    // The wait costs real time only, and the
     // captured sequence starts from the state the scene was in when the shot was
     // asked for, no matter how long the assets took.
     //
@@ -1697,7 +1698,18 @@ fn drive_offline_clock(
         // Drain every whole fixed cycle admitted for this logical frame before
         // capture. Budget or causal holds keep that duration in the time owner's
         // accumulator; no further frame duration is admitted while it drains.
-        if fixed_time.overstep() >= fixed_time.timestep() {
+        let manual_pending = step_control
+            .as_ref()
+            .is_some_and(|control| control.remaining() > 0);
+        let automatic_pending = !virtual_time.is_paused()
+            && !step_control
+                .as_ref()
+                .is_some_and(|control| control.is_held())
+            && fixed_time.overstep() >= fixed_time.timestep();
+        let participant_pending = coupling
+            .as_ref()
+            .is_some_and(|state| state.held && state.active_participants > 0);
+        if manual_pending || automatic_pending || participant_pending {
             commands.insert_resource(TimeUpdateStrategy::ManualDuration(
                 std::time::Duration::ZERO,
             ));
@@ -1714,6 +1726,7 @@ fn drive_offline_clock(
         }
         // The frame is presentable — capture it, then hold the clock until the
         // readback delivers.
+        state.last_capture_sim_tick = sim_tick.as_ref().map(|tick| tick.0);
         if let Some(target) = &capture_target {
             commands.spawn(Readback::texture(target.0.clone()));
         } else {
@@ -1998,6 +2011,7 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
         Ok(Some(lunco_api_core::api_value!({
             "active": state.active,
             "frame_index": state.frame_index,
+            "last_capture_sim_tick": state.last_capture_sim_tick,
             "is_waiting_for_frame": state.is_waiting_for_frame,
         })))
     }

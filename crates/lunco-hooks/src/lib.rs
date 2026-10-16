@@ -1025,49 +1025,58 @@ pub fn invoke_with_context(
 /// Invoke a registered hook call after validating its declared argument and
 /// result types.
 pub fn invoke(id: &str, invocation: &HookInvocation<'_>) -> Option<HookResult> {
-    let hook = get(id)?;
-    if let Err(error) = invocation.context.validate() {
-        return Some(Err(HookError(format!(
-            "hook '{id}' received an invalid runtime execution context: {error}"
-        ))));
-    }
-    if let Some(contract) = descriptor(id) {
-        if invocation.args.len() != contract.parameters.len() {
-            return Some(Err(HookError(format!(
-                "hook '{id}' expects {} argument(s), received {}",
-                contract.parameters.len(),
-                invocation.args.len()
-            ))));
+    get(id).map(|hook| hook.invoke(invocation))
+}
+
+impl RegisteredHook {
+    /// Invoke this captured implementation with the registry's typed contract.
+    /// An asynchronous owner retains the registration selected with its inputs;
+    /// later policy replacement cannot change the callable halfway through a job.
+    pub fn invoke(&self, invocation: &HookInvocation<'_>) -> HookResult {
+        let id = self.id.as_str();
+        if let Err(error) = invocation.context.validate() {
+            return Err(HookError(format!(
+                "hook '{id}' received an invalid runtime execution context: {error}"
+            )));
         }
-        for (index, (argument, parameter)) in
-            invocation.args.iter().zip(&contract.parameters).enumerate()
-        {
-            if !matches_value_type(parameter.value_type, argument) {
-                return Some(Err(HookError(format!(
-                    "hook '{id}' argument {} ('{}') expects {}, received {}",
-                    index,
-                    parameter.name,
-                    parameter.value_type.as_str(),
-                    argument.type_name()
-                ))));
+        if let Some(contract) = descriptor(id) {
+            if invocation.args.len() != contract.parameters.len() {
+                return Err(HookError(format!(
+                    "hook '{id}' expects {} argument(s), received {}",
+                    contract.parameters.len(),
+                    invocation.args.len()
+                )));
+            }
+            for (index, (argument, parameter)) in
+                invocation.args.iter().zip(&contract.parameters).enumerate()
+            {
+                if !matches_value_type(parameter.value_type, argument) {
+                    return Err(HookError(format!(
+                        "hook '{id}' argument {} ('{}') expects {}, received {}",
+                        index,
+                        parameter.name,
+                        parameter.value_type.as_str(),
+                        argument.type_name()
+                    )));
+                }
             }
         }
+        let result = self.hook.invoke(invocation);
+        result.and_then(|value| {
+            let Some(contract) = descriptor(id) else {
+                return Ok(value);
+            };
+            if matches_value_type(contract.output, &value) {
+                Ok(value)
+            } else {
+                Err(HookError(format!(
+                    "hook '{id}' must return {}, received {}",
+                    contract.output.as_str(),
+                    value.type_name()
+                )))
+            }
+        })
     }
-    let result = hook.hook.invoke(invocation);
-    Some(result.and_then(|value| {
-        let Some(contract) = descriptor(id) else {
-            return Ok(value);
-        };
-        if matches_value_type(contract.output, &value) {
-            Ok(value)
-        } else {
-            Err(HookError(format!(
-                "hook '{id}' must return {}, received {}",
-                contract.output.as_str(),
-                value.type_name()
-            )))
-        }
-    }))
 }
 
 fn matches_value_type(expected: HookValueType, value: &HookValue) -> bool {
@@ -1240,6 +1249,39 @@ pub fn catalog() -> Vec<HookCatalogEntry> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn captured_registration_keeps_implementation_and_context_validation() {
+        const ID: &str = "test.captured.registration";
+        register(RegisteredHook {
+            id: ID.into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(AddHook),
+        });
+        let captured = get(ID).unwrap();
+        register(RegisteredHook {
+            id: ID.into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(CountCallsHook(Arc::new(AtomicUsize::new(0)))),
+        });
+        let args = [HookValue::Int(2), HookValue::Int(3)];
+        assert_eq!(
+            captured
+                .invoke(&HookInvocation::unclassified(&args))
+                .unwrap(),
+            HookValue::Int(5)
+        );
+        let mut invalid = RuntimeExecutionContext::unclassified();
+        invalid.time_seconds = Some(f64::NAN);
+        assert!(
+            captured
+                .invoke(&HookInvocation::with_context(&args, invalid))
+                .is_err()
+        );
+        unregister(ID);
+    }
 
     /// A native (Rust) hook that returns the sum of two int args — proves the
     /// registry works with a non-scripted `ScriptHook` too.

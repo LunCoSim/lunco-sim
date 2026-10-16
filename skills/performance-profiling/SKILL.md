@@ -17,6 +17,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   the scene in a pre-existing session. Report concurrent GPU/CPU workloads and
   classify affected numbers as contention-affected, not clean acceptance. Do
   not use Tracy's instrumented number as acceptance evidence.
+  Record the admitted Twin source revision and require its expected authored
+  verdict before comparing completed-mission windows. A tick threshold or zero
+  process exit does not prove acceptance. Exclude source/API errors, and require
+  readiness and diagnostics to pass for the measured cohort.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
@@ -25,8 +29,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
   from another process is not evidence for the task scene.
   A zero collector exit does not prove capture integrity. Compare the saved
-  file size with the collector's reported compressed size and require a
-  successful native CSV export before using its zones. A size mismatch,
+  file size with the collector's reported compressed payload plus native file
+  framing, and require a successful native CSV export before using its zones.
+  `FileWrite::GetCompressionStatistics` excludes the six-byte file header and
+  four-byte length per compressed block; these bytes are present on disk. A size
+  mismatch,
   parser failure or stalled export leaves that capture unusable. A reported
   instrumentation failure also makes the requested window incomplete. Keep hot
   zone names bounded: step ids, timestamps, and measured durations must not be
@@ -36,6 +43,8 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   Check disk space while the owned app is live as well as after it exits.
   Native capture writing can overlap runtime allocations, and the collector
   can report success despite a truncated file.
+  Native unwrapped CSV rows are grouped by source location; sort by
+  `ns_since_start` before reconstructing chronological phases or transitions.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
@@ -107,17 +116,84 @@ Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against
 monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
 a short native physics service time does not certify realtime co-simulation.
+For scene-test diagnostics, `--tick-hz` varies manual update pacing; use the
+runtime's `Time<Fixed>` quantum and elapsed time when interpreting physics cost.
 Completed Modelica receipts have one reader in `SimulationCompletions`, serviced
-before clock projection and by the native driver on response readiness between
-application updates. Windowed completion admission still depends on application
-updates until its simulation owner is isolated. The default
-communication period is one physics tick; longer periods must be authored
-explicitly.
+before clock projection, before admission of a held pending fixed cycle, and by
+the native driver on response readiness between application updates. A ready
+receipt can release another cycle in the same update; unfinished work yields
+without a wait. Full presentation isolation remains a separate requirement.
+The default communication period is one physics tick; longer periods must be
+authored explicitly.
+For deliberately frozen captures use `StepSimulation` and presentation-timed
+sequencing. Manual demand uses the same fixed runner as paced execution and
+still respects preparation and solver barriers. A native hold gates the entire
+simulation; compare `clock_snapshot().physics_elapsed_s` and `fixed_elapsed_s`
+at completed-cycle boundaries before interpreting throughput measurements.
+Attribute numerical service separately from transaction dispatch and result
+admission. Live workers pass the exact communication point to the existing
+`LiveStepper::advance_to` boundary; adaptive Rumoca sessions and fixed
+prediction own their internal steps. Preserve the fixed prediction lattice,
+event handling, input sampling and finite/completion validation when optimizing
+that path. Do not add another worker-side integration grid or catch-up planner.
+Keep communication-clock checks at floating point roundoff scale, with finite
+timestamps required at both request and completion admission. A solver's state
+tolerance must not loosen its communication endpoint validation. Validate the
+endpoint using `start + dt`; subtracting large absolute timestamps can reject
+a valid short interval through cancellation.
 
 UI exposure publication is paced by `Time<Real>`, independent of simulation
-pause and rate. Its dirty-state gate still coalesces unchanged facts. Keep
+pause and rate. Its dirty-state gate still coalesces unchanged facts. Attribute
+main-thread snapshot capture separately from `runtime_ui_policy_preparation`
+and owner publication. Native pure policy evaluation uses shared bounded worker
+admission, retaining captured hooks and caller context; one job plus one latest
+pending snapshot per surface bounds work. Source and identity changes fence
+completion. The wasm kernel is currently cooperative, not an isolated worker.
+Wait for ready surfaces and inspect preparation failures before taking a UI
+performance cohort. This boundary does not isolate the entire fixed runner
+from the presentation thread. Keep
 mission/timeline waits and telemetry deadlines on their declared simulation
 clocks; changing their timers to wall time changes simulation semantics.
+
+For script cost, attribute `rhai_native_task_tick` by stable actor gid and
+compare the same task-invocation range or simulation phase. Equal wall-time
+windows need not contain the same mission work when realtime pacing differs.
+Task callbacks borrow the persistent map through Rhai's bound receiver; see
+[the callback contract](../../docs/architecture/rhai-task-tree.md#leaf-callback-contract).
+Preserve captures, imports, state/error semantics and fixed cadence while
+removing copies at that boundary.
+
+For cost or memory that grows with runtime, check interpreter scope lifetime:
+initialized globals persist, while per-call constants and function locals
+must be released on both success and error. Use Rhai's scope-rewinding option
+at every scenario call boundary; do not periodically clear live scenario state.
+
+For Rhai presentation cost, inspect helper arguments and array iteration for
+copies of nested facts. Project the fields a helper consumes before calling
+it; indexed access can count participant statuses without copying their model
+input/output maps. Preserve the public hook facts and compare complete property
+outputs, including empty and unavailable states. Use paired real-owner spans
+for attribution; synthetic large-payload timings alone do not establish FPS.
+
+For typed Rhai boundary cost, use the shared `lunco-hooks-rhai` converter.
+It borrows input containers; embedding owners lower native leaves through
+`dynamic_to_hook_with_native`. Do not build a normalized Dynamic tree before
+calling it, clone containers to inspect their type, or add another recursive
+converter. Preserve native f64 math, unsigned integers, shared values and
+visible rejection of unsupported types. Check the interpreter resource seam
+with `typed_conversion_rejects_nested_native_values_without_cloning_them`, then
+exercise production typed command/query consumers, including a negative case.
+
+For port-exchange cost, inspect `BindingStatus.connections` and join targets to
+`ListPorts` owner metadata. The causal-state sink count is not the number of
+compiled wire targets: scene/shader inputs also participate in the exchange.
+Separate `cosim_exchange_write` from accumulation before changing routing.
+Preserve live metadata, bounds, ownership and stale-slot checks. For shader-name
+cost, use the shared borrowed converter described in
+[shader parameters](../../docs/architecture/shader-layers-and-params.md);
+canonical-name lookup must not allocate, and entities without `ShaderLook` must
+reject before conversion. Allocation probes and kernel timings do not certify
+whole-scene FPS.
 
 For native physics ordering investigations, enable
 `lunco_physics::order_audit=debug` in an owned diagnostic session. The continuous
@@ -136,6 +212,14 @@ For continuous-query dispatch, compare the CCD owner's bounded
 scene and ordered inputs. Small batches execute the same kernel directly;
 larger batches join before authoritative correction. Preserve native query
 results and compare complete physics time, including CCD and joints.
+The default minimum is eight queries per worker; joined chunks retain prepared order.
+Use `continuous_scoped_queries_preserve_order_geometry_and_errors` for bitwise
+witness/normal/contact-cache parity before production state replay.
+`ccd_query_dispatch` records bounded query and worker counts around the shared
+kernel and join. Match query population and simulation phase, retain power
+observations throughout each comparison, and separate dispatch duration from
+the enclosing sweep and complete physics tick. A changed worker distribution
+needs measured benefit in addition to numerical parity.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges
@@ -351,8 +435,9 @@ and retirement. Compare concurrent construction intervals and end-to-end
 readiness, not only summed worker time. A round transfers complete input buffers
 once, runs independent participants concurrently, and admits checked results in
 command order. Require exact replay, terminal observation-failure and scene
-replacement evidence before a scheduling gain claim. Keep solver clocks,
-micro-step math, metadata and generation retirement unchanged. The native
+replacement evidence before a scheduling gain claim. Preserve exact
+communication points, backend numerical profiles, metadata and generation
+retirement. The native
 compiler already shares its DAE and source map; additional metadata caches do
 not address dominant native construction cost.
 For mixed loading and live execution, inspect `modelica_live_step_job` queue
@@ -1079,7 +1164,8 @@ detects unexpected clipping and should remain zero. Pair this with
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
 response latency. `SimulationCompletions` runs in `First`, after message
 rotation and before `ClockProjectionSet`, and in the native driver's bounded
-completion wait; compile requests remain in
+completion wait. The shared fixed runner also services it once before checking
+admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
 The profile is read on demand and is not a replay or UI-isolation verdict; a
@@ -1113,6 +1199,10 @@ the sweep's preparation, native broad phase and candidate work. To profile
 these stages without millions of support/witness zones, use
 `RUST_LOG=info,lunco_physics::ccd=debug,lunco_physics::ccd::support=info,lunco_physics::ccd::minimum=info`.
 The disabled spans are diagnostic only; physics still evaluates their bounds.
+Compare `ccd_query_dispatch` with each `ccd_query_chunk` on its actual thread.
+Dispatch self time can include waiting for scoped workers; it is not a measure
+of dispatch overhead. Chunk lifetimes expose scheduling gaps and imbalance
+without changing candidate assignment or deterministic result consumption.
 Keep fresh native geometry, whole-arc certification, stable part order and joint
 closure when optimizing these queries. Compare separate unprofiled runs over
 the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`

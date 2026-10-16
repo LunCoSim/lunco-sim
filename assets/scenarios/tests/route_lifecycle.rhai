@@ -11,8 +11,8 @@ const SUBJECT_PATH = "/RouteLifecycle/Subject";
 const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
 const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
-const APPLICATION_ADMISSION_PATH = "/RouteLifecycle/ApplicationAdmissionMarker";
-const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
+const NESTED_ADMISSION_PATH = "/RouteLifecycle/NestedAdmissionMarker";
+const NESTED_ADMISSION_EVENT = "ROUTE_LIFECYCLE_NESTED_EDIT";
 
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(SUBJECT_PATH);
@@ -266,7 +266,7 @@ fn on_start(me, ctx) {
     this.hold_started = 0;
     this.route_ready = false;
     this.route_source_restore_pending = false;
-    this.application_admission_pending = false;
+    this.nested_admission_pending = false;
     this.reference_admission_start_tick = -1;
     this.move_preview_started = false;
     this.move_preview_update_sent = false;
@@ -276,15 +276,15 @@ fn on_start(me, ctx) {
     this.alternate_program_path = ();
     this.reference_admission_started = false;
     this.reference_admission_checked = false;
-    this.application_admission_received = false;
-    this.application_admission_accepted = false;
-    this.application_admission_context_ok = false;
-    this.application_admission_event_tick_matches = false;
-    this.application_admission_event_tick = ();
-    this.application_admission_payload_tick = ();
-    this.application_admission_entity_unindexed = false;
-    this.application_admission_pause_observed = false;
-    this.application_admission_first_tick_checked = false;
+    this.nested_admission_received = false;
+    this.nested_admission_accepted = false;
+    this.nested_admission_context_ok = false;
+    this.nested_admission_event_tick_matches = false;
+    this.nested_admission_event_tick = ();
+    this.nested_admission_payload_tick = ();
+    this.nested_admission_entity_unindexed = false;
+    this.nested_admission_pause_observed = false;
+    this.nested_admission_first_tick_checked = false;
     this.route_step_route_fixture_finished = false;
     this.route_step_hud_projection_finished = false;
     this.route_step_switch_program_source_finished = false;
@@ -328,8 +328,8 @@ fn on_start(me, ctx) {
     this.route_step_verify_insert_before_finished = false;
     this.route_step_verify_insert_after_finished = false;
     this.route_step_verify_ribbon_add_finished = false;
-    this.route_step_application_projection_admission_finished = false;
-    this.route_step_application_projection_verdict_finished = false;
+    this.route_step_nested_projection_admission_finished = false;
+    this.route_step_nested_projection_verdict_finished = false;
 }
 
 fn on_event(me, evt, ctx) {
@@ -349,20 +349,20 @@ fn on_event(me, evt, ctx) {
         // lifecycle identity and the generation is diagnostic context only.
         this.route_ready = true;
     }
-    if evt.name == APPLICATION_ADMISSION_EVENT && this.application_admission_pending {
+    if evt.name == NESTED_ADMISSION_EVENT && this.nested_admission_pending {
         let execution = evt.value;
-        this.application_admission_received = true;
-        this.application_admission_accepted = execution["accepted"] == true;
-        this.application_admission_context_ok = execution["scope"] == "application"
-            && execution["cycle"] == "repl"
-            && execution["phase"] == "evaluation"
-            && execution["clock"] == "application"
-            && execution["sequence"] != ();
-        this.application_admission_event_tick_matches = execution["tick"] == evt.sim_tick;
-        this.application_admission_event_tick = evt.sim_tick;
-        this.application_admission_payload_tick = execution["tick"];
-        this.application_admission_entity_unindexed = execution["entity_indexed"] == false;
-        this.application_admission_pause_observed = clock_snapshot().virtual_paused;
+        this.nested_admission_received = true;
+        this.nested_admission_accepted = execution["accepted"] == true;
+        this.nested_admission_context_ok = execution["scope"] == this.admission_context.scope
+            && execution["cycle"] == this.admission_context.cycle
+            && execution["phase"] == this.admission_context.phase
+            && execution["clock"] == this.admission_context.clock
+            && execution["sequence"] == this.admission_context.sequence;
+        this.nested_admission_event_tick_matches = execution["tick"] == evt.sim_tick;
+        this.nested_admission_event_tick = evt.sim_tick;
+        this.nested_admission_payload_tick = execution["tick"];
+        this.nested_admission_entity_unindexed = execution["entity_indexed"] == false;
+        this.nested_admission_pause_observed = clock_snapshot().virtual_paused;
     }
 }
 
@@ -444,13 +444,13 @@ fn route_lifecycle_timeout(me) {
             + ", selection=" + query("InspectSelection", #{}).to_string()
             + ", viewport_selection=" + query("InspectUsdSelection", #{}).to_string();
     }
-    if this.waiting_for == "the application/Repl projection and event verdict" {
-        detail += "; application_event_received=" + this.application_admission_received.to_string()
-            + ", accepted=" + this.application_admission_accepted.to_string()
-            + ", context_ok=" + this.application_admission_context_ok.to_string()
-            + ", entity_unindexed=" + this.application_admission_entity_unindexed.to_string()
-            + ", pause_observed=" + this.application_admission_pause_observed.to_string()
-            + ", first_tick_checked=" + this.application_admission_first_tick_checked.to_string();
+    if this.waiting_for == "the nested simulation projection and event verdict" {
+        detail += "; application_event_received=" + this.nested_admission_received.to_string()
+            + ", accepted=" + this.nested_admission_accepted.to_string()
+            + ", context_ok=" + this.nested_admission_context_ok.to_string()
+            + ", entity_unindexed=" + this.nested_admission_entity_unindexed.to_string()
+            + ", pause_observed=" + this.nested_admission_pause_observed.to_string()
+            + ", first_tick_checked=" + this.nested_admission_first_tick_checked.to_string();
     }
     this.checks.push(t_true(false, detail));
     this = finish(this);
@@ -542,6 +542,8 @@ fn route_step_hud_projection_action(me) {
     this.checks.push(t_true(surface.properties.program_count == "1 PROGRAMS"
             && surface.properties.programs[0].path == this.program_path,
         "the Application/Ui owner publishes the typed program collection properties"));
+    this.checks.push(t_true(surface.properties.simulation_summary == "no simulation participants",
+        "the runtime HUD reports an empty participant set for a Rhai-only program scope"));
     for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
     this.route_step_hud_projection_finished = true;
     return;
@@ -1750,9 +1752,9 @@ fn route_step_verify_ribbon_add_action(me) {
 fn route_step_verify_ribbon_add_complete(me) { this.done || this.route_step_verify_ribbon_add_finished == true }
 
 
-fn route_step_application_projection_admission_action(me) {
+fn route_step_nested_projection_admission_action(me) {
     if this.done { return; }
-    this.waiting_for = "application/Repl reference admission";
+    this.waiting_for = "nested simulation reference admission";
     let primary_program = program_editor::list(this.doc, ROUTE);
     if primary_program == () || !primary_program.ok
         || primary_program.programs.len() == 0 { return; }
@@ -1778,68 +1780,69 @@ fn route_step_application_projection_admission_action(me) {
     let generation = route_revision(this.doc);
     if generation == () {
         this.checks.push(t_true(false,
-            "Application/Repl projection admission requires the current document generation"));
+            "nested simulation projection admission requires the current document generation"));
         this = finish(this);
         return;
     }
     let code = "let edit = cmd(\"ApplyUsdOps\", #{ doc_id: "
         + this.doc.to_string()
         + ", parent_gen: " + generation.to_string()
-        + ", label: \"Application Repl projection admission\", ops: [#{ AddPrim: #{"
+        + ", label: \"Nested simulation projection admission\", ops: [#{ AddPrim: #{"
         + " edit_target: \"@runtime@\", parent_path: \"/RouteLifecycle\","
-        + " name: \"ApplicationAdmissionMarker\", type_name: \"Xform\","
+        + " name: \"NestedAdmissionMarker\", type_name: \"Xform\","
         + " reference: \"lunco://vessels/markers/predicted_landing.usda\","
         + " reference_prim_path: \"\" }}] });"
         + " let runtime = execution_context(); let clocks = clock_snapshot();"
-        + " emit(\"" + APPLICATION_ADMISSION_EVENT + "\", #{ accepted: edit.ok,"
+        + " emit(\"" + NESTED_ADMISSION_EVENT + "\", #{ accepted: edit.ok,"
         + " scope: runtime.scope, cycle: runtime.cycle, phase: runtime.phase,"
         + " clock: runtime.clock, sequence: runtime.sequence, tick: clocks.sim_tick,"
-        + " entity_indexed: find_path(\"" + APPLICATION_ADMISSION_PATH + "\") >= 0 });";
-    this.application_admission_pending = true;
+        + " entity_indexed: find_path(\"" + NESTED_ADMISSION_PATH + "\") >= 0 });";
+    this.admission_context = execution_context();
+    this.nested_admission_pending = true;
     let queued = cmd("RunRhai", #{ code: code });
     this.checks.push(t_true(queued != () && queued.ok == true,
-        "the Application/Repl script is admitted through the public command queue"));
+        "the nested simulation script is admitted through the public command queue"));
     if queued == () || queued.ok != true { this = finish(this); return; }
-    this.route_step_application_projection_admission_finished = true;
+    this.route_step_nested_projection_admission_finished = true;
     return;
 }
 
-fn route_step_application_projection_admission_complete(me) { this.done || this.route_step_application_projection_admission_finished == true }
+fn route_step_nested_projection_admission_complete(me) { this.done || this.route_step_nested_projection_admission_finished == true }
 
 
-fn application_projection_tick_is_admitted(me) {
-    this.done || (this.application_admission_received
-        && sim_tick() > this.application_admission_event_tick)
+fn nested_projection_tick_is_admitted(me) {
+    this.done || (this.nested_admission_received
+        && sim_tick() > this.nested_admission_event_tick)
 }
 
-fn route_step_application_projection_verdict_action(me) {
+fn route_step_nested_projection_verdict_action(me) {
     if this.done { return; }
-    this.waiting_for = "the application/Repl projection and event verdict";
-    if !this.application_admission_first_tick_checked {
-        let projected = find_path(APPLICATION_ADMISSION_PATH) >= 0;
+    this.waiting_for = "the nested simulation projection and event verdict";
+    if !this.nested_admission_first_tick_checked {
+        let projected = find_path(NESTED_ADMISSION_PATH) >= 0;
         this.checks.push(t_true(projected,
-            "the first simulation tick after an Application/Repl USD edit sees its referenced prim projected"));
-        this.application_admission_first_tick_checked = true;
+            "the first simulation tick after a nested simulation USD edit sees its referenced prim projected"));
+        this.nested_admission_first_tick_checked = true;
         if !projected { this = finish(this); return; }
         return;
     }
-    if !this.application_admission_received { return; }
-    this.checks.push(t_true(this.application_admission_accepted,
-        "the Application/Repl USD edit is accepted by the typed document command"));
-    this.checks.push(t_true(this.application_admission_context_ok,
-        "the edit and its event retain Application/Repl evaluation context"));
-    this.checks.push(t_true(this.application_admission_event_tick_matches,
-        "the application-produced event tick matches its producer boundary (payload="
-            + this.application_admission_payload_tick.to_string() + ", event="
-            + this.application_admission_event_tick.to_string() + ")"));
-    this.checks.push(t_true(this.application_admission_entity_unindexed,
-        "entity lookup has not indexed the referenced prim immediately after the Application/Repl document edit"));
-    this.checks.push(t_true(this.application_admission_pause_observed,
-        "pending Application/Repl projection pauses simulation admission"));
+    if !this.nested_admission_received { return; }
+    this.checks.push(t_true(this.nested_admission_accepted,
+        "the nested simulation USD edit is accepted by the typed document command"));
+    this.checks.push(t_true(this.nested_admission_context_ok,
+        "the edit and its event retain nested simulation evaluation context"));
+    this.checks.push(t_true(this.nested_admission_event_tick_matches,
+        "the nested-call event tick matches its producer boundary (payload="
+            + this.nested_admission_payload_tick.to_string() + ", event="
+            + this.nested_admission_event_tick.to_string() + ")"));
+    this.checks.push(t_true(this.nested_admission_entity_unindexed,
+        "entity lookup has not indexed the referenced prim immediately after the nested simulation document edit"));
+    this.checks.push(t_true(this.nested_admission_pause_observed,
+        "pending nested simulation projection pauses simulation admission"));
     this = finish(this);
 }
 
-fn route_step_application_projection_verdict_complete(me) { this.done || this.route_step_application_projection_verdict_finished == true }
+fn route_step_nested_projection_verdict_complete(me) { this.done || this.route_step_nested_projection_verdict_finished == true }
 
 
 fn route_lifecycle_steps() {
@@ -1891,9 +1894,9 @@ fn route_lifecycle_steps() {
         step(Fn("route_step_verify_insert_before_action"), Fn("route_step_verify_insert_before_complete")),
         step(Fn("route_step_verify_insert_after_action"), Fn("route_step_verify_insert_after_complete")),
         step(Fn("route_step_verify_ribbon_add_action"), Fn("route_step_verify_ribbon_add_complete")),
-        step(Fn("route_step_application_projection_admission_action"), Fn("route_step_application_projection_admission_complete")),
-        wait_until(Fn("application_projection_tick_is_admitted")),
-        step(Fn("route_step_application_projection_verdict_action"), Fn("route_step_application_projection_verdict_complete")),
+        step(Fn("route_step_nested_projection_admission_action"), Fn("route_step_nested_projection_admission_complete")),
+        wait_until(Fn("nested_projection_tick_is_admitted")),
+        step(Fn("route_step_nested_projection_verdict_action"), Fn("route_step_nested_projection_verdict_complete")),
 
     ])
 }

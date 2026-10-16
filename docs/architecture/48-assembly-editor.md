@@ -572,6 +572,10 @@ typed arc identities; source and history snapshots use the native USD dependency
 visitor. `lunco-usd-compose` and `lunco-assets-core` retain ownership of traversal,
 limits, identities and byte reads. Preparation does not split a compound edit:
 the original operation sequence validates and commits once through the journal.
+Preparation retains native missing-dependency diagnostics. The existing
+`usd.scene_composition` policy at the projection owner decides whether an
+incomplete referenced closure can enter the scene; the command worker does not
+replace that policy with an unconditional rejection.
 The same admission serves single, compound, transient and proposal commands and
 component and program attachment, detachment and dome lighting. Unmounted file
 documents acquire their dependency closure on the same worker, including existing
@@ -588,8 +592,11 @@ does not choose simulation steps. Preview and inactive document preparations do
 not hold the simulation clock. Before publication the owner checks document
 generation, layer revisions, origin, pinned runtime owner, exact stage identity
 and resolver revision.
-Closing a document or scene cancels queued work, rejects its pending commands,
-releases its progress holds and drops callbacks and result slots. Worker results
+Closing a document cancels its work. Scene teardown cancels work from its live
+mounts, including additive imports; independent previews retain their document
+lifetime. `TwinClosed` retires work admitted by that exact Twin, including its
+unmounted documents. Cancellation rejects pending commands, releases progress
+holds and drops callbacks and result slots. Worker results
 have only weak publication destinations. Operation identities survive teardown.
 
 `InspectUsdDocument` is the read-only agent/human inspection query. It requires

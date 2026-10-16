@@ -205,8 +205,11 @@ act with `cmd`/`set`.
 The runtime assigns persistent scenario hooks to the cycles owned by the
 selected application plugins. Use `// @peer host|client|both` to choose the
 network peer. `host` includes the standalone authoritative process. Continuous
-behavior may declare `// @timing simulation`; this records its fixed-step
-requirement and does not install a schedule from Rhai. Neither directive
+behavior uses `// @timing simulation` by default. Explicit
+`// @timing presentation` programs run the same task interpreter on application
+frames with presentation-clock waits, including during a simulation pause or
+manual hold. They submit typed domain commands and cannot perform direct
+reflection/structural world writes. Timing metadata does not install schedules. Neither directive
 chooses the script's `Core`, `Application`, or `Twin` owner; Rust assigns that
 owner and the schedules that invoke it.
 `on_visualization` runs once in `PreUpdate`, after lifecycle, document, and
@@ -1562,7 +1565,7 @@ scoped to that hook.
 | HTTP API | `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}` |
 | MCP | the `run_scenario` tool (`mcp/src/index.js`) |
 | One-shot eval | `RunRhai { code }` — runs once with full world access; stdout in the original deferred response |
-| Structured click tool | `RunRhaiTool { tool, args, scene_bound: true }` — invokes `on_click(context)` with typed values and retires queued scene input on reload; scene contexts include diagnostic `button` (`primary`, `secondary`, or `middle`) and settings-derived semantic `pointer_intents`; authored tools should use `pointer_intent(context, name)` |
+| Structured click tool | `RunRhaiTool { tool, args }` — invokes `on_click(context)` with typed values, pins the committed scene generation and retires queued input on reload; scene contexts include diagnostic `button` (`primary`, `secondary`, or `middle`) and settings-derived semantic `pointer_intents`; authored tools should use `pointer_intent(context, name)` |
 | Control | `SetScenarioPaused { target, paused }`, `StopScenario { target }` |
 
 ## N. Examples index

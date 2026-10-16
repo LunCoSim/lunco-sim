@@ -7,6 +7,20 @@
 
 use bevy::prelude::*;
 
+/// Fence interaction work to its admitted scene, including an explicitly empty
+/// scene. Admission and execution use the same transaction-owner check.
+pub fn validate_interaction_scene(
+    generation: Option<u64>,
+    scene: Option<&SceneTransitionCoordinator>,
+) -> Result<(), String> {
+    if scene.is_some_and(|scene| scene.active().is_some() || scene.has_admitted())
+        || scene.and_then(|scene| scene.completed_generation()) != generation
+    {
+        return Err("interaction belongs to a retired or transitioning scene".into());
+    }
+    Ok(())
+}
+
 /// Monotonic identity for one admitted scene lifecycle transaction.
 ///
 /// Scene paths are descriptive input, not transaction identities: the same
@@ -354,6 +368,30 @@ pub struct SceneTransitionFailed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interaction_lifetime_rejects_pending_and_repeated_scene_transactions() {
+        let mut scene = lunco_core::SceneTransitionCoordinator::default();
+        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_ok());
+        scene.admit(lunco_core::SceneTransitionRequest::Clear);
+        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        scene.take_admitted();
+        let first = scene.start(lunco_core::SceneTransition::Clear);
+        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        assert!(scene.complete(first));
+        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        assert!(
+            lunco_core::scene::validate_interaction_scene(Some(first.get()), Some(&scene)).is_ok()
+        );
+        let second = scene.start(lunco_core::SceneTransition::Clear);
+        assert!(scene.complete(second));
+        assert!(
+            lunco_core::scene::validate_interaction_scene(Some(first.get()), Some(&scene)).is_err()
+        );
+        assert!(
+            lunco_core::scene::validate_interaction_scene(Some(second.get()), Some(&scene)).is_ok()
+        );
+    }
 
     #[test]
     fn scene_transitions_are_serialized_at_terminal_edges() {

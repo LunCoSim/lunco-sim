@@ -101,6 +101,34 @@ fn on_tick(me, ctx) {
         return;
     }
 
+    if this.phase == 2 {
+        let proposal = this.proposal_request;
+        if proposal.status == "pending" { proposal = command_result(proposal.id); }
+        if proposal == () || proposal.status == "pending" { return; }
+        if proposal.ok != true {
+            fail(this, "component-instance preparation failed: " + proposal.to_string());
+            return;
+        }
+        let review = assembly_edit::review_session(this.doc);
+        if !query_ok(review) || review.proposals.len() != 1
+            || review.proposals[0].diagnostics.len() != 0 {
+            fail(this, "component-instance proposal did not validate cleanly: " + review.to_string());
+            return;
+        }
+        this.commit_request = assembly_edit::commit_proposal(review.proposals[0].id);
+        this.phase = 3;
+    }
+    if this.phase == 3 {
+        let result = this.commit_request;
+        if result.status == "pending" { result = command_result(result.id); }
+        if result == () || result.status == "pending" { return; }
+        if result.ok != true {
+            fail(this, "component-instance commit failed: " + result.to_string());
+            return;
+        }
+        this.phase = 1;
+    }
+
     if this.phase == 0 {
         let parameter_plan = assembly_builder::parameter_plan(
             "root", BUNDLE,
@@ -595,19 +623,9 @@ fn on_tick(me, ctx) {
             fail(this, "component-instance proposal was rejected: " + proposal.error);
             return;
         }
-        let review = assembly_edit::review_session(this.doc);
-        if !query_ok(review) || review.proposals.len() != 1
-            || review.proposals[0].diagnostics.len() != 0 {
-            fail(this, "component-instance proposal did not validate cleanly");
-            return;
-        }
-        let committed = assembly_edit::commit_proposal(review.proposals[0].id);
-        if !query_ok(committed) {
-            fail(this, "component-instance proposal could not be committed: " + committed.error);
-            return;
-        }
+        this.proposal_request = proposal;
         this.wait_generation = before.generation;
-        this.phase = 1;
+        this.phase = 2;
         return;
     }
 

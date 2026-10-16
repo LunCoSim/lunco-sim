@@ -491,12 +491,13 @@ scene therefore stops safely, but cannot become a process-wide load lock; there
 is no restart-process fallback or mutation-rejection shim in the scene commands.
 
 The safety sequence is intentionally one-way within a scene: a terminal fault
-pauses the physics clock with a zero delta, while the virtual clock remains
-available for diagnostics and lifecycle commands. The invalid scene is not
-repaired or resumed. `SceneTeardown` clears the fault and its safety hold, and
-the physics owner separately resets scene-owned holds, deliberate-step debt, and
-the physics clock before the replacement is admitted. This is recovery of the
-session boundary, not recovery of invalid runtime state. The contract is covered
+pauses native physics with a zero delta and holds shared simulation admission.
+Interaction and presentation remain available for diagnostics and lifecycle
+commands. The invalid scene is not repaired or resumed. `SceneTeardown` clears the fault and its safety hold, and
+the physics owner separately resets scene-owned holds and the physics clock.
+The time owner registers `SimulationStepControl` as scene state, so final
+reset retires shared deliberate-step demand and manual holds after terminal
+callbacks and before replacement admission. This is recovery of the session boundary, not recovery of invalid runtime state. The contract is covered
 by `lunco-physics::terminal_runtime_fault_pauses_physics_until_cleared` and
 `lunco-usd-sim::fault_then_scene_reload_can_admit_a_replacement_runtime`.
 
@@ -506,11 +507,12 @@ by stable `GlobalEntityId` values, so `lunco-avatar` clears claims for outgoing
 replacement scene can therefore reuse deterministic ids without inheriting a
 prior lesson's driver, while non-scene ids remain untouched.
 
-The same boundary clears the fixed `SimTick`, rollback marker, prediction input
-logs, host jitter buffers, applied-input acknowledgements, render-leading drive
+The same boundary clears rollback markers, prediction input logs, host jitter buffers, applied-input acknowledgements, render-leading drive
 values, simulated intents, and control-path registry. Physics clears its holds
-and queued deliberate-step debt and restores a zero-delta physics clock. These
-are scene-owned control surfaces, not session identity; leaving any of them
+and restores a zero-delta physics clock; the time owner retires shared step
+demand. `SimTick`, `Time<Fixed>` and admitted fixed-time balance remain continuous;
+the time owner reanchors the replacement mission epoch at the current tick.
+These are scene-owned control surfaces, not session identity; leaving any of them
 behind would allow a replacement entity or reused global id to receive an old
 command or remain silently held.
 
@@ -635,8 +637,8 @@ Bevy-disabled entities, which still own native components and removal hooks.
 
 The physics owner registers scene-derived continuous contacts and diagnostics,
 constraint order and position scope, dynamic island masses, escape bounds and
-reports, holds, and step debt. Final teardown drops retained collider geometry
-and re-arms topology discovery even if no replacement physics tick occurs.
+reports and holds. The time owner retires shared step demand. Final teardown
+drops retained collider geometry and re-arms topology discovery even if no replacement physics tick occurs.
 Physics integration settings retain their explicit application lifetime.
 
 Live authoring resolves its document from the entity's exact projected stage
@@ -650,7 +652,10 @@ scene resource. Its teardown observer first cancels admission keys, rejects
 outstanding command receipts and releases `UsdDocumentAuthoring` holds; resource
 reset then drops continuations and result slots. Workers hold weak publication
 slots and cannot retain completed recipes after their request retires. Document
-close applies the same boundary to the addressed document. Before commit, the
+close applies the same boundary to the addressed document. Independent document
+work explicitly survives unrelated scene teardown, retaining its completion
+channel; closing its owning Twin retires it immediately. Source leases capture
+scene generation only for stages in registered scene mounts. Before commit, the
 owner validates its exact document and stage lease, including resolver revision.
 Pending discards use that same lease and scene-resource boundary. Closing their
 document or saving it rejects and drops the pending source read; a stale discard
@@ -659,6 +664,15 @@ The render-free scene owner supplies `is_authoritative_scene_stage` to both
 projection and document preparation. It reads the exact active mount and stage
 identity, so preview/import work cannot hold the simulation, and an old root
 loses authority before its deferred despawn even when a new root reuses its path.
+
+Async exposure preparation and guided HUD cards register scene resources at their
+owning packages. Exposure invalidation cancels queued admission and drops its
+result receiver immediately; running workers cannot publish into a retired
+scene. HUD cards, pointer subscriptions and context-menu roots tag their detached
+callback entities `SceneOwned`, so final teardown also retires endpoints created
+by terminal callbacks. Camera exposure retention remains an explicit producer
+contract.
+
 
 ## See also
 

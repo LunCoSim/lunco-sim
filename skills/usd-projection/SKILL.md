@@ -524,8 +524,11 @@ overrides and warm restoration with
 `scripts/api/test_route_runtime_persistence.py`, plus `route_authoring_history`.
 Unmounted file documents must prepare existing dependencies on the same worker;
 command dispatch must not read the dependency closure synchronously. Pending
-discards share the document preparation lease and retire on close, save or scene
-teardown. Verify that a newer edit makes an in-flight discard reject without
+discards share the document preparation lease and retire on document close or save.
+Preparation and discard work for registered scene mounts also retires on scene
+teardown. Independent document work retains its result and completion channel
+across unrelated scene transitions; its owning Twin's close retires it immediately.
+Verify that a newer edit makes an in-flight discard reject without
 resetting its opinions or history.
 Cancellation must reject the receipt, release its progress hold and drop its
 callback/result slot; a matching revision alone cannot authorize publication into

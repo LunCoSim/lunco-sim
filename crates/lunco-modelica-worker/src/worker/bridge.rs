@@ -403,39 +403,6 @@ mod compile_admission_tests {
     }
 }
 
-/// Decide this tick's macro step for one model.
-///
-/// **The macro-step contract** (A3), factored out as a pure function so it is
-/// testable without a worker thread or an `App`:
-///
-/// * `target_time` — the world clock (model-local), advanced one fixed delta per
-///   fixed tick when no step is in flight. NEVER a render-frame quantity.
-/// * `current_time` — the model's own clock, from the last worker result.
-/// * `in_flight` — a `Step` is already out at the worker for this model.
-///
-/// Returns the `dt` to request, or `None` for "nothing to do this tick".
-///
-/// The requested `dt` is the **whole deficit**, clamped to
-/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None`. A coupled caller
-/// holds the shared target clock until the result lands. A slower participant
-/// still commits each requested point before the next fixed cycle.
-///
-/// While a step is in flight we do not dispatch another (one macro step per
-/// model at a time — the worker owns one `SimulationSession` per entity).
-pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bool) -> Option<f64> {
-    if in_flight {
-        return None;
-    }
-    let deficit = target_time - current_time;
-    if deficit < MIN_MACRO_STEP_DT {
-        // Already at (or, through micro-step rounding, just past) the
-        // communication point. Overshoot corrects itself: the deficit goes
-        // slightly negative and the next tick's fixed delta absorbs it.
-        return None;
-    }
-    Some(deficit.min(MAX_MACRO_STEP_DT))
-}
-
 fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> {
     let mut ordered = inputs
         .iter()
@@ -587,22 +554,10 @@ pub fn spawn_modelica_requests(
         }
 
         // ── Macro step to the next declared communication point ─────────────
-        // The validation at the top of this iteration established the field's
-        // invariant. Read the authored value directly so a malformed value can
-        // never be converted into a different schedule here.
-        let period = model.communication_period_secs;
         if model.target_time + COMMUNICATION_EPS < model.next_communication_time {
             continue;
         }
-        let Some(dt) = plan_macro_step(model.next_communication_time, model.current_time, false)
-        else {
-            // The solver can land a tiny amount past a point because its
-            // micro-step ladder is discrete. Move the schedule to the next
-            // point instead of repeatedly dispatching a sub-micro-step.
-            model.next_communication_time = model.current_time + period;
-            model.pending_step_inputs = None;
-            continue;
-        };
+        let dt = model.next_communication_time - model.current_time;
 
         let sampled_inputs = model
             .pending_step_inputs
@@ -1649,7 +1604,7 @@ mod compile_fault_tests {
                 rtol: 1.0e-8,
                 h0: Some(1.0 / 60.0),
                 t_start: 0.0,
-                t_end: super::LIVE_MICRO_DT,
+                t_end: super::LIVE_INTERNAL_STEP_SECS,
             },
             parameter_overrides: vec![("mass".to_owned(), 2.0)],
             initial_inputs: Vec::new(),

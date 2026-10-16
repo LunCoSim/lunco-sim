@@ -38,6 +38,8 @@ fn simulation_dependencies(me, ctx) {
            find_path("/LanderTest/Route/P1"), find_path("/LanderTest/Route/P2")],
        entity_writes: [rover], query_reads: [], required_inputs: [] }
 }
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
 
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. The scene's

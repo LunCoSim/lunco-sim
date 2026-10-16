@@ -51,8 +51,8 @@ pub struct ApiCommandEvent {
     /// Internal outcome key used by result-reporting handlers.
     pub id: u64,
     /// The transport request waiting for this command's result, if any.
-    /// `None` is used by in-process callers and by commands whose owner sends a
-    /// deferred response through its own completion path.
+    /// `None` is used by in-process callers without a transport request. Deferred
+    /// commands retain this identity through admission, then their owner completes it.
     #[reflect(ignore)]
     pub correlation_id: Option<u64>,
     /// Trusted in-process producer classification. It is assigned by the
@@ -99,9 +99,6 @@ pub fn api_request_observer(
         Option<&CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
     )>,
-    // Which commands answer later, on the correlation id. Populated by whichever crate owns
-    // them (`register_deferred_command`), never by name here.
-    deferred_commands: Option<Res<DeferredCommands>>,
 ) {
     let req = trigger.event();
     let correlation_id = req.correlation_id;
@@ -118,7 +115,6 @@ pub fn api_request_observer(
             &type_reg,
             &mut subscriptions,
             &q_meta,
-            deferred_commands.as_deref(),
             correlation_id,
         )
     };
@@ -487,15 +483,12 @@ pub fn api_command_dispatcher(
                     world
                         .resource_mut::<lunco_core::ActiveCommandId>()
                         .set_with_origin(cmd_id, origin);
-                    let deferred_correlation_id = world
-                        .get_resource::<PendingApiRequest>()
-                        .map(|pending| pending.correlation_id)
-                        .filter(|id| *id != 0)
-                        .filter(|_| {
-                            matches!(origin, Some(lunco_core::CommandOrigin::ApiTransport))
-                                && world.get_resource::<DeferredCommands>()
-                                    .is_some_and(|deferred| deferred.contains(&cmd_name))
-                        });
+                    let deferred = world
+                        .get_resource::<DeferredCommands>()
+                        .is_some_and(|commands| commands.contains(registration.type_id()));
+                    if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
+                        pending.correlation_id = if deferred { correlation_id.unwrap_or(0) } else { 0 };
+                    }
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
                     // The pending correlation is a per-dispatch handoff to a
@@ -505,21 +498,14 @@ pub fn api_command_dispatcher(
                     if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
                         pending.correlation_id = 0;
                     }
-                    // A deferred owner can reject synchronously, before there
-                    // is any queued operation to produce its later response.
-                    // Forward that terminal result through the same transport
-                    // mapper; accepted work remains pending under its owner.
-                    if let Some(deferred_id) = deferred_correlation_id {
-                        let failure = world
-                            .get_resource::<lunco_core::CommandResults>()
-                            .and_then(|results| results.get(cmd_id))
-                            .and_then(|outcome| normalize_command_result(Some(outcome)).error);
-                        if let Some((_, message)) = failure {
-                            warn!("[lunco-api] deferred command '{cmd_name}' rejected at admission: {message}");
-                            emit_command_response(world, Some(deferred_id), cmd_id);
-                        }
+                    let admission_failed = world
+                        .get_resource::<lunco_core::CommandResults>()
+                        .and_then(|results| results.get(cmd_id))
+                        .is_some_and(|outcome| matches!(outcome,
+                            lunco_core::CommandOutcome::Rejected(_) | lunco_core::CommandOutcome::Failed(_)));
+                    if !deferred || admission_failed {
+                        emit_command_response(world, correlation_id, cmd_id);
                     }
-                    emit_command_response(world, correlation_id, cmd_id);
                 }
             });
         }
@@ -995,7 +981,6 @@ fn execute_request(
         Option<&CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
     )>,
-    deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
     match request {
@@ -1080,25 +1065,6 @@ fn execute_request(
                 ) {
                     return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
                 }
-            }
-
-            // A DEFERRED command answers on this request's correlation id, later. The
-            // executor does not know (and must not know) which commands those are — a crate
-            // that owns one calls `register_deferred_command::<T>()`. See `DeferredCommands`.
-            //
-            // The visibility, type, and validation gates above deliberately run first. A
-            // hidden command cannot bypass its visibility policy, malformed input is rejected
-            // synchronously, and an absent event registration cannot be parked as deferred work.
-            if deferred_commands.is_some_and(|d| d.contains(command)) {
-                commands.insert_resource(PendingApiRequest { correlation_id });
-                commands.trigger(ApiCommandEvent {
-                    command: command.clone(),
-                    params: typed_params.clone(),
-                    id: id_counter.next_id(),
-                    correlation_id: None,
-                    origin: Some(lunco_core::CommandOrigin::ApiTransport),
-                });
-                return None; // the handler answers on `correlation_id`
             }
 
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher.
@@ -1220,22 +1186,21 @@ fn execute_request(
 /// Specialized payloads such as raw screenshot bytes may emit
 /// [`ApiResponseEvent`] directly because they are not represented by an `Ack`.
 ///
-/// **Contract:** a deferred command MUST eventually send exactly one `ApiResponseEvent` on
-/// that id. If it never does, the caller hangs — which is precisely why a command that is
-/// not registered here (because its plugin isn't in this binary) must fall through to the
-/// ordinary `CommandNotFound` path rather than defer into silence.
+/// Admission failures are answered by the dispatcher. For admitted work, the
+/// owner must send exactly one `ApiResponseEvent` on the original correlation
+/// id. Commands without this registered capability use ordinary dispatch.
 #[derive(Resource, Default, Debug)]
-pub struct DeferredCommands(std::collections::HashSet<String>);
+pub struct DeferredCommands(std::collections::HashSet<std::any::TypeId>);
 
 impl DeferredCommands {
-    pub fn contains(&self, command: &str) -> bool {
-        self.0.contains(command)
+    pub fn contains(&self, command: std::any::TypeId) -> bool {
+        self.0.contains(&command)
     }
 }
 
 /// The correlation id of the request a deferred command is currently answering.
 ///
-/// Set by the executor immediately before it dispatches the command; read by the handler
+/// Scoped by the reflected dispatcher around one deferred command; read by the handler
 /// (and by whatever async completion the handler arms) to address the response.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct PendingApiRequest {
@@ -1259,15 +1224,10 @@ impl DeferredCommandAppExt for App {
         // is the same signal `DiscoverSchema` and the not-found check already read. No
         // separate "backend installed" marker.
         self.register_type::<T>();
-        let short = std::any::type_name::<T>()
-            .rsplit("::")
-            .next()
-            .unwrap_or_default()
-            .to_string();
         self.world_mut()
             .resource_mut::<DeferredCommands>()
             .0
-            .insert(short);
+            .insert(std::any::TypeId::of::<T>());
         self
     }
 }
@@ -1344,6 +1304,137 @@ mod tests {
                 OpId::new(),
                 lunco_api_core::api_value!({ "answer": 42 }),
             ))
+        }
+    }
+
+    #[test]
+    fn deferred_admission_scopes_correlations_and_answers_failures() {
+        use std::sync::{Arc, Mutex};
+
+        let mut app = App::new();
+        app.add_plugins(ApiExecutorPlugin)
+            .init_resource::<ApiEntityRegistry>()
+            .init_resource::<ApiQueryRegistry>()
+            .init_resource::<ApiVisibility>()
+            .init_resource::<DeferredAdmissions>()
+            .register_deferred_command::<TestDeferred>()
+            .register_deferred_command::<TestImmediateDeferred>();
+        __register_on_test_deferred(&mut app);
+        __register_on_test_immediate_deferred(&mut app);
+        let responses = Arc::new(Mutex::new(Vec::<(u64, ApiResponse)>::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<ApiResponseEvent>| {
+            sink.lock()
+                .unwrap()
+                .push((trigger.correlation_id, trigger.response.clone()));
+        });
+        for (correlation_id, fail) in [(41, false), (42, true)] {
+            app.world_mut().commands().trigger(ApiRequestEvent {
+                request: ApiRequest::ExecuteCommand {
+                    command: "TestDeferred".into(),
+                    params: api_value!({"fail": fail}),
+                },
+                correlation_id,
+            });
+        }
+        app.world_mut().flush();
+        let admissions = &app.world().resource::<DeferredAdmissions>().0;
+        assert_eq!(
+            admissions.iter().map(|(_, cid)| *cid).collect::<Vec<_>>(),
+            [41, 42]
+        );
+        let first = admissions[0].0;
+        assert_eq!(
+            app.world().resource::<PendingApiRequest>().correlation_id,
+            0
+        );
+        assert!(matches!(
+            responses.lock().unwrap().as_slice(),
+            [(42, ApiResponse::Error { .. })]
+        ));
+        finish_command_result(
+            app.world_mut(),
+            Some(first),
+            Some(41),
+            Ok(Ack::with_data(OpId::new(), api_value!({"answer": 42}))),
+            ApiErrorCode::InternalError,
+        );
+        app.world_mut().flush();
+        {
+            let collected = responses.lock().unwrap();
+            assert!(matches!(
+                collected.as_slice(),
+                [
+                    (42, ApiResponse::Error { .. }),
+                    (41, ApiResponse::Ok { .. })
+                ]
+            ));
+        }
+        app.world_mut().trigger(ApiRequestEvent {
+            request: ApiRequest::ExecuteCommand {
+                command: "TestImmediateDeferred".into(),
+                params: api_value!({}),
+            },
+            correlation_id: 43,
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            responses
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(cid, _)| *cid == 43)
+                .count(),
+            1
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct DeferredAdmissions(Vec<(u64, u64)>);
+
+    #[Command(default)]
+    struct TestDeferred {
+        fail: bool,
+    }
+
+    #[Command(default)]
+    struct TestImmediateDeferred {}
+
+    #[on_command(TestImmediateDeferred)]
+    fn on_test_immediate_deferred(
+        _: On<TestImmediateDeferred>,
+        active: Res<ActiveCommandId>,
+        pending: Res<PendingApiRequest>,
+        mut commands: Commands,
+    ) {
+        let id = active.get();
+        let cid = pending.correlation_id;
+        commands.queue(move |world: &mut World| {
+            finish_command_result(
+                world,
+                id,
+                Some(cid),
+                Err("completed immediately".into()),
+                ApiErrorCode::CommandRejected,
+            );
+        });
+    }
+
+    #[on_command(TestDeferred)]
+    fn on_test_deferred(
+        trigger: On<TestDeferred>,
+        active: Res<ActiveCommandId>,
+        pending: Res<PendingApiRequest>,
+        mut admissions: ResMut<DeferredAdmissions>,
+    ) -> Result<Ack, String> {
+        admissions.0.push((
+            active.get().expect("admitted command id"),
+            pending.correlation_id,
+        ));
+        if cmd.fail {
+            Err("admission rejected".into())
+        } else {
+            Ok(Ack::new(OpId::new()))
         }
     }
 

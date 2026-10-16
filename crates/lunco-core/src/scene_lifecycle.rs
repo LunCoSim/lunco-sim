@@ -103,6 +103,11 @@ impl SceneMountState {
         self.roots.contains(&root)
     }
 
+    /// Roots owned by this scene transaction, including additive imports.
+    pub fn roots(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.roots.iter().copied()
+    }
+
     /// The primary running scene root, if one has been mounted.
     pub fn active_root(&self) -> Option<Entity> {
         self.active_root

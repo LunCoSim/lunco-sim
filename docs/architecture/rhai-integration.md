@@ -131,7 +131,10 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   returned in the original deferred response. Admission captures the active
   workspace Twin, including an explicitly empty workspace. Deferred code is
   rejected if that workspace identity changes before evaluation; its execution
-  context remains `Application/Repl/Evaluation`.
+  context is `Application/Repl/Evaluation` for external submissions. Nested
+  Rhai work retains its caller's complete typed invocation context.
+  `command_result(id)` accepts native unsigned command IDs and non-negative
+  Rhai integer literals; negative IDs report an evaluation error.
 - **Structured UI tools:** `RunRhaiTool { tool, args }` and
   `RunRhaiToolHook { tool, hook, args }` enqueue typed calls in a bounded UI
   queue. The exclusive drain runs after Bevy picking in `PreUpdate`, before
@@ -140,30 +143,48 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   work cannot delay or consume admission for pointer and menu hooks. These calls
   return `CommandOutcome::Pending` at admission; `command_result(id)` remains
   pending until execution or owner retirement records the terminal outcome.
-  `RunRhai` uses the same admission/result contract. These calls
+  `RunRhai` uses the same admission/result contract and the dispatcher's deferred
+  correlation scope. Admission failures return terminal results before queued
+  execution. These calls
   resolve the registered tool and capture its actual `ToolScope` from one
-  registry snapshot. A Twin registration supplies its stable owner even when
+  registry snapshot and pin the committed scene generation. A pending or active
+  scene transition rejects interaction admission. Before execution, that exact
+  generation must still be current. A Twin registration supplies its stable owner even when
   `owner_twin_id` is omitted. An explicit interaction owner and a typed Twin
   caller must agree with that registration. Before dispatch, the owner must
   still be active and the visible tool must still belong to the admitted scope;
   a lower-scope definition or another Twin's same-name tool cannot receive the
-  old request. Application tools keep `Application/Ui/Evaluation` context
-  unless the caller supplies a Twin flow or has a typed Twin route. A workbench
+  old request. External application tools use `Application/Ui/Evaluation`;
+  an explicit Twin flow uses a Twin route. Nested calls retain the originating
+  route, phase, clock samples, sequence, producer stamp, actor, authority and
+  client-local restriction through the typed `CommandOrigin::Rhai` and
+  `WorldScriptExecution` admission snapshot. Queue placement never reclassifies
+  a stop or simulation invocation as UI/REPL evaluation. Synchronous nested
+  world evaluation restores the entire caller bridge state on return. A workbench
   menu captures that flow owner at selection time. Twin tool-flow routes use
-  generation zero until a scenario is admitted against the committed scene.
+  the committed scene generation (zero only when no scene has committed).
+  Nested Twin-route snippets retain and validate that same generation; scene
+  transitions retire them along with queued tools.
   `TwinClosed` removes its queued tool calls and snippets immediately, without
   waiting for Rhai readiness, and completes deferred results as
-  `CommandRejected`. Scene interaction adapters set `scene_bound: true` on
-  either structured tool command. Admission requires an active scene and pins
-  its root independently of the tool library scope. `SceneTeardown` removes
-  those queued invocations through the same terminal-result owner, and the
-  drain revalidates the captured mount before execution. Scene click, pointer
-  move and context-menu calls use this lifetime. Application workbench menu
-  invocations omit it; the documented default is `false`. The registration
-  itself keeps its declared application or Twin lifetime.
+  `CommandRejected`. Callback invocations carry the exact `ToolHookBinding`;
+  retired or replaced surface and invocation bindings reject before execution.
+  `SceneTeardown` retires queued tools and nested Twin-route snippets through
+  the same terminal-result owner. The registration itself keeps its declared
+  application or Twin lifetime.
   Drain-time ownership rejection uses the same terminal
   result and a concise warning. Application-owned calls retain their own
-  lifetime. General
+  lifetime within their admitted scene. Persistent UI callbacks supply an explicit
+  `RunRhaiToolHook.binding` entity lease (`ToolHookBinding`). Admission checks its
+  endpoint, tool scope, Twin, and scene; an omitted request owner is supplied
+  by the binding. Every terminal rejection releases an exact invocation lease,
+  including queue overload before admission. Execution also requires the exact entity
+  and binding value to remain live. Replacing or tearing down a UI binding
+  despawns that lease. Surface bindings are retained by their publisher; a
+  popup selection transfers an invocation binding to the queue for terminal
+  cleanup. `SceneTransitionStarted` retires queued tools without waiting for
+  interpreter readiness. Ordinary tool calls omit the binding and retain the same
+  scene/registration/ownership checks. General
   `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
   arguments use `TelemetryValue` and are
   converted directly to native Rhai values at the backend boundary. Scene click
@@ -184,7 +205,13 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   document has an active interaction. Policies use this owner context to
   commit placement; idle clicks do not discover interactions by traversing USD.
   `ClearScenePointerMoveHook { doc_id, interaction_id }`
-  cannot clear a different interaction. With no active subscriptions, the
+  cannot clear a different interaction. Each subscription owns a scene-bound
+  `ToolHookBinding` surface lease; every queued sample retains that exact lease.
+  Refreshing its context replaces the lease, and clearing or retiring the
+  subscription despawns it, revoking samples already queued. Twin cleanup uses
+  the admitted subscription owner even after workspace documents are removed.
+  New subscriptions reject during stop hooks or scene transitions; cleanup
+  remains idempotent. With no active subscriptions, the
   viewport drops pending samples before resolving scene identity. When another
   document is subscribed, unmatched hits are discarded after the lightweight
   document lookup and before coordinate conversion, terrain raycasting, or
@@ -450,9 +477,16 @@ and time samples before calling a Rhai or native provider; invalid context is a
 visible hook error rather than an inferred clock.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
-simulation or another runtime cycle. Persistent scenarios may declare
-`// @peer host|client|both` and `// @timing simulation`; these validate the
-scenario's execution target and fixed-step requirements while Rust retains schedule
+simulation or another runtime cycle.
+`dt()` reads the configured physics timestep, including a simulation-cycle
+startup call before the first tick; pause and rate changes do not rescale it.
+Persistent scenarios may declare
+`// @peer host|client|both` and `// @timing simulation|presentation`; omitted
+timing is simulation. Both cadences share one lifecycle and task interpreter.
+Presentation tasks use their owner-provided frame time for waits, receive an
+independent event delivery queue, and submit typed commands rather than direct
+world mutations. Simulation helpers retain their simulation-only contract.
+These directives select the scenario's execution target and cadence while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a
 source-revision diagnostic. The driver reparses metadata when the document
 generation changes, so edits cannot leave stale routing attached to a program.
@@ -671,6 +705,12 @@ one canonical path. Rhai owns sequences, chords, drag workflows, and retries;
 Rust owns only event validation and fan-out. The command accepts logical window
 coordinates and is local to the primary window; it is not a direct scene-edit
 or semantic-control shortcut.
+
+`input_click` queues both native button transitions in one input phase. Use it
+for ordinary activation after the target has been laid out and hovered. Split
+press/release across frames when the held state itself matters, such as drags
+or callback-replacement tests. A frame wait is not a gesture-duration guarantee:
+slow rendering can stretch a held press beyond egui's click limit.
 
 The input bridge currently targets the primary window. Validate the gesture
 lifecycle on Wayland, X11, and Windows before treating cross-platform

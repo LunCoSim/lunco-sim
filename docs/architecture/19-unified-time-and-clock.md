@@ -29,7 +29,11 @@ the same update without waiting for a later lifecycle cycle.
 readiness owners publish their current holds. The fixed runner checks admission
 before each complete `FixedMain` cycle; if a hold appears during a cycle, that
 cycle finishes and the remaining fixed time stays in `Time<Fixed>::overstep`
-until admission resumes. Completed fixed elapsed time plus pending overstep
+until admission resumes. When a participant holds pending fixed work, the runner
+services `SimulationCompletions` once before checking the next cycle's admission.
+Ready receipts can release that cycle in the same application update; unfinished
+work returns control to the host without waiting. Completed fixed elapsed time
+plus pending overstep
 equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
@@ -40,6 +44,31 @@ the whole remaining duration in the same fixed accumulator. There is no second
 debt clock, timestep change, or skipped tick. Pause and causal holds stop new
 admission and preserve the already admitted balance. Manual scene-test and
 recording drivers select input durations without installing a separate cap.
+`lunco-time` also owns `StepSimulation` and `SimulationStepControl`. A manual
+hold stops automatic advancement without changing user pause/rate. Positive
+step requests while held or paused add exact fixed-cycle demand to the same
+runner and accumulator; they never bypass preparation, native admission,
+participant barriers or runtime faults. The runner consumes demand before the
+cycle begins, marks that complete cycle active, and restores transport projection
+afterward. `SimulationStepControl` registers its scene lifetime at initialization;
+its final reset follows shutdown and entity-removal callbacks. Release retires
+pending demand, terminal faults cancel it, and scene
+teardown resets the control. A cycle callback may release the hold safely.
+Native `PhysicsHolds` project their own `PhysicsIntegration` progress key;
+editor dragging owns a distinct `SceneInteraction` key. Both gate complete
+simulation admission. These are engine admission mechanisms; authored Rhai
+chooses shot sequencing and explicit step requests. Presentation scenarios use
+the existing scenario FSM/task interpreter with `@timing presentation`, so
+recording waits do not require simulation ticks while the world is frozen.
+
+Native transitions back to automatic sampling use `lunco_time::set_time_update_strategy`.
+Returning from manual duration to automatic sampling reanchors Bevy's native
+wall-time sample without advancing its elapsed time. The next sample admits
+only time since that handoff, preserving fixed debt and timer continuity.
+Recording saves the source before arming and restores it on completion or
+cancellation, including a cancellation before visual readiness. The headless
+realtime-mode transition uses the same time-owner function.
+
 After the runner, `WorldTime` is published from the latest completed
 `SimTick`. Its mission seconds, elapsed seconds, and epoch are derived from
 `MissionClock`; no consumer accumulates its own calendar time.
@@ -313,7 +342,12 @@ scenario's `FixedUpdate` callback runs before that tick's Avian
 `(sim_tick - 1) * fixed_dt_s` there. A hold or coupling barrier can clear
 `physics_dt_s` when it pauses the clock; that sampled delta is not a
 physics-cycle counter. Use elapsed-time conservation to validate completed
-physics cycles. The production replay gate accepts clock arithmetic within
+physics cycles. The native physics owner validates exact `Duration` agreement
+at `FixedLast` and raises `simulation-physics-clock-diverged` on failure. The
+snapshot delegates to that same validator; an active cycle permits the native
+clock to expose the preceding completed interval before integration. It also
+reports `manual_simulation_hold`, `queued_simulation_steps` and
+`simulation_cycle_active`. The production replay gate accepts clock arithmetic within
 `1e-9` seconds and requires exact equality (`numeric_tolerance=0`) for serialized
 state traces across runs.
 

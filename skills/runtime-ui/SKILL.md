@@ -151,9 +151,25 @@ completed script evaluations, or read the command/REPL owners directly.
 
 Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
-`EngineExposures.revision` tracks changed values, visibility, namespace withdrawal
-and scene retirement; it is not a frame counter. Do not use JSON to detect
-internal changes.
+`EngineExposures.revision` changes when a complete surface changes or retires;
+it is not a frame counter. Do not use JSON to detect internal changes.
+Runtime visibility/property policies prepare immutable facts through shared
+bounded async admission in the same headless and windowed owner. Use
+`ReadExposures` to wait for `state == "ready"` before asserting their properties.
+A new identity starts hidden and `pending`; `failed` exposes an owner error
+without partial properties and requires source/identity replacement to recover.
+Ready telemetry samples remain available while the next sample prepares. Never
+feed UI completion timing into simulation decisions or send live World/USD
+readers to the worker. See the
+[publication contract](../../docs/architecture/runtime-authored-ui.md).
+Run the held-physics preparation and negative-result gate with the built
+production binary in both host modes:
+
+```sh
+python3 scripts/api/test_runtime_ui_preparation.py --port 4374 --log target/ui-preparation-headless.log
+python3 scripts/api/test_runtime_ui_preparation.py --port 4375 --windowed --log target/ui-preparation-windowed.log
+```
+
 When one producer owns several surfaces, keep invalidation domains separate so
 continuous motion does not rebuild static authored topology. Use the existing
 authoritative stage revision for USD-derived membership and cache that
@@ -290,14 +306,72 @@ HUD also exposes a surface-specific reset that removes its per-Twin override.
 Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
-The script-driven `GuidedOverlay` is owner-tagged presentation state. A HUD
-command issued from a Twin route must carry its stable Twin ID; a stale or
-inactive owner is rejected. `TwinClosed` clears every field only when that
-Twin owns the overlay, and scene replacement clears all old presentation state
-before the next scenario starts. Core/Application scripts keep their runtime
-scope; clearing presentation does not restart them. Tutorial launchers call
-`ClearGuidedOverlay` before replacing a lesson so actions, spotlight, coach
-step, missing-anchor diagnostic, and recovery card cannot leak between lessons.
+Script-driven hint/objective/action cards belong to `lunco-workbench-guided-ui`.
+Omitting `hud` uses the calling script's card; unscripted API/REPL input uses
+a distinct command-context card. Several scenario/tool producers
+share a scene card by supplying the same explicit `hud` id, for example
+`hint("mission-controls", text)` and
+`guided_hud_actions("mission-controls", tool, hook, actions)`. The Twin is part
+of the identity; never choose a card by last writer, hook name, or label.
+
+`GuidedHudVisibility` supplies the host default (View in LunCoSim).
+`hud_perspectives(ids)` or `hud_perspectives(hud, ids)` declares a per-card
+allowlist; `[]` explicitly allows all. Unknown ids reject atomically. Scope
+covers the whole card before rendering or input creation. Switching perspective
+preserves content. Coach, spotlight, and recovery presentation remains separate.
+
+`SetGuidedHudActions` validates the endpoint and action ids, creates an explicit
+`ToolHookBinding` entity, and retires the prior binding. The UI carries that
+entity into `RunRhaiToolHook.binding`; the shared scripting queue validates its
+exact endpoint, registered owner, Twin, and scene generation at admission and
+again at execution. The immutable action row's widget identity includes its
+binding entity, so replacement also retires in-progress input. Empty actions
+retire the binding. Script removal immediately clears its card,
+including while the driver is paused or preparing. Script-instance retirement
+(including recompilation) clears implicit script cards; scene replacement clears
+all cards; `TwinClosed` clears that Twin's cards. All three despawn their leases.
+Stop hooks may clear existing content/actions idempotently; clears never create
+cards. New content, perspective declarations, and bindings reject during stop.
+HUI, dropdown, Escape, and native menu actions capture `RuntimeUiActionScope`
+at emission; validate it before interpreting the action, then retain the shared
+queue's execution-time scene check. Never resolve the next active Twin for an
+old event. Named cards are scene-owned, so callback tools can update them independently of
+a scenario host. `ClearGuidedOverlay` clears the calling script's card and the
+active coach/spotlight presentation, preserving other cards. Inspect the admitted
+scope, content, and visibility through `InspectGuidedHud`.
+Script-opened scene menus retain the same captured scope while open and clear
+on scene transition or owning Twin close; stop hooks cannot open menus. Each
+popup has its own widget identity and child callback leases. Replacement or
+dismissal retires unselected leases; selection transfers one `Invocation`
+binding to the queue, which releases it on execution or rejection. HUD rows
+use `Surface` retention. Scene transitions retire queued tools even while the
+interpreter is preparing. Never leave a selected popup endpoint unowned.
+Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
+production popup/menu input, replacement, dismissal, reset, and Twin-replacement
+gate. Installed workbench menus bind provider-lifetime endpoints beneath a fresh
+installation root and the current input Twin/scene; disable input during scene
+transition. Selection creates a scene-bound invocation child. This keeps
+application menus reusable after scene reset while replacement revokes both
+held input and selected work. Every terminal admission/queue path releases the
+exact invocation lease, including overload with an omitted request owner.
+
+Nested deferred calls retain their typed caller context and capabilities through
+`CommandOrigin::Rhai`/`WorldScriptExecution`. Never rebuild a stopping caller as
+UI/REPL evaluation. The gate stops `guided_hud_teardown.rhai`, then inspects the
+completed authored verdict from both deferred queues. The wrapper uses
+temporary application-source fixtures for the native asset watcher and removes
+them after its owned runtime exits.
+
+Run `assets/scripting/tests/test_guided_hud.rhai` with
+`scripts/api/run_rhai_test.sh PORT FILE` in an owned windowed production session.
+It checks View/Build/Editor, independent teaching scope, preservation, and invalid
+scope/endpoint rejection. Capture screenshots to verify actual placement/input;
+headless presentation acknowledgements do not prove visibility.
+`assets/scenarios/tests/guided_hud_teardown.rhai` reports `HUD_TEARDOWN` after
+its host is stopped; it also publishes a script-owned teaching card with an
+explicit all-perspectives scope. Register the generic `hud_binding_probe.rhai` test library
+only in an isolated test Twin when exercising real pointer callbacks and Twin
+replacement; never persist test tools into a user's Twin.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime adds `Pickable` to those visible

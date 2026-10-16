@@ -7775,6 +7775,7 @@ dependencies = [
  "lunco-render",
  "lunco-status-core",
  "lunco-storage",
+ "lunco-time",
  "lunco-tools-bevy",
  "lunco-viewport-core",
  "web-time",
@@ -8267,6 +8268,7 @@ dependencies = [
  "lunco-celestial-spatial-core",
  "lunco-control-core",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-doc",
  "lunco-interaction-core",
  "lunco-physics",
@@ -8388,6 +8390,7 @@ dependencies = [
  "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-selection",
+ "lunco-scripting-bridge-core",
  "lunco-scripting-rhai-core",
  "lunco-scripting-rhai-runtime",
  "lunco-settings",
@@ -9784,6 +9787,7 @@ dependencies = [
  "lunco-port-core",
  "lunco-telemetry-core",
  "lunco-time",
+ "lunco-tools",
  "lunco-workspace",
 ]
 
@@ -11423,7 +11427,10 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "lunco-api-core",
+ "lunco-command-contracts",
  "lunco-core",
+ "lunco-scripting",
  "lunco-scripting-bridge-core",
  "lunco-telemetry-core",
  "lunco-theme",

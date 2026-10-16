@@ -26,6 +26,8 @@ fn on_start(me, ctx) {
     this.go_sent = false;
     this.go2_sent = false;
     this.seq_a = 0;
+    this.anonymous_count = 0;
+    this.anonymous_predicate_count = 0;
     this.seq_b = 0;
     this.branch_a = 0;
     this.branch_b1 = 0;
@@ -132,7 +134,10 @@ fn interrupt_recovery(me) { emit("TASK_INTERRUPT_RECOVERED", 1); }
 
 fn task(me, ctx) {
     emit("TASK_CTX_EMPTY", ctx.len() == 0);
+    let increment = 2;
     seq([
+        once(|m| { this.anonymous_count += increment; }),
+        wait_until(|m| { this.anonymous_predicate_count += 1; this.anonymous_count == increment }),
         once(|m| emit("TASK_SEQ_A", 1)),
         wait_for("TASK_GO"),
         once(|m| emit("TASK_SEQ_B", 1)),
@@ -258,6 +263,8 @@ fn on_tick(me, ctx) {
         && this.archive_export_done {
         this.done = true;
         report_verdict([
+            t_true(this.anonymous_count == 2 && this.anonymous_predicate_count == 1,
+                "anonymous actions and predicates preserve bound state and captures"),
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
             t_true(this.start_cycle == "simulation" && this.start_phase == "start", "on_start inherits its simulation cycle and start phase"),
             t_true(this.start_clock == "simulation" && this.start_dt > 0.0 && this.start_tick >= 0, "simulation clock APIs work in on_start"),

@@ -72,6 +72,11 @@ fn on_tick(me, ctx) {
         dir: [0.0, -1.0, 0.0],
         max: 20.0,
     });
+    let native_ray = query("Raycast", #{
+        origin: vec3(0.0, 10.0, 0.0),
+        dir: vec3(0.0, -1.0, 0.0),
+        max: 20.0,
+    });
     let ground_height = query("GroundHeight", #{
         x: 0.0,
         z: 0.0,
@@ -130,6 +135,8 @@ fn on_tick(me, ctx) {
         "topology did not expose the authored payload joint body ownership"));
     checks.push(t_true(ray != () && ray.hit == true,
         "production raycast did not observe the authored ground collider"));
+    checks.push(t_true(native_ray == ray,
+        "native vector parameters must produce the same typed raycast result as arrays"));
     checks.push(t_true(ground_height != () && ground_height.hit == true
         && ground_height.height.abs() < 0.1,
         "production ground-height query did not observe the authored surface"));

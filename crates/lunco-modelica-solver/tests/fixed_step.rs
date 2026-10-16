@@ -74,6 +74,46 @@ fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
 }
 
 #[test]
+fn fixed_communication_points_preserve_internal_steps_and_reject_invalid_targets() {
+    let compiled = compile("FixedRamp", ramp_model(), "fixed_ramp.mo").unwrap();
+    for origin in [0.0, 2.75] {
+        let mut settings = options();
+        settings.t_start = origin;
+        settings.t_end = origin + 1.0;
+        let mut interval = FixedStepSession::new(&compiled.dae, settings.clone()).unwrap();
+        let mut single = FixedStepSession::new(&compiled.dae, settings).unwrap();
+        interval.advance_to(origin + 0.06).unwrap();
+        for _ in 0..6 {
+            single.step(0.01).unwrap();
+        }
+        let expected = single.state().unwrap();
+        assert_eq!(
+            interval.state().unwrap().time.to_bits(),
+            expected.time.to_bits()
+        );
+        assert_eq!(interval.state().unwrap().values, expected.values);
+        interval.advance_to(origin + 0.06).unwrap();
+        for target in [
+            origin + 0.065,
+            origin + 0.05,
+            f64::NAN,
+            f64::INFINITY,
+            1e300,
+        ] {
+            assert!(
+                interval.advance_to(target).is_err(),
+                "invalid target {target}"
+            );
+            assert_eq!(
+                interval.state().unwrap().time.to_bits(),
+                expected.time.to_bits()
+            );
+            assert_eq!(interval.state().unwrap().values, expected.values);
+        }
+    }
+}
+
+#[test]
 fn fixed_rk4_repeats_the_same_operation_sequence() {
     let compiled =
         compile("FixedRamp", ramp_model(), "fixed_ramp.mo").expect("fixed ramp compiles");
@@ -123,7 +163,7 @@ fn predicted_live_resolution_constructs_the_fixed_backend() {
         .expect("the resolved prediction backend constructs");
 
     assert!(matches!(&stepper, LiveStepper::Fixed(_)));
-    stepper.step(0.01).expect("fixed prediction step");
+    stepper.advance_to(0.01).expect("fixed prediction step");
     assert_eq!(stepper.time().to_bits(), 0.01_f64.to_bits());
 }
 
@@ -179,8 +219,11 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
             .set_inputs(&[("u", input)])
             .expect("right input is accepted");
         assert_eq!(left.state().unwrap().values.get("u").copied(), Some(input));
-        left.step(0.01).expect("left fixed step");
-        right.step(0.01).expect("right fixed step");
+        left.advance_to((step + 1) as f64 * 0.01)
+            .expect("left communication point");
+        right
+            .advance_to((step + 1) as f64 * 0.01)
+            .expect("right communication point");
 
         let left_state = left.state().expect("left state is observable");
         let right_state = right.state().expect("right state is observable");

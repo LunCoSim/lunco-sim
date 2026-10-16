@@ -342,6 +342,12 @@ The same policy boundary applies to simulation participants: Rust exposes
 typed participant facts and authored public outputs, while Twin Rhai chooses
 which values become a presentation property. Missing, compiling, paused, and
 failed states remain explicit instead of being hidden until a sample exists.
+The built-in properties policy counts statuses through indexed participant
+access and passes only those counts to its formatting helper. Rhai array
+iteration and by-value helper arguments can copy nested input/output maps;
+presentation helpers should receive only the fields they consume. Custom
+policies retain the complete typed participant facts at the existing hook
+boundary.
 
 Subject-scoped publication is lifecycle-scoped. It accepts only prims below the
 current primary `SceneMountState::active_root`; preview, additive, and outgoing
@@ -475,8 +481,26 @@ The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
 20 Hz); discrete lifecycle facts should use an event observer. Camera status
-is the latter. `EngineExposures.revision` tracks changed values, visibility,
-namespace withdrawal and scene retirement; it is not a frame counter.
+is the latter. `EngineExposures.revision` advances only when a complete surface
+changes (including its preparation state) or is retired; it is not a frame counter.
+
+`lunco-luncosim-exposures` captures immutable facts and typed caller context,
+then evaluates pure visibility and property policies through shared bounded
+async admission. Headless and windowed consumers use this same path. The owner
+retains one job plus the latest pending input per surface, and atomically commits
+validated results. Policy generation, active source revision and subject identity
+fence stale completions; closing a Twin retires its surfaces immediately.
+Existing ready samples remain available during continuous refresh. New surfaces
+or replaced identities start `pending`, hidden with no properties. Invalid
+policy results become `failed`, with an error and no partial view. Such failures
+remain terminal until the source or identity changes. Native synchronous domain
+producers publish `ready` views through the same registry.
+
+Only owned values and pure hook registrations leave the application thread.
+The native host uses workers; wasm currently schedules the same kernel as a
+cooperative local task. Neither path changes simulation clocks or permits UI
+completion to choose an authoritative simulation transition.
+
 The registry and authored metadata caches follow the shared
 [scene resource lifetime contract](61-scene-lifecycle-and-teardown.md).
 Namespaces default to scene lifetime, with application retention declared at
@@ -504,9 +528,11 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ReadExposures","params":{"surface":"mission-status"}}'
 ```
 
-The response contains `revision`, `visible`, and typed properties. A remote
-consumer can retain its own view and skip rebuilding while the revision is
-unchanged.
+The response contains `revision` and each surface's `state` (`pending`, `ready`,
+or `failed`), `error` (a diagnostic on failure, otherwise unit), `visible`, and
+typed properties. Consumers wait for `ready` before reading prepared properties,
+and can retain their view while the revision is unchanged. Inspect `failed`
+rather than repeatedly waiting for an invalid policy.
 
 ## Placement and workbench coexistence
 
@@ -646,3 +672,116 @@ assuming a host-installed font.
   presentation.
 - Need to inspect the engine side: query `ReadExposures` and compare its
   revision before looking at rendering code.
+
+## Script-driven HUD cards
+
+`lunco-workbench-guided-ui::hud` owns Rhai hint/objective/action cards separately
+from coach tours and spotlights. The host's `GuidedHudVisibility` supplies the
+default perspective restriction. LunCoSim chooses View (`sandbox_view`). Authored
+Rhai chooses exceptions with `hud_perspectives(ids)`; `[]` means all perspectives.
+Unknown perspective ids reject before changing state. One rule covers all card
+content and pointer input. Hiding a card preserves state; visible cards stack
+by stable owner identity and measured height.
+
+Implicit cards belong to the executing script's stable identity. Unscripted
+API/REPL calls use a distinct command-context card; there is no fabricated
+script identity for that context. Explicit `hud`
+names identify scene-owned cards shared by several producers; Twin identity
+fences both kinds. `hint(hud, text)`, `objectives_hud(hud, records)`, and
+`guided_hud_actions(hud, tool, hook, actions)` address the same named card.
+Single-producer scripts use the overloads without `hud`. Named scene cards are
+appropriate when a scenario and a callback tool update the same presentation.
+There is no tutorial classification, current-writer selection, or asset-name
+policy in the engine.
+
+Action sets are validated and stored with a required `ToolHookBinding` entity
+lease. Replacing or clearing actions despawns the previous lease. Clicks carry
+that exact entity to `RunRhaiToolHook.binding`, alongside typed action data.
+The shared tool queue checks the lease, immutable endpoint, registered tool
+scope, active Twin, and scene generation before admitting and executing work.
+All queued tool calls pin their admitted scene transaction, including menu
+callbacks. A callback queued before a reset cannot execute against the next
+instance of the same scene or Twin.
+
+The action row's egui identity includes its binding entity. Button identity is
+stable within that immutable action set, including its authored order.
+Replacing the action set therefore retires pointer/keyboard interaction identity
+as well as queued execution; a release cannot activate a replacement endpoint.
+
+Script component removal immediately retires its implicit card, even while the
+script driver is paused or preparing. The language-neutral script lifecycle
+also emits `ScriptInstanceRetired` after stop
+or executable invalidation. The HUD owner clears that script's implicit card
+and despawns its bindings. `SceneTransitionStarted` clears all cards and leases;
+`TwinClosed` clears that Twin's cards and leases. During script teardown,
+idempotent content/action clears may update an existing card; they never create
+a card. New content, scope changes, and callback bindings reject, so stop hooks
+cannot recreate retired presentation.
+`ClearGuidedOverlay` clears the caller's implicit card plus coach presentation;
+other cards retain their state. `InspectGuidedHud` exposes the same per-card
+visibility/input decision used by rendering for runtime verification.
+
+Perspective policy stays in authored Rhai. Rust owns identity, membership checks,
+validated callback transport, and teardown. The production windowed gate is
+`assets/scripting/tests/test_guided_hud.rhai`; generic lifecycle and queued-lease
+seams have Rust tests. A headless acknowledgement does not verify presentation.
+
+Semantic HUI actions, dropdowns, Escape dismissal, and native menu actions carry
+`RuntimeUiActionScope`, captured at input emission. The host validates the
+explicitly captured Twin and scene before interpreting even a built-in action.
+The tool queue then pins that same admitted scene for deferred execution. This
+fences both event delivery and callback execution; stale input never acquires
+the replacement Twin's identity from handler timing.
+
+Script-opened scene context menus retain this same scope while open, validate it
+before painting or dispatch, and clear on scene transition or owning Twin close.
+Each popup owns a fresh ECS root and child `ToolHookBinding` leases. Its root
+scopes egui widget identity, so replacing a popup also retires any held gesture.
+Dismissal arms after the opening pointer transaction ends and uses egui's
+layer-aware outside-click contract.
+Replacement and dismissal despawn all unselected endpoints. Selection transfers
+only its endpoint to the shared tool queue with `ToolHookBindingRetention::Invocation`;
+the queue retires it after execution or rejection. HUD rows use `Surface`
+retention and keep their binding until their owner replaces or clears it.
+Scene transitions retire queued tool work immediately, including while the
+interpreter is preparing; application REPL work retains its workspace lifetime.
+Stop hooks cannot open menus.
+
+Installed workbench menus use provider-owned ECS roots and child endpoint
+leases with `ToolHookBindingLifetime::Provider`. Each installation scopes its
+widget tree to that fresh root identity and the current input Twin/scene.
+Input is disabled while a scene transition is pending. Replacement atomically
+publishes a validated tree and despawns the outgoing root; `TwinClosed` retires the owning
+Twin's contribution. Application contributions remain installed across scene
+resets. Selecting an item creates a child `Invocation` lease pinned to the
+input's Twin and committed scene generation. Provider replacement revokes that
+child even before command admission; scene replacement rejects it at admission
+or retires it from the queue. The provider endpoint stays available for a fresh
+selection in the next scene. No menu callback dispatches by name alone.
+
+Deferred Rhai work retains its caller's typed origin, actor, authority and
+client-local restrictions. Its phase and clock are independent of which queue
+executes it; a nested `RunRhai` or tool call from `on_stop` remains a stop call
+and cannot publish new presentation. Twin-route snippets also retain the
+caller's scene generation and retire on scene transition. Idempotent cleanup
+stays available while that owning scene remains current.
+
+Run `scripts/api/test_guided_ui_callbacks.py --port PORT` against the production
+binary for held-press popup replacement, fresh selection, outside dismissal,
+scene teardown, installed menu replacement/reuse, deferred stop hooks and Twin
+replacement, plus document pointer-subscription registration and cleanup.
+The wrapper drives window input; the
+isolated Twin's `hud_binding_probe.rhai` library supplies the runtime verdicts.
+The wrapper creates temporary application Rhai/JSON sources for native menu
+replacement and removes them after the owned session exits. The maintained USD
+fixture supplies the lifecycle clock for the stop-hook checks.
+Injected input acknowledgements mean queued input, not completed callbacks.
+The driver waits for a rendered input frame, then completes an authored no-op
+hook on the same FIFO interaction queue before running its verdict. A REPL
+query alone does not establish that the preceding UI callback has executed.
+
+The API dispatcher scopes each deferred request's correlation around its typed
+handler and uses registered command type identity to select deferral. Admission
+failures answer immediately; admitted work completes through its owner. This
+keeps concurrent requests distinct and prevents a rejected callback from leaving
+its transport waiting.

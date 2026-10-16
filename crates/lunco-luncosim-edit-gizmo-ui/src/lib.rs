@@ -598,7 +598,7 @@ fn capture_gizmo_start(
     )>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
     mut session: ResMut<GizmoDragSession>,
-    mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
+    mut simulation_progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) {
     let Some(captured_proxy) = pointer_capture.proxy else {
@@ -698,12 +698,10 @@ fn capture_gizmo_start(
     }
 
     if captured_live_any {
-        // A selected lander is an articulation: the leg bodies are coupled to
-        // the root and carry welded footpad colliders. Holding the entire physics world
-        // is the only atomic capture boundary available to Avian; changing only
-        // the root to Kinematic leaves live joints to integrate against a pose
-        // the gizmo is mutating, which creates unbounded impulses.
-        physics_holds.set(lunco_physics::PhysicsHolds::CINEMATIC, true);
+        simulation_progress.acquire(
+            lunco_core_runtime::SimulationProgressKey::scene_interaction(),
+            "Scene editing owns an uncommitted physical pose",
+        );
     }
 }
 
@@ -728,7 +726,7 @@ fn restore_gizmo_dynamic(
     q_grids: Query<&big_space::prelude::Grid>,
     mut session: ResMut<GizmoDragSession>,
     pointer_capture: Option<Res<GizmoPointerCapture>>,
-    mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
+    mut simulation_progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut commands: Commands,
 ) {
     let mut restored_entities = Vec::new();
@@ -996,8 +994,16 @@ fn restore_gizmo_dynamic(
     // its velocity was zeroed. This keeps a jointed lander from taking one fixed
     // step against a half-restored articulation.
     if session_empty {
-        physics_holds.set(lunco_physics::PhysicsHolds::CINEMATIC, false);
+        simulation_progress.release(lunco_core_runtime::SimulationProgressKey::scene_interaction());
     }
+}
+
+fn retire_gizmo_admission(
+    mut session: ResMut<GizmoDragSession>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+) {
+    session.targets.clear();
+    progress.release(lunco_core_runtime::SimulationProgressKey::scene_interaction());
 }
 
 /// App-owned replacement for transform-gizmo-bevy's default `mouse_interaction`
@@ -1264,7 +1270,9 @@ impl Plugin for SceneEditGizmoPlugin {
             .init_resource::<GizmoPointerCapture>()
             .init_resource::<GizmoVisibilityState>();
 
+        app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.add_systems(Startup, configure_gizmo_modes);
+        app.add_systems(lunco_core::SceneTeardown, retire_gizmo_admission);
         app.add_systems(
             Last,
             (capture_final_gizmo_pose, restore_gizmo_dynamic).chain(),
@@ -1525,10 +1533,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
-        // `restore_gizmo_dynamic` clears the drag's physics hold, so the resource
-        // it writes must exist — a bare `App` has none, and the missing init made
-        // the system fail param validation instead of running the case under test.
-        app.init_resource::<lunco_physics::PhysicsHolds>();
+        // The drag lifecycle releases its own shared admission key.
+        app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<GizmoDragSession>();
         let active_frame = app
             .world_mut()
@@ -1614,10 +1620,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
-        // `restore_gizmo_dynamic` clears the drag's physics hold, so the resource
-        // it writes must exist — a bare `App` has none, and the missing init made
-        // the system fail param validation instead of running the case under test.
-        app.init_resource::<lunco_physics::PhysicsHolds>();
+        // The drag lifecycle releases its own shared admission key.
+        app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<GizmoDragSession>();
         let active_frame = app
             .world_mut()

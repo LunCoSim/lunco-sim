@@ -32,10 +32,11 @@
 //!
 //! Two knobs, both essential:
 //!
-//! 1. **`TimeUpdateStrategy::ManualDuration(dt)`** — the clock no longer reads
-//!    the wall. Every `app.update()` advances `Time<Virtual>` by exactly `dt`,
-//!    which `Time<Fixed>` drains into one `FixedUpdate` tick when `--tick-hz`
-//!    matches `lunco_core_runtime::FIXED_HZ`. This fixes the clock input and
+//! 1. **`TimeUpdateStrategy::ManualDuration(dt)`** supplies raw elapsed duration
+//!    on each update. The shared transport and admission owners derive virtual
+//!    time, which the production `Time<Fixed>` drains into admitted simulation
+//!    ticks. `--tick-hz` selects the manual input duration, preserving the
+//!    physics timestep installed by the shared runtime. This fixes clock input and
 //!    avoids realtime pacing; it does not by itself guarantee identical
 //!    authoritative state across runs. The runner advances as fast as the CPU
 //!    allows, without sleeping or vsync.
@@ -255,6 +256,7 @@ struct Cli {
     /// too so it can require the argument and print it.
     scene: String,
     max_ticks: u64,
+    /// Manual update rate; the shared runtime owns the physics timestep.
     tick_hz: f64,
     /// Optional channel-name filter for the verdict (see module docs).
     verdict_channel: Option<String>,
@@ -1050,9 +1052,9 @@ USAGE:
     --max-ticks N            Safety bound on cumulative running fixed steps across scene
                              transitions (default {DEFAULT_MAX_TICKS}).
                              Exhausting it with no verdict exits 2.
-    --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core_runtime::FIXED_HZ).
-                             Keep it at FIXED_HZ for exactly one physics tick
-                             per update.
+    --tick-hz HZ             Manual update rate (default {hz}, = lunco_core_runtime::FIXED_HZ).
+                             Selects the clock input duration per update;
+                             the shared runtime retains its physics timestep.
     --verdict-channel NAME   Only accept a recognized verdict from this channel.
                              Default: the first PASS/FAIL/INCONCLUSIVE/ERROR payload.
     --verification NAME      Require the scene to match a Twin manifest's
@@ -1967,27 +1969,6 @@ fn arm_scenarios_after_startup(app: &mut App) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Reapply the authoritative transport projection after zero-duration startup
-/// preparation. The final readiness update can clear its hold after the time
-/// projection system has already run; without this handoff the virtual clock
-/// remains paused and the first deterministic fixed tick never runs.
-fn reproject_test_transport(app: &mut App) -> Result<(), &'static str> {
-    let transport = *app
-        .world()
-        .get_resource::<lunco_time::TimeTransport>()
-        .ok_or("TimeTransport resource is not installed")?;
-    let progress_held = app
-        .world()
-        .get_resource::<lunco_core_runtime::SimulationProgress>()
-        .ok_or("SimulationProgress resource is not installed")?
-        .is_held();
-    let Some(mut virtual_time) = app.world_mut().get_resource_mut::<Time<Virtual>>() else {
-        return Err("Time<Virtual> resource is not installed");
-    };
-    lunco_time::project_transport_state(&transport, &mut virtual_time, progress_held);
-    Ok(())
-}
-
 fn dirty_authored_scene_document(world: &World) -> Option<String> {
     let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<UsdDocument>>()?;
     registry.ids().find_map(|doc| {
@@ -2083,16 +2064,10 @@ pub fn run() -> u8 {
     // process argv and makes the scene hand-off explicit for every test mode.
     app.insert_resource(lunco_luncosim_services::ScenePath(Some(cli.scene.clone())));
 
-    // ── Determinism, installed AFTER the core plugin so it wins ──────────────
-    //
-    // `LunCoSimHeadlessPlugin` installs the runtime time owner. Keep its
-    // admission and retained fixed accumulator; the test driver only selects
-    // the manual input duration and integration timestep.
-    // The fixed clock must match the manual step, or one `app.update()` is not
-    // one physics tick and the "ticks" in `--max-ticks` stop meaning anything.
-    // (Under `--jitter` that one-to-one relation is INTENTIONALLY broken — the
-    // fixed accumulator drains 0, 1 or 2 ticks per update, as it does in the GUI.)
-    app.insert_resource(Time::<Fixed>::from_hz(cli.tick_hz));
+    // The production composition owns the physics quantum and admission.
+    // This driver supplies only manual wall-clock input; the retained fixed
+    // accumulator decides how many ticks run, as it does in the GUI. Safety
+    // bounds below count completed SimTicks independently of update cadence.
     // THE determinism knob: the clock stops reading the wall (see module docs).
     // With `--jitter` this resource is re-set before each update; it is still
     // `ManualDuration`, so the wall clock never enters the run either way.
@@ -2359,16 +2334,8 @@ pub fn run() -> u8 {
         );
     }
 
-    if let Err(error) = reproject_test_transport(&mut app) {
-        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
-        return finish_scene_test(
-            &app,
-            &cli,
-            2,
-            SceneTestProcessStatus::RunnerError,
-            Some(error.to_owned()),
-        );
-    }
+    // Readiness can settle after the startup frame's transport projection.
+    lunco_time::project_time_transport(app.world_mut());
 
     let startup_tick = app.world().resource::<lunco_core_runtime::SimTick>().0;
     let fixed = app.world().resource::<Time<Fixed>>();
@@ -2553,7 +2520,7 @@ pub fn run() -> u8 {
                 Some(error),
             );
         }
-        sim_seconds = ticks as f64 / cli.tick_hz;
+        sim_seconds = fixed.elapsed_secs_f64();
 
         // Let an in-flight Modelica worker make progress before the next
         // zero-delta barrier update. This is a scheduling yield only; no wall

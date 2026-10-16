@@ -317,7 +317,10 @@ Verify all three layers, in order:
 
 For interaction tools, verify the registered scope as well as callability.
 Pass the captured Twin flow owner through `RunRhaiToolHook.owner_twin_id` when
-the UI flow belongs to a Twin. Include an authored replacement case that
+the UI flow belongs to a Twin. Explicit callback bindings supply that owner
+when the request omits it. Nested queued calls inherit their caller's complete
+runtime context, actor and capabilities; choosing the UI queue does not turn a
+stop hook into a new UI evaluation. Include an authored replacement case that
 queues a call, closes its Twin, and proves a same-name tool in the replacement
 Twin receives no old call. Keep application-tool lifetime checks separate from
 Twin-flow checks.

@@ -431,6 +431,8 @@ pub enum ScriptTiming {
     /// The fixed simulation cycle owned by the scenario runtime.
     #[default]
     Simulation,
+    /// Presentation behavior driven by the host's recorded/application frame clock.
+    Presentation,
     /// A timing value the scenario runtime does not support.
     Unsupported,
 }
@@ -478,10 +480,10 @@ impl ScenarioDirectives {
                     };
                 }
                 "@timing" => {
-                    directives.timing = if !has_extra_value && value == "simulation" {
-                        ScriptTiming::Simulation
-                    } else {
-                        ScriptTiming::Unsupported
+                    directives.timing = match (value, has_extra_value) {
+                        ("simulation", false) => ScriptTiming::Simulation,
+                        ("presentation", false) => ScriptTiming::Presentation,
+                        _ => ScriptTiming::Unsupported,
                     };
                 }
                 _ if directive.starts_with('@') => {
@@ -510,7 +512,7 @@ impl ScenarioDirectives {
         }
         if self.timing == ScriptTiming::Unsupported {
             diagnostics.push(Diagnostic::error(
-                "unsupported scenario @timing directive; expected simulation",
+                "unsupported scenario @timing directive; expected simulation or presentation",
                 None,
                 None,
             ));
@@ -809,6 +811,7 @@ struct Fsm {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenarioPass {
     FixedTick,
+    Presentation,
     PausedLifecycle,
     Startup,
 }
@@ -1134,6 +1137,33 @@ fn scenario_execution_context(
     }
 }
 
+fn scenario_program_context(
+    world: &World,
+    owner_twin: Option<lunco_workspace::TwinId>,
+    timing: ScriptTiming,
+    scene_generation: u64,
+) -> lunco_core::RuntimeExecutionContext {
+    let mut context = scenario_execution_context(
+        world,
+        owner_twin,
+        timing == ScriptTiming::Simulation,
+        Some(scene_generation),
+    );
+    if timing == ScriptTiming::Presentation {
+        if let Some(route) = context.route.as_mut() {
+            route.cycle = lunco_core::RuntimeCycle::Visualization;
+        }
+        context.clock = lunco_core::RuntimeClock::Presentation;
+        let time = world.get_resource::<Time<Real>>();
+        context.time_seconds = time.map(Time::elapsed_secs_f64);
+        context.delta_seconds = time.map(Time::delta_secs_f64);
+        context.sequence = world
+            .get_resource::<bevy::diagnostic::FrameCount>()
+            .map(|frame| frame.0 as u64);
+    }
+    context
+}
+
 fn scenario_visualization_context(
     world: &World,
     entity: Entity,
@@ -1209,7 +1239,11 @@ pub struct ScenarioDriver<R: ScenarioRuntime> {
 
 fn external_progress_is_held(progress: &lunco_core_runtime::SimulationProgress) -> bool {
     progress.blockers().any(|blocker| {
-        blocker.key.owner != lunco_core_runtime::SimulationProgressOwner::ScriptPreparation
+        !matches!(
+            blocker.key.owner,
+            lunco_core_runtime::SimulationProgressOwner::ScriptPreparation
+                | lunco_core_runtime::SimulationProgressOwner::PhysicsIntegration
+        )
     })
 }
 
@@ -1497,6 +1531,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     stop_error = driver.runtime.call_hook(*entity, ScenarioHook::Stop, gid);
                 }
                 driver.runtime.forget_program(*entity);
+                if gid > 0 {
+                    world.trigger(bridge_core::ScriptInstanceRetired {
+                        script: lunco_core::GlobalEntityId::from_raw(gid as u64),
+                    });
+                }
 
                 let state = driver.fsm.entry(*entity).or_default();
                 state.started = false;
@@ -1914,6 +1953,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .call_hook(entity, ScenarioHook::Stop, state.gid);
             }
             driver.runtime.forget(entity);
+            if state.gid > 0 {
+                world.trigger(bridge_core::ScriptInstanceRetired {
+                    script: lunco_core::GlobalEntityId::from_raw(state.gid as u64),
+                });
+            }
         });
         if let Some(mut participants) =
             world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
@@ -1973,6 +2017,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// behavior.
     pub fn run(world: &mut World, language: ScriptLanguage) {
         Self::run_with_pass(world, language, ScenarioPass::FixedTick);
+    }
+
+    /// Drive presentation programs through the same lifecycle and task interpreter.
+    /// This pass never advances the shared simulation clock.
+    pub fn run_presentation(world: &mut World, language: ScriptLanguage) {
+        Self::run_with_pass(world, language, ScenarioPass::Presentation);
     }
 
     /// Exclusive-system body for a paused simulation pass.
@@ -2168,6 +2218,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             });
             if !has_consumer && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
                 inbox.pending.clear();
+                inbox.presentation_pending.clear();
+                inbox.presentation_languages.clear();
             }
             return;
         }
@@ -2177,7 +2229,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         }
         let scene_generation_available = committed_generation.is_some();
         let scene_generation = committed_generation.unwrap_or(0);
-        let run_tick = pass == ScenarioPass::FixedTick;
+        let run_tick = matches!(pass, ScenarioPass::FixedTick | ScenarioPass::Presentation);
+        let presentation_pass = pass == ScenarioPass::Presentation;
         let startup_pass = pass == ScenarioPass::Startup;
         let pass_start_event_sequence = world
             .get_resource::<ScriptEventInbox>()
@@ -2223,11 +2276,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .get_resource::<lunco_readiness::ReadinessState>()
             .map(|state| state.held_entities.clone())
             .unwrap_or_default();
-        // A script's own preparation hold must not deadlock its activation.
-        // Other owners' progress holds do gate first initialization/start so a
-        // lifecycle hook cannot observe a partially prepared authoritative
-        // source set.
+        // Script compilation and native integration holds do not gate source
+        // activation. Other preparation owners gate initialization/start so
+        // lifecycle hooks observe a complete authoritative source set.
         let external_progress_blocked = scenario_startup_is_blocked(world);
+        let mut has_presentation_consumers = false;
         let live: HashSet<Entity>;
         {
             let models: Vec<(
@@ -2289,6 +2342,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         .get_resource::<ScenarioDriver<R>>()
                         .and_then(|driver| driver.fsm.get(&entity));
                     if startup_pass && state.is_some_and(|state| state.started) {
+                        has_presentation_consumers |= state.is_some_and(|state| {
+                            state.directives.timing == ScriptTiming::Presentation
+                        });
                         continue;
                     }
                     let directives_changed =
@@ -2297,6 +2353,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         Some(state) if !directives_changed => state.directives,
                         _ => ScenarioDirectives::from_source(&doc.source),
                     };
+                    has_presentation_consumers |= directives.timing == ScriptTiming::Presentation;
                     let prior_diag = state.and_then(|state| state.directives_diagnostic_generation);
                     // Only (re)compilation reads source/params, so clone them ONLY when a
                     // recompile is actually due (first sight or generation bump) — otherwise
@@ -2391,6 +2448,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     }
                 }
 
+                if directives.is_supported() && !startup_pass {
+                    let presentation = directives.timing == ScriptTiming::Presentation;
+                    if presentation != presentation_pass {
+                        continue;
+                    }
+                }
                 let gid = scenario_self_id(world, entity);
                 work.push((
                     entity,
@@ -2414,6 +2477,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // ECS key only within that scope.
         work.sort_unstable_by_key(|actor| scenario_actor_order_key(world, actor.0));
 
+        if startup_pass && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
+            if has_presentation_consumers {
+                inbox.presentation_languages.insert(language);
+            } else {
+                inbox.presentation_languages.remove(&language);
+                if inbox.presentation_languages.is_empty() {
+                    inbox.presentation_pending.clear();
+                }
+            }
+        }
+
         // A fixed-step event is eligible after SimTickSet only when its recorded
         // tick precedes the current tick. That boundary determines when the
         // event becomes visible; events stamped at the current tick remain
@@ -2428,7 +2502,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 .map(|mut inbox| {
                     if inbox.faulted {
                         inbox.pending.clear();
+                        inbox.presentation_pending.clear();
                         Vec::new()
+                    } else if presentation_pass {
+                        std::mem::take(&mut inbox.presentation_pending)
                     } else if run_tick {
                         let Some(current_tick) = current_sim_tick else {
                             return Vec::new();
@@ -2472,7 +2549,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // the next pass, but intentionally discard the events themselves.
             events.clear();
             if !startup_pass && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
-                inbox.pending = events;
+                if presentation_pass {
+                    inbox.presentation_pending = events;
+                } else {
+                    inbox.pending = events;
+                }
             }
             return;
         }
@@ -2507,18 +2588,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 ) in work
             {
                 let owner_twin = scenario_twin_owner(world, entity);
-                let pass_context = scenario_execution_context(
-                    world,
-                    owner_twin,
-                    run_tick,
-                    Some(scene_generation),
-                );
-                let activation_context = scenario_execution_context(
-                    world,
-                    owner_twin,
-                    true,
-                    Some(scene_generation),
-                );
+                let program_context = scenario_program_context(world, owner_twin, directives.timing, scene_generation);
+                let pass_context = if run_tick { program_context } else {
+                    scenario_execution_context(world, owner_twin, false, Some(scene_generation))
+                };
+                let activation_context = program_context;
                 let _scope = bridge_core::WorldScope::enter(world, pass_context);
                 // Gate this entity's hook `cmd()`s against the launching session
                 // (§3.4). `None` for a host-trusted launch → ungated. Covers the
@@ -2546,6 +2620,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         None
                     };
                     runtime.forget_program(entity);
+                    if gid > 0 { world.trigger(bridge_core::ScriptInstanceRetired { script: lunco_core::GlobalEntityId::from_raw(gid as u64) }); }
                     if let Some(mut participants) = world
                         .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
                     {
@@ -2782,7 +2857,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         if let Some(source) =
                             bridge_core::resolve_entity(world, ev.event.source)
                         {
-                            let undeclared_modelica_event = world
+                            let undeclared_modelica_event = directives.timing == ScriptTiming::Simulation && world
                                 .get_resource::<
                                     lunco_core_runtime::SimulationBarrierParticipants,
                                 >()
@@ -2899,6 +2974,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         }
                     }
                     runtime.forget(entity);
+                    if st.gid > 0 { world.trigger(bridge_core::ScriptInstanceRetired { script: lunco_core::GlobalEntityId::from_raw(st.gid as u64) }); }
                     if let Some(mut participants) = world
                         .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
                     {
@@ -2931,8 +3007,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // Those events are already in `inbox.pending` and belong to the
             // next pass; never replace them with the recycled delivered batch.
             // Reuse the old allocation only when no new event was produced.
-            if inbox.pending.is_empty() {
-                inbox.pending = events;
+            let pending = if presentation_pass {
+                &mut inbox.presentation_pending
+            } else {
+                &mut inbox.pending
+            };
+            if pending.is_empty() {
+                *pending = events;
             }
         }
     }
@@ -3490,6 +3571,9 @@ pub const SCRIPT_EVENT_INBOX_CAPACITY: usize = 4096;
 pub struct ScriptEventInbox {
     /// Events awaiting a causally later fixed tick or the next paused pass.
     pending: Vec<QueuedScenarioEvent>,
+    /// Presentation consumers have an independent delivery boundary.
+    presentation_pending: Vec<QueuedScenarioEvent>,
+    presentation_languages: HashSet<ScriptLanguage>,
     /// Sequence assigned to the next accepted event.
     next_sequence: u64,
     /// Whether the fixed-capacity boundary has been crossed.
@@ -3505,6 +3589,8 @@ impl Default for ScriptEventInbox {
     fn default() -> Self {
         Self {
             pending: Vec::with_capacity(SCRIPT_EVENT_INBOX_CAPACITY),
+            presentation_pending: Vec::new(),
+            presentation_languages: HashSet::new(),
             next_sequence: 0,
             overflowed: false,
             dropped: 0,
@@ -3514,9 +3600,16 @@ impl Default for ScriptEventInbox {
 }
 
 impl ScriptEventInbox {
+    /// Whether a language has active presentation event consumers.
+    pub fn has_presentation_consumers(&self, language: ScriptLanguage) -> bool {
+        self.presentation_languages.contains(&language)
+    }
+
     /// Discard scene-owned events and reset this scene's overflow accounting.
     pub fn clear(&mut self) {
         self.pending.clear();
+        self.presentation_pending.clear();
+        self.presentation_languages.clear();
         self.overflowed = false;
         self.dropped = 0;
     }
@@ -3535,15 +3628,22 @@ impl ScriptEventInbox {
     }
 
     fn enqueue_with(&mut self, event: impl FnOnce() -> TelemetryEvent) -> bool {
-        if self.faulted || self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY {
+        if self.faulted
+            || self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY
+            || self.presentation_pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY
+        {
             self.overflowed = true;
             self.dropped = self.dropped.saturating_add(1);
             return false;
         }
-        self.pending.push(QueuedScenarioEvent {
+        let event = QueuedScenarioEvent {
             sequence: self.next_sequence,
             event: event(),
-        });
+        };
+        if !self.presentation_languages.is_empty() {
+            self.presentation_pending.push(event.clone());
+        }
+        self.pending.push(event);
         self.next_sequence = self.next_sequence.wrapping_add(1);
         true
     }
@@ -3552,13 +3652,15 @@ impl ScriptEventInbox {
     /// replacement boundary.
     pub fn reset(&mut self) {
         self.pending.clear();
+        self.presentation_pending.clear();
+        self.presentation_languages.clear();
         self.overflowed = false;
         self.dropped = 0;
         self.faulted = false;
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct QueuedScenarioEvent {
     sequence: u64,
     event: TelemetryEvent,
@@ -3753,6 +3855,11 @@ mod tests {
         };
         progress.acquire(compile, "compile this scenario");
         assert!(!external_progress_is_held(&progress));
+        progress.acquire(
+            SimulationProgressKey::physics_integration(),
+            "native admission",
+        );
+        assert!(!external_progress_is_held(&progress));
 
         let modelica = SimulationProgressKey {
             owner: SimulationProgressOwner::ModelicaPreparation,
@@ -3852,12 +3959,17 @@ mod lifecycle_readiness_tests {
         assert_eq!(unknown_peer.timing, ScriptTiming::Simulation);
         assert_eq!(unknown_peer.diagnostics().len(), 1);
 
-        let unknown_timing = ScenarioDirectives::from_source("// @timing presentation\n");
+        assert_eq!(
+            ScenarioDirectives::from_source("// @timing presentation\n").timing,
+            ScriptTiming::Presentation
+        );
+
+        let unknown_timing = ScenarioDirectives::from_source("// @timing invalid\n");
         assert_eq!(unknown_timing.peer_target, ScenarioPeerTarget::Host);
         assert_eq!(unknown_timing.timing, ScriptTiming::Unsupported);
         assert_eq!(unknown_timing.diagnostics().len(), 1);
 
-        let invalid = ScenarioDirectives::from_source("// @peer clinet\n// @timing presentation\n");
+        let invalid = ScenarioDirectives::from_source("// @peer clinet\n// @timing invalid\n");
         assert_eq!(invalid.diagnostics().len(), 2);
 
         let unknown_directive = ScenarioDirectives::from_source("// @peerhost\n");
@@ -4259,7 +4371,7 @@ mod lifecycle_readiness_tests {
             ScriptDocument::new(
                 72,
                 ScriptLanguage::Rhai,
-                "// @peer clinet\n// @timing presentation\n",
+                "// @peer clinet\n// @timing invalid\n",
             ),
         );
         world.resource_mut::<ScriptRegistry>().insert_document(
@@ -4703,6 +4815,74 @@ mod lifecycle_readiness_tests {
     }
 
     #[test]
+    fn presentation_uses_the_shared_lifecycle_with_an_independent_event_boundary() {
+        let mut world = World::new();
+        world.insert_resource(scene_coordinator_at_generation(1));
+        world.init_resource::<ScriptRegistry>();
+        world.init_resource::<DocumentDiagnostics>();
+        world.init_resource::<ScriptEventInbox>();
+        world.init_resource::<lunco_core_runtime::SimTick>();
+        world.init_resource::<Time<Real>>();
+        world.init_resource::<bevy::diagnostic::FrameCount>();
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        world.spawn(ScriptedModel {
+            document_id: Some(81),
+            language: Some(ScriptLanguage::Rhai),
+            ..Default::default()
+        });
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts.clone(),
+            Arc::new(Mutex::new(false)),
+        )));
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(81),
+            ScriptDocument::new(81, ScriptLanguage::Rhai, "// @timing presentation\n"),
+        );
+        ScenarioDriver::<RecordingRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
+        ScenarioDriver::<RecordingRuntime>::run_startup(&mut world, ScriptLanguage::Rhai);
+        ScenarioDriver::<RecordingRuntime>::run_startup(&mut world, ScriptLanguage::Rhai);
+        assert!(
+            world
+                .resource::<ScriptEventInbox>()
+                .has_presentation_consumers(ScriptLanguage::Rhai)
+        );
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("presentation_event", 0));
+        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
+            &mut world,
+            ScriptLanguage::Rhai,
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![RecordedCall::Compile, RecordedCall::Start]
+        );
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(25));
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 7;
+        ScenarioDriver::<RecordingRuntime>::run_presentation(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                RecordedCall::Compile,
+                RecordedCall::Start,
+                RecordedCall::Event("presentation_event".into()),
+                RecordedCall::Tick
+            ]
+        );
+        assert_eq!(world.resource::<lunco_core_runtime::SimTick>().0, 0);
+        let contexts = contexts.lock().unwrap();
+        let behavior = contexts.last().unwrap();
+        assert_eq!(behavior.clock, lunco_core::RuntimeClock::Presentation);
+        assert_eq!(behavior.time_seconds, Some(0.025));
+        assert_eq!(behavior.sequence, Some(7));
+    }
+
+    #[test]
     fn visualization_hook_runs_during_modelica_preparation_before_start() {
         use lunco_core_runtime::{SimulationProgressKey, SimulationProgressOwner};
 
@@ -5061,7 +5241,7 @@ mod lifecycle_readiness_tests {
                 .resource_mut::<ScriptRegistry>()
                 .reload_external_source(
                     DocumentId::new(73),
-                    "// @peer clinet\n// @timing presentation\n",
+                    "// @peer clinet\n// @timing invalid\n",
                 )
         );
         run_scenarios(&mut world);

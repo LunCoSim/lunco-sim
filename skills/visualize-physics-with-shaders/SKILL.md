@@ -214,9 +214,17 @@ deferral with a known migration path, not the absence of a standard.
   dangling-wire warning from propagation instead of the classic silent dead uniform.
   If your wire logs as dangling, check the Shader prim's `inputs:` first, then the
   WGSL field list.
-- **Names are snake_case, because the reflection binds WGSL struct fields.**
-  `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`, but a field
-  spelled `loadFrac` in the WGSL is unreachable.
+- **Runtime names are the exact snake_case WGSL keys.** `ListPorts` publishes
+  these keys; geometry connections, named reads, writes and resolved connections
+  use them without conversion. USD material parameter authoring performs its
+  WGSL name conversion before publishing `ShaderLook`. Scalar writes
+  require a driven input with an explicitly authored `F32` value and must fit
+  its GPU storage range. Run `lander_plume_activity` through the production
+  scene runner and repeat its authored gate in the windowed API host when changing this boundary;
+  its authored checks cover declared names, slot identity, range rejection and
+  next-tick release of the temporary test hold back to its connected source.
+  Use the shared `scripts/api/run_editor_scene_test.py` with this scene,
+  an explicit `--port`, `--timeout` and `--log` for the windowed production host.
 - **Publish the physical quantity, not the driving term.** A strut fed the
   proximity-gated force pressed *onto* the leg reads fully loaded while still in
   the air, and glows red *before* touchdown. The honest number is the spring's

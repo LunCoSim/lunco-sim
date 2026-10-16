@@ -27,6 +27,8 @@ fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
        query_reads: ["ListSpawnCatalog"], required_inputs: [] }
 }
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
 
 /// True if any spawned catalog root carries the exact content identity.
 fn has_structure(entry_id) {

@@ -51,6 +51,8 @@ lunco_hooks::declare_hook! {
 /// domain meaning. The host or Rhai policy owns the resulting command/event.
 #[derive(Event, Clone, Debug, PartialEq)]
 pub struct RuntimeUiAction {
+    /// Owner captured when input emitted the action, before deferred delivery.
+    pub scope: RuntimeUiActionScope,
     /// Twin-authored semantic action identifier.
     pub action: String,
     /// Typed parameter map attached by the authored node's tags. The runtime
@@ -58,6 +60,41 @@ pub struct RuntimeUiAction {
     pub parameters: HookValue,
     /// HUI node that emitted the action.
     pub source: Entity,
+}
+
+/// Origin lifetime of semantic UI input. A deferred event cannot acquire the
+/// next Twin or scene merely because its handler runs after a reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeUiActionScope {
+    /// Workspace Twin active when input occurred, including no active Twin.
+    pub owner_twin_id: Option<u64>,
+    /// Committed scene transaction when input occurred, including no scene.
+    pub scene_generation: Option<u64>,
+}
+
+impl RuntimeUiActionScope {
+    /// Capture the authoritative workspace and scene publications at input time.
+    pub fn capture(
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
+    ) -> Self {
+        Self {
+            owner_twin_id: workspace.and_then(|w| w.active_twin).map(|id| id.raw()),
+            scene_generation: scene.and_then(|s| s.completed_generation()),
+        }
+    }
+
+    /// Reject stale input before interpreting any semantic action.
+    pub fn validate(
+        &self,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
+    ) -> Result<(), String> {
+        if self.owner_twin_id != workspace.and_then(|w| w.active_twin).map(|id| id.raw()) {
+            return Err("UI action belongs to a retired Twin".into());
+        }
+        lunco_core::scene::validate_interaction_scene(self.scene_generation, scene)
+    }
 }
 
 #[derive(Message, Clone, Copy, Debug)]
@@ -118,7 +155,12 @@ fn register_action(functions: &mut HtmlFunctions, callback: impl Into<String>, a
     functions.register(
         callback,
         move |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
+            let scope = RuntimeUiActionScope::capture(
+                world.get_resource::<lunco_workspace::WorkspaceResource>(),
+                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+            );
             world.trigger(RuntimeUiAction {
+                scope,
                 action: action.clone(),
                 source,
                 parameters: HookValue::Map(Vec::new()),
@@ -145,7 +187,12 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
                     .map(|(key, value)| (key.clone(), HookValue::str(value.clone())))
                     .collect(),
             );
+            let scope = RuntimeUiActionScope::capture(
+                world.get_resource::<lunco_workspace::WorkspaceResource>(),
+                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+            );
             world.trigger(RuntimeUiAction {
+                scope,
                 action,
                 source,
                 parameters,
@@ -2403,6 +2450,8 @@ fn register_runtime_ui_input_regions(
 fn dismiss_modal_runtime_ui(
     keys: Res<ButtonInput<KeyCode>>,
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
@@ -2419,6 +2468,7 @@ fn dismiss_modal_runtime_ui(
         return;
     };
     commands.trigger(RuntimeUiAction {
+        scope: RuntimeUiActionScope::capture(workspace.as_deref(), scene.as_deref()),
         action,
         source,
         parameters: HookValue::Map(Vec::new()),
@@ -2611,6 +2661,21 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deferred_action_scope_preserves_an_explicitly_empty_workspace() {
+        let scope = super::RuntimeUiActionScope::capture(None, None);
+        assert!(scope.validate(None, None).is_ok());
+        let outgoing = super::RuntimeUiActionScope {
+            owner_twin_id: Some(17),
+            scene_generation: None,
+        };
+        assert!(outgoing.validate(None, None).is_err());
+        let mut incoming = lunco_workspace::WorkspaceResource::new();
+        incoming.active_twin = Some(lunco_workspace::TwinId::new(23));
+        assert!(scope.validate(Some(&incoming), None).is_err());
+        assert!(outgoing.validate(Some(&incoming), None).is_err());
+    }
+
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
     use bevy::ecs::system::RunSystemOnce;

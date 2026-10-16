@@ -469,14 +469,7 @@ def main() -> None:
             wait_for(session, lambda: not documents(session), "test document cleanup before Exit")
         verdict("verify_editor_retirement", ids_final, [])
         verdict("verify_scene_policy_retired", application_policy)
-        verdict("verify_scene_interaction_requires_scene")
-        try:
-            execute(session, "RunRhaiTool", tool="gizmo", args={"Map": {}}, scene_bound=True)
-        except RuntimeError as error:
-            admission_error = str(error)
-        else:
-            admission_error = ""
-        verdict("verify_scene_interaction_transport_rejection", admission_error)
+        verdict("verify_command_identifier_rejection")
         print(f"PASS: Twin switching, same-Twin reopening, rejected replacement; owned PID={session.process.pid}, port={PORT}")
     print("API Exit completed; owned process and port released")
 

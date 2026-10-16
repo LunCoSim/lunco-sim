@@ -96,7 +96,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   source reordering, same-size replacement, clear, clone and compaction cannot
   route a value to another name. Only sample/topology changes mark the component
   changed; hint maintenance does not. Modelica's reflected variable map and the
-  fixed-step publication boundary remain the source contract.
+  completion-admission publication boundary remain the source contract.
   Structural publication uses `PortTopologyState::observe_if_changed` for
   auxiliary declarations and Modelica unit contracts. Their fingerprints are
   derived on first observation, their own component changes, and participant
@@ -238,16 +238,19 @@ not named scalar `SimConnection` wires. Keeping that distinction prevents a
 second scalar propagation implementation while preserving the transform
 system's own schedule and invalidation rules.
 
-All cosim and physics systems run in `FixedUpdate` at a shared fixed timestep
-so every engine advances with the same `dt`:
+Co-simulation exchange and physics run on the shared fixed timestep. Accepted
+Modelica snapshots publish at completion admission, which advances no clock:
 
 ```
-First:
+SimulationCompletions (before clock projection, between pending fixed cycles,
+                       and on driver response readiness):
   ModelicaSet::HandleResponses      — validate async results and release completed causal holds
+  validate_usd_modelica_port_contracts → sync_modelica_outputs
+                                   — initial/later committed snapshots and status → shared ports
+First:
   ClockProjectionSet               — project remaining holds before sampling virtual time
-
 FixedUpdate:
-  1. sync_modelica_outputs          — completed Modelica results → SimComponent.outputs
+  1. script/native output sampling — committed physical observations on the shared boundary
   2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
                                        (force_* → PendingForces; joint angle/displacement → motor)
   3. CosimApplySet::ApplyForces     — apply_pending_forces: drain PendingForces into Avian Forces
@@ -281,9 +284,8 @@ this graph. See
 ## The macro-step contract (what step 6 actually promises)
 
 The ordering above is *within* a tick. The other half of an FMI-CS master is the
-**communication step** itself: what `dt` each engine is asked for, and who waits
-for whom. Stating it explicitly (finding `A3` — it was previously unstated, and
-the code did not implement any coherent version of it):
+**communication step** itself: the requested integration interval and which
+completed transactions admit the next fixed tick.
 
 **1. Communication points follow the fixed master clock.** Every model carries a
 `communication_period_secs` and `next_communication_time`. The world still
@@ -308,10 +310,10 @@ participant contract.**
 `current_time` is the model's own clock (`stepper.time()`), reported back by the
 worker. A `TimeTransport.rate` burst therefore produces more Avian/Rhai fixed
 ticks and proportionally more *declared* Modelica communication points, rather
-than multiplying worker callbacks at the render cadence. The requested `dt` is
-capped at `MAX_MACRO_STEP_DT` (~0.18 s) for catch-up, so one explicit time jump
-cannot hand the solver a ten-second step. Normal authored communication points
-are validated to fit that bound and the fixed master-tick lattice; the worker
+than multiplying worker callbacks at the render cadence. The requested `dt`
+must fit `MAX_MACRO_STEP_DT` (~0.18 s); an oversized request fails before
+mutating solver state. Authored communication periods also satisfy the fixed
+master-tick lattice. The worker
 receives the master's sequence number and `[start_time, stop_time]`, validates
 both against its own solver clock, and the main thread accepts only the exact
 in-flight response at that endpoint. A worker result is still required before
@@ -329,9 +331,16 @@ due set; its last committed output is held between those points.
 `SimulationBarrier` gates `FixedMain`, including SimTick, Rhai, controllers,
 connection propagation, Modelica input sampling, and Avian. Results are consumed
 by the single `SimulationCompletions` schedule before clock projection. The
-native driver also services that schedule on response readiness between app
-updates; readiness never consumes a receipt or advances a clock. Partial
-receipts do not require another complete application update.
+fixed runner also services that schedule before checking a held pending cycle,
+and the native driver services it on response readiness between app updates.
+This admits already completed work without waiting for another render update;
+unfinished work yields to the host. Readiness itself never consumes a receipt
+or advances a clock. The same
+completion boundary validates USD port contracts and publishes accepted Modelica
+outputs/status. Initialized participants expose `Idle` and real initial outputs
+while held; no physics tick is needed to observe readiness. Fixed propagation
+and presentation read that one committed surface. Partial receipts do not require
+another complete application update.
 
 While a running solver is pending, elapsed pacing demand remains in the fixed
 accumulator. User pause and scene preparation freeze demand. Rate changes alter
@@ -380,19 +389,30 @@ participants through 4x, 0.25x, pause, and resume, including Modelica's own `tim
 coordinate.
 
 **5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
-The worker's command-squashing (which correctly collapses redundant
-`UpdateParameters`/`Compile`) explicitly does **not** apply to `Step`: dropping
-one would delete `dt` of simulated time and ack it as a success. If back-pressure
-is ever needed there, `dt`s must be **summed**, never dropped.
+The worker retains every ordered transaction with its interval-start input
+sample. Setpoint coalescing applies to `UpdateParameters`/`Compile`, never to
+`Step`. Backpressure bounds pending work without merging integration intervals
+or retiming their inputs.
 
-**6. The live solver is not the batch solver.** The interactive path integrates a
-fixed ladder of `SECS_PER_TICK / 3` micro-steps with an explicit-family solver;
-the batch/Fast-Run path keeps its adaptive-implicit BDF. See
-[`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a — that
-doc also states, honestly, how far short of true Tier-A determinism this still
-falls.
+**6. Numerical backends own internal steps.** The worker asks
+`LiveStepper::advance_to` to reach the exact communication point. Adaptive
+sessions use Rumoca's maintained Model Exchange driver, including event
+handling. Fixed prediction validates the target against its configured lattice
+before integrating the same internal RK4 steps. Interval validation precedes
+input admission; completion time and finite observations are checked before
+publication. The worker does not implement a second numerical step planner.
+See [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a.
 
 ## FMI boundary and conformance claim
+
+The native transaction boundary validates `stop_time` against the single
+addition `start_time + dt`, following the endpoint calculation described for
+[`fmi3DoStep`](https://fmi-standard.org/docs/3.0.2/#fmi3DoStep). Request and
+completion admission share one finite-time comparison with an allowance of
+32 machine epsilons at the timestamp's scale. This allowance covers floating
+point representation, not solver error or permission to return stale state.
+Non-finite clocks and intervals too small to advance their represented start
+time fail before input admission.
 
 The contract above is deliberately an **FMI-CS-shaped master algorithm**, not a
 claim that the current Modelica worker is already an FMI implementation. The
@@ -402,8 +422,7 @@ current code has the right master-side invariants for a future FMU backend:
 * input snapshots at a communication point;
 * a positive, bounded communication step;
 * zero-order hold of the last validated outputs between points;
-* conservative waiting only for participants whose outputs can reach a
-  state-writing sink; and
+* conservative waiting for every due active participant; and
 * explicit faulting instead of releasing a failed coupled step as if it had
   completed.
 

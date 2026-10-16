@@ -583,7 +583,7 @@ pub fn build_shader_material(
 /// field names) are unaffected.
 pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
     let key = to_snake_case(key);
-    let key = key.as_str();
+    let key = key.as_ref();
     let Some(field) = m.schema.field(key) else {
         return false;
     };

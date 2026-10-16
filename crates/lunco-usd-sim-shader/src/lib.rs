@@ -567,9 +567,8 @@ fn fill_prim_engine_params(
 ///
 /// The connection itself is not resolved here. `rewire_usd_connections` turns every
 /// `inputs:*.connect` on every prim into a `SimConnection` regardless of target, and
-/// `lunco-render-bevy`'s shader-parameter port backend receives the write. This pass
-/// decides only what the render layer cannot: which of those names are SHADER
-/// parameters, and therefore whether the material must be private.
+/// this crate's shader-parameter port backend receives the write. This pass
+/// identifies the shader parameters and whether the material must be private.
 ///
 /// `inputs:` is the engine's spelling for every port, so the prim's connected inputs
 /// must be intersected with the parameters the bound shader actually declares. A
@@ -584,14 +583,18 @@ fn driven_shader_inputs(
     let declared: std::collections::BTreeSet<String> = reader
         .attr_names(shader_prim)
         .iter()
-        .filter_map(|a| a.strip_prefix("inputs:").map(to_snake_case))
+        .filter_map(|a| {
+            a.strip_prefix("inputs:")
+                .map(|name| to_snake_case(name).into_owned())
+        })
         .collect();
     reader
         .attr_names(prim)
         .iter()
         .filter_map(|attr| {
-            let name = to_snake_case(attr.strip_prefix("inputs:")?);
-            (declared.contains(&name) && !reader.connections(prim, attr).is_empty()).then_some(name)
+            let name = attr.strip_prefix("inputs:")?;
+            (declared.contains(name) && !reader.connections(prim, attr).is_empty())
+                .then(|| name.to_owned())
         })
         .collect()
 }
@@ -622,9 +625,9 @@ fn read_shader_inputs(
         }
         let key = to_snake_case(name);
         if let Some(c) = get_attribute_as_vec3(reader, shader_prim, &attr) {
-            values.insert(key, ParamValue::Vec4([c.x, c.y, c.z, 1.0]));
+            values.insert(key.into_owned(), ParamValue::Vec4([c.x, c.y, c.z, 1.0]));
         } else if let Some(v) = reader.real_f32(shader_prim, &attr) {
-            values.insert(key, ParamValue::F32(v));
+            values.insert(key.into_owned(), ParamValue::F32(v));
         }
     }
     values

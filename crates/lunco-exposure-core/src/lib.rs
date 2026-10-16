@@ -3,6 +3,6 @@
 pub mod exposure;
 
 pub use exposure::{
-    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureSurface, ExposureValue,
-    ExposureWriter,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureState, ExposureSurface,
+    ExposureValue, ExposureWriter,
 };

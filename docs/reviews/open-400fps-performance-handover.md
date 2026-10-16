@@ -9415,3 +9415,767 @@ The 200 FPS and sub-1 ms physics targets remain unmet. Full simulation and
 presentation isolation still requires the typed command/snapshot boundary in
 architecture 62; these improvements do not move the whole simulation owner
 off the GUI app thread.
+
+### Bound task state and startup clock — 2026-10-15
+
+The Rhai task adapter passes the persistent scenario map through
+`CallFnOptions::bind_this_ptr` for anonymous callbacks and accepts a mutable
+native receiver. It returns the callback result directly. Named callbacks use
+the same bound-map contract. Captures, imported modules, actor ordering and
+fixed cadence remain owned by the existing interpreter/task kernel. Callback
+errors retain already-applied state writes and surface as script diagnostics.
+The interpreter seam proves zero payload clones, persistent mutations, error
+propagation and top-level imports (2 checks). The production
+`scripting_task_contract` gate passes 42 authored checks, including anonymous
+actions/predicates with captures and startup clock access.
+
+The scripting clock owner's `dt()` reads the configured `Time<Fixed>` timestep.
+This is available before the first admitted tick, when the last elapsed delta
+is still zero; it remains the physics integration period across transport
+pause/rate changes. The cycle guard and missing/invalid-clock faults remain
+mandatory. The production Modelica initialization network passes 34 checks,
+including pause/rate coupling; the negative initialization fixture reaches its
+expected `modelica-initialization-failed` terminal fault and exits zero.
+
+The owned capture at API 4331 is connected to PID 3610572 on Tracy 8086,
+contains 19,384,132 zones over 107.9 seconds, saves approximately 126.34 MiB,
+and passes native CSV exports. For actor gid 7114085941306766, task invocation
+ordinals 1500–1999 have median 0.456 ms versus 0.612 ms in the earlier capture;
+means are 0.998 versus 1.087 ms, with a larger current tail. These are inclusive
+diagnostic observations under different resource contention, not an isolated
+speedup or product FPS comparison. The current capture ends before route
+startup and does not establish its settled cost. Evidence is
+`target/task-borrow-tracy{.tracy,-context.json,-capture.log,-matched-task.json}`.
+
+A separate normal Cargo run at API 4332 reaches tick 5403. Its final
+18.414-second window advances from simulation second 71.633 to 90.050 at
+1.00014 realtime, ends with 8.502 ms pending demand and clips no simulation
+time. Fixed-cycle p50/p95/max are 6.215/8.829/10.450 ms; the final retained
+native-physics median is 2.732 ms. The 1,106 retained FPS observations in that
+window have median 70.40. Seven terrain observations report 256/256 resident
+tiles, no pending stream work and an inactive complete derived map; an earlier
+observation at simulation second 68.567 has one pending tile and is outside
+this window. The camera audit and inspected screenshot show a 1280×720 view
+with the driven FLIP, route labels, terrain and shadows. Cutoff, touchdown
+confirmation and route startup remain ticks 1316, 1407 and 3104; these selected
+milestones do not prove complete state replay. Compact status reports nine
+active shared-clock participants and 48,672 real solver samples. Evidence is
+`target/task-borrow-normal{.png,-context.json,-camera.json,-status.json,-samples.json,-settled-summary.json}`.
+
+The concurrent simulator is PID 3602514, API 4286, in the `usd` checkout. It
+remains untouched; the current runs are contention-affected and are not an
+uncontended FPS comparison with the earlier viewport. Both owned simulators,
+the collector and the three scene gates exit zero and release their ports.
+The 200 FPS/sub-1 ms physics targets and full simulation/presentation isolation
+remain open.
+
+### Invocation-local Rhai scope lifetime — 2026-10-15
+
+Every scenario callback invocation uses Rhai's scope-rewinding option: lifecycle,
+events, dependencies, task callbacks and prelude drivers. Initialized globals
+and bound/captured state persist; invocation constants and locals are released
+on normal return and error. The canonical contract is in
+[`scenario-program-cache.md`](../architecture/scenario-program-cache.md).
+An inline interpreter regression grows from one scope entry to 129 after 64
+calls before the fix and remains at one afterward, including error unwinding.
+All 49 owner unit tests pass. The rebuilt normal production binary passes the
+42-check task gate, 34-check Modelica initialization/clock gate and 111-check
+windowed route lifecycle gate. Evidence is `target/hook-scope-{baseline,unit}.log`,
+`target/hook-scope-normal-{scripting_task_contract,modelica_initialization_network}.log`
+and `target/hook-scope-route-editor{,-driver}.log`.
+
+The new owned Tracy run at API 4336 (PID 3692406, collector 3692405, connected
+on 8086) closes cleanly and exports 17,845,320 zones over 245.6 seconds from
+126,837,272 saved bytes. Its final sampled tick is 2203, before route startup;
+it does not establish settled route performance. During trace seconds 190–230,
+inclusive fixed-runner, native-physics, render-schedule and script-system means
+are 32.304, 20.179, 18.727 and 4.838 ms respectively. Concurrent builds/runtime
+work and memory/I/O pressure affect the whole measurement. Evidence is
+`target/hook-scope-settled{.tracy,-context.json,-capture.log,-samples.json,-owners.json}`;
+the native CSV export succeeds.
+
+The separate normal run at API 4339 confirms nine active shared-clock
+participants and ready topology but supplies no comparable FPS acceptance
+window. Repeated competing builds remain active; at 06:28:30 UTC, AC reports
+offline, the battery is discharging and GPU telemetry reports 12.27 W at
+787 MHz. The owned sampler is deliberately interrupted and the app exits zero
+through `Exit`; the sampler's 130 status is not an app failure. Evidence is
+`target/hook-scope-normal-{context,status,readiness,samples}.json`,
+`target/hook-scope-normal-monitor.log` and `target/hook-scope-power.json`.
+No power profile, graphics quality or solver cadence is changed. The bounded
+scope lifetime is verified; a product FPS improvement is not established.
+
+After the trace exits and its API listener is gone, package-scoped
+`cargo clean -p lunco-luncosim` removes 8.4 GiB of this checkout's application
+outputs. Source, sibling targets and shared caches remain intact. The normal
+production artifact is rebuilt with regular sccache and `-j 4` before the
+normal gates above. All owned runtime/test ports are released; other checkouts'
+processes are untouched.
+
+### Participant summary projection — 2026-10-15
+
+The built-in `runtime.ui.properties` policy counts participant statuses by
+indexed access and passes only the counts to its formatter. This avoids Rhai
+copies of nested Modelica input/output maps during array iteration and helper
+argument passing. Complete typed facts remain available to custom policies;
+labels, ordering, precision, hook context and publication cadence are preserved.
+The canonical guidance is in `runtime-authored-ui.md` and the profiling skill.
+
+The production windowed `route_lifecycle` gate passes 112 checks, including an
+empty participant list in a Rhai-only program scope. The normal production
+one-shot hook gate passes 45 checks, including off-cycle rejection. Complete
+property output matches across ten paired synthetic cases covering empty,
+mixed, missing and unknown statuses. An alternating same-process large-payload
+benchmark uses nine participants with 2,000 inputs and 2,000 outputs each;
+warm request medians for ten policy calls are 334.025 versus 80.827 ms. These
+include source compilation, fixture construction and transport, so they are
+not isolated hook CPU or FPS measurements. Evidence is
+`target/participant-policy-{route,hook-test}.log`,
+`target/participant-policy-route-driver.log`,
+`target/participant-policy-{parity,comparison}.json`.
+
+The real Griffin exposure owner is compared in one owned production process
+at API 4343 (PID 3830390, collector 3830388, connected on Tracy 8086). Original
+and revised policy bodies alternate twice through the supported inline hook
+binding API; unique entry names identify the trace windows. Seven-second
+interiors after each binding have these inclusive per-surface medians:
+
+| Owner | Original 1 | Revised 1 | Original 2 | Revised 2 |
+|---|---:|---:|---:|---:|
+| properties | 2.168 ms | 1.186 ms | 2.148 ms | 1.295 ms |
+| unchanged visibility | 1.359 ms | 1.338 ms | 1.425 ms | 1.372 ms |
+| unchanged fact construction | 0.671 ms | 0.679 ms | 0.715 ms | 0.662 ms |
+
+Properties have 154/178/132/138 samples respectively. Every phase retains nine
+active shared-clock participants and ready topology. Both surface summaries
+remain identical across phases; the camera stays at the same 1280×720 Avatar
+view. The final inspected image shows Griffin in flight, terrain and the
+objective overlay; it does not establish settled route acceptance. The run
+spans ticks 209–715, with some pending terrain work. A concurrent build remains
+active and AC reports offline; a GPU observation reports 247 MHz and 10.38 W.
+These observations support reduced policy cost, not overall FPS acceptance.
+No power profile, solver cadence or graphics quality is changed.
+
+The collector saves 59,830,985 bytes, matching its 57.05 MiB report, with
+8,332,765 zones over 154.8 seconds. Both native CSV exports succeed. Evidence
+is `target/participant-policy-live{.tracy,.png,-context.json,-phases.json,-summary.json}`
+and `target/participant-policy-{profile-driver.log,power.csv}`. The current
+policy is restored in the last phase; the app and collector exit zero and
+release their ports. The 200 FPS, sub-1 ms physics and complete simulation/UI
+isolation goals remain open.
+
+### Shared physics clock in the scene-test driver — 2026-10-15
+
+The scene-test driver supplies manual elapsed duration through Bevy's existing
+`TimeUpdateStrategy`; the production composition retains its `Time<Fixed>`
+quantum, fixed scheduler and Modelica barrier. `--tick-hz` selects manual update
+cadence. Completed simulation duration is read from `Time<Fixed>::elapsed`,
+independently of that input rate. There is no test-specific integration clock,
+replacement stepper, policy hook or conditional networking path.
+
+Before this repair, a 120 Hz manual driver also replaced `Time<Fixed>` with
+8.333333 ms. Lightyear's `TimelinePlugin::finish` triggered its configured
+`SetTickDuration` event and restored 16.666667 ms in networking builds. Without
+networking, the same authored Modelica clock gate failed 4/34 checks: default
+exchange cadence, resumed coupling and two telemetry-time checks. Networking
+masked the competing owner. The process summary also divided completed ticks
+by manual update rate, reporting half the actual physics duration at 120 Hz.
+Evidence is `target/communication-120-owner.log` and
+`target/communication-no-network-baseline.log`; the latter exits 1.
+
+The repaired normal production builds pass the existing 34-check
+`modelica_initialization_network` gate with a 120 Hz manual driver, both with
+and without networking. The non-networking build also passes at 30 Hz with
+0.3 jitter. These authored checks cover coupled initialization, default
+per-physics-tick exchange, explicit 30 Hz exchange, pause/resume, 4x/0.25x rates,
+latched interval-start inputs and telemetry timestamps. The inconsistent
+initialization fixture still reaches its declared `modelica-initialization-failed`
+terminal fault and exits zero at 120 Hz manual cadence. An external process
+check verifies each exit/verdict and its rounded simulation duration against
+completed 60 Hz ticks. Evidence is
+`target/communication-driver-{local,network}-results.json` and the corresponding
+`target/communication-driver-{local,network}-*.log` files. Temporary owner
+diagnostics are removed before the passing builds.
+
+A separate unprofiled Griffin run of the preceding HUD change uses API 4344
+(PID 51185), reaches tick 1858 and exits zero through the API. Its last retained
+window has fixed-cycle p50/p95/max 5.157/8.050/13.004 ms, native-physics p50
+2.608 ms and retained FPS median 82.39. This is a landing/early-egress window,
+not settled route acceptance; competing work and power conditions change during
+the run. Evidence is `target/participant-policy-normal-{context,samples,status}.json`
+and `target/participant-policy-normal{.png,-driver.log}`. It establishes neither
+200 FPS nor sub-1 ms physics.
+
+Native exports of the retained `griffin-d17d65261.tracy` capture over seconds
+80–94 attribute 1.395 ms per physics tick to inclusive CCD sweep geometry:
+1.005 ms candidate geometry (including 0.416 ms native initial contacts),
+0.239 ms leaf trajectories and 0.088 ms swept BVH work. Parent and child costs
+must not be summed. These numbers identify the next contact-query investigation;
+they do not justify changing substeps, contact tolerance or graphics quality.
+Evidence is `target/ccd-existing-breakdown.json` and its successful native export.
+
+### Backend-owned communication targets — 2026-10-15
+
+Live execution calls `LiveStepper::advance_to` with the master's requested
+endpoint. Adaptive integration delegates to the pinned Rumoca Model Exchange
+session; fixed prediction validates the configured lattice and applies its
+unchanged internal RK4 steps. Native and Wasm workers share the checked advance
+boundary. The canonical contracts are in architecture 20, 22 and 28.
+
+The focused inline ODE regression initially requests 0.007 seconds and fails
+completion at 0.005555555556 seconds. It passes after this cutover, including
+subsequent 0.014 and 0.025 endpoints. All 65 worker tests and six fixed-backend
+tests pass. The latter cover exact state equality against individual internal
+steps, bitwise repeatability with changing inputs, and non-mutating rejection
+of off-lattice, backward and non-finite targets. Evidence is
+`target/exact-communication-{baseline,worker-tests,solver-tests}.log`.
+
+The rebuilt production binary passes the 34-check initialization/clock gate,
+four-check drive-law gate and both expected terminal observation/initialization
+failure gates. Each process exits zero and its authored verdict or declared
+terminal fault is checked. Evidence is `target/exact-communication-gates.json`
+and its four corresponding gate logs.
+
+An owned Tracy run at API 4345 (PID 281430, collector 281429 connected on 8086)
+saves approximately 587.4 MiB; the native statistics and numerical-zone exports
+succeed. The capture includes a large host clock discontinuity. Its exported
+24,705 numerical jobs cover only part of the 49,455 worker samples observed by
+the runtime, so it does not establish complete late-window attribution or a
+speedup. The mission reaches its completion report, which fails one of 16
+checks: the Twin clears `route_engaged` at completion and then requires that
+same live flag in its final historical phase assertion. This is a distinct
+authored verdict defect, not a passing mission result. Evidence is
+`target/exact-communication-tracy{.tracy,.png,-context.json,-runtime.log,-status.json,-numerical.json}`.
+
+A separate ordinary Cargo run at API 4346 (PID 302524) advances ticks
+4302–5411 over 18.472 seconds of monotonic time: 1.00059 realtime, with pending
+demand decreasing from 13.850 to 2.628 ms and zero clipped simulation time.
+Final fixed-cycle p50/p95/max are 5.772/7.159/9.499 ms; retained native-physics
+p50 is 2.580 ms. The 1,110 unique retained FPS observations have median 104.17.
+All seven terrain observations report 256/256 resident tiles, zero pending
+work and an inactive complete derived map. The inspected 1280×720 Avatar image
+shows the driven FLIP, terrain, shadows and route labels. Nine shared-clock
+participants remain active; selected cutoff/touchdown/route-start milestones
+are ticks 1316/1407/3103. These milestones do not establish full state replay.
+The sampled simulator/build inventory contains only this app; AC is online.
+Graphics settings, eight native substeps and numerical tolerance are unchanged.
+Evidence is `target/exact-communication-normal{.png,-context.json,-camera.json,-samples.json,-status.json,-settled-summary.json}`.
+Both apps and the collector exit zero and release their ports. The 200 FPS,
+sub-1 ms physics, full presentation isolation and external FMU interoperability
+goals remain open.
+
+Shared disk pressure required a full checkout-local `cargo clean` after
+package-scoped cleaning proved insufficient. All 305 evidence/config entries
+at the target root were preserved and restored; source, sibling targets,
+Cargo registry and shared sccache were retained. Both production builds use
+the normal target, regular sccache and `-j 4`.
+
+### Communication-clock validation — 2026-10-15
+
+The shared worker request/completion and main-thread response comparison
+requires finite clocks and permits only floating point roundoff. Request
+validation compares the endpoint with `start + dt` and rejects an interval
+that cannot advance its represented start. Architecture 22 owns the contract.
+
+Two focused inline protocol regressions fail before the repair: the previous
+comparison accepts an infinite actual clock, and cancellation rejects a valid
+one-physics-tick request starting at 1e9 seconds. The updated tests also reject
+a stale whole-tick endpoint at that origin, oversized requests, non-finite
+endpoints and unresolvable intervals, while accepting adjacent representation
+roundoff. All 67 worker tests pass. Evidence is
+`target/communication-envelope-{baseline,worker-tests}.log`.
+
+The regular production rebuild passes the existing 34-check Modelica
+initialization/clock gate at 120 Hz manual pacing and the declared terminal
+observation-failure gate. Both processes exit zero and their authored result
+markers are verified in `target/communication-envelope-gates.json` and the two
+scene logs. These cover the stricter validation in production; the preceding
+ordinary Griffin run supplies the performance measurement, not this focused
+protocol check. Full external FMU conformance remains open.
+
+### CCD dispatch attribution and mission verdict — 2026-10-15
+
+`ccd_query_dispatch` records bounded query and worker counts around the existing
+native query kernel and its synchronous join. The default minimum batch remains
+64; no query distribution, solver tolerance, contact tolerance, substep count or
+graphics setting changes in this checkpoint.
+
+An ordinary owned Griffin run at API 4348 (PID 324845) compares batch settings
+64/0/8/0/64 after the route. Native physics medians from the sampled latest
+steps are 2.481/2.112/2.086/2.054/2.212 ms; sweep medians are
+1.236/0.858/0.845/0.843/0.934 ms. Every phase retains 37 bodies, 36 colliders,
+12 joints and eight substeps. Evolving settling/contact work prevents treating
+the first/last difference as a code speedup. Evidence is
+`target/ccd-dispatch-{context,phases,summary}.json` and `.png`.
+
+The owned Tracy run at API 4351 (PID recorded in its context file) saves
+528.22 MiB over 211.5 seconds, with 78,704,690 zones. Native statistics and
+unwrapped dispatch exports succeed. With 29 queries, the two serial interior
+dispatch medians are 0.120/0.138 ms and the two three-worker medians are
+0.065/0.090 ms. These isolate the existing dispatch owner; complete physics
+samples vary more widely and establish no app-level FPS gain. The exporter
+groups unwrapped rows by source location, so chronology is reconstructed only
+after sorting timestamps. Evidence is
+`target/ccd-dispatch-tracy{.tracy,-context.json,-phases.json,-dispatch-summary.json}`.
+
+An experimental striped work distribution passes exact native query parity
+(witnesses, normals, status, diagnostics, errors and retained cache fields).
+Its separate capture at API 4352 saves 493.52 MiB over 211.5 seconds and exports
+successfully. AC is online for its first phase and offline for the remaining
+three; GPU clocks drop from 945 MHz to 517–555 MHz and native tick costs rise
+sharply. It cannot establish the experimental distribution's speed. The change
+is removed; `target/ccd-striped-experiment.patch` retains the experiment beside
+its capture, phase samples and unit log. All three apps and both collectors
+exit zero and release their ports.
+
+The Twin's mission report now consumes the existing historical `route_started`
+fact. Current guidance authority remains `route_engaged` and can be released
+at completion. Local lunar-base-model main commit `bba8667` shares its structured
+phase check with a four-case authored one-shot gate, including false and missing
+evidence. Both fresh Tracy runs pass all 16 full mission checks and that
+four-case gate through the real production API. The continuous-contact baseline
+scene passes all 12 checks. No root or Twin push is performed.
+
+### Shared simulation stepping review — 2026-10-15
+
+Explicit fixed-cycle control belongs to `lunco-time::SimulationStepControl` and
+`StepSimulation`. The shared fixed runner admits both paced and manual cycles;
+physics, Modelica and simulation timers consume the same admitted quantum.
+Native physics holds acquire a shared `PhysicsIntegration` admission key.
+Editor dragging owns a separate `SceneInteraction` key, released on completion
+and scene teardown. These holds cannot release each other.
+
+Recording programs declare `@timing presentation` and use the existing scenario
+FSM and native task interpreter. The owner-provided clock controls waits, while
+frame-index edges control shot callbacks. Simulation-only programs keep their
+fixed cadence and incur no presentation-event cloning. The clock snapshot checks
+native physics against the current shared cycle interval and surfaces divergence
+as a terminal runtime fault.
+
+The production `shared_simulation_step` gate passes all 28 checks headless and
+in an owned windowed session (API 4355), including presentation event delivery,
+exact three/two-cycle admission, user pause/rate retention, frozen Modelica and
+native clocks, and atomic rejection. The windowed screenshot shows its PASS
+verdict. The native physics owner also validates completed clocks directly at
+`FixedLast`; snapshot reads delegate to the same validator. Modelica output and
+status publication belongs to `SimulationCompletions` after response admission,
+including initial `Idle` observations while time is held. Its fixed-step and
+initialization-sampling copies are removed.
+
+The manual-runner resource test, 33 Rhai-enabled lifecycle tests and four focused
+physics mechanism tests pass. Six production regressions pass: initialization/
+clock exchange at 120 Hz update pacing, variable projection, expected terminal
+observation/initialization failures, native task semantics and continuous
+contacts. Evidence uses the `target/shared-stepping-*` prefix. All owned
+controllable sessions exit through the API and release their ports.
+
+The stored exact-state reference reports an articulated-state mismatch at tick
+11. A freshly built pre-change HEAD (`07d9b5f93`) reproduces the identical first
+mismatch. Its selected 56 physics, Modelica, articulated and final state rows
+were captured without changing simulation inputs. The candidate passes the
+production exact comparison against those rows in serial and default Compute
+profiles, with the startup native-pause bit reflecting shared preparation. The
+canonical reference changes only that startup pause field; its numerical rows
+remain unchanged. The 0.25-jitter serial profile also passes the same 24-check
+production comparison through tick 780. Evidence is
+`target/shared-clock-{original-head,candidate-paired}*`; the archived candidate
+executable is restored with its exact SHA-256 verified. The historical-reference
+discrepancy remains open. The stock editor gate fails document-generation
+admission on pre-change HEAD, so editor visual acceptance remains unproven and
+its authored observer is unchanged.
+
+Full simulation/presentation isolation, 200 FPS, sub-1 ms physics and external
+FMU interoperability remain open. No performance improvement is claimed here.
+
+The rebuilt production app also passes 24 recording checks: four-frame and
+one-frame stepped takes retain shared physics/Modelica receipts, and a two-frame
+motionless take advances neither owner. ffprobe confirms exact encoded counts
+4/1/2. A four-check mesh-free readiness fixture verifies that cancelling an
+armed request restores realtime simulation and presentation-task timers.
+`lunco-time::set_time_update_strategy` reanchors the native real-time sample on
+manual-to-automatic transitions without changing elapsed time; its focused test
+covers manual time both ahead of and behind computer time. Recording restores
+its saved update source on cancellation, completion and activation failure, and
+the headless realtime transition reuses the same time owner. Evidence is
+`target/shared-clock-handoff-*` and `target/shared-recording-cancel-*`;
+the fresh shared-step gate passes 28 checks headless and windowed. Owned API
+4357 exits successfully through `Exit` and releases its port.
+
+### Ready receipts between shared fixed cycles — 2026-10-15
+
+The owned `833c4a2c5` Tracy run (API 4358) passes all 16 Griffin mission
+checks and the four-check mission-evidence gate. Its 705.41 MiB capture contains
+54,965,227 zones over 188 seconds and exports successfully through the adjacent
+Tracy tools. For 29-query CCD dispatches, the final eight seconds of each
+1/3/1/3-worker cohort have medians 0.201/0.135/0.153/0.120 ms. AC remains online.
+Other-checkout Cargo builds overlap the comparison, so these data do not justify
+a product FPS claim. The AC-powered batch-admission comparison below supplies
+the separate evidence for the current default.
+Evidence is `target/shared-clock-current-tracy-*` and its `.tracy`/`.png`.
+
+The separate unprofiled run (API 4359) also overlaps other-checkout builds.
+Across 18.673 monotonic seconds it completes 917 ticks: 0.8185 realtime, with
+14.864 seconds of retained demand despite a 5.972 ms fixed-tick median.
+Source inspection identifies a frame dependency: the fixed runner checks a
+participant barrier without servicing receipts completed during the preceding
+native cycle. Its deterministic injected-receipt regression stops at one of
+three requested cycles. Both paced and manual cases pass after the shared
+runner invokes the existing `SimulationCompletions` schedule once before
+admitting a held pending cycle. All 58 time-owner tests pass. Unfinished work
+yields to the host; no wait, alternate response reader or change to ordered
+receipt validation is introduced. This is a generic fixed-boundary mechanism,
+owned by `lunco-time`, rather than a changeable scenario policy.
+
+The same unprofiled process passes the extended 25-check recording gate,
+including realtime simulation and presentation-timer progress after closing the
+final take, plus the 28-check shared-step gate. Evidence is
+`target/shared-clock-current-normal-*`; API 4359 exits zero and releases its
+port. The receipt regression and owner suite are recorded in
+`target/shared-cycle-completion-{baseline,time-tests}.log`.
+
+The candidate normal lander run (API 4360) completes 1,116 ticks over 18.645
+monotonic seconds: 0.9976 realtime, with 3.235 ms of retained demand at its last
+sample and no clipped duration. Observed app updates include two through six
+fixed cycles. It passes the same 16 mission checks at tick 5468, followed by the
+28-check shared-step and 25-check recording gates. The inspected Avatar image
+shows the deployed FLIP, route labels, terrain and shadows. Other-checkout
+builds and a simulator overlap portions of this run; the late CCD cohorts are
+not an uncontended product comparison, and neither 200 FPS nor sub-1 ms physics
+is established. See `target/shared-cycle-completion-normal-summary.json` and
+the matching samples, phases, context and image. API 4360 exits zero.
+
+Boundary receipt rejection also cancels queued manual demand before returning
+to the host. Its injected failure initially leaves two steps queued; cleanup at
+the fixed runner's exit satisfies that contract with no tick applied. All 58
+time-owner tests pass, including both paced/manual ready-receipt and rejection
+cases. The final regular Cargo rebuild passes 28 shared-clock and 25 recording
+checks in owned API 4361, with encoded counts 4/1/2. It exits zero and releases
+its port. Six final headless production gates pass: the 34-check default/subrate
+clock gate at 120 Hz update pacing, both declared terminal failure gates, and
+three 24-check exact comparisons against the pre-change build's selected state
+rows (serial, default Compute, 0.25-jitter serial). The historical canonical
+reference discrepancy remains open as described above. Evidence is
+`target/shared-cycle-completion-{fault-baseline,time-tests,final-*,gate-*,gates.json}`.
+Full presentation isolation and external FMU interoperability also remain open.
+
+### Continuous-query batch admission — 2026-10-15
+
+`ContinuousCollisionSettings.minimum_query_batch_size` defaults to eight.
+The existing scoped query kernel, contiguous chunks and prepared result order
+remain authoritative; each worker retains independent native EPA scratch.
+The inline serial/parallel regression compares impact time, witnesses, normals,
+contact geometry and candidate axes by floating-point bits, as well as query
+counts, diagnostic order and initial-overlap proof state. Both cold and retained
+cache passes succeed (`target/ccd-batch-final-parity.log`).
+
+The normal production baseline at API 4362 uses the unchanged kernel and
+alternates minimum batches 64/8/64/8 after mission completion. All four windows
+have AC online and no competing Cargo or simulator process. Latest-sample CCD
+sweep medians are 1.336/0.915/1.082/0.943 ms; total physics medians are
+2.551/2.156/2.335/2.241 ms. The viewport remains 1280 by 720 with the same
+camera, rendering quality, 37 bodies, 36 colliders, 12 joints and eight substeps.
+The retained FPS medians are 108.05/126.16/119.76/109.58, so this evidence supports
+the query batching change without establishing a general FPS improvement.
+The scene passes all 16 mission checks and its four-check mission-evidence gate.
+The inspected image shows the deployed rover, route labels, terrain and shadows.
+Evidence is `target/ccd-balance-baseline-{context,phases,camera,status}.json`
+and `target/ccd-balance-baseline.png`; API 4362 exits zero and releases its port.
+
+The existing native Tracy capture `target/shared-clock-current-tracy.tracy`
+and its successful adjacent-tool export identify the same query kernel's
+one/three-worker dispatch costs above. The current batch admission changes no
+collision math, timestep, tolerance or solver ordering. Independent simulation
+and presentation ownership, 200 FPS, sub-1 ms physics and external FMU
+interoperability remain open.
+
+The final regular Cargo run (API 4365) passes all 16 mission checks and the
+four-check mission-evidence gate. It retains the same body/collider/joint/substep
+inventory and its inspected screenshot retains the rover, terrain and shadows.
+The four settled windows advance at 1.0007/0.9983/1.0023/1.0045 realtime.
+AC is offline throughout these windows: physics medians are
+2.558/1.771/2.482/2.365 ms and retained FPS medians are
+29.12/30.81/33.13/26.64. These are power-affected observations, not product FPS
+acceptance. The stronger batch-size evidence is the AC-powered baseline above.
+Evidence is `target/ccd-batch-final-{summary,phases,context}.json` and
+`target/ccd-batch-final.png`; API 4365 exits zero and releases its port.
+
+The final production scene gates pass all 12 continuous-contact checks,
+including initial-overlap rejection, with the default Compute pool. Three
+24-check state comparisons match the pre-change build's selected reference
+rows exactly: serial, default Compute and 0.25-jitter serial. These comparisons
+cover that retained state selection rather than a whole-world determinism
+claim. See `target/ccd-batch-final-gates.json` and matching gate logs. All four
+processes exit zero and release API 4366.
+
+### Current default batch: CPU and GPU attribution — 2026-10-15
+
+The current-source Tracy run uses owned API 4367 and collector 492103,
+connected to app 492104 on 8086. The capture contains 31,180,806 zones over
+155 seconds. Its 579,902,098 file bytes equal 579,789,052 compressed payload
+bytes plus the native six-byte header and 28,260 four-byte block lengths;
+the payload rounds to the collector's 552.93 MiB report. Adjacent native CPU,
+GPU and exposure exports all exit zero. The run passes all 16 mission checks
+and the four-check mission-evidence gate; its inspected image retains the
+rover, terrain and shadows. Both processes exit zero and release their ports.
+
+The settled window is trace seconds 146.558–153.558, before screenshot delivery.
+It contains 420 physics cycles and 282 host/render updates. Median inclusive
+CPU spans are 9.031 ms for the shared fixed runner, 4.640 ms for native physics,
+7.016 ms for the render schedule and 3.700 ms per exposure publication (140
+publications). These nested/cross-thread values must not be summed. The
+29-query, three-worker dispatch has 4,028 samples at 0.122 ms median.
+The exposure subspans identify per-surface fact construction at 0.308 ms,
+visibility policy at 0.651 ms and properties policy at 0.835 ms, each with 280
+samples. This leaves presentation fact construction/conversion and policy calls
+as a concrete CPU investigation alongside whole-simulation isolation.
+
+GPU timestamps cover the same trace coordinate and window. The opaque 3D pass
+has 282 samples at 1.472 ms median; the camera early-shadow pass has 282 samples
+at 0.438 ms, while its late pass measures timestamp overhead. No shared-shadow
+span is emitted, so this is a camera-shadow attribution rather than a measured
+whole-shadow aggregate. These settled data do not justify reducing shadows or
+terrain quality. The endpoint terrain observation reports 256/256 resident
+meshes, no pending work and a complete inactive derived map.
+
+Another checkout's assembly test overlaps the settled window. AC has returned
+by that window, but GPU clock observations are 547–667 MHz after the preceding
+battery-powered run. Instrumentation and those operating conditions preclude a
+product FPS comparison. Evidence is `target/ccd-batch-current-tracy.tracy`,
+`target/ccd-batch-current-tracy-{integrity,owners,exposure,context,phases}.json`
+and the matching image/logs. The 200 FPS, sub-1 ms physics, independent
+presentation and external FMU interoperability acceptance goals remain open.
+
+The standard uninstrumented networking-feature production binary is rebuilt
+successfully after capture (`target/ccd-batch-final-normal-rebuild.log`). Only
+superseded task-owned compressed executable copies and completed test
+executables are retired for space; source, shared caches, captures and verdict
+logs remain. The current binary hash and retirement manifests are retained in
+`.lunco/performance-evidence/`. No profiling process remains on owned ports.
+
+
+### Borrowed typed Rhai conversion — 2026-10-15
+
+`lunco-hooks-rhai` owns the single borrowed traversal from Rhai values to the
+owned `HookValue` ABI. Native Rhai read accessors retain shared containers and
+map order. `dynamic_to_hook_with_native` admits owner-provided opaque-leaf
+lowering without changing scalar/container handling; the world-bound adapter
+supplies finite f64 vector/quaternion leaves. The existing command/query bridge
+consumes this same traversal, while pure hooks retain the closed ABI. This is
+interpreter value conversion, not changeable product policy, so it adds no hook,
+cache, clock or execution lane. Canonical guidance is in `hook-policies.md`.
+
+The interpreter resource regression observes three unnecessary native-value
+clones under the baseline and zero with the borrowed traversal. All 15
+hook-owner tests pass, including shared native leaves, full-width unsigned
+integers, exact signed zero and explicit unsupported-type/lowering errors.
+Production gates pass 14 authored-runtime checks (native-vector and array
+raycasts agree), eight negative checks (nested unsupported native data rejects
+before dispatch), 42 task checks, 34 coupled initialization/clock checks at
+120 Hz host pacing and 24 exact selected-state comparisons with the pre-change
+build. See `target/typed-value-borrow-{baseline,hooks-tests}.log` and
+`target/typed-value-borrow-gates.json` plus its gate logs. API 4371 is released.
+
+The first normal run at API 4370 is excluded from acceptance: the mutable Twin
+controls contain an in-progress two-argument `input_hint` migration, which this
+checkout cannot execute. Its four-check evidence probe is not the complete
+mission verdict. Its changed topology and 2560 by 1568 viewport also prevent a
+performance comparison. The separate clean verification checkout uses Twin
+commit `bba86672533ac249684ee1dae70d59d524c5e5f3` and an identical copy of its
+untracked 67,020-byte heightmap (SHA in the terrain evidence record). With that
+complete payload, owned API 4372 emits all 16 mission checks, reports ready and
+clear diagnostics, and advances at 1.0052 realtime over the three-second
+observation. The inspected 1280 by 720 image shows the deployed rover, controls,
+terrain and shadows, with an optional dataset-download prompt. The retained
+physics median is 2.855 ms with 37 bodies, 36 colliders, 12 joints and eight
+substeps. Main-checkout compilation overlaps this observation; neither its
+44.98 retained FPS median nor the excluded run's lower physics time proves a
+performance improvement. Both owned sessions exit zero and release their ports.
+Evidence is `target/typed-value-borrow-admitted-{context,result,summary,terrain}.json`,
+its runtime/driver logs and image. The prior missing-payload attempt reports the
+terrain admission fault and supplies no acceptance evidence. The mutable Twin's
+in-progress edits remain untouched. Current-Twin integration, 200 FPS, sub-1 ms
+physics, full presentation isolation and external FMU interoperability remain
+open.
+
+
+### Immutable runtime UI policy preparation — 2026-10-16
+
+The native UI projection captures owned facts and caller context, then prepares
+pure policy views through existing bounded `AsyncWorkAdmission`. The exposure
+owner retains one in-flight batch and one latest pending input per namespace;
+source epochs and surface identity fence publication. Captured registrations use
+`RegisteredHook::invoke`, the same context/type validation as global dispatch.
+Complete views replace registry entries atomically. Invalid results expose a
+terminal failed state without partial properties; source replacement recovers.
+The canonical contract is in `runtime-authored-ui.md`. Live-World scripts and
+simulation clock/receipt admission remain on their existing owners.
+
+All 28 focused owner tests pass. The baseline production gate rejects the absent
+publication-state contract; the candidate's nine authored checks pass in both
+headless and windowed production sessions, including held-physics failure and
+recovery. The maintained driver is `scripts/api/test_runtime_ui_preparation.py`.
+Windowed `route_lifecycle` passes 112 checks. Shared stepping passes 28 checks;
+recording passes 25 and ffprobe confirms exactly 4/1/2 frames at 1280 by 720.
+The frozen complete Griffin Twin at `bba8667` passes all 16 mission checks with
+clear readiness and diagnostics on both normal and Tracy artifacts. The normal
+image retains controls, telemetry, rover, terrain and shadows, plus the optional
+raw-dataset provisioning popup. Its 3.578 ms retained physics median and 22.14 FPS
+median overlap another simulator, sibling compilation and a brief headless gate;
+these are contention-affected observations, not performance acceptance.
+
+Owned Tracy app 1203836 at API 4380 connects to collector 1203835 on 8086.
+The 132.2-second capture has 29,886,099 zones. All five adjacent native exports
+succeed. File size 572,864,020 equals 572,754,478 compressed payload bytes plus
+the six-byte header and 27,384 four-byte block lengths; payload 546.221 MiB
+matches the collector's 546.22 MiB report. In trace seconds 123.453–130.453,
+139 publications take 0.9655 ms median on the main thread; pure policy batches
+take 3.2027 ms on worker 27. Visibility and properties run on that worker,
+while completion service is 0.0069 ms median. The earlier trace's 3.700 ms
+publication belongs to a different instrumented cohort; do not present a paired
+FPS gain from those timings.
+
+The current window contains 315 host updates and about 419 fixed cycles.
+Inclusive medians are 7.116 ms for the shared fixed runner, 4.100 ms for native
+physics, and 6.843 ms for the render schedule. GPU opaque and camera early-shadow
+medians are 1.403 and 0.433 ms; shared-shadow spans are absent. These nested and
+cross-thread spans must not be summed. Terrain is complete (256/256 resident,
+no pending work, derived 1/1 inactive). Sibling compilation overlaps the window;
+profiling overhead is diagnostic. Full presentation isolation, 200 FPS, sub-1 ms
+physics, current mutable-Twin API integration and external FMU interoperability
+remain open.
+
+Evidence is `target/ui-policy-{owner-tests,route,recording}*.log`,
+`target/ui-policy-griffin-{context,result,summary}.json` and its inspected image,
+and `target/ui-policy-tracy{.tracy,-owners.json,-integrity.json,-context.json}`
+plus logs and image. All owned applications, collector and exporters exit;
+API 4374–4378/4380 and Tracy 8086 are released. Large prior CSV exports are
+losslessly archived as `target/griffin-{current-all,owner-schedules}.psv.zst`;
+round-trip SHA records are in
+`.lunco/performance-evidence/ui-policy-csv-archives.json`. Shared caches,
+sibling worktrees and the mutable Twin's unrelated HUD edits are preserved.
+
+
+The final non-Tracy rebuild was interrupted before disk exhaustion (exit 130),
+so it supplies no additional build evidence. Profile-only output was cleaned,
+and the already runtime-tested normal executable was restored from its
+round-trip verified archive, SHA-256
+`97273ac13aeb9ac0da07ff4fc69064d7483adbc1ea96fa677353b2f279f4fdfe`.
+Current Rust source also compiled successfully with Tracy after unused-import
+cleanup; later changes are formatting and documentation only. The build and
+restoration manifest is
+`.lunco/performance-evidence/ui-policy-build-manifest.json`.
+
+
+### Port-owner inventory and borrowed shader names — 2026-10-16
+
+The `5cdecb946` normal baseline's owned headless session (PID 1292437,
+API 4381) passes all 16 Griffin mission checks, then freezes through the shared
+`StepSimulation` boundary for a port inventory. There are 601 bound connections
+and 601 distinct targets; `CosimStatus`'s 74 causal-state sinks are a different
+inventory. Joining unique USD-path targets to `ListPorts` identifies 247 scene
+properties, 190 shader parameters, 132 Modelica inputs, 19 force actuators and
+seven rigid-body fields. Six generated scalar endpoints cannot be joined by
+display name because those names collide; this is a limitation of that join,
+not evidence of missing ports. The current native trace's write phase is
+0.6845 ms median versus 0.0576 ms for accumulation. The generic held-value
+`InputPorts` kernel is about 158 ns per resolved write, which does not attribute
+that whole production cost to registry validation. Evidence is
+`target/port-write-live-audit{.json,-summary.json,.log}`,
+`target/port-exchange-opt1-baseline.log`, and the saved probe source
+`target/port_exchange_bench.rs`.
+
+`lunco-materials::naming::to_snake_case` borrows unchanged input and streams
+changed spellings into owned output. Material projection, authoring and renderer
+callers use that one converter; ownership is acquired only at persistence. The
+authoring setter consumes a borrowed name rather than cloning it before its own
+storage operation. Runtime shader ports use the exact published WGSL key.
+Scene-property named
+queries use the existing slot resolver, whose native component-membership
+check does not sample color values; full inspection retains complete listing.
+No metadata/bounds/ownership validation, solver clock, native substep, rendered
+quality or exchange order is skipped or changed.
+
+The borrowing-contract baseline fails to compile against the owned-only return
+contract; both current naming tests pass. A local differential probe matches
+all 10,000 generated mixed ASCII/Unicode names. The allocation probe reports
+zero allocations for 262,144 canonical-name conversions, versus 1,048,576
+previously. With the probe's allocation counter enabled, `roughness` measures
+75.02 -> 4.76 ns/call and `plume_length_fraction` 130.25 -> 9.83 ns/call;
+`AOStrength` retains its spelling transformation with one allocation per call
+instead of four. These are helper-level observations, not scene FPS gains.
+Caller checks pass for `lunco-usd-sim-shader`, `lunco-render-bevy`, and
+`lunco-scene-authoring`; the separate scene-port check and all eight owner tests
+pass. No new owner warning is introduced; native Parry warnings pre-exist.
+Logs and probes use `target/material-name-*`, `target/material-naming-*` and
+`target/scene-port-declaration-*`.
+
+The default production application builds with regular
+`cargo run -p lunco-luncosim -j 4 -- --help` (23m56s). Headless scene-runner
+PID 2180983/API 4382 and windowed production PID 2184342/API 4383 both pass the
+authored plume gate and six shader-port checks at tick 241. Their printed plume
+metrics match exactly. The windowed host reports clear readiness and zero
+retained runtime errors. Both processes and ports are released. Evidence is
+`target/shader-port-{default-build,scene,windowed,windowed-driver}.log` and
+`target/shader-port-runtime-validation.json`; the latter retains the exact
+normal binary and source hashes. The shared
+`scripts/api/run_editor_scene_test.py` drives the windowed authored fixture.
+That shared runner also passes on PID 2203615/API 4384 at tick 241, with the
+same six checks and identical printed plume metrics; its process and port are
+released. Logs are `target/shader-port-windowed-shared{,-driver}.log`.
+A user-authorized clean of the inactive USD
+checkout's development outputs recovers 26.6 GiB while preserving its clean
+source state; `target/inactive-usd-dev-clean.json` records the audit.
+
+The headless Griffin mission inventory belongs to the earlier normal baseline.
+There is no fresh paired FPS cohort or full-Twin image for these changes.
+Whole-simulation/presentation isolation, 200 FPS, sub-1 ms physics and external
+FMU interoperability remain open.
+
+Shader resource fixtures declare explicitly typed values or assert rejection
+of an untyped driven input. The integer regression reproduces
+`16777217 -> 16777216` in the baseline named read. Runtime declarations,
+metadata and resolution all use the exact
+published WGSL key, including connected geometry inputs. Named/slot reads share
+one reader that widens integers directly to f64. All eight owner tests pass,
+including rejection of untyped driven inputs
+and integer writes. Logs are `target/shader-port-{baseline-tests,contract-baseline,contract-tests}.log`.
+The authored `lander_plume_activity` gate checks canonical inspection,
+undeclared-name rejection, named writes, non-mutating GPU-range rejection,
+release through `ReleasePort`, and the following physics tick's replacement
+of the test setpoint by its connected source. The check permits only the
+declared f32 GPU storage precision when comparing that input with its f64 source.
+
+### Continuous-query cost attribution — 2026-10-16
+
+Two fresh native exports of the existing `ccd-batch-current-tracy` capture
+complete successfully. In its recorded 146.558–153.558 s window, 420 physics
+cycles contain 4,028 continuous geometry sweeps. Their inclusive total is
+808.532 ms (1.925 ms per physics cycle); nested scoped query dispatch accounts
+for 522.818 ms (1.245 ms/cycle). Leaf trajectories account for 131.549 ms
+(0.313 ms/cycle) and swept BVH work for 45.371 ms (0.108 ms/cycle). These nested
+totals must not be added. Triangle/cylinder initial native contacts consume
+231.635 ms summed across workers, which is not an additional main-thread cost.
+Evidence is `target/ccd-cost-attribution{.json,-driver.log,-export.log,.py}`.
+
+Dispatch self time includes scoped worker waits. `ccd_query_chunk` now marks
+each actual immutable chunk evaluation, including direct serial execution, so
+the next capture can distinguish worker lifetimes from dispatch gaps. It does
+not change query assignment, correction order or geometry. The native
+`SubstepSchedule` already uses Bevy's single-threaded executor. This older
+instrumented cohort is diagnostic evidence, not candidate FPS acceptance.
+
+### Current UI integration — 2026-10-16
+
+Integrated source `f0285d63c` preserves main's scoped HUD and popup callback
+lifetimes. The normal default production build passes. Headless PID 2253284
+(API 4382) and windowed PID 2277746 (API 4384) pass all six authored plume
+checks at tick 241. The windowed UI preparation gate passes nine checks on
+PID 2309467/API 4382; the real window/input callback driver passes 18 authored
+assertions on PID 2310822/API 4384. All owned sessions exit and release their
+ports. Logs use `target/cosim-ui-integration-*`.
+
+The generated command reference combines fresh windowed and headless schemas
+with the unchanged optional networking schema, yielding all 275 commands.
+Fresh definitions take precedence. Networking source is unchanged since the
+recorded shared-stepping schema; no networking host is launched for validation.
+No full-Twin performance result is inferred from these focused gates.

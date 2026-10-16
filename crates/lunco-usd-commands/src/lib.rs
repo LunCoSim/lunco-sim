@@ -408,13 +408,21 @@ struct PendingUsdDiscards {
     tasks: Vec<PendingUsdDiscard>,
 }
 
-impl lunco_core::SceneResource for PendingUsdDiscards {}
+impl lunco_core::SceneResource for PendingUsdDiscards {
+    fn clear_scene(&mut self) {
+        self.tasks.retain(|discard| !discard.lease.is_scene_owned());
+    }
+}
 
 fn retire_pending_usd_discards(world: &mut World, doc: Option<DocumentId>) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingUsdDiscards>().tasks);
     let mut retained = Vec::new();
     for discard in pending {
-        if doc.is_some_and(|doc| discard.lease.document() != doc) {
+        let retire = doc.map_or_else(
+            || discard.lease.is_scene_owned(),
+            |doc| discard.lease.document() == doc,
+        );
+        if !retire {
             retained.push(discard);
         } else {
             let error = format!(

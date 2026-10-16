@@ -62,6 +62,7 @@ fn simulation_dependencies(me, ctx) {
 
 fn on_start(me, ctx) {
     this.doc = ();
+    this.proposal_request = ();
     this.elapsed = 0.0;
     this.done = false;
 }
@@ -153,14 +154,21 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    let existing_proposal = assembly_edit::propose(
-        this.doc, "Assembly", "Validate referenced body and hinge plan",
-        existing_hinge.ops, document.generation,
-    );
+    if this.proposal_request == () {
+        this.proposal_request = assembly_edit::propose(
+            this.doc, "Assembly", "Validate referenced body and hinge plan",
+            existing_hinge.ops, document.generation,
+        );
+        return;
+    }
+    let existing_proposal = this.proposal_request;
+    if existing_proposal.status == "pending" { existing_proposal = command_result(existing_proposal.id); }
+    if existing_proposal == () || existing_proposal.status == "pending" { return; }
     let review = assembly_edit::review_session(this.doc);
     if existing_proposal.ok == false || review.proposals.len() != 1
         || review.proposals[0].diagnostics.len() != 0 {
-        fail(this, "referenced body and hinge plan failed proposal validation");
+        fail(this, "referenced body and hinge plan failed proposal validation: "
+            + existing_proposal.to_string() + "; " + review.to_string());
         return;
     }
     assembly_edit::review_proposal(review.proposals[0].id, #{ Reject: () });

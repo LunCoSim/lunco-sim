@@ -123,6 +123,13 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def input_fingerprints():
+    changed = subprocess.check_output(['git', 'diff', '--name-only', 'HEAD'], cwd=ROOT, text=True).splitlines()
+    untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], cwd=ROOT, text=True).splitlines()
+    return {name: digest(ROOT/name) for name in sorted(set(changed + untracked + ['Cargo.lock']))
+            if (ROOT/name).is_file() and (name.endswith(('.rs', '.mo', '.rhai', '.usda', '.usdc', '.py', 'Cargo.toml')) or name == 'Cargo.lock')}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reference', type=Path, default=ROOT/'scripts/tests/fixtures/deterministic-physics-reference.json')
@@ -138,6 +145,9 @@ def main():
     profiles = args.profile or list(baseline['profiles'])
     if not profiles or len(profiles) != len(set(profiles)): parser.error('profiles must be non-empty and unique')
     args.logs.mkdir(parents=True, exist_ok=True)
+    inputs = input_fingerprints()
+    checkout_revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    integration_parent = subprocess.run(['git', 'rev-parse', '--verify', '-q', 'MERGE_HEAD'], cwd=ROOT, text=True, capture_output=True).stdout.strip()
     captured = {}
     receipts = {}
     for profile in profiles:
@@ -156,12 +166,11 @@ def main():
             receipts[profile] = {suffix: digest(args.logs/f'{profile}.{suffix}.log') for suffix in ('first', 'second')}
             print(f'PAIRED EXACT {profile}', flush=True)
         captured[profile] = first
-    status = subprocess.check_output(['git', 'ls-files', '--modified', '--others', '--exclude-standard'], cwd=ROOT, text=True).splitlines()
-    inputs = {name: digest(ROOT/name) for name in sorted(set(status + ['Cargo.lock']))
-              if (ROOT/name).is_file() and (name.endswith(('.rs', '.mo', '.rhai', '.usda', '.usdc', '.py', 'Cargo.toml')) or name == 'Cargo.lock')}
+    if input_fingerprints() != inputs:
+        raise RuntimeError('capture inputs changed while the production profiles were running')
     candidate = {key: baseline[key] for key in ('schema', 'comparison')}
     candidate.update(recorded_at_utc=datetime.now(timezone.utc).isoformat(), profiles=captured,
-                     source={'capture_checkout_revision': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+                     source={'capture_checkout_revision': checkout_revision, 'integration_parent_revision': integration_parent,
                              'binary': {'name': BINARY.name, 'sha256': digest(BINARY)},
                              'input_sha256': inputs, 'paired_log_sha256': receipts,
                              'capture_instrumentation': 'Production Rhai typed evidence through the bounded scene-test evidence wire.',
