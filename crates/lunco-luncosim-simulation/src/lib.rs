@@ -5,6 +5,8 @@
 //! workbench, picking, or tutorial policy. Those capabilities are layered by
 //! the application/UI packages.
 
+mod physics_presentation;
+
 use avian3d::prelude::PhysicsPlugins;
 use bevy::prelude::*;
 use big_space::prelude::*;
@@ -167,6 +169,7 @@ fn luncosim_physics_plugins() -> impl PluginGroup {
         .disable::<avian3d::dynamics::ccd::CcdPlugin>()
         .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
+        .add(physics_presentation::PhysicsPresentationPlugin)
 }
 
 /// The luncosim's gravity before any scene is loaded, and the value scene
@@ -226,6 +229,17 @@ mod physics_configuration_tests {
             .add_plugins(luncosim_physics_plugins());
 
         let body = app.world_mut().spawn(RigidBody::Dynamic).id();
+
+        assert!(
+            app.world()
+                .get::<bevy_transform_interpolation::NonlinearTranslationEasing>(body)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<bevy_transform_interpolation::NonlinearRotationEasing>(body)
+                .is_some()
+        );
 
         assert!(
             app.world().get::<TranslationInterpolation>(body).is_some(),

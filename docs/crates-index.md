@@ -282,7 +282,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
-| **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
+| **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics and bounded physical render easing through native endpoint states, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, exact-owner asynchronous experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
 | **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
@@ -1517,7 +1517,9 @@ celestial, avatar, or scene-command plugins.
 
 **`lunco-luncosim-simulation`**
 Renderer-independent domain composition above the host substrate. It owns the
-persistent world shell, Avian physics, USD loading/projection, terrain,
+persistent world shell, Avian physics, bounded physical render easing through
+the shared time owner and native interpolation endpoint lifecycle, USD
+loading/projection, terrain,
 celestial, Modelica/cosimulation, mobility, avatar, controller, hardware,
 telemetry, scene commands, and the headless execution plugin. Application
 services remain in `lunco-luncosim-services` and Rhai integration remains in

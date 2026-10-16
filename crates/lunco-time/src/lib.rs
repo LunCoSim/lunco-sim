@@ -896,6 +896,25 @@ fn interpolated_sim_tick(completed_tick: u64, mission_tick0: u64, alpha: f64) ->
     }
 }
 
+/// Interpolation between completed simulation states. Queued fixed cycles are
+/// backlog, never permission to extrapolate beyond the latest completed state.
+/// Render easing and the presentation-time sample share this clock boundary.
+pub fn simulation_presentation_fraction(
+    fixed: &Time<Fixed>,
+    virtual_time: &Time<Virtual>,
+    coupling: Option<&lunco_core_runtime::SimulationBarrier>,
+    reset: bool,
+) -> f64 {
+    let held = virtual_time.is_paused() || coupling.is_some_and(|state| state.held);
+    if reset {
+        0.0
+    } else if held {
+        1.0
+    } else {
+        fixed.overstep_fraction_f64().clamp(0.0, 1.0)
+    }
+}
+
 fn update_simulation_presentation_time(
     tick: Res<SimTick>,
     mission: Res<MissionClock>,
@@ -905,16 +924,7 @@ fn update_simulation_presentation_time(
     mut presentation: ResMut<SimulationPresentationTime>,
 ) {
     let reset = mission.is_changed();
-    let held = virtual_time.is_paused() || coupling.is_some_and(|state| state.held);
-    let alpha = if reset {
-        0.0
-    } else if held {
-        // A pause presents the latest completed physical state and then holds
-        // it. This is the upper interpolation endpoint, never a prediction.
-        1.0
-    } else {
-        fixed.overstep_fraction_f64().clamp(0.0, 1.0)
-    };
+    let alpha = simulation_presentation_fraction(&fixed, &virtual_time, coupling.as_deref(), reset);
     let sim_tick = if reset {
         tick.0 as f64
     } else {

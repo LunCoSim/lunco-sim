@@ -151,6 +151,12 @@ completed tick is `n`, the running presentation sample is:
 sample tick = n - 1 + Time<Fixed>.overstep_fraction()
 ```
 
+`simulation_presentation_fraction` supplies this same interval to the physical
+Transform easing consumer in the shared application composition. Native
+interpolation retains endpoint capture, change invalidation and FixedFirst
+restore; its public nonlinear-easing markers select the application consumer.
+No render read consumes or discards queued simulation duration.
+
 The fraction is bounded to `[0, 1]`, so the sample stays between two completed
 physics states and never predicts beyond `SimTick`. On pause or a simulation
 barrier it presents the upper endpoint, `n`, then remains fixed. The sample's

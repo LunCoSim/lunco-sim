@@ -510,3 +510,36 @@ schema conversion test pass (`target/coordinate-drive-mechanism-tests.log` and
 `is_infinite()` to test the actual contract; the prior magnitude comparison
 reported false for the observed positive infinity in Rhai. Contact-kernel,
 sustained vehicle and performance qualification remain separate open work.
+
+## Bounded physical presentation
+
+The fixed runner retains pending authoritative cycles. Native interpolation's
+raw `Time<Fixed>::overstep_fraction()` may therefore exceed one while the host
+catches up. Griffin reproduced a non-unit dish render quaternion after that
+extrapolation; canonical simulation admission correctly rejected it.
+
+`lunco-time::simulation_presentation_fraction` is the shared owner of the
+completed-state interval for both presentation time and physical rendering.
+`lunco-luncosim-simulation` selects the maintained interpolation library's public
+custom-easing markers and consumes its public endpoint states before its easing
+bookkeeping. Native capture, invalidation and FixedFirst restore remain installed.
+Pause presents the completed endpoint; backlog bounds presentation at that
+endpoint without consuming or discarding simulation time. Invalid endpoints
+raise a structured runtime fault and hold physics before asserting quaternion
+math. This is continuous render math with no changeable policy hook.
+
+Three generic composition/lifecycle seam tests pass, including retained backlog,
+pause, canonical-position preservation, native restore, and malformed-endpoint
+faulting (`target/bounded-physics-presentation-tests.log`). Regular `cargo run`
+compiles and launches. The production force-drive and coupled/uncoupled gear
+gates pass 18/5/5 checks (`target/bounded-presentation-gates.json`).
+
+The owned headful Griffin run reports touchdown and ramp deployment and advances
+past 337 simulation seconds without the reproduced rotation fault. Interactive
+user inputs occurred during this run; it is not an unattended mission verdict.
+A separate lightweight sample advances 10.016667 simulation seconds in 10.025039
+wall seconds (`target/bounded-griffin-light-wall-progress.json`). The inspected
+image `target/bounded-griffin-view.png` retains lander, rover, ramp and terrain.
+Its approximately 65 FPS and 1.3–1.6 ms native physics timings do not meet the
+performance target. Full UI/simulation ownership separation, collision-kernel
+qualification and external FMU interoperability remain open.

@@ -22,6 +22,15 @@ architectures, compiler versions, or solver profiles. Those numerical promises
 need an explicit deterministic profile and their own cross-platform evidence.
 Rendering and interpolated presentation samples are outside authoritative state.
 
+`lunco-time::simulation_presentation_fraction` owns the bounded interval between
+completed physics states. The presentation-time sample and application physical
+easing both consume that owner. Retained fixed backlog never becomes an
+extrapolation fraction and is not discarded by a presentation read. The shared
+headless/headful application composes native endpoint capture, invalidation and
+FixedFirst restore with its easing consumer through the public nonlinear-easing
+markers. Invalid endpoints fault and hold physics before quaternion math. This
+is a continuous clock/geometry invariant, with no Twin-specific Rhai policy.
+
 The workspace enables Avian's maintained `enhanced-determinism` feature. In
 addition to deterministic math, it selects Parry's ordered contact-subdetector
 caches, including heightfield manifolds. Terrain collider bakes commit complete
@@ -64,7 +73,7 @@ ordinary pass and closure together, not just their isolated numerical kernels.
 
 The shared headless/headful physics composition disables Avian's XPBD plugin.
 The application joint owner composes its public preparation and impulse kernels
-with ordered warm-start, ordinary and closure passes, f64 velocity projection
+with ordered drive, geometric and closure passes, f64 velocity projection
 before contact relaxation, and reaction finalization. The native contact solver
 stays installed. The application finalizer stages all joint reactions before
 publishing any of them. `JointForces` retains the completed report while a body

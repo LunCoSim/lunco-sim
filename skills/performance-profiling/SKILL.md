@@ -116,6 +116,11 @@ Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against
 monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
 a short native physics service time does not certify realtime co-simulation.
+Physical render easing consumes the time owner's bounded
+`simulation_presentation_fraction`; full queued cycles are never a render
+extrapolation factor. The common application plugin uses native endpoint
+capture/restore with public custom-easing markers. Do not remove queued time or
+loosen quaternion admission to conceal an invalid render pose.
 For scene-test diagnostics, `--tick-hz` varies manual update pacing; use the
 runtime's `Time<Fixed>` quantum and elapsed time when interpreting physics cost.
 Completed Modelica receipts have one reader in `SimulationCompletions`, serviced

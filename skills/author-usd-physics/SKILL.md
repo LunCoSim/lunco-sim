@@ -807,6 +807,16 @@ assert penetration against the authored numerical tolerance, require a real
 collision impulse on the exact pair, and require all supporting legs to contact
 terrain after settling.
 
+## Physical render time
+
+The shared application composition uses the native interpolation endpoint
+lifecycle with `lunco-time::simulation_presentation_fraction`. Queued fixed-step
+demand remains in the pacing clock; rendering holds the latest completed pose
+when that demand exceeds one step. Native FixedFirst restores solved endpoints
+before the bridge reads physical motion. Use the public nonlinear-easing
+markers for this application integration. Do not normalize a failed render
+rotation or loosen physical admission to conceal extrapolation.
+
 ## Native drive integration and contact ownership
 
 USD force and acceleration coefficients retain their dimensional motor metadata.
