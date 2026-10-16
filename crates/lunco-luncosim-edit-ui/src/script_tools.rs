@@ -1965,6 +1965,7 @@ pub(crate) fn on_scene_pointer_event(
         .map(|id| id.get())
         .unwrap_or_default();
     commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+        binding: None,
         tool: "scene_interaction".to_string(),
         hook: "on_pointer".to_string(),
         args: context.clone(),
@@ -2339,6 +2340,7 @@ pub(crate) fn flush_scene_pointer_moves(
         };
         let args = merge_pointer_move_context(context.args, &subscription.context);
         commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+            binding: None,
             tool: subscription.tool.clone(),
             hook: subscription.hook.clone(),
             args,

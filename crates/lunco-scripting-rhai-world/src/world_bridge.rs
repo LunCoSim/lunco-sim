@@ -1530,6 +1530,10 @@ fn build_world_engine_base(
     engine.register_fn(
         "open_context_menu",
         |screen_position: Dynamic, items: Dynamic| -> bool {
+            if bridge_core::execution_context().phase == lunco_core::RuntimePhase::Stop {
+                warn!("[rhai-ui] context menu rejected during scenario teardown");
+                return false;
+            }
             if let Err(error) = bridge_core::ensure_script_mutation_allowed() {
                 warn!("[rhai-ui] context menu rejected: {error}");
                 return false;
@@ -5292,6 +5296,8 @@ impl WorldScriptWorkspace {
 pub struct WorldToolOwner {
     scope: lunco_tools::ToolScope,
     twin: Option<lunco_workspace::TwinId>,
+    callback: Option<(Entity, bridge_core::ToolHookBinding)>,
+    scene_generation: Option<u64>,
 }
 
 impl WorldToolOwner {
@@ -5300,18 +5306,13 @@ impl WorldToolOwner {
         hook: &str,
         requested_twin: Option<u64>,
         workspace: Option<&lunco_workspace::WorkspaceResource>,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<Self, String> {
-        validate_tool_hook_identifiers(tool, hook)?;
-        let (scope, registered) = lunco_tools::get_with_scope(tool)
-            .ok_or_else(|| format!("script tool '{tool}' is not registered"))?;
-        if !registered
-            .functions()
-            .iter()
-            .any(|function| function == &format!("{hook}/1"))
-        {
-            return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
-        }
-        Self::from_scope(scope, script_flow_twin(requested_twin)?, workspace)
+        let scope = lunco_tools::resolve_hook(tool, hook)?;
+        let mut owner = Self::from_scope(scope, script_flow_twin(requested_twin)?, workspace)?;
+        owner.scene_generation = scene.and_then(|scene| scene.completed_generation());
+        owner.validate_scene(scene)?;
+        Ok(owner)
     }
 
     fn from_scope(
@@ -5338,6 +5339,8 @@ impl WorldToolOwner {
         }
         let owner = Self {
             scope,
+            callback: None,
+            scene_generation: None,
             twin: registered_twin
                 .or(requested_twin)
                 .map(lunco_workspace::TwinId::new),
@@ -5356,13 +5359,50 @@ impl WorldToolOwner {
         Ok(())
     }
 
-    fn validate(
+    fn validate(&self, tool: &str, world: &World) -> Result<(), String> {
+        self.validate_twin(world.get_resource::<lunco_workspace::WorkspaceResource>())?;
+        self.validate_scope(tool, lunco_tools::active_scope(tool).as_ref())?;
+        self.validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
+        self.validate_callback(world)
+    }
+
+    fn validate_scene(
         &self,
-        tool: &str,
-        workspace: Option<&lunco_workspace::WorkspaceResource>,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<(), String> {
-        self.validate_twin(workspace)?;
-        self.validate_scope(tool, lunco_tools::active_scope(tool).as_ref())
+        lunco_core::scene::validate_interaction_scene(self.scene_generation, scene)
+    }
+
+    fn validate_callback(&self, world: &World) -> Result<(), String> {
+        if let Some((entity, admitted)) = &self.callback {
+            if world.get::<bridge_core::ToolHookBinding>(*entity) != Some(admitted) {
+                return Err("UI callback binding has been retired or replaced".into());
+            }
+            admitted
+                .validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
+        }
+        Ok(())
+    }
+
+    /// Pin the exact callback lease before placing work on the interaction queue.
+    pub fn bind_callback(
+        &mut self,
+        entity: Entity,
+        binding: &bridge_core::ToolHookBinding,
+        tool: &str,
+        hook: &str,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
+    ) -> Result<(), String> {
+        if binding.tool != tool
+            || binding.hook != hook
+            || binding.owner_twin_id != self.twin.map(|id| id.raw())
+            || binding.tool_scope != self.scope
+        {
+            return Err("UI callback endpoint does not match its explicit binding".into());
+        }
+        binding.validate_scene(scene)?;
+        self.callback = Some((entity, binding.clone()));
+        Ok(())
     }
 
     fn validate_scope(
@@ -5413,21 +5453,6 @@ fn validate_active_script_twin(
             "Rhai call Twin owner {} is no longer active",
             twin.raw()
         ));
-    }
-    Ok(())
-}
-
-fn validate_tool_hook_identifiers(tool: &str, hook: &str) -> Result<(), String> {
-    if tool.is_empty()
-        || !tool
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        || hook.is_empty()
-        || !hook
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Err(format!("invalid script-tool hook '{tool}::{hook}'"));
     }
     Ok(())
 }
@@ -5630,7 +5655,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 workspace: admitted,
                 ..
             } => admitted.validate(workspace),
-            PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, workspace),
+            PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, world),
         };
         if let Err(error) = ownership {
             warn!("[rhai] {error}");
@@ -5798,6 +5823,7 @@ pub fn eval_tool_with_world_as(
         hook,
         None,
         world.get_resource::<lunco_workspace::WorkspaceResource>(),
+        world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
     )?;
     let engine = world_script_engine(world)?
         .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
@@ -5824,14 +5850,8 @@ fn eval_tool_with_engine(
     cycle: lunco_core::RuntimeCycle,
     owner: &WorldToolOwner,
 ) -> Result<String, String> {
-    validate_tool_hook_identifiers(tool, hook)?;
-    owner.validate(
-        tool,
-        world.get_resource::<lunco_workspace::WorkspaceResource>(),
-    )?;
-    if !lunco_tools::has_function(tool, &format!("{hook}/1")) {
-        return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
-    }
+    lunco_tools::resolve_hook(tool, hook)?;
+    owner.validate(tool, world)?;
 
     use std::sync::{Arc, Mutex};
     let out = Arc::new(Mutex::new(String::new()));
@@ -6344,6 +6364,42 @@ mod tests {
             lunco_workspace::TwinMode::Orphan(_) => panic!("fixture must be a workspace folder"),
         };
         workspace.add_twin(twin)
+    }
+
+    #[test]
+    fn queued_callback_rejects_replaced_and_despawned_binding_entities() {
+        use super::{World, WorldToolOwner, bridge_core};
+
+        let mut world = World::new();
+        let binding = bridge_core::ToolHookBinding {
+            tool: "probe".into(),
+            hook: "apply".into(),
+            owner_twin_id: None,
+            scene_generation: None,
+            tool_scope: lunco_tools::ToolScope::Application,
+        };
+        let entity = world.spawn(binding.clone()).id();
+        let mut owner =
+            WorldToolOwner::from_scope(lunco_tools::ToolScope::Application, None, None).unwrap();
+        owner
+            .bind_callback(entity, &binding, "probe", "apply", None)
+            .unwrap();
+        assert!(owner.validate_callback(&world).is_ok());
+        assert!(
+            owner
+                .bind_callback(entity, &binding, "other", "apply", None)
+                .is_err()
+        );
+        world
+            .get_mut::<bridge_core::ToolHookBinding>(entity)
+            .unwrap()
+            .hook = "changed".into();
+        assert!(owner.validate_callback(&world).is_err());
+        world.entity_mut(entity).insert(binding.clone());
+        assert!(owner.validate_callback(&world).is_ok());
+        world.despawn(entity);
+        world.spawn(binding);
+        assert!(owner.validate_callback(&world).is_err());
     }
 
     #[test]

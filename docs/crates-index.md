@@ -1195,8 +1195,12 @@ Rhai-facing HUD, spotlight, coach-mark, and recovery surfaces and is installed
 explicitly by a host after `lunco-workbench`. The generic `HelpAnchors` and
 `ViewportPlaceholder` resources remain in `lunco-workbench-core`, so hosts can
 publish empty-state guidance and typed actions without making the shell depend
-on a tutorial implementation. The shell defers those actions until its layout
-render scope ends.
+on a tutorial implementation. Script-owned and explicitly named scene HUD cards
+apply one perspective scope to hints, objectives, actions, and input. Their
+callback leases retire with card replacement, script retirement, scene reset,
+and Twin close; the shared scripting queue revalidates leases and scene
+generations before execution. The shell defers its actions until layout render
+scope ends.
 
 **`lunco-workbench-file-dialog`**
 The production file-dialog capability used by the workbench and domain UI.
@@ -1219,6 +1223,8 @@ browser task or on teardown. Native dialog retirement suppresses completion;
 Reusable HUI/Flair surface presentation. It owns the generic manifest asset
 loader, retained tree lifecycle, authored placement and styling bridge, input
 regions, render-readiness acknowledgement, and open semantic action transport.
+Semantic input carries the Twin and committed scene captured at emission, so
+deferred delivery cannot acquire a replacement scene or Twin.
 The `lunco-luncosim-ui` host supplies capture mode and named gates and handles
 application actions; the runtime UI crate does not name cameras, terrain, or
 models. Runtime surface assets remain under `assets/ui/` and are loaded through
@@ -1455,7 +1461,9 @@ Production Rhai authoring/query package. It owns catalog discovery, script diagn
 Language-neutral, interpreter-free world bridge for scripting backends. It owns
 native value construction, reflected ECS reads/writes, typed `HookValue`
 command/query dispatch, hierarchy, authority, capabilities, and the resolved
-scenario audience. It has no JSON transport dependency. Rhai and Python
+scenario audience. It also defines explicit `ToolHookBinding` callback leases
+and the `ScriptInstanceRetired` lifecycle edge. Scene transaction validation
+remains owned by `lunco-core`. It has no JSON transport dependency. Rhai and Python
 provide only their native value builders and language bindings. Clock,
 spatial/physics/celestial, and USD identity projections live in separate
 adapters so a host that needs generic bridge access does not compile those

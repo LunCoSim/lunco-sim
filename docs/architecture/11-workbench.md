@@ -272,13 +272,22 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
-The mission objective checklist uses the optional
-`lunco_workbench_guided_ui::GuidedObjectivesVisibility` host policy. LunCoSim
-restricts the checklist to the `sandbox_view` perspective; other hosts show it
-in every perspective by default. Tutorial hints, authored action buttons,
-spotlights, coach cards, and recovery surfaces remain available over Builder
-and Editor when a lesson targets those views. Their authored anchors still have
-to resolve in the active layout. Application surfaces stack, top to bottom: menus, popups (egui `Foreground`),
+Script-driven hint/objective/action cards are owned by
+`lunco-workbench-guided-ui`. `GuidedHudVisibility` restricts the complete card;
+LunCoSim defaults it to `sandbox_view`. Rhai declares a card-specific allowlist
+through `hud_perspectives(ids)`; an empty list allows every perspective. A script
+has its own implicit card; an explicit `hud` name lets several producers share
+one scene-owned card within a Twin. Cards never inherit another script's scope.
+Hidden cards create neither paint nor input areas. Visible cards stack by stable
+owner identity using their measured height. Coach, spotlight, and recovery
+surfaces retain their own layout-anchor contracts.
+
+Action sets carry explicit `ToolHookBinding` entity leases, validated by the
+shared scripting queue at admission and execution. Replacement and teardown
+despawn leases, so queued callbacks cannot bind to a new same-name card or Twin.
+See [runtime-authored UI](runtime-authored-ui.md#script-driven-hud-cards).
+
+Application surfaces stack, top to bottom: menus, popups (egui `Foreground`),
 UI windows/dialogs/notices (`lunco_theme::UI_ORDER`), the general HUD, then the
 specific HUD (`lunco_theme::HudTier`, egui `Background` above docked panels,
 ordered once per pass by `lunco_theme::stack_hud_layers`). Authored runtime HUI

@@ -5,6 +5,9 @@
 //! controller state, so a command aimed at the wrong entity cannot pass the
 //! lesson merely because some other vessel was possessed.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn human_drives(id) {
     if id < 0 { return false; }
     let role = controller(id);

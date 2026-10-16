@@ -15,7 +15,6 @@ api-transport = [
     "dep:lunco-celestial-spatial",
     "dep:lunco-scene-camera",
     "dep:lunco-scene-commands",
-    "dep:lunco-scripting-bridge-core",
     "lunco-luncosim-runtime/api-transport",
     "lunco-modelica-ui/api",
 ]
@@ -133,7 +132,7 @@ lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["window-audience", "rhai"] }
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
-lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-sysml-ui = { path = "../lunco-sysml-ui", optional = true }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }

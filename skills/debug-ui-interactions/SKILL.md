@@ -21,6 +21,14 @@ part of the failure.
 
 ## Use the real application input path
 
+Launch timed synthetic gestures with `--no-throttle` when the owned window may
+be unfocused. Power-save frame pacing can stretch a press/release beyond the
+native click-duration limit. Send separate press/release phases across frames
+within a short gesture; use `InjectWindowInput` directly when measuring timing.
+After publishing or switching a surface, capture its rendered layout before
+injecting pointer input. A command acknowledgement precedes widget layout and
+does not establish a hit target.
+
 Build or resolve the production binary as `LUNCOSIM_BIN`, launch exactly one
 windowed `luncosim` process with an explicit free API port, and wait for
 `/api/ready` before injecting input. The `InjectWindowInput` command and

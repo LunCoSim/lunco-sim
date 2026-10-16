@@ -1531,6 +1531,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     stop_error = driver.runtime.call_hook(*entity, ScenarioHook::Stop, gid);
                 }
                 driver.runtime.forget_program(*entity);
+                if gid > 0 {
+                    world.trigger(bridge_core::ScriptInstanceRetired {
+                        script: lunco_core::GlobalEntityId::from_raw(gid as u64),
+                    });
+                }
 
                 let state = driver.fsm.entry(*entity).or_default();
                 state.started = false;
@@ -1941,6 +1946,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .call_hook(entity, ScenarioHook::Stop, state.gid);
             }
             driver.runtime.forget(entity);
+            if state.gid > 0 {
+                world.trigger(bridge_core::ScriptInstanceRetired {
+                    script: lunco_core::GlobalEntityId::from_raw(state.gid as u64),
+                });
+            }
         });
         if let Some(mut participants) =
             world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
@@ -2603,6 +2613,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         None
                     };
                     runtime.forget_program(entity);
+                    if gid > 0 { world.trigger(bridge_core::ScriptInstanceRetired { script: lunco_core::GlobalEntityId::from_raw(gid as u64) }); }
                     if let Some(mut participants) = world
                         .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
                     {
@@ -2956,6 +2967,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         }
                     }
                     runtime.forget(entity);
+                    if st.gid > 0 { world.trigger(bridge_core::ScriptInstanceRetired { script: lunco_core::GlobalEntityId::from_raw(st.gid as u64) }); }
                     if let Some(mut participants) = world
                         .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
                     {

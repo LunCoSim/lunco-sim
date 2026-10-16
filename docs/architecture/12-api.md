@@ -869,9 +869,12 @@ pattern in `skills/test-via-api/SKILL.md`.
 ### Deferred command responses
 
 Commands that require work after dispatch register with
-`register_deferred_command`. The executor holds the original transport request
-open, and the owning handler emits one `ApiResponseEvent` on its correlation
-id. This is used by `CaptureScreenshot` and `RunRhai`; callers receive the
+`register_deferred_command`. Registration uses the command's Rust type identity.
+The reflected dispatcher scopes `PendingApiRequest` around that command's
+handler, then clears it; concurrently queued requests cannot share a handoff.
+Admission failures return a terminal response immediately. For admitted work,
+the owner emits one `ApiResponseEvent` on the original correlation id.
+This is used by `CaptureScreenshot` and `RunRhai`; callers receive the
 actual payload or error without a second endpoint or an exposed command id.
 
 ```bash

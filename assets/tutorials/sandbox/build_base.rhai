@@ -23,6 +23,9 @@
 //! and may change without changing what was spawned, so the lesson never
 //! infers identity from them.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 /// True if any spawned catalog root carries the exact content identity.
 fn has_structure(entry_id) {
     for e in list_entities() {

@@ -30,6 +30,9 @@
 //! only for the duration of one evaluation. Single-threaded (FixedUpdate / wasm)
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
+mod tool_binding;
+pub use tool_binding::ToolHookBinding;
+
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -1754,6 +1757,14 @@ thread_local! {
 /// if none).
 pub fn current_self() -> u64 {
     CURRENT_SELF.with(|c| c.get())
+}
+
+/// Published by the script lifecycle owner after an instance is stopped or
+/// invalidated for recompilation. Presentation consumers retire instance leases.
+#[derive(bevy::prelude::Event, Clone, Copy, Debug)]
+pub struct ScriptInstanceRetired {
+    /// Stable identity of the outgoing script instance's host.
+    pub script: lunco_core::GlobalEntityId,
 }
 
 /// Temporarily bind bridge operations to one executing script entity.

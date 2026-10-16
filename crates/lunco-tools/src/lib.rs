@@ -305,6 +305,26 @@ pub fn has_function(name: &str, sig: &str) -> bool {
     get(name).is_some_and(|t| t.functions().iter().any(|f| f == sig))
 }
 
+/// Resolve a callable one-argument hook and its authoritative registration owner.
+pub fn resolve_hook(tool: &str, hook: &str) -> Result<ToolScope, String> {
+    if [tool, hook]
+        .iter()
+        .any(|id| id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    {
+        return Err(format!("invalid script-tool hook '{tool}::{hook}'"));
+    }
+    let (scope, registered) =
+        get_with_scope(tool).ok_or_else(|| format!("script tool '{tool}' is not registered"))?;
+    if !registered
+        .functions()
+        .iter()
+        .any(|f| f == &format!("{hook}/1"))
+    {
+        return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
+    }
+    Ok(scope)
+}
+
 /// The textual source of a registered tool, when it is source-defined.
 pub fn source(name: &str) -> Option<String> {
     get(name).and_then(|tool| tool.source().map(str::to_string))

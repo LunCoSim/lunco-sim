@@ -9,6 +9,9 @@
 //! when needed but is not a completion condition. Tilt is read with `is_tipped` /
 //! `tilt_deg` (prelude, off `world_rotation`).
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.

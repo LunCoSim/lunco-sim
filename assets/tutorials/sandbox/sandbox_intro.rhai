@@ -5,6 +5,9 @@
 //! uses the shared Next control. The current avatar camera is free-flight; its
 //! controls come from the authored keymap, not from a tutorial-owned binding.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn steps() {
     [
         // 0

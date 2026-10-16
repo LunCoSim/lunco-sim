@@ -6,6 +6,9 @@
 //! the cards explain each, and the student may possess and drive any of them
 //! between cards.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn steps() {
     [
         #{ anchor: "",                      title: "Compare three rovers",      body: "Three rovers are lined up on the yard: green Explorer LT, amber Standard, and red Hauler. Select each rover and read its Inspector values." },

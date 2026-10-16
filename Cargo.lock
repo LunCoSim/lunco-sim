@@ -9785,6 +9785,7 @@ dependencies = [
  "lunco-port-core",
  "lunco-telemetry-core",
  "lunco-time",
+ "lunco-tools",
  "lunco-workspace",
 ]
 
@@ -11420,7 +11421,10 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "lunco-api-core",
+ "lunco-command-contracts",
  "lunco-core",
+ "lunco-scripting",
  "lunco-scripting-bridge-core",
  "lunco-telemetry-core",
  "lunco-theme",

@@ -59,9 +59,13 @@ Use the shared prelude:
 - `input_binding(...)`/`input_hint(...)` for the controller-owned semantic
   labels.
 
-In LunCoSim, mission objectives are shown in View. Tutorial hints and actions
-remain visible in every perspective, as do spotlight and coach-step overlays;
-use those overlays to guide learners toward Builder or Editor panel anchors.
+LunCoSim defaults complete HUD cards to View. A lesson that guides work across
+perspectives declares `hud_perspectives([])` in its initialization; a lesson
+limited to particular layouts declares their registered ids instead. The
+declaration applies only to that script's card, including objectives and input.
+Use ordinary `hint(...)` and mission helpers afterward. Spotlights and coach
+steps use their existing layout anchors. Do not inspect lesson names or special
+case tutorial assets in Rust to choose visibility.
 
 Use `panel.center` for the viewport or central work area, a generic
 `panel.side_browser`, `panel.right_inspector`, or `panel.bottom` anchor for a

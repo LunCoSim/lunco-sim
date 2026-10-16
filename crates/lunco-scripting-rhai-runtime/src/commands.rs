@@ -82,6 +82,11 @@ pub struct RunRhaiTool {
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhaiToolHook {
+    /// Explicit UI callback lease. Retired/replaced bindings reject at admission
+    /// and again before queued execution. Omitted for ordinary tool calls.
+    #[serde(default)]
+    #[reflect(default)]
+    pub binding: Option<Entity>,
     /// Registered tool namespace, for example `waypoint_editor`.
     pub tool: String,
     /// One-argument function in that namespace, without `/1`.
@@ -254,9 +259,17 @@ fn on_run_rhai_tool(
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let owner = WorldToolOwner::capture(&cmd.tool, "on_click", None, workspace.as_deref())?;
+    let owner = WorldToolOwner::capture(
+        &cmd.tool,
+        "on_click",
+        None,
+        workspace.as_deref(),
+        scene.as_deref(),
+    )
+    .inspect_err(|error| warn!("[rhai] {error}"))?;
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
@@ -289,14 +302,27 @@ fn on_run_rhai_tool_hook(
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+    bindings: Query<&lunco_scripting_bridge_core::ToolHookBinding>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let owner = WorldToolOwner::capture(
+    let mut owner = WorldToolOwner::capture(
         &cmd.tool,
         &cmd.hook,
         cmd.owner_twin_id,
         workspace.as_deref(),
-    )?;
+        scene.as_deref(),
+    )
+    .inspect_err(|error| warn!("[rhai] {error}"))?;
+    if let Some(entity) = cmd.binding {
+        let binding = bindings
+            .get(entity)
+            .map_err(|_| "UI callback binding has been retired".to_owned())
+            .inspect_err(|error| warn!("[rhai] {error}"))?;
+        owner
+            .bind_callback(entity, binding, &cmd.tool, &cmd.hook, scene.as_deref())
+            .inspect_err(|error| warn!("[rhai] {error}"))?;
+    }
     let id = active.get().unwrap_or(0);
     let authority = guard.and_then(|g| g.0);
     let correlation_id =

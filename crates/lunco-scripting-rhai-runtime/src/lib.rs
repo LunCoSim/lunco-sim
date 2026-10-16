@@ -216,6 +216,7 @@ fn dispatch_workbench_menu_action(
         return;
     };
     commands.trigger(commands::RunRhaiToolHook {
+        binding: None,
         tool: tool.clone(),
         hook: hook.clone(),
         args: args.clone(),

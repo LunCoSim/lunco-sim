@@ -6,6 +6,9 @@
 //! on real actions, never a timer (see first_drive.rhai for the pattern this
 //! follows).
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn on_start(me, ctx) {
     // The application catalog selects the scene before this scenario starts.
     // Ordering belongs to the catalog; this script owns only its observable

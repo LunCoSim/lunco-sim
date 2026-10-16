@@ -18,16 +18,20 @@
 //! reusable anchor registry and viewport placeholder live in
 //! `lunco-workbench-core`.
 //!
-//! Command payloads are single strings (objectives arrive pre-formatted as a
-//! checklist block from the rhai prelude) — the same trivially-marshalled shape
-//! as `ShowNotification.text`, avoiding any nested-collection reflection.
+//! Commands carry typed presentation records. Cards have independent identity,
+//! perspective scope, and callback leases; coaches retain anchored presentation.
+
+mod hud;
+pub use hud::{
+    GuidedHudAction, GuidedHudActionRequested, GuidedHudVisibility, InspectGuidedHud,
+    SetGuidedHudActions, SetGuidedHudPerspectives, SetHint, SetObjectives,
+};
 
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
-use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
 /// Shared UI layer for guided rings, coach cards, and recovery surfaces: above
@@ -41,19 +45,7 @@ pub const GUIDED_OVERLAY_ORDER: egui::Order = lunco_theme::UI_ORDER;
 /// menus and window controls remain above both layers in `Foreground`.
 pub const GUIDED_SCRIM_ORDER: egui::Order = egui::Order::Background;
 
-/// Optional host restriction for the persistent mission-objectives checklist.
-///
-/// `None` keeps objectives available in every perspective. Tutorial hints,
-/// action buttons, coach tours, spotlights, and recovery surfaces are separate
-/// teaching presentation and do not use this gate.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct GuidedObjectivesVisibility {
-    /// Perspective that may display the mission checklist, when restricted.
-    pub visible_in_perspective: Option<PerspectiveId>,
-}
-
-/// Persistent guided HUD + spotlight state. Always present (headless too) so
-/// the commands never panic on a missing resource; only the draw is ui-gated.
+/// Anchored coach, spotlight, and recovery presentation, independent of HUD cards.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct GuidedOverlay {
     /// Twin whose scenario currently owns this presentation, or `None` for an
@@ -62,17 +54,6 @@ pub struct GuidedOverlay {
     /// Stable identity of the scenario that last authored the active coach
     /// tour. The application host uses it to route Stop to the scenario owner.
     pub owner_script: Option<lunco_core::GlobalEntityId>,
-    /// One-line instruction shown at the top of the HUD card. Empty = hidden.
-    pub hint: String,
-    /// Pre-formatted objectives checklist block (one objective per line, with a
-    /// leading glyph). Empty = the objectives card is hidden.
-    pub objectives: String,
-    /// Registered Rhai tool selected by the current action set.
-    pub action_tool: String,
-    /// One-argument Rhai hook selected by the current action set.
-    pub action_hook: String,
-    /// Optional semantic action buttons displayed below the hint/objectives.
-    pub actions: Vec<GuidedHudAction>,
     /// Active spotlight: `(anchor_key, caption)`. `anchor_key` resolves against
     /// [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors); a named key must resolve to a
     /// visible widget. `None` = no spotlight.
@@ -99,6 +80,7 @@ impl GuidedOverlay {
 
 fn command_owner_twin(
     workspace: Option<&lunco_workspace::WorkspaceResource>,
+    clearing_retired_owner: bool,
 ) -> Result<Option<lunco_workspace::TwinId>, String> {
     let context = lunco_scripting_bridge_core::execution_context();
     let Some(route) = context.route else {
@@ -109,8 +91,12 @@ fn command_owner_twin(
     }
     let raw = route
         .owner_id
+        .filter(|raw| *raw != 0)
         .ok_or_else(|| "Twin guided HUD command has no owner identity".to_owned())?;
     let twin = lunco_workspace::TwinId::new(raw);
+    if clearing_retired_owner {
+        return Ok(Some(twin));
+    }
     let Some(workspace) = workspace else {
         return Err(format!("Twin {raw} guided HUD command has no workspace"));
     };
@@ -126,7 +112,7 @@ fn begin_command_owner(
     hud: &mut GuidedOverlay,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
-    match command_owner_twin(workspace) {
+    match command_owner_twin(workspace, false) {
         Ok(owner) => {
             if hud.owner_twin != owner {
                 hud.clear();
@@ -199,61 +185,6 @@ pub struct TourStep {
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-/// Set the persistent one-line hint. Empty `text` clears it. Rhai: `hint(msg)`
-/// / `clear_hint()`.
-#[Command(default)]
-pub struct SetHint {
-    /// Instruction text; empty hides the hint line.
-    pub text: String,
-}
-
-/// Set the persistent objectives checklist. `text` is a pre-formatted block
-/// (one objective per line). Empty clears it. Rhai: `objectives_hud(list)` —
-/// the prelude formats the list into this block and also auto-publishes it from
-/// declarative `mission(me, ctx)` state.
-#[Command(default)]
-pub struct SetObjectives {
-    /// Pre-formatted checklist block; empty hides the objectives card.
-    pub text: String,
-}
-
-/// One optional semantic button on the persistent guided HUD.
-#[derive(Reflect, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GuidedHudAction {
-    /// Stable action identifier passed to the authored Rhai hook.
-    pub id: String,
-    /// Button label shown in the HUD.
-    pub label: String,
-    /// Disabled buttons remain visible so the operator can see the next step.
-    pub enabled: bool,
-}
-
-/// Replace the HUD's authored action buttons. All buttons dispatch their id to
-/// one registered one-argument Rhai tool hook; an empty `actions` list clears
-/// the buttons.
-#[Command(default)]
-pub struct SetGuidedHudActions {
-    /// Registered Rhai tool namespace, e.g. `griffin_surface_ops`.
-    pub tool: String,
-    /// One-argument function in that namespace, without `/1`.
-    pub hook: String,
-    /// Current button set in display order.
-    #[serde(default)]
-    pub actions: Vec<GuidedHudAction>,
-}
-
-/// A guided HUD button was pressed. The application adapter dispatches it
-/// through the normal typed Rhai tool-hook command path.
-#[derive(Event, Clone, Debug, PartialEq, Eq)]
-pub struct GuidedHudActionRequested {
-    /// Registered Rhai tool namespace.
-    pub tool: String,
-    /// One-argument Rhai hook name.
-    pub hook: String,
-    /// Authored action identifier passed as a string argument.
-    pub action: String,
-}
-
 /// Spotlight a workbench widget by its [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors) key,
 /// dimming everything else. Rhai: `spotlight(anchor, caption)`.
 #[Command(default)]
@@ -300,8 +231,8 @@ pub struct SetTourStep {
 #[Command(default)]
 pub struct ClearTour {}
 
-/// Clear every field of the current guided presentation while retaining its
-/// execution owner. Rhai tutorial launchers use this before replacing a lesson.
+/// Clear the calling script card and active coach presentation. Other HUD
+/// cards retain their own content, callback bindings, and perspective scope.
 #[Command(default)]
 pub struct ClearGuidedOverlay {}
 
@@ -353,45 +284,6 @@ fn on_guided_skip(_trigger: On<GuidedSkip>, mut world: DeferredWorld) {
         name: stringify!(GuidedSkip).to_string(),
         origin: None,
     });
-}
-
-#[on_command(SetHint)]
-fn on_set_hint(
-    trigger: On<SetHint>,
-    mut hud: ResMut<GuidedOverlay>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-) {
-    if !begin_command_owner(&mut hud, workspace.as_deref()) {
-        return;
-    }
-    hud.hint = cmd.text.clone();
-}
-
-#[on_command(SetObjectives)]
-fn on_set_objectives(
-    trigger: On<SetObjectives>,
-    mut hud: ResMut<GuidedOverlay>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-) {
-    if !begin_command_owner(&mut hud, workspace.as_deref()) {
-        return;
-    }
-    hud.objectives = cmd.text.clone();
-}
-
-#[on_command(SetGuidedHudActions)]
-fn on_set_guided_hud_actions(
-    trigger: On<SetGuidedHudActions>,
-    mut hud: ResMut<GuidedOverlay>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-) {
-    if !begin_command_owner(&mut hud, workspace.as_deref()) {
-        return;
-    }
-    let cmd = trigger.event();
-    hud.action_tool = cmd.tool.clone();
-    hud.action_hook = cmd.hook.clone();
-    hud.actions = cmd.actions.clone();
 }
 
 #[on_command(Spotlight)]
@@ -464,7 +356,7 @@ fn on_clear_guided_overlay(
     mut hud: ResMut<GuidedOverlay>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
-    let owner = match command_owner_twin(workspace.as_deref()) {
+    let owner = match command_owner_twin(workspace.as_deref(), false) {
         Ok(owner) => owner,
         Err(error) => {
             warn!("[guided-hud] {error}");
@@ -476,9 +368,6 @@ fn on_clear_guided_overlay(
 }
 
 register_commands!(
-    on_set_hint,
-    on_set_objectives,
-    on_set_guided_hud_actions,
     on_spotlight,
     on_clear_spotlight,
     on_set_tour_step,
@@ -496,106 +385,6 @@ fn register_guided_navigation(app: &mut App) {
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────
-
-/// Draw the persistent objectives/hint card and any authored action buttons,
-/// top-left below the menu bar. It only owns pointer input while buttons are
-/// present. Workbench menus and window controls are rendered in the higher
-/// egui `Foreground` order.
-fn draw_guided_hud(
-    mut egui_ctx: EguiContexts,
-    hud: Res<GuidedOverlay>,
-    objectives_visibility: Res<GuidedObjectivesVisibility>,
-    snapshot: Option<Res<WorkbenchSnapshot>>,
-    theme: Option<Res<lunco_theme::Theme>>,
-    mut commands: Commands,
-) {
-    let objectives_visible = objectives_visibility
-        .visible_in_perspective
-        .is_none_or(|required| {
-            snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.active_perspective() == Some(required))
-        });
-    let show_objectives = objectives_visible && !hud.objectives.is_empty();
-    if !show_objectives && hud.hint.is_empty() && hud.actions.is_empty() {
-        return;
-    }
-    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    // The lesson HUD is a specific-HUD readout: above docked panels and below
-    // the general HUD, UI surfaces, popups, and menus.
-    let screen = ctx.viewport_rect();
-    let theme = theme
-        .map(|t| t.clone())
-        .unwrap_or_else(lunco_theme::Theme::dark);
-    let accent = theme.tokens.accent;
-
-    lunco_theme::HudTier::Specific
-        .area(ctx, egui::Id::new("lunco_guided_hud"))
-        .interactable(!hud.actions.is_empty())
-        .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
-        .show(ctx, |ui| {
-            ui.set_max_width(320.0);
-            egui::Frame::new()
-                .fill(theme.tokens.surface_raised)
-                .corner_radius(10.0)
-                .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
-                .inner_margin(egui::Margin::symmetric(12, 10))
-                .show(ui, |ui| {
-                    if show_objectives {
-                        ui.label(
-                            egui::RichText::new("OBJECTIVES")
-                                .color(accent)
-                                .text_style(lunco_theme::TypographyRole::Label.text_style())
-                                .strong(),
-                        );
-                        ui.add_space(2.0);
-                        for line in hud.objectives.lines() {
-                            // Colour done/failed lines by their leading glyph.
-                            let color = match line.chars().next() {
-                                Some('✓') => theme.tokens.success,
-                                Some('✗') => theme.tokens.error,
-                                Some('▸') => theme.tokens.text,
-                                _ => theme.tokens.text_subdued,
-                            };
-                            ui.label(
-                                egui::RichText::new(line)
-                                    .color(color)
-                                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
-                            );
-                        }
-                    }
-                    if !hud.hint.is_empty() {
-                        if show_objectives {
-                            ui.add_space(6.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                        }
-                        ui.label(egui::RichText::new(&hud.hint).color(theme.tokens.text));
-                    }
-                    if !hud.actions.is_empty() {
-                        if !hud.hint.is_empty() || show_objectives {
-                            ui.add_space(8.0);
-                            ui.separator();
-                            ui.add_space(6.0);
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            for action in &hud.actions {
-                                if ui
-                                    .add_enabled(action.enabled, egui::Button::new(&action.label))
-                                    .clicked()
-                                {
-                                    commands.trigger(GuidedHudActionRequested {
-                                        tool: hud.action_tool.clone(),
-                                        hook: hud.action_hook.clone(),
-                                        action: action.id.clone(),
-                                    });
-                                }
-                            }
-                        });
-                    }
-                });
-        });
-}
 
 /// Draw a blocking but non-terminal recovery surface for an unavailable
 /// authored guided target. It owns input until the learner chooses an action,
@@ -1431,29 +1220,23 @@ pub struct GuidedOverlayPlugin;
 impl Plugin for GuidedOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GuidedOverlay>()
-            .init_resource::<GuidedObjectivesVisibility>()
             .add_observer(clear_twin_overlay_on_close)
             .add_observer(clear_overlay_on_scene_transition);
+        hud::install(app);
         register_all_commands(app);
         register_guided_navigation(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
         // client-targeted guided scenario may drive them (see `ClientCommandPolicy`).
         use lunco_core::MarkClientLocalExt;
-        app.mark_client_local::<SetHint>()
-            .mark_client_local::<SetObjectives>()
-            .mark_client_local::<SetGuidedHudActions>()
-            .mark_client_local::<Spotlight>()
+        app.mark_client_local::<Spotlight>()
             .mark_client_local::<ClearSpotlight>()
             .mark_client_local::<SetTourStep>()
             .mark_client_local::<ClearTour>()
             .mark_client_local::<ClearGuidedOverlay>();
-        // The host may restrict mission objectives by perspective. Hints and
-        // authored actions stay available to tutorials in every perspective,
-        // as do spotlight, tour, and recovery surfaces.
         app.add_systems(
             EguiPrimaryContextPass,
             (
-                draw_guided_hud,
+                hud::draw_guided_hud,
                 draw_spotlight,
                 draw_tour,
                 draw_guided_recovery,
@@ -1525,15 +1308,6 @@ mod tests {
         let mut hud = GuidedOverlay {
             owner_twin: Some(twin),
             owner_script: Some(lunco_core::GlobalEntityId::from_raw(17)),
-            hint: "step one".into(),
-            objectives: "objective".into(),
-            action_tool: "lesson".into(),
-            action_hook: "advance".into(),
-            actions: vec![GuidedHudAction {
-                id: "next".into(),
-                label: "Next".into(),
-                enabled: true,
-            }],
             spotlight: Some(("panel.center".into(), "look here".into())),
             tour: Some(TourStep {
                 index: 1,
@@ -1551,26 +1325,20 @@ mod tests {
 
         clear_overlay_for_twin(&mut hud, other_twin);
         assert_eq!(hud.owner_twin, Some(twin));
-        assert_eq!(hud.hint, "step one");
         clear_overlay_for_twin(&mut hud, twin);
 
         assert_eq!(hud.owner_twin, None);
         assert_eq!(hud.owner_script, None);
-        assert!(hud.hint.is_empty());
-        assert!(hud.objectives.is_empty());
-        assert!(hud.action_tool.is_empty());
-        assert!(hud.action_hook.is_empty());
-        assert!(hud.actions.is_empty());
         assert!(hud.spotlight.is_none());
         assert!(hud.tour.is_none());
         assert!(hud.reported_missing_anchor.is_none());
         assert!(hud.recovery.is_none());
 
         let mut application_hud = GuidedOverlay {
-            hint: "application help".into(),
+            spotlight: Some(("panel.center".into(), "application help".into())),
             ..Default::default()
         };
         clear_overlay_for_twin(&mut application_hud, twin);
-        assert_eq!(application_hud.hint, "application help");
+        assert!(application_hud.spotlight.is_some());
     }
 }
