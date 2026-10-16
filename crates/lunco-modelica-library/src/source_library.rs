@@ -669,6 +669,20 @@ fn on_library_install_action(
     request.0 = true;
 }
 
+/// Source-language filtering belongs here, over the shared resident catalog.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn source_file_count() -> usize {
+    lunco_assets_runtime::library::global_library_sources()
+        .iter()
+        .flat_map(|source| source.files())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+        })
+        .count()
+}
+
 impl Plugin for SourceLibraryPlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
@@ -694,7 +708,7 @@ impl Plugin for SourceLibraryPlugin {
             let resolved = configured_native_library_root(settings).and_then(|root| {
                 if let Some(root) = &root {
                     lunco_assets_runtime::library::install_global_library_sources(vec![
-                        LibraryAssetSource::Filesystem(root.clone()),
+                        LibraryAssetSource::filesystem(root.clone())?,
                     ])?;
                 }
                 Ok(root)
@@ -703,7 +717,7 @@ impl Plugin for SourceLibraryPlugin {
                 Ok(Some(root)) => {
                     info!("[source library] admitted on-disk root {}", root.display());
                     LibraryLoadState::Ready {
-                        file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
+                        file_count: source_file_count(),
                         compressed_bytes: 0,
                         uncompressed_bytes: 0,
                     }

@@ -36,8 +36,10 @@ compatibility aliases were retained.
 The native reader review reproduced an escaped metadata-sidecar read. Engine
 and installed-library sources, including the default directory source, now
 share `NativeAssetReader`, which validates
-payloads, metadata and directory operations before delegating streaming to
-Bevy. Bevy's sidecar-path helper is private, so this adapter spells its `.meta`
+payloads, metadata and directory operations. The shared storage opener admits
+regular files. Owned handles supply demand-sized reads and ordinary seek
+semantics on the asset I/O pool, without independent read-ahead. Bevy's
+sidecar-path helper is private, so this adapter spells its `.meta`
 sibling convention once; language consumers never interpret sidecars. The
 filesystem containment check is not an atomic guarantee against concurrent
 hostile filesystem replacement.
@@ -66,7 +68,10 @@ Two documents declaring the same package retain separate document-owned source
 registrations: resolution reports ambiguity until one owner closes, then recovers
 the remaining owner without reopening it.
 Opening a Twin package in the editor retains its admitted directory owner.
-Closing the document preserves the resource; replacing the Twin retires it.
+Per-file facts refresh with the current parsed document generation without
+retiring directory ownership. Separate class files keep their package membership.
+Save commits facts; close discards unsaved overlays and preserves saved resources.
+Older in-flight admission cannot overwrite a save. Replacing the Twin retires it.
 
 Native Windows and browser runtime acceptance remain separate from Linux
 compile/runtime evidence. Application source-store identity changes require an
@@ -89,16 +94,40 @@ admit ambient working-directory lookup as Pixar's default filesystem policy does
 
 ## Accepted checks (2026-10-16)
 
-- Shared conformance: `cargo test -p lunco-assets-path -p lunco-assets-core -p lunco-assets-runtime -p lunco-modelica-ast -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed six cases. The strengthened native containment case also passed with a valid later cache present, proving terminal rejection rather than fallthrough.
-- UI result seam: `cargo test -p lunco-assets-runtime --features ui --lib failed_result_slot_is_terminal -j 4` passed. Storage URI conformance: `cargo test -p lunco-storage --lib file_uris_preserve_native_paths_and_reject_invalid_addresses -j 4` passed after reproducing the minimal-file-URI rejection.
-- `cargo check -p lunco-modelica-assets --bin build_modelica_library_assets -j 4` and the production `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. The build reports existing dependency warnings from `parry3d-f64`; no new project warning was introduced.
-- `scripts/api/test_asset_resources.py`: nine authored Rhai assertions, fourteen captures, exit 0. Directed inspection confirmed literal/encoded names, library pending-to-ready, file-URI loading and explicit reload, ambiguous-package recovery, document retirement, replacement bytes, admitted Twin view closure and Twin retirement.
-- `scripts/api/test_path_interoperability.py`: 42 authored assertions, exit 0. The driver reuses editor-scene readiness and checks the current document-composition contract; native rename, negative target admission, save/readback and a USD-bound Modelica equation result passed.
-- The production Twin-search gate reported `TESTS_OK 6`, exit 0. Repository and `/tmp` catalogue runs produced 171 identical entries.
-- All controlled runtime launches used this checkout's production binary and owned API port 4286, with PID/cwd/executable verification. Every owned runtime exited and released its port. The skill catalogue validator passed all 43 entries.
+- `cargo test -p lunco-storage -p lunco-assets-core -p lunco-assets-runtime -p lunco-modelica-ast -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4`: eight passing cases. Coverage includes regular-file admission, streaming and seek semantics, shared overlay ownership, complete native/memory membership, traversal diagnostics, package membership/provenance and save fencing against older admission results.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed. Existing vendored `parry3d-f64` warnings remain; no new native project warning was introduced.
+- Browser storage: `cargo test -p lunco-storage --target wasm32-unknown-unknown --lib opfs_stream_budget_and_cancelled_read_seek -j 4` passed in headless Chrome with the matching wasm-bindgen runner and ChromeDriver. One test covers demand-sized slices, byte limits and seeking after a cancelled pending read.
+- `cargo check -p lunco-assets-runtime --target wasm32-unknown-unknown -j 4`: passed, including the registered Twin OPFS adapter and generic library store. Existing warnings in unchanged platform/dependency code remain. This is not full browser-application acceptance.
+- `scripts/api/test_asset_resources.py`: 22 authored Rhai assertions, 28 captured and inspected resource views, exit 0. Positive images, explicit replacement/reload, multiple top-level declarations, ambiguous owners, invalid/current parse transitions, sibling-file membership, edited declarations, saved and unsaved closure, and Twin retirement passed. A FIFO was rejected before opening. The 70 MiB Twin payload used 67,108,937 process-read bytes including API/screenshot transport activity under the 64 MiB payload budget; both Twin and native file requests displayed the size diagnostic.
+- `scripts/api/test_path_interoperability.py`: 42 authored assertions, exit 0, including native rename/case/rejected targets, save/readback and USD-bound Modelica execution. The production Twin-search gate passed six authored assertions and exited 0.
+- `cargo build -p lunco-assets-runtime --bin build_asset_manifest -j 4`: passed. The executable generated the authoritative catalog for a source/data fixture, excluded its hidden source and rejected a missing directory with exit 1. `bash -n scripts/build_web.sh` passed.
+- All controlled simulator launches used this checkout's production binary and owned API port 4286, with PID/cwd/executable verification. Every owned runtime exited and released its port. The skill catalogue validator passed all 43 entries.
 
-Local evidence is under `.lunco/terrain-lines/full-review/` and
-`.lunco/asset-resource-review/`. The new command's reference section was generated
-from live GUI/headless schemas; unchanged feature-gated networking sections remain
-in the canonical reference. These runs do not establish browser or native Windows
-acceptance, nor full Modelica external-function/resource compatibility.
+Current evidence is under `.lunco/asset-resolution-fix/` and the `fix-*` logs in
+`.lunco/asset-resolution-audit/`. These runs do not establish native Windows or
+full browser-application acceptance, nor full Modelica external-function/resource
+compatibility.
+
+## Shared boundary regression coverage
+
+Native and memory source stores use complete file inventories; Modelica owns
+source extension filtering. The common traversal reports unreadable, escaped,
+repeated and unrepresentable identities instead of silently dropping entries.
+Post-startup native installation prepares the inventory on its existing worker.
+The web manifest generator is invoked from its owning `lunco-assets-runtime`
+package.
+
+Storage admits only regular files for reads. Twin/native sources open streaming
+handles before the common consumer budget applies; overlays pin immutable bytes
+without cloning them. Browser OPFS uses bounded on-demand slices and keeps its
+JavaScript snapshot in a local task, with explicit offsets for cancelled reads
+followed by seeking. The source-fact bridge carries typed file provenance through
+the compiler, worker, registry and resource resolver.
+
+The resource production driver covers edited and retired declarations,
+separate-file member rejection, save/close persistence, unsaved-close restoration,
+invalid-parse recovery, FIFO rejection before open and a 70 MiB Twin payload
+rejected by the 64 MiB UI budget. Linux process-I/O evidence distinguishes a
+bounded stream from eager full-file materialization. Browser storage tests cover
+bounded reads and seeking after a cancelled read. The accepted checks above
+record the production results.

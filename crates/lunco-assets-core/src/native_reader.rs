@@ -1,4 +1,4 @@
-//! Native asset containment around Bevy's maintained streaming file reader.
+//! Native asset containment and demand-driven reads on the asset I/O pool.
 
 use bevy::asset::io::{AssetReader, AssetReaderError, PathStream, Reader, file::FileAssetReader};
 use std::path::{Path, PathBuf};
@@ -30,29 +30,59 @@ impl NativeAssetReader {
         crate::existing_path_within_root(&self.root, path)?
             .ok_or_else(|| AssetReaderError::NotFound(path.to_path_buf()))
     }
+}
 
-    fn regular_file(&self, path: &Path) -> Result<(), AssetReaderError> {
-        let resolved = self.resolve(path)?;
-        if !std::fs::metadata(resolved)?.is_file() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "asset reads require a regular file",
-            )
-            .into());
-        }
-        Ok(())
+/// An owned handle uses the same admission as direct storage reads. Payload
+/// reads run on the asset I/O workers and consume only the requested buffer;
+/// there is no independent read-ahead allocation outside the consumer budget.
+pub(crate) fn open_asset_file(path: &Path) -> Result<impl Reader + use<>, AssetReaderError> {
+    lunco_storage::FileStorage::open_regular_file(path)
+        .map(NativeFileReader)
+        .map_err(|error| match error {
+            lunco_storage::StorageError::NotFound => AssetReaderError::NotFound(path.to_path_buf()),
+            error => std::io::Error::other(error.to_string()).into(),
+        })
+}
+
+struct NativeFileReader(std::fs::File);
+
+impl bevy::tasks::futures_lite::io::AsyncRead for NativeFileReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buffer: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Ready(std::io::Read::read(&mut self.0, buffer))
+    }
+}
+
+impl bevy::tasks::futures_lite::io::AsyncSeek for NativeFileReader {
+    fn poll_seek(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        position: std::io::SeekFrom,
+    ) -> std::task::Poll<std::io::Result<u64>> {
+        std::task::Poll::Ready(std::io::Seek::seek(&mut self.0, position))
+    }
+}
+
+impl Reader for NativeFileReader {
+    fn seekable(
+        &mut self,
+    ) -> Result<&mut dyn bevy::asset::io::SeekableReader, bevy::asset::io::ReaderNotSeekableError>
+    {
+        Ok(self)
     }
 }
 
 impl AssetReader for NativeAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        self.regular_file(path)?;
-        self.reader.read(path).await
+        open_asset_file(&self.resolve(path)?)
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
         // Bevy's sidecar-path helper is private. Validate its `.meta` sibling
-        // before delegating so sidecars obey the same containment as payloads.
+        // so sidecars obey the same containment and regular-file admission.
         let mut meta = path.to_path_buf();
         let mut extension = path.extension().unwrap_or_default().to_os_string();
         if !extension.is_empty() {
@@ -60,8 +90,7 @@ impl AssetReader for NativeAssetReader {
         }
         extension.push("meta");
         meta.set_extension(extension);
-        self.regular_file(&meta)?;
-        self.reader.read_meta(path).await
+        open_asset_file(&self.resolve(&meta)?)
     }
 
     async fn read_directory<'a>(

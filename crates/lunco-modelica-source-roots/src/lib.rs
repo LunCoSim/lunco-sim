@@ -103,7 +103,13 @@ pub struct SourceRoot {
     /// Parsed authored namespaces installed by the current load operation.
     /// Scoped source-set IDs remain the authoritative lifetime owner.
     pub namespaces: Vec<String>,
-    pub package_sources: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
+    /// Per-file facts from admission and saved editor generations.
+    pub source_files: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
+    /// Current document generations overlaid at this same source-set owner.
+    pub document_sources:
+        HashMap<lunco_doc::DocumentId, lunco_modelica_ast::resource_uri::SourceFileFacts>,
+    /// Saves which must survive an older in-flight source-set admission.
+    pending_saved_sources: HashMap<String, lunco_modelica_ast::resource_uri::SourceFileFacts>,
     pub origin_document: Option<lunco_doc::DocumentId>,
     /// How to actually load this root when the gate decides to.
     pub kind: SourceRootKind,
@@ -116,6 +122,67 @@ pub struct SourceRoot {
     /// `NotLoaded` → `Loading` (gate kicks off bg task)
     /// `Loading` → `Ready` / `Failed` (loader completes).
     pub state: LoadState,
+}
+
+impl SourceRoot {
+    pub fn effective_sources(&self) -> Vec<&lunco_modelica_ast::resource_uri::SourceFileFacts> {
+        let overridden = self
+            .document_sources
+            .values()
+            .map(|file| file.source_uri.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let mut files = self
+            .source_files
+            .iter()
+            .filter(|file| !overridden.contains(file.source_uri.as_str()))
+            .chain(self.document_sources.values())
+            .collect::<Vec<_>>();
+        files.sort_by(|left, right| left.source_uri.cmp(&right.source_uri));
+        files
+    }
+
+    fn refresh_document_source(
+        &mut self,
+        id: lunco_doc::DocumentId,
+        facts: lunco_modelica_ast::resource_uri::SourceFileFacts,
+        saved: bool,
+    ) {
+        if saved {
+            if matches!(self.state, LoadState::NotLoaded | LoadState::Loading { .. }) {
+                self.pending_saved_sources
+                    .insert(facts.source_uri.clone(), facts.clone());
+            }
+            self.source_files
+                .retain(|file| file.source_uri != facts.source_uri);
+            self.source_files.push(facts.clone());
+        }
+        self.document_sources.insert(id, facts);
+    }
+
+    fn effective_namespaces(&self) -> Vec<String> {
+        // A document registers one entry per top-level namespace. Its file
+        // facts may contain several declarations; sibling entries must not
+        // claim each other's namespaces. Directory sets admit all their files.
+        if self.origin_document.is_some() {
+            return self.namespaces.clone();
+        }
+        let files = self.effective_sources();
+        if files.is_empty() {
+            return self.namespaces.clone();
+        }
+        let mut names = files
+            .iter()
+            .flat_map(|file| &file.classes)
+            .filter_map(|name| {
+                rumoca_core::qualified_name_segments(name)
+                    .next()
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 /// Lifetime owner for one compiler source set.
@@ -182,7 +249,9 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: id.to_string(),
                     namespaces: Vec::new(),
-                    package_sources: Vec::new(),
+                    source_files: Vec::new(),
+                    document_sources: HashMap::new(),
+                    pending_saved_sources: HashMap::new(),
                     origin_document: None,
                     kind: SourceRootKind::Bundled { filename },
                     owner: SourceRootOwner::Application,
@@ -223,7 +292,9 @@ impl SourceRootRegistry {
                 SourceRoot {
                     id: root_name,
                     namespaces: Vec::new(),
-                    package_sources: Vec::new(),
+                    source_files: Vec::new(),
+                    document_sources: HashMap::new(),
+                    pending_saved_sources: HashMap::new(),
                     origin_document: None,
                     kind,
                     owner: SourceRootOwner::Application,
@@ -267,7 +338,9 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 namespaces: Vec::new(),
-                package_sources: Vec::new(),
+                source_files: Vec::new(),
+                document_sources: HashMap::new(),
+                pending_saved_sources: HashMap::new(),
                 origin_document: None,
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Application,
@@ -290,7 +363,9 @@ impl SourceRootRegistry {
             SourceRoot {
                 id,
                 namespaces: Vec::new(),
-                package_sources: Vec::new(),
+                source_files: Vec::new(),
+                document_sources: HashMap::new(),
+                pending_saved_sources: HashMap::new(),
                 origin_document: None,
                 kind: SourceRootKind::Disk { root_dir },
                 owner: SourceRootOwner::Twin(twin),
@@ -327,7 +402,9 @@ impl SourceRootRegistry {
             SourceRoot {
                 id: id.clone(),
                 namespaces: vec![namespace],
-                package_sources: Vec::new(),
+                source_files: Vec::new(),
+                document_sources: HashMap::new(),
+                pending_saved_sources: HashMap::new(),
                 origin_document: Some(document),
                 kind,
                 owner,
@@ -350,7 +427,7 @@ impl SourceRootRegistry {
         id: &str,
         operation_id: u64,
         mut namespaces: Vec<String>,
-        package_sources: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
+        source_files: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
         error: Option<String>,
     ) -> bool {
         let Some(entry) = self
@@ -373,12 +450,20 @@ impl SourceRootRegistry {
         match error {
             Some(error) => {
                 entry.namespaces.clear();
-                entry.package_sources.clear();
+                entry.source_files.clear();
+                entry.pending_saved_sources.clear();
                 entry.state = LoadState::Failed(error);
             }
             None => {
                 entry.namespaces = namespaces;
-                entry.package_sources = package_sources;
+                entry.source_files = source_files;
+                for (uri, facts) in entry.pending_saved_sources.drain() {
+                    entry.source_files.retain(|file| file.source_uri != uri);
+                    entry.source_files.push(facts);
+                }
+                entry
+                    .source_files
+                    .sort_by(|left, right| left.source_uri.cmp(&right.source_uri));
                 entry.state = LoadState::Ready;
             }
         }
@@ -393,8 +478,12 @@ impl SourceRootRegistry {
             .roots
             .iter()
             .filter_map(|(id, entry)| {
-                (id == namespace || entry.namespaces.iter().any(|name| name == namespace))
-                    .then(|| id.clone())
+                (id == namespace
+                    || entry
+                        .effective_namespaces()
+                        .iter()
+                        .any(|name| name == namespace))
+                .then(|| id.clone())
             })
             .collect::<Vec<_>>();
         owners.sort_unstable();
@@ -558,7 +647,9 @@ fn register_indexed_library_source_root(
         SourceRoot {
             id: id.to_owned(),
             namespaces,
-            package_sources: Vec::new(),
+            source_files: Vec::new(),
+            document_sources: HashMap::new(),
+            pending_saved_sources: HashMap::new(),
             origin_document: None,
             kind: SourceRootKind::SourceLibrary,
             owner: SourceRootOwner::Application,
@@ -592,6 +683,7 @@ impl Plugin for ModelicaSourceRootsPlugin {
         );
         app.add_observer(register_open_document_source_root);
         app.add_observer(refresh_document_source_roots);
+        app.add_observer(refresh_saved_document_source_roots);
         app.add_observer(retire_document_source_roots);
         app.add_observer(register_indexed_library_source_root);
         #[cfg(not(target_arch = "wasm32"))]
@@ -663,6 +755,20 @@ fn refresh_document_source_roots(
     );
 }
 
+fn refresh_saved_document_source_roots(
+    trigger: On<lunco_doc_bevy::DocumentSaved>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    source_roots: Option<ResMut<SourceRootRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+) {
+    refresh_document_roots(
+        trigger.event().doc,
+        &registry,
+        source_roots,
+        workspace.as_deref(),
+    );
+}
+
 fn retire_document_source_roots(
     trigger: On<lunco_doc_bevy::DocumentClosed>,
     mut roots: ResMut<SourceRootRegistry>,
@@ -670,6 +776,9 @@ fn retire_document_source_roots(
     roots
         .roots
         .retain(|_, root| root.origin_document != Some(trigger.event().doc));
+    for root in roots.roots.values_mut() {
+        root.document_sources.remove(&trigger.event().doc);
+    }
 }
 
 fn refresh_document_roots(
@@ -715,18 +824,48 @@ fn refresh_document_roots(
     }) {
         return;
     }
-    // Opening a view of an admitted directory source preserves that source's
-    // identity, including while its compiler admission is still in flight.
-    if path.as_ref().is_some_and(|path| source_roots.roots.values().any(|root|
-        root.origin_document.is_none() && matches!(&root.kind, SourceRootKind::Disk { root_dir } if path.starts_with(root_dir)))) { return; }
     let source_uri = path
         .as_ref()
         .map(|path| lunco_assets_path::slashed(path))
         .unwrap_or_default();
-    let packages = document
-        .strict_ast()
-        .map(|ast| lunco_modelica_ast::resource_uri::package_sources(&ast, &source_uri))
-        .unwrap_or_default();
+    let parsed = (!document.syntax_is_stale())
+        .then(|| document.strict_ast())
+        .flatten()
+        .map(|ast| lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(&ast, &source_uri));
+    let invalid_facts = lunco_modelica_ast::resource_uri::SourceFileFacts {
+        source_uri: source_uri.clone(),
+        packages: Vec::new(),
+        classes: Vec::new(),
+        error: Some(format!("source `{source_uri}` has no valid current parse")),
+    };
+    // A view contributes current language facts to its existing directory
+    // owner. Closing it drops only the unsaved overlay, never the Twin root.
+    let mut represented = false;
+    for root in source_roots.roots.values_mut() {
+        if !path.as_ref().is_some_and(|path| root.origin_document.is_none() && matches!(&root.kind, SourceRootKind::Disk { root_dir } if path.starts_with(root_dir))) {
+            root.document_sources.remove(&id);
+            continue;
+        }
+        represented = true;
+        let facts = parsed.clone().unwrap_or_else(|| {
+            let mut facts = root
+                .document_sources
+                .get(&id)
+                .or_else(|| {
+                    root.source_files
+                        .iter()
+                        .find(|file| file.source_uri == source_uri)
+                })
+                .cloned()
+                .unwrap_or_else(|| invalid_facts.clone());
+            facts.error = invalid_facts.error.clone();
+            facts
+        });
+        root.refresh_document_source(id, facts, !document.is_dirty());
+    }
+    if represented {
+        return;
+    }
     for class in document.index().classes.values() {
         if rumoca_core::qualified_name_segments(&class.name).count() == 1 {
             let registration = source_roots.register_open_doc_root(
@@ -737,7 +876,8 @@ fn refresh_document_roots(
             );
             if let Some(entry) = registration.and_then(|id| source_roots.roots.get_mut(&id)) {
                 if entry.origin_document == Some(id) {
-                    entry.package_sources = packages.clone();
+                    entry.source_files =
+                        vec![parsed.clone().unwrap_or_else(|| invalid_facts.clone())];
                 }
             }
         }
@@ -1289,7 +1429,9 @@ mod tests {
         SourceRoot {
             id: id.to_owned(),
             namespaces: Vec::new(),
-            package_sources: Vec::new(),
+            source_files: Vec::new(),
+            document_sources: HashMap::new(),
+            pending_saved_sources: HashMap::new(),
             origin_document: None,
             kind: SourceRootKind::Disk {
                 root_dir: PathBuf::from("/inline/test/root"),
@@ -1314,7 +1456,9 @@ mod tests {
             SourceRoot {
                 id: "application:control".into(),
                 namespaces: Vec::new(),
-                package_sources: Vec::new(),
+                source_files: Vec::new(),
+                document_sources: HashMap::new(),
+                pending_saved_sources: HashMap::new(),
                 origin_document: None,
                 kind: SourceRootKind::Disk {
                     root_dir: PathBuf::from("/inline/application"),

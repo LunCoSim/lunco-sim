@@ -297,19 +297,15 @@ pub fn scan_library(dir: &Path) -> Vec<String> {
     rels
 }
 
-/// Read all files with `extension` below a caller-selected native source root.
+/// Inventory every file below a caller-selected native source root.
 ///
 /// Asset consumers use this instead of implementing another recursive
 /// filesystem walk. The returned paths are stable and absolute on native so
-/// diagnostics retain the same URI that the source-root owner supplied. A
-/// read failure is reported separately from the files that did load; callers
-/// can therefore keep the source-root admission atomic while still surfacing
-/// every failed path.
+/// diagnostics retain the same URI that the source-root owner supplied.
+/// Traversal and identity failures are reported separately; callers admit the
+/// inventory atomically while surfacing every failed path.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_files_with_extension(
-    root: &Path,
-    extension: &str,
-) -> (Vec<(String, String)>, Vec<String>) {
+pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
     let mut files = Vec::new();
     let mut diagnostics = Vec::new();
     if !root.is_absolute() {
@@ -369,32 +365,22 @@ pub fn read_files_with_extension(
             };
             match lunco_storage::entry_kind_file_sync(&resolved) {
                 Ok(lunco_storage::StorageEntryKind::Directory) => stack.push(path),
-                Ok(lunco_storage::StorageEntryKind::File)
-                    if path
-                        .extension()
-                        .and_then(|value| value.to_str())
-                        .is_some_and(|value| value.eq_ignore_ascii_case(extension)) =>
-                {
-                    if !visited.insert(resolved.clone()) {
+                Ok(lunco_storage::StorageEntryKind::File) => {
+                    if !visited.insert(resolved) {
                         diagnostics.push(format!(
                             "source file is reachable more than once: {}",
                             path.display()
                         ));
                         continue;
                     }
-                    let Some(identifier) = path.to_str() else {
+                    if path.to_str().is_none() {
                         diagnostics.push(format!(
                             "source path cannot be represented as a UTF-8 identity: {}",
                             path.display()
                         ));
                         continue;
-                    };
-                    match lunco_assets_core::read_asset_file_string(&resolved) {
-                        Ok(source) => files.push((identifier.to_owned(), source)),
-                        Err(error) => {
-                            diagnostics.push(format!("cannot read {}: {error}", path.display()))
-                        }
                     }
+                    files.push(path);
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -403,7 +389,39 @@ pub fn read_files_with_extension(
             }
         }
     }
-    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files.sort();
+    diagnostics.sort();
+    (files, diagnostics)
+}
+
+/// Read selected UTF-8 sources from the common containment-checked inventory.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_files_with_extension(
+    root: &Path,
+    extension: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let (paths, mut diagnostics) = inventory_files(root);
+    let mut files = Vec::new();
+    for path in paths.into_iter().filter(|path| {
+        path.extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    }) {
+        // Inventory is an identity snapshot. Byte reads revalidate containment
+        // against the current filesystem and consume the resolved path.
+        let source = path
+            .strip_prefix(root)
+            .map_err(std::io::Error::other)
+            .and_then(|relative| {
+                lunco_assets_core::existing_path_within_root(root, relative)?
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+            })
+            .and_then(|resolved| lunco_assets_core::read_asset_file_string(&resolved));
+        match source {
+            Ok(source) => files.push((lunco_assets_path::slashed(&path), source)),
+            Err(error) => diagnostics.push(format!("cannot read {}: {error}", path.display())),
+        }
+    }
     diagnostics.sort();
     (files, diagnostics)
 }

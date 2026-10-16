@@ -120,7 +120,7 @@ pub fn package_declaration(
             bundle
                 .iter()
                 .map(|document| (document.definition(), document.uri())),
-        ) {
+        )? {
             let name = package.namespace.clone();
             if packages.insert(name.clone(), package).is_some() {
                 return Err(format!("ambiguous source-library package `{name}`"));

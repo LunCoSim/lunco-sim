@@ -15,3 +15,22 @@ fn verify_resource_source(id, expected_open) {
         t_true(found == expected_open, "resource source document has the expected lifetime"),
     ], "Resource source lifetime", "ASSET_RESOURCE_SOURCE");
 }
+
+fn verify_resource_edit(id, package_name, dirty) {
+    let source = query("GetDocumentSource", #{doc_id: id});
+    let status = query("CompileStatus", #{doc_id: id});
+    report_verdict([
+        t_true(source.source.contains("package " + package_name), "current document owns the edited declaration"),
+        t_true(source.dirty == dirty, "document save state matches the current source"),
+        t_true(status.ast_parsed, "current source generation has a valid parse"),
+    ], "Resource source generation", "ASSET_RESOURCE_GENERATION");
+}
+
+fn verify_resource_invalid(id, expected_source) {
+    let source = query("GetDocumentSource", #{doc_id: id});
+    let status = query("CompileStatus", #{doc_id: id});
+    report_verdict([
+        t_true(source.source == expected_source, "invalid edit is the current authored source"),
+        t_true(!status.ast_parsed, "invalid source is not admitted as a parsed generation"),
+    ], "Resource invalid generation", "ASSET_RESOURCE_INVALID");
+}

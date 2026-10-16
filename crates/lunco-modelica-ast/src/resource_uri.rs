@@ -86,7 +86,7 @@ impl ModelicaUri {
     }
 }
 
-/// Actual top-level package declaration and its containing source identity.
+/// Actual package declaration and its containing source identity.
 /// Nested resource directories are derived from the qualified package name,
 /// independently of whether the package is represented by one or many files.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -134,20 +134,45 @@ pub fn package_sources(
     out
 }
 
-/// Merge package facts across the whole source set. A class stored in its own
-/// `.mo` file is still a member of its enclosing package for MLS 13.5 checks.
-pub fn source_set_package_sources<'a>(
-    documents: impl IntoIterator<Item = (&'a rumoca_ir_ast::StoredDefinition, &'a str)>,
-) -> Vec<PackageSource> {
+/// Parsed facts retain their source provenance so one editor generation can
+/// replace one file without discarding declarations from sibling files.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SourceFileFacts {
+    pub source_uri: String,
+    pub packages: Vec<PackageSource>,
+    pub classes: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl SourceFileFacts {
+    pub fn parsed(definition: &rumoca_ir_ast::StoredDefinition, source_uri: &str) -> Self {
+        let mut classes = definition.declared_class_names();
+        classes.sort();
+        Self {
+            source_uri: source_uri.to_owned(),
+            packages: package_sources(definition, source_uri),
+            classes,
+            error: None,
+        }
+    }
+}
+
+/// Merge language membership across source files, preserving each package's
+/// authored source identity. Separate class files participate in MLS 13.5.
+pub fn package_sources_for_files<'a>(
+    files: impl IntoIterator<Item = &'a SourceFileFacts>,
+) -> Result<Vec<PackageSource>, String> {
     let mut packages = Vec::new();
     let mut members =
         std::collections::HashMap::<String, std::collections::BTreeSet<String>>::new();
-    for (definition, uri) in documents {
-        packages.extend(package_sources(definition, uri));
-        for qualified in definition.declared_class_names() {
-            let mut parts = rumoca_core::qualified_name_segments(&qualified).collect::<Vec<_>>();
-            if parts.len() > 1 {
-                let member = parts.pop().expect("nonempty qualified path");
+    for file in files {
+        if let Some(error) = &file.error {
+            return Err(error.clone());
+        }
+        packages.extend(file.packages.iter().cloned());
+        for qualified in &file.classes {
+            let mut parts = rumoca_core::qualified_name_segments(qualified).collect::<Vec<_>>();
+            if let Some(member) = (parts.len() > 1).then(|| parts.pop()).flatten() {
                 members
                     .entry(parts.join("."))
                     .or_default()
@@ -160,7 +185,17 @@ pub fn source_set_package_sources<'a>(
             package.members = members.iter().cloned().collect();
         }
     }
-    packages
+    Ok(packages)
+}
+
+pub fn source_set_package_sources<'a>(
+    documents: impl IntoIterator<Item = (&'a rumoca_ir_ast::StoredDefinition, &'a str)>,
+) -> Result<Vec<PackageSource>, String> {
+    let files = documents
+        .into_iter()
+        .map(|(definition, uri)| SourceFileFacts::parsed(definition, uri))
+        .collect::<Vec<_>>();
+    package_sources_for_files(&files)
 }
 
 #[cfg(test)]
@@ -213,5 +248,30 @@ mod tests {
             vec!["A", "A.B"]
         );
         assert_eq!(packages[0].members, vec!["B"]);
+        let sibling =
+            rumoca_phase_parse::parse_to_ast("within A; model Sibling end Sibling;", "Sibling.mo")
+                .unwrap();
+        let replacement =
+            rumoca_phase_parse::parse_to_ast("package A package C end C; end A;", "A.mo").unwrap();
+        let files = vec![
+            SourceFileFacts::parsed(&replacement, "A.mo"),
+            SourceFileFacts::parsed(&sibling, "Sibling.mo"),
+        ];
+        let packages = package_sources_for_files(&files).unwrap();
+        assert_eq!(
+            packages
+                .iter()
+                .find(|package| package.namespace == "A")
+                .unwrap()
+                .members,
+            vec!["C", "Sibling"]
+        );
+        assert!(!packages.iter().any(|package| package.namespace == "A.B"));
+        let mut invalid = files[0].clone();
+        invalid.error = Some("source has no current parse".into());
+        assert_eq!(
+            package_sources_for_files([&invalid]).unwrap_err(),
+            "source has no current parse"
+        );
     }
 }

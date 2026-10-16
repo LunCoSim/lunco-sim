@@ -1975,9 +1975,11 @@ case-insensitive schemes, qualified package authorities, percent encoding and
 separate fragments. Rumoca validates qualified names and supplies declaration
 facts. URI decoding does not apply to internal literal asset addresses.
 
-The compiler publishes package/source/member facts from the exact admitted
-source-set ASTs. `SourceRootRegistry` retains them only for the current operation
-and source lifetime. Its immutable `ResourceContext` projection maps a resource
+The compiler publishes `SourceFileFacts` from the exact admitted source-set
+ASTs. Source provenance stays attached to each file; package membership is a
+projection across those facts, including classes in separate files.
+`SourceRootRegistry` retains them only for the current operation and source
+lifetime. Its immutable `ResourceContext` projection maps a resource
 to a typed asset location; it does not search storage or read bytes. Installed
 library package facts come from the parsed source artifact, including packages
 that are absent from the palette index. Missing or ambiguous package owners
@@ -1993,6 +1995,10 @@ required by [MLS 13.5](https://specification.modelica.org/maint/3.6/packages.htm
 `lunco-modelica-library::package_paths` owns installed-library class-to-file
 mapping. Widgets do not join cache paths or load files. Bitmap painting uses
 the common asynchronous egui asset/image pipeline. Opening or editing a
-file-backed package refreshes source facts; document close and Twin close retire
-those registrations. Resource-scope changes invalidate bytes and textures
+file-backed package refreshes facts only after its current parse settles.
+A directory-backed view overlays its existing source-set owner; saving commits
+that file's facts and fences older in-flight admission results. Closing discards
+only unsaved facts. Independent document registrations retire on document close;
+Twin-owned registrations retire on Twin close. Resource-scope changes invalidate
+bytes and textures
 before another source can reuse the same displayed URI.

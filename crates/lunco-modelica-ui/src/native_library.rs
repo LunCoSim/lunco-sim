@@ -63,15 +63,15 @@ impl Plugin for NativeLibraryIndexerPlugin {
                 bytes_done: 0,
                 bytes_total: 0,
             });
-            app.insert_resource(start_native_index(root));
+            app.insert_resource(start_native_index(root, true));
         }
     }
 }
 
-fn start_native_index(root: std::path::PathBuf) -> NativeLibraryInstallSlot {
+fn start_native_index(root: std::path::PathBuf, rebuild: bool) -> NativeLibraryInstallSlot {
     let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_native_index(slot.clone(), root, cancel.clone());
+    spawn_native_index(slot.clone(), root, cancel.clone(), rebuild);
     NativeLibraryInstallSlot {
         state: slot,
         cancel,
@@ -82,6 +82,7 @@ fn spawn_native_index(
     slot: NativeInstallSlot,
     root: std::path::PathBuf,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    rebuild: bool,
 ) {
     bevy::tasks::AsyncComputeTaskPool::get()
         .spawn(async move {
@@ -90,6 +91,16 @@ fn spawn_native_index(
                 root.display()
             );
             let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let source =
+                    LibrarySource::filesystem(root.clone()).map_err(|error| error.to_string())?;
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Ok(());
+                }
+                lunco_assets_runtime::library::install_global_library_sources(vec![source])
+                    .map_err(|error| error.to_string())?;
+                if !rebuild && root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
+                    return Ok(());
+                }
                 lunco_modelica_assets::indexer::run_with_cancel(
                     lunco_modelica_assets::indexer::Options::for_source_root(root.clone()),
                     Some(cancel.clone()),
@@ -121,7 +132,7 @@ fn spawn_native_index(
             set_install_state(
                 &slot,
                 LibraryLoadState::Ready {
-                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
+                    file_count: lunco_modelica_library::source_library::source_file_count(),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 },
@@ -187,19 +198,13 @@ fn on_native_library_index_action(
             .cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    if let Err(error) = lunco_assets_runtime::library::install_global_library_sources(vec![
-        LibrarySource::Filesystem(root.clone()),
-    ]) {
-        commands.insert_resource(LibraryLoadState::Failed(error.to_string()));
-        return;
-    }
     commands.insert_resource(LibraryLoadState::Loading {
         phase: LibraryLoadPhase::Parsing,
         bytes_done: 0,
         bytes_total: 0,
     });
     commands.insert_resource(NativeLibraryIndexLoad::new());
-    commands.insert_resource(start_native_index(root));
+    commands.insert_resource(start_native_index(root, true));
 }
 
 fn drive_native_library_dataset(
@@ -271,30 +276,13 @@ fn drive_native_library_dataset(
                     return;
                 }
             };
-            if let Err(error) = lunco_assets_runtime::library::install_global_library_sources(vec![
-                LibrarySource::Filesystem(root.clone()),
-            ]) {
-                *state = LibraryLoadState::Failed(error.to_string());
-                return;
-            }
-            if root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
-                *state = LibraryLoadState::Ready {
-                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                };
-                if index_load.is_none() {
-                    commands.insert_resource(NativeLibraryIndexLoad::new());
-                }
-                return;
-            }
             *state = LibraryLoadState::Loading {
                 phase: LibraryLoadPhase::Parsing,
                 bytes_done: 0,
                 bytes_total: 0,
             };
             commands.insert_resource(NativeLibraryIndexLoad::new());
-            commands.insert_resource(start_native_index(root));
+            commands.insert_resource(start_native_index(root, false));
         }
     }
 }

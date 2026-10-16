@@ -565,8 +565,13 @@ machine-global cache.
 ## Source libraries and resource views
 
 `lunco-assets-runtime::library` is the common installed-source store for native
-filesystem and in-memory backends. Relative paths are validated once at that
-owner; native reads use `existing_path_within_root`, including symlink
+filesystem and in-memory backends. `LibrarySource::filesystem` prepares a complete,
+language-neutral resident inventory through `discovery::inventory_files`;
+source-language consumers filter that inventory themselves. Source byte reads
+revalidate containment after inventory and consume the resolved path. Source membership
+never probes storage during painting. Installations after UI startup prepare
+the store on a worker before publication. Relative paths use that owner's
+shared validation; native reads use `existing_path_within_root`, including symlink
 containment. Absolute source-file reads are accepted only by their owning
 installed filesystem root. An unowned absolute file remains the document
 admission owner's responsibility. Only `Ok(None)` advances an ordered search;
@@ -580,11 +585,22 @@ reader streams native files and borrows resident memory bytes, so a bounded
 consumer need not materialize the whole payload before checking its budget.
 
 Default, engine-library and installed-library native sources share
-`lunco-assets-core::NativeAssetReader`, a containment adapter around Bevy's
-maintained streaming file reader. Payloads, metadata sidecars and directory
-queries all validate their owning root. A containment or I/O error terminates
+`lunco-assets-core::NativeAssetReader`, a containment adapter which reads and
+seeks owned storage handles on the asset I/O workers. Each read consumes only
+the caller's buffer, without an independent read-ahead allocation. Payloads,
+metadata sidecars and directory queries all validate their owning root. A containment or I/O error terminates
 the search; only absence permits the next root. Native source roots must be
-absolute, and payload/sidecar reads require regular files.
+absolute. `FileStorage::open_regular_file` supplies the shared admission for
+payload, sidecar, direct storage and library streaming reads; nonregular entries
+are rejected before opening, including FIFOs with no writer. Path and handle
+metadata checks are not an atomic guarantee against hostile filesystem replacement.
+
+Twin readers also open streams before the common reader applies its byte limit.
+Native handles use the same storage admission; OPFS holds an immutable File
+snapshot and sends demand-driven slices of at most 8 KiB through Rust channels.
+The browser-local task retains JavaScript values and exits when the reader is
+dropped. Seeking after a cancelled read retains response offsets. Resident Twin
+overlays share their immutable byte Arc without copying it at open.
 
 `lunco-assets-core::registered_read` owns bounded reads through registered
 sources and admitted directories. USD preparation and UI byte loading consume
@@ -598,8 +614,12 @@ filename case remain unchanged.
 Document views of admitted directory sources retain the directory's source-set
 identity. Independent document-backed packages have document-scoped registrations;
 duplicate namespaces fail with their source paths, rather than replacing another
-document. Closing a view preserves its admitted source, and replacing a Twin
-retires that Twin's roots and dependent UI caches.
+document. Directory owners retain per-file declaration provenance: fresh document
+parses replace that file's facts without removing sibling-file members. Pending
+or invalid parses reject resources visibly. Saves commit facts to the existing
+owner, including while an older worker admission is in flight. Closing a view
+drops its unsaved overlay and preserves saved facts; replacing a Twin retires
+that Twin's roots and dependent UI caches.
 
 The storage URI boundary accepts RFC 8089's authority form (`file:///path`)
 and minimal absolute form (`file:/path`); both use the maintained `url` crate

@@ -70,14 +70,12 @@ output and connect that output back to itself. EnvironmentProbe outputs use
 `target_mount_x/y/z` inputs, and their wires choose which object supplies the
 direction.
 
-The engine-recognized **source** extensions are walked into the discovery manifest
-(`crates/lunco-assets-runtime/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
-`.py`, `.sysml`, `.kerml`**. `.mo` (Modelica), `.py` (optional Python), and
-SysML/KerML sources are catalogued both because a `.usda`/Twin names them and
-so they can be browsed directly. Python is not the standard scenario backend;
-Rhai is. The Scenarios menu groups registered source files by type.
-Non-source data (`.json`, `.toml`) is not walked: it is read by a subsystem or
-evaluated ad hoc, not browsed as an authored asset.
+The engine catalog and web manifest share `discovery::scan_library`; its
+registered extensions live in `MANIFEST_EXTS`, not in a second packaging list.
+Domain discovery, such as Modelica's model catalog or a Twin's SysML source
+index, is distinct from that engine catalog. Installed source stores use the
+complete `inventory_files` traversal and let their language owner select sources.
+Catalog membership never restricts loading an explicitly addressed data asset.
 
 ## The `lunco://` scheme
 
@@ -141,12 +139,12 @@ prepend references = @lunco://components/mobility/wheel.usda@
 prepend references = @lunco://components/power/battery.usda@
 
 # ✅ a file sitting next to a Twin scene
-uniform asset info:sourceAsset = @twin://my_mission/gnc.rhai@
+uniform asset info:sourceAsset = @./gnc.rhai@
 
 # ⚠️ only legal when this file is itself inside assets/ AND never Twin-mounted
 uniform asset info:sourceAsset = @scenarios/foo.rhai@
 
-# ❌ always — `..` escapes the root and returns NotFound
+# ❌ when this traversal leaves the admitted source root
 prepend references = @../../components/mobility/wheel.usda@
 ```
 
@@ -306,15 +304,14 @@ scenarios use events, while authored tests may sample ticks for verdicts.
 
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
-(`crates/lunco-assets-runtime/src/discovery.rs`). After adding or removing any catalogued source
-(`.usda`/`.wgsl`/`.rhai`/`.mo`):
+(`crates/lunco-assets-runtime/src/discovery.rs`). After changing a source included by `scan_library`:
 
 ```bash
 ./scripts/build_web.sh build luncosim
 ```
 
 which rsyncs `assets/` into `dist/` and runs
-`cargo run -p lunco-assets --bin build_asset_manifest -- <dist>/assets`
+`cargo run -p lunco-assets-runtime --bin build_asset_manifest -- <dist>/assets`
 (`scripts/build_web.sh`). That generator calls the **same**
 `discovery::scan_library` the native runtime uses, so the two cannot drift.
 There is no standalone regenerate command.
@@ -349,8 +346,8 @@ in their own layers. A tutorial only projects metadata from that stage.
 - ❌ A bare relative reference to a **shipped** asset — it resolves against the
   anchoring document, so the file breaks the moment a Twin mounts it. Use
   `@lunco://…@`.
-- ❌ `@../../…@` anywhere — `..` escapes the root and returns NotFound. There
-  are zero such refs in the tree; keep it that way.
+- ❌ A layer-relative reference which escapes its admitted root. Explicit `./`
+  and `../` references anchor to the contributing layer and remain contained.
 - ❌ A dynamic/non-literal Rhai `import` — dependencies must be known while the
   asset is loading, so the loader rejects it visibly.
 - ❌ `lunco:spawnable` on a prim that is not the stage `defaultPrim` — invisible
@@ -393,3 +390,16 @@ not filesystem probes. Explicit native file URIs retain native filename semantic
 portable asset paths and exact UTF-8 language source identities keep their own
 validated representations. Use the shared resource reload action after an external
 file edit; do not introduce a language-specific retry or cache reset.
+
+Prepare native source stores with `LibrarySource::filesystem` on a worker after
+UI startup. The common inventory includes every file, including Resources,
+Images and test directories; language owners filter its resident paths. Native
+reads share `FileStorage::open_regular_file`, so special files reject before
+opening. Twin readers stream native/OPFS payloads before the consumer byte limit
+and share resident overlay bytes without cloning the payload.
+
+Directory-owned Modelica facts retain per-file provenance. A document overlays
+its current valid parse at that owner; an invalid/pending parse reports an
+error. Save commits facts, close removes only the unsaved overlay, and Twin
+retirement removes the owner. Verify edits, sibling-file membership, save/close,
+and invalid-parse recovery with `scripts/api/test_asset_resources.py`.

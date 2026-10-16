@@ -40,7 +40,7 @@ pub(super) enum CompilerCompletion {
 pub(super) struct SourceRootCommit {
     pub root_id: String,
     pub namespaces: Vec<String>,
-    pub packages: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
+    pub sources: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
     pub error: Option<String>,
     pub inserted_file_count: usize,
     pub parsed_file_count: usize,
@@ -427,7 +427,7 @@ fn install_source_root(
         return SourceRootCommit {
             root_id,
             namespaces: Vec::new(),
-            packages: Vec::new(),
+            sources: Vec::new(),
             error: Some(format!("Rumoca compiler actor faulted: {error}")),
             inserted_file_count: 0,
             parsed_file_count: 0,
@@ -450,8 +450,8 @@ fn install_source_root(
             }
             SourceRootCommit {
                 root_id: root_id.clone(),
-                packages: if error.is_none() {
-                    compiler.source_root_package_sources(&root_id)
+                sources: if error.is_none() {
+                    compiler.source_root_source_facts(&root_id)
                 } else {
                     Vec::new()
                 },
@@ -475,7 +475,7 @@ fn install_source_root(
             SourceRootCommit {
                 root_id: root_id.clone(),
                 namespaces: Vec::new(),
-                packages: Vec::new(),
+                sources: Vec::new(),
                 error: Some(fault),
                 inserted_file_count: 0,
                 parsed_file_count: 0,

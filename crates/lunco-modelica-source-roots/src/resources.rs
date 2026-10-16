@@ -58,14 +58,21 @@ impl ResourceContext {
                 .map(AssetReadTarget::Registered)
                 .map_err(|error| error.to_string());
         }
-        let package = unique_package(root, &parsed.qualified)?;
+        if !matches!(root.state, LoadState::Ready) {
+            return Err(format!(
+                "Modelica source set `{owner}` is awaiting admission"
+            ));
+        }
+        let sources = root.effective_sources();
+        let packages = lunco_modelica_ast::resource_uri::package_sources_for_files(sources)?;
+        let package = unique_package(&packages, &parsed.qualified)?;
         if package.members.iter().any(|member| member == first) {
             return Err(
                 "a resource path cannot start with a class name; use a qualified URI authority"
                     .into(),
             );
         }
-        let top = unique_package(root, namespace)?;
+        let top = unique_package(&packages, namespace)?;
         match &root.kind {
             SourceRootKind::SourceLibrary => Err("source-library resource was not admitted".into()),
             SourceRootKind::Bundled { filename } => Ok(AssetReadTarget::Registered(
@@ -101,11 +108,10 @@ impl ResourceContext {
 }
 
 fn unique_package<'a>(
-    root: &'a super::SourceRoot,
+    packages: &'a [lunco_modelica_ast::resource_uri::PackageSource],
     namespace: &str,
 ) -> Result<&'a lunco_modelica_ast::resource_uri::PackageSource, String> {
-    let mut matches = root
-        .package_sources
+    let mut matches = packages
         .iter()
         .filter(|package| package.namespace == namespace);
     let package = matches
@@ -168,6 +174,58 @@ pub(super) fn publish_resource_context(
 mod tests {
     use super::*;
     #[test]
+    fn asset_resolution_contract_saved_admission() {
+        let mut registry = SourceRootRegistry::default();
+        registry.register_disk_root("source", PathBuf::from("/owner"));
+        let uri = "/owner/A.mo";
+        let old = rumoca_compile::compile::ParsedSourceDocument::parse(
+            uri,
+            "package A package Before end Before; end A;",
+        )
+        .unwrap();
+        let saved = rumoca_compile::compile::ParsedSourceDocument::parse(
+            uri,
+            "package A package After end After; end A;",
+        )
+        .unwrap();
+        let id = lunco_doc::DocumentId::new(1);
+        registry
+            .roots
+            .get_mut("source")
+            .unwrap()
+            .refresh_document_source(
+                id,
+                lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(saved.definition(), uri),
+                true,
+            );
+        registry
+            .roots
+            .get_mut("source")
+            .unwrap()
+            .document_sources
+            .remove(&id);
+        assert!(
+            ResourceContext::capture(&registry)
+                .resolve("modelica://A.After/file.bin")
+                .unwrap_err()
+                .contains("awaiting admission")
+        );
+        assert!(registry.complete_load(
+            "source",
+            0,
+            vec!["A".into()],
+            vec![lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(
+                old.definition(),
+                uri
+            )],
+            None
+        ));
+        let context = ResourceContext::capture(&registry);
+        assert!(context.resolve("modelica://A.After/file.bin").is_ok());
+        assert!(context.resolve("modelica://A.Before/file.bin").is_err());
+    }
+
+    #[test]
     fn asset_resolution_contract() {
         let mut registry = SourceRootRegistry::default();
         registry.register_disk_root("source", PathBuf::from("/owner"));
@@ -181,10 +239,16 @@ mod tests {
             "within A; model Separate end Separate;",
         )
         .unwrap();
-        let packages = lunco_modelica_ast::resource_uri::source_set_package_sources([
-            (document.definition(), "/owner/A/package.mo"),
-            (child.definition(), "/owner/A/Separate.mo"),
-        ]);
+        let packages = vec![
+            lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(
+                document.definition(),
+                "/owner/A/package.mo",
+            ),
+            lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(
+                child.definition(),
+                "/owner/A/Separate.mo",
+            ),
+        ];
         assert!(registry.complete_load("source", 0, vec!["A".into()], packages, None));
         let context = ResourceContext::capture(&registry);
         let resolved = context
@@ -209,12 +273,21 @@ mod tests {
         assert!(context.resolve("modelica://A.B/Child/file.bin").is_err());
         assert!(context.resolve("modelica://A/Separate/file.bin").is_err());
         assert!(context.resolve("modelica://A.Missing/file.bin").is_err());
-        let duplicate = registry.roots["source"].package_sources[0].clone();
+        let mut duplicate = registry.roots["source"]
+            .source_files
+            .iter()
+            .find(|file| file.packages.iter().any(|package| package.namespace == "A"))
+            .unwrap()
+            .clone();
+        duplicate.source_uri = "/owner/A/duplicate.mo".into();
+        for package in &mut duplicate.packages {
+            package.source_uri = duplicate.source_uri.clone();
+        }
         registry
             .roots
             .get_mut("source")
             .unwrap()
-            .package_sources
+            .source_files
             .push(duplicate);
         assert!(
             ResourceContext::capture(&registry)

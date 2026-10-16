@@ -24,9 +24,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug)]
 pub enum LibrarySource {
     /// The library is materialised on the local filesystem at this root.
-    Filesystem(PathBuf),
+    Filesystem(Arc<FilesystemLibrary>),
     /// The library has been fetched and decompressed into memory.
     InMemory(Arc<InMemoryLibrary>),
+}
+
+/// Immutable native source inventory. Construction belongs to preparation,
+/// before publishing a store to consumers; membership never performs I/O.
+#[derive(Debug)]
+pub struct FilesystemLibrary {
+    root: PathBuf,
+    files: std::collections::BTreeSet<PathBuf>,
+}
+
+impl FilesystemLibrary {
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
 }
 
 /// Decompressed source-library tree held entirely in memory.
@@ -45,21 +59,6 @@ impl InMemoryLibrary {
     /// Total size of the decompressed files.
     pub fn total_bytes(&self) -> u64 {
         self.files.values().map(|v| v.len() as u64).sum()
-    }
-
-    /// Materialise UTF-8 files as stable `(uri, source)` pairs.
-    ///
-    /// URIs are library-relative paths rendered with forward slashes. Invalid
-    /// UTF-8 is skipped because Modelica source is UTF-8 text.
-    pub fn as_source_pairs(&self) -> Vec<(String, String)> {
-        let mut out = Vec::with_capacity(self.files.len());
-        for (path, bytes) in &self.files {
-            let uri = lunco_assets_path::slashed(path);
-            if let Ok(source) = std::str::from_utf8(bytes) {
-                out.push((uri, source.to_string()));
-            }
-        }
-        out
     }
 }
 
@@ -88,7 +87,7 @@ fn install_sources(
             .zip(&sources)
             .all(|(left, right)| match (left, right) {
                 (LibrarySource::Filesystem(left), LibrarySource::Filesystem(right)) => {
-                    left == right
+                    left.root == right.root
                 }
                 (LibrarySource::InMemory(left), LibrarySource::InMemory(right)) => {
                     Arc::ptr_eq(left, right)
@@ -109,15 +108,7 @@ fn admit_sources(sources: Vec<LibrarySource>) -> std::io::Result<Vec<LibrarySour
     sources
         .into_iter()
         .map(|source| match source {
-            #[cfg(not(target_arch = "wasm32"))]
-            LibrarySource::Filesystem(root) => {
-                lunco_assets_core::canonical_directory_root(&root).map(LibrarySource::Filesystem)
-            }
-            #[cfg(target_arch = "wasm32")]
-            LibrarySource::Filesystem(_) => Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "filesystem source libraries require a native host",
-            )),
+            LibrarySource::Filesystem(store) => Ok(LibrarySource::Filesystem(store)),
             LibrarySource::InMemory(tree) => {
                 for path in tree.files.keys() {
                     if path.is_absolute() {
@@ -150,9 +141,9 @@ pub fn has_library_source() -> bool {
 /// Return whether `path` belongs to an installed filesystem-backed library.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn owns_filesystem_path(path: &std::path::Path) -> bool {
-    global_library_sources()
-        .iter()
-        .any(|source| matches!(source, LibrarySource::Filesystem(root) if path.starts_with(root)))
+    global_library_sources().iter().any(
+        |source| matches!(source, LibrarySource::Filesystem(root) if path.starts_with(root.root())),
+    )
 }
 
 /// wasm has no filesystem-backed source roots.
@@ -198,8 +189,9 @@ pub fn library_open(path: &std::path::Path) -> std::io::Result<Option<(PathBuf, 
     validate_request(path)?;
     for source in global_library_sources() {
         if let LibrarySource::Filesystem(root) = source {
-            if let Some(resolved) = owned_path(root, path)? {
-                let file = std::fs::File::open(&resolved)?;
+            if let Some(resolved) = owned_path(root.root(), path)? {
+                let file = lunco_storage::FileStorage::open_regular_file(&resolved)
+                    .map_err(std::io::Error::other)?;
                 return Ok(Some((resolved, file)));
             }
         }
@@ -234,28 +226,59 @@ pub fn primary_filesystem_library_root() -> Option<&'static std::path::Path> {
     global_library_sources()
         .iter()
         .find_map(|source| match source {
-            LibrarySource::Filesystem(path) => Some(path.as_path()),
+            LibrarySource::Filesystem(path) => Some(path.root()),
             LibrarySource::InMemory(_) => None,
         })
 }
 
-/// Count the Modelica source files in the installed filesystem roots.
-///
-/// The resident path set is the shared filesystem traversal used by source
-/// membership queries, so callers do not need to maintain a second recursive
-/// walker just to populate a load-status count.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn filesystem_library_file_count() -> usize {
-    native_path_set().len()
-}
-
 impl LibrarySource {
+    /// Prepare a complete, language-neutral inventory. Run on a preparation
+    /// worker when installing a store after the UI has started.
+    pub fn filesystem(root: PathBuf) -> std::io::Result<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let root = lunco_assets_core::canonical_directory_root(&root)?;
+            let (paths, diagnostics) = crate::discovery::inventory_files(&root);
+            if !diagnostics.is_empty() {
+                return Err(std::io::Error::other(diagnostics.join("\n")));
+            }
+            let files = paths
+                .into_iter()
+                .map(|path| {
+                    path.strip_prefix(&root)
+                        .map(std::path::Path::to_path_buf)
+                        .map_err(std::io::Error::other)
+                })
+                .collect::<std::io::Result<_>>()?;
+            Ok(Self::Filesystem(Arc::new(FilesystemLibrary {
+                root,
+                files,
+            })))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = root;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem source libraries require a native host",
+            ))
+        }
+    }
+
+    /// Resident library-relative file identities, independent of language.
+    pub fn files(&self) -> Box<dyn Iterator<Item = &std::path::Path> + '_> {
+        match self {
+            Self::Filesystem(store) => Box::new(store.files.iter().map(PathBuf::as_path)),
+            Self::InMemory(tree) => Box::new(tree.files.keys().map(PathBuf::as_path)),
+        }
+    }
+
     /// Read an owned file through the common asset containment boundary.
     pub fn read(&self, path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
         validate_request(path)?;
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Filesystem(root) => owned_path(root, path)?
+            Self::Filesystem(root) => owned_path(root.root(), path)?
                 .map(|resolved| lunco_assets_core::read_asset_file_bytes(&resolved))
                 .transpose(),
             #[cfg(target_arch = "wasm32")]
@@ -272,7 +295,7 @@ impl LibrarySource {
     /// Base path used to construct candidate paths for this backend.
     pub fn base(&self) -> &std::path::Path {
         match self {
-            Self::Filesystem(root) => root.as_path(),
+            Self::Filesystem(root) => root.root(),
             Self::InMemory(_) => std::path::Path::new(""),
         }
     }
@@ -284,79 +307,12 @@ impl LibrarySource {
     pub fn contains(&self, candidate: &std::path::Path) -> bool {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Filesystem(root) => {
-                candidate.starts_with(root) && native_path_set().contains(candidate)
-            }
+            Self::Filesystem(root) => candidate
+                .strip_prefix(root.root())
+                .is_ok_and(|relative| root.files.contains(relative)),
             #[cfg(target_arch = "wasm32")]
             Self::Filesystem(_) => false,
             Self::InMemory(inner) => inner.files.contains_key(candidate),
-        }
-    }
-}
-
-/// Resident set of every `.mo` file across installed filesystem libraries.
-///
-/// It is built lazily by one sequential walk. An empty result before a
-/// filesystem source is installed is not memoised, allowing a later source
-/// installation to retry.
-#[cfg(not(target_arch = "wasm32"))]
-fn native_path_set() -> &'static std::collections::HashSet<PathBuf> {
-    static SET: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
-    static EMPTY: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
-
-    if let Some(set) = SET.get() {
-        return set;
-    }
-    if !global_library_sources()
-        .iter()
-        .any(|source| matches!(source, LibrarySource::Filesystem(_)))
-    {
-        return EMPTY.get_or_init(std::collections::HashSet::new);
-    }
-    SET.get_or_init(build_native_path_set)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn build_native_path_set() -> std::collections::HashSet<PathBuf> {
-    let start = std::time::Instant::now();
-    let mut files = std::collections::HashSet::new();
-    let mut root_count = 0usize;
-    for source in global_library_sources() {
-        if let LibrarySource::Filesystem(root) = source {
-            root_count += 1;
-            collect_modelica_files(root, &mut files);
-        }
-    }
-    info!(
-        "[LibraryFs] native path-set: {} .mo files across {} roots in {:?}",
-        files.len(),
-        root_count,
-        start.elapsed()
-    );
-    files
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn collect_modelica_files(dir: &std::path::Path, files: &mut std::collections::HashSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        let path = entry.path();
-        if file_type.is_dir() {
-            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                if matches!(name, "Resources" | "Images" | "test") {
-                    continue;
-                }
-            }
-            collect_modelica_files(&path, files);
-        } else if file_type.is_file()
-            && path.extension().and_then(|extension| extension.to_str()) == Some("mo")
-        {
-            files.insert(path);
         }
     }
 }
@@ -476,11 +432,10 @@ mod resolution_tests {
         std::fs::write(root.join(literal), b"inside").unwrap();
         let outside = folder.path().join("outside.bin");
         std::fs::write(&outside, b"outside").unwrap();
-        let native = admit_sources(vec![LibrarySource::Filesystem(root.clone())])
-            .unwrap()
-            .remove(0);
-        assert!(admit_sources(vec![LibrarySource::Filesystem(PathBuf::from("relative"))]).is_err());
-        assert!(admit_sources(vec![LibrarySource::Filesystem(outside.clone())]).is_err());
+        let native = LibrarySource::filesystem(root.clone()).unwrap();
+        assert!(native.contains(&root.join(literal)));
+        assert!(LibrarySource::filesystem(PathBuf::from("relative")).is_err());
+        assert!(LibrarySource::filesystem(outside.clone()).is_err());
         let invalid = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
             files: HashMap::from([(PathBuf::from("../escape"), vec![])]),
         }));
@@ -488,6 +443,25 @@ mod resolution_tests {
         let memory = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
             files: HashMap::from([(literal.to_path_buf(), b"inside".to_vec())]),
         }));
+        assert!(memory.contains(literal));
+        // Source stores inventory arbitrary assets; language and directory
+        // names do not change membership between native and memory backends.
+        for relative in ["test/Probe.mo", "Resources/data.bin", "Images/icon.png"] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"resident").unwrap();
+        }
+        let catalog = LibrarySource::filesystem(root.clone()).unwrap();
+        let parity = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
+            files: ["test/Probe.mo", "Resources/data.bin", "Images/icon.png"]
+                .into_iter()
+                .map(|path| (PathBuf::from(path), b"resident".to_vec()))
+                .collect(),
+        }));
+        for path in parity.files() {
+            assert!(catalog.contains(&root.join(path)));
+            assert_eq!(catalog.read(path).unwrap(), parity.read(path).unwrap());
+        }
         let slot = OnceLock::new();
         install_sources(&slot, vec![native.clone()]).unwrap();
         install_sources(&slot, vec![native.clone()]).unwrap();
@@ -511,9 +485,7 @@ mod resolution_tests {
         {
             let alias = folder.path().join("alias");
             std::os::unix::fs::symlink(&root, &alias).unwrap();
-            let alias = admit_sources(vec![LibrarySource::Filesystem(alias)])
-                .unwrap()
-                .remove(0);
+            let alias = LibrarySource::filesystem(alias).unwrap();
             assert_eq!(
                 alias.read(&root.join(literal)).unwrap(),
                 Some(b"inside".to_vec())
@@ -552,7 +524,7 @@ impl bevy::asset::io::AssetReader for LibraryReader {
                         .iter()
                         .map(|source| match source {
                             LibrarySource::Filesystem(root) => {
-                                Some(lunco_assets_core::NativeAssetReader::new(root))
+                                Some(lunco_assets_core::NativeAssetReader::new(root.root()))
                             }
                             LibrarySource::InMemory(_) => None,
                         })
@@ -608,7 +580,7 @@ impl bevy::asset::io::AssetReader for LibraryReader {
         match source {
             #[cfg(not(target_arch = "wasm32"))]
             LibrarySource::Filesystem(root) => {
-                if let Some(path) = owned_path(root, &relative)? {
+                if let Some(path) = owned_path(root.root(), &relative)? {
                     return Ok(path.is_dir());
                 }
             }
@@ -680,7 +652,7 @@ pub fn library_resource_path(
         }
         let source_relative = match source {
             LibrarySource::Filesystem(root) => source_file
-                .strip_prefix(root)
+                .strip_prefix(root.root())
                 .map_err(std::io::Error::other)?,
             LibrarySource::InMemory(_) => source_file,
         };
@@ -698,10 +670,10 @@ pub fn library_resource_path(
 
 /// Native read-side mirror of the registered source-library reader.
 pub fn library_resource_local_path(path: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
-    let (_, source, relative) = source_request(path)?;
+    let (_, source, _relative) = source_request(path)?;
     match source {
         #[cfg(not(target_arch = "wasm32"))]
-        LibrarySource::Filesystem(root) => owned_path(root, &relative),
+        LibrarySource::Filesystem(root) => owned_path(root.root(), &_relative),
         _ => Ok(None),
     }
 }

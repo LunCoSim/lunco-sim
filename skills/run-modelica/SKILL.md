@@ -1093,3 +1093,11 @@ preview and displays pending/missing/invalid outcomes. Verify the rendered resul
 in an owned windowed session; compiler or byte-read success alone does not prove
 an image was displayed. Do not derive a resource path from the source cache or
 from the component palette, which does not enumerate package declarations.
+
+An editor view inside an admitted directory must retain that directory owner.
+Its current parsed generation overlays only its source file; sibling-file
+members remain admitted. Pending/invalid parses reject resource requests.
+Saving commits those facts even during an in-flight source-root admission;
+closing drops the unsaved overlay while preserving the saved directory facts.
+Use the shared resource acceptance driver to cover edit, save, close and parse
+recovery, together with directed screenshots in the owned production session.

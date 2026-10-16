@@ -437,7 +437,7 @@ pub struct ModelicaCompiler {
 
 #[derive(Clone)]
 struct SourceSetContribution {
-    package_sources: Vec<lunco_modelica_ast::resource_uri::PackageSource>,
+    source_files: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
     roots: std::collections::HashSet<String>,
     revision: u64,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
@@ -964,11 +964,15 @@ impl ModelicaCompiler {
             mut diagnostics,
             content_closure,
         } = prepared;
-        let package_sources = lunco_modelica_ast::resource_uri::source_set_package_sources(
-            parsed
-                .iter()
-                .map(|document| (document.definition(), document.uri())),
-        );
+        let source_files = parsed
+            .iter()
+            .map(|document| {
+                lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(
+                    document.definition(),
+                    document.uri(),
+                )
+            })
+            .collect();
         let file_count = files.len();
         // A source root is one semantic unit. Do not publish a partial package:
         // the compile owner must either see every member or a terminal load
@@ -989,7 +993,7 @@ impl ModelicaCompiler {
                 self.source_set_contributions.insert(
                     id.clone(),
                     SourceSetContribution {
-                        package_sources,
+                        source_files,
                         roots: parsed_roots,
                         revision,
                         content_closure: content_closure.clone(),
@@ -1048,13 +1052,13 @@ impl ModelicaCompiler {
 
     /// Package storage facts from the exact admitted ASTs. URI consumers must
     /// not infer the containing source from a package name or a cache layout.
-    pub fn source_root_package_sources(
+    pub fn source_root_source_facts(
         &self,
         source_set_id: &str,
-    ) -> Vec<lunco_modelica_ast::resource_uri::PackageSource> {
+    ) -> Vec<lunco_modelica_ast::resource_uri::SourceFileFacts> {
         self.source_set_contributions
             .get(source_set_id)
-            .map(|contribution| contribution.package_sources.clone())
+            .map(|contribution| contribution.source_files.clone())
             .unwrap_or_default()
     }
 

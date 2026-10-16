@@ -1472,7 +1472,7 @@ fn commit_ready_compiler_completions(
                 let _ = tx.send(ModelicaResult {
                     loaded_source_root_id: Some(commit.root_id),
                     loaded_source_root_namespaces: commit.namespaces,
-                    loaded_source_root_packages: commit.packages,
+                    loaded_source_root_sources: commit.sources,
                     source_root_operation_id: Some(source_root_operation_id),
                     error: commit.error,
                     ..Default::default()
@@ -4282,8 +4282,8 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 Vec::new()
             };
             send(ModelicaResult {
-                loaded_source_root_packages: if err.is_none() {
-                    compiler.source_root_package_sources(&id)
+                loaded_source_root_sources: if err.is_none() {
+                    compiler.source_root_source_facts(&id)
                 } else {
                     Vec::new()
                 },

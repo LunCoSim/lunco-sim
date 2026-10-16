@@ -44,12 +44,24 @@ pub async fn read_registered_asset_bytes(
                 ),
             });
         }
-        bytes
-            .try_reserve_exact(count)
-            .map_err(|error| ReadAssetBytesError::Io {
-                path: path.path().to_path_buf(),
-                source: std::io::Error::other(format!("asset buffer allocation failed: {error}")),
-            })?;
+        let required = bytes.len() + count;
+        if required > bytes.capacity() {
+            // Geometric growth keeps large bounded streams linear without
+            // requesting capacity beyond the consumer's preparation budget.
+            let capacity = bytes
+                .capacity()
+                .saturating_mul(2)
+                .max(required)
+                .min(max_bytes);
+            bytes
+                .try_reserve_exact(capacity - bytes.len())
+                .map_err(|error| ReadAssetBytesError::Io {
+                    path: path.path().to_path_buf(),
+                    source: std::io::Error::other(format!(
+                        "asset buffer allocation failed: {error}"
+                    )),
+                })?;
+        }
         bytes.extend_from_slice(&buffer[..count]);
     }
     Ok(bytes)
