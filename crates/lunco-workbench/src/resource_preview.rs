@@ -5,6 +5,8 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_workbench_core::commands::OpenAssetResource;
 use lunco_workbench_core::uri::{UriClicked, UriResolution};
 
+const TEXT_SCROLL: &str = "asset-resource-text";
+
 #[derive(Resource, Default)]
 struct ResourcePreview {
     uri: Option<String>,
@@ -47,6 +49,14 @@ fn retire_preview(
     if let Ok(ctx) = contexts.ctx_mut() {
         lunco_assets_runtime::ui_loader::invalidate_resource_images(ctx);
     }
+}
+
+fn preview_available_size(ui: &egui::Ui) -> egui::Vec2 {
+    // Scroll content may offer infinite height; previews use the visible body.
+    ui.available_rect_before_wrap()
+        .intersect(ui.clip_rect())
+        .size()
+        .max(egui::Vec2::ZERO)
 }
 
 fn draw(
@@ -100,15 +110,36 @@ fn draw(
     let Some(uri) = preview.uri.clone() else {
         return;
     };
+    let reset_scroll = preview.is_changed();
     let mut open = true;
     egui::Window::new("Resource")
         .id(egui::Id::new("asset-resource-preview"))
         .default_pos(ctx.content_rect().center())
         .pivot(egui::Align2::CENTER_CENTER)
         .constrain_to(ctx.content_rect())
+        .vscroll(true)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label(&uri);
+            if reset_scroll {
+                ui.scroll_to_cursor(Some(egui::Align::TOP));
+                // Reset stable scroll owners before bytes arrive, including
+                // text whose first ready frame follows asynchronous loading.
+                let text_scroll_id = ui.make_persistent_id(egui::IdSalt::new(TEXT_SCROLL));
+                egui::scroll_area::State::default().store(ctx, text_scroll_id);
+            }
+            ui.add_sized(
+                egui::vec2(preview_available_size(ui).x, ui.spacing().interact_size.y),
+                egui::Label::new(&uri)
+                    .truncate()
+                    .selectable(true)
+                    .halign(egui::Align::LEFT),
+            )
+            .context_menu(|ui| {
+                if ui.button("Copy URI").clicked() {
+                    ui.ctx().copy_text(uri.clone());
+                    ui.close();
+                }
+            });
             if ui.button("Reload").clicked() {
                 commands.trigger(OpenAssetResource { uri: uri.clone() });
             }
@@ -132,15 +163,19 @@ fn draw(
                         }
                     });
                     if let Ok(text) = text {
-                        egui::ScrollArea::both().show(ui, |ui| {
-                            ui.add(egui::Label::new(text).selectable(true));
-                        });
                         if text.len() < bytes.len() {
                             ui.label(format!("Showing {} of {} bytes", text.len(), bytes.len()));
                         }
+                        egui::ScrollArea::both()
+                            .id_salt(TEXT_SCROLL)
+                            .max_height(preview_available_size(ui).y)
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(text).selectable(true));
+                            });
                     } else {
-                        let image = egui::Image::new(uri.as_str());
-                        match image.load_for_size(ctx, ui.available_size()) {
+                        let available = preview_available_size(ui);
+                        let image = egui::Image::new(uri.as_str()).max_size(available);
+                        match image.load_for_size(ctx, available) {
                             Ok(egui::load::TexturePoll::Ready { .. }) => {
                                 ui.add(image.shrink_to_fit());
                             }

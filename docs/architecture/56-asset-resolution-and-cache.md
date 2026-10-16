@@ -641,6 +641,14 @@ replaces the maintained raster decoder instance: completed old decodes retain
 their old cache Arc and cannot publish into the new scope's image cache.
 Invalidation runs before workbench widgets read resources.
 
+The resource window bounds its scrolling content to the viewport. Long URIs
+use an ellipsized label with full hover text and a Copy URI context action;
+they do not consume the image area as wrapped lines. Image size hints and text
+scroll regions use the visible body, including after asynchronous loading or a
+resource switch. The text-size
+notice precedes its bounded text region so it remains reachable. Opening or
+reloading a resource resets the window's content scroll position.
+
 TODO — browser HTTP allocation: the registered browser directory source uses
 Bevy's `HttpWasmAssetReader`, which buffers the full response before returning a
 reader. Its allocation therefore precedes the common consumer budget. Replace

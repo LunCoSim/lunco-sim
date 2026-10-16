@@ -91,6 +91,8 @@ fencing and I/O are owner mechanisms. `UriRegistry` retains language routing;
 widgets dispatch typed resource/class actions. The shared preview supplies generic
 load/diagnostic presentation and uses existing theme defaults. No Twin selection,
 permission or scenario policy was added to Rust, and no new policy hook was needed.
+The workbench owns viewport containment and transient scroll reset through egui's
+public widget/state APIs.
 
 Standards checked: [OpenUSD Ar](https://openusd.org/dev/api/ar_page_front.html),
 the pinned Rust OpenUSD resolver/composition APIs,
@@ -110,7 +112,8 @@ admit ambient working-directory lookup as Pixar's default filesystem policy does
 - `scripts/api/test_path_interoperability.py`: 42 authored assertions, exit 0, including native rename/case/rejected targets, save/readback and USD-bound Modelica execution. The production Twin-search gate passed six authored assertions and exited 0.
 - `cargo build -p lunco-assets-runtime --bin build_asset_manifest -j 4`: passed. The executable generated the authoritative catalog for a source/data fixture, excluded its hidden source and rejected a missing directory with exit 1. `bash -n scripts/build_web.sh` passed.
 - All controlled simulator launches used this checkout's production binary and owned API port 4286, with PID/cwd/executable verification. Every owned runtime exited and released its port. The skill catalogue validator passed all 43 entries.
-- Rename follow-up: `cargo test -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed three cases, including relocation, saved facts and stale-operation rejection. The production binary rebuilt successfully. `scripts/api/test_asset_resource_renames.py` passed 20 authored assertions and exited 0; ten reviewed captures show resource recovery and the expected retired/missing diagnostics. The owned session released port 4286. Evidence is in `.lunco/asset-resolution-rereview/fixed/` and its adjacent `rename-*` logs. This verifies resource loading; the reopened-image capture also shows an existing preview window extending below the viewport.
+- Rename follow-up: `cargo test -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed three cases, including relocation, saved facts and stale-operation rejection. The production binary rebuilt successfully. `scripts/api/test_asset_resource_renames.py` passed 20 authored assertions and exited 0; ten reviewed captures show resource recovery and the expected retired/missing diagnostics. The owned session released port 4286. Evidence is in `.lunco/asset-resolution-rereview/fixed/` and its adjacent `rename-*` logs. This verifies resource loading; preview layout is covered separately below.
+- Preview layout: the production build passed, and `scripts/api/test_resource_preview_layout.py` completed both standard 1280x720 and compact 960x540 runs with exit 0. All 24 directed captures were reviewed: image corner markers, title/close controls, long-URI tooltip and copy menu, bounded text notice, scroll/reload and image-after-text stayed within the viewport. The copy menu was inspected; OS clipboard delivery was not exercised. Both owned API sessions on port 4286 exited with clean render logs. Evidence is in `.lunco/resource-preview-layout/complete-standard/` and `complete-compact/`. The driver records captures and lifecycle; visual review supplies the layout verdict.
 
 Current evidence is under `.lunco/asset-resolution-fix/` and the `fix-*` logs in
 `.lunco/asset-resolution-audit/`. These runs do not establish native Windows or
