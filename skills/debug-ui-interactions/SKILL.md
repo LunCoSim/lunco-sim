@@ -23,8 +23,11 @@ part of the failure.
 
 Launch timed synthetic gestures with `--no-throttle` when the owned window may
 be unfocused. Power-save frame pacing can stretch a press/release beyond the
-native click-duration limit. Send separate press/release phases across frames
-within a short gesture; use `InjectWindowInput` directly when measuring timing.
+native click-duration limit. For an ordinary click after layout settles, use
+`input_click`: its native press/release transitions share one input phase, so
+slow frames cannot turn the click into a long hold. Use separate phases for
+drags and held-gesture assertions; measure their wall duration when a click is
+expected. `InjectWindowInput` exposes the individual transitions directly.
 After publishing or switching a surface, capture its rendered layout before
 injecting pointer input. A command acknowledgement precedes widget layout and
 does not establish a hit target.
@@ -176,9 +179,9 @@ next primary click commits a moved route point through the canonical
 `@runtime@` USD edit path, whose projected change updates the ribbon once. The
 `route_interaction` production gate verifies that Move selects and retains the
 target, the live ghost follows a coalesced injected terrain cursor trace, and
-document generation stays unchanged during preview. It sequences typed Bevy
-press/release events on separate task ticks and waits for observable state with
-the Rhai behavior tree. It does not verify OS, compositor, or winit input
+document generation stays unchanged during preview. It observes application
+frame boundaries and authoritative state through the Rhai behavior tree.
+It does not verify OS, compositor, or winit input
 delivery; actual headful input remains a separate check. Do not use
 simulation-time sleeps or encode progression as numeric phase state.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
@@ -186,7 +189,9 @@ run by `scripts/run_editor_scene_tests.sh`; it uses `InjectWindowInput` to send
 typed Bevy window events through picking and verifies the mounted fixture,
 waypoint hit, semantic context intent, unchanged pre-menu selection, live scene
 selection in the focused editor owner, explicit Move menu action, ghost
-placement, and deletion. This gate does not exercise physical OS mouse input.
+placement, and deletion. Ordinary menu clicks use `input_click`; pointer
+movement and layout are observed before each click. This gate does not exercise
+physical OS mouse input.
 Bevy emits one click observer per entity in its previous hover map, whose
 iteration order is unspecified. The runtime scene router resolves from that
 same event-source map by hit depth and the authored policy for the actual button

@@ -82,6 +82,11 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    diagnostic/verdict boundary without crashing or silently substituting a
    default. A historical regression example alone is not sufficient reason
    to add a negative test.
+   Script helpers that receive a state map return the updated map, and callers
+   assign it back to `this`; argument mutation does not update the caller's
+   bound state. Keep the terminal verdict latched in that state so stop hooks
+   cannot emit a contradictory second result. Timeout diagnostics preserve an
+   earlier failure and identify the current awaited operation.
 4. For requirements, read the mounted SysML snapshot and evaluate composed USD
    evidence. Keep the requirement ID/limit in SysML and emit structured check
    evidence (name, measured value, units, criterion, source revision, and
@@ -119,6 +124,10 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    state. The production test wrappers give each process a run-scoped
    `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as
    ephemeral settings and runtime overlays.
+   Discovery resolves source assets through the same owning Twin and prepared
+   asset paths as runtime. A source search path may resolve from the Twin root
+   after a layer miss; `./` paths require the layer-relative source. Do not copy
+   a script beside its scene to satisfy discovery or bypass a failing fixture.
 7. Repeat with deterministic clocks and explicit seeds. Record the clock
    contract, timestep/substeps, source revision, and finite-state result. A
    repeatability check compares the same sampled evidence, not merely a zero

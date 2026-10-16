@@ -690,6 +690,12 @@ Rust owns only event validation and fan-out. The command accepts logical window
 coordinates and is local to the primary window; it is not a direct scene-edit
 or semantic-control shortcut.
 
+`input_click` queues both native button transitions in one input phase. Use it
+for ordinary activation after the target has been laid out and hovered. Split
+press/release across frames when the held state itself matters, such as drags
+or callback-replacement tests. A frame wait is not a gesture-duration guarantee:
+slow rendering can stretch a held press beyond egui's click limit.
+
 The input bridge currently targets the primary window. Validate the gesture
 lifecycle on Wayland, X11, and Windows before treating cross-platform
 automation as a stable contract.

@@ -269,6 +269,13 @@ recipes and their acceptance scenes stay in the owning Twin.
    support assets and are omitted from the root test catalog. The runner
    classifies each included test's execution domain from its source's top-level
    literal `TEST_KIND` constant.
+   Discovery mounts the scene's owning Twin and uses the runtime's composed
+   asset identifiers and prepared search-path resolver. Search paths prefer
+   the contributing layer, then the Twin root; explicit `./` paths stay bound
+   to that layer. Test membership uses library-relative source identity,
+   including nested fixture Twins, independently of cache storage locations.
+   Source bytes use the bounded shared asset reader, including the library's
+   authored, packed-cache and shared-cache order.
    The production discovery API lives in `lunco-scene-validation`, alongside
    the asset and stage validation it reuses; the scene mutation crate does not
    own test inventory.
