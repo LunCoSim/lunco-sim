@@ -73,6 +73,14 @@ retiring directory ownership. Separate class files keep their package membership
 Save commits facts; close discards unsaved overlays and preserves saved resources.
 Older in-flight admission cannot overwrite a save. Replacing the Twin retires it.
 
+Native rename handling relocates directory registrations and all source/package
+provenance, including saved facts, pending saves and closed-source facts.
+Pre-rename worker operations cannot publish. Disk roots reload through the
+existing worker after the rename's automatic class/save transaction. The focused
+production driver is `scripts/api/test_asset_resource_renames.py`; its authored
+checks live in `asset_resolution.rhai`, and its captures cover open/closed folder
+moves, file rename/save/close/reopen, retired declarations and missing resources.
+
 Native Windows and browser runtime acceptance remain separate from Linux
 compile/runtime evidence. Application source-store identity changes require an
 application restart. Full class-document anchor scrolling is outside this asset
@@ -102,6 +110,7 @@ admit ambient working-directory lookup as Pixar's default filesystem policy does
 - `scripts/api/test_path_interoperability.py`: 42 authored assertions, exit 0, including native rename/case/rejected targets, save/readback and USD-bound Modelica execution. The production Twin-search gate passed six authored assertions and exited 0.
 - `cargo build -p lunco-assets-runtime --bin build_asset_manifest -j 4`: passed. The executable generated the authoritative catalog for a source/data fixture, excluded its hidden source and rejected a missing directory with exit 1. `bash -n scripts/build_web.sh` passed.
 - All controlled simulator launches used this checkout's production binary and owned API port 4286, with PID/cwd/executable verification. Every owned runtime exited and released its port. The skill catalogue validator passed all 43 entries.
+- Rename follow-up: `cargo test -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed three cases, including relocation, saved facts and stale-operation rejection. The production binary rebuilt successfully. `scripts/api/test_asset_resource_renames.py` passed 20 authored assertions and exited 0; ten reviewed captures show resource recovery and the expected retired/missing diagnostics. The owned session released port 4286. Evidence is in `.lunco/asset-resolution-rereview/fixed/` and its adjacent `rename-*` logs. This verifies resource loading; the reopened-image capture also shows an existing preview window extending below the viewport.
 
 Current evidence is under `.lunco/asset-resolution-fix/` and the `fix-*` logs in
 `.lunco/asset-resolution-audit/`. These runs do not establish native Windows or
@@ -131,3 +140,10 @@ rejected by the 64 MiB UI budget. Linux process-I/O evidence distinguishes a
 bounded stream from eager full-file materialization. Browser storage tests cover
 bounded reads and seeking after a cancelled read. The accepted checks above
 record the production results.
+
+## Open TODO
+
+Bound browser HTTP response allocation before consumer limits, as specified in
+the [shared resource contract](../architecture/56-asset-resolution-and-cache.md#source-libraries-and-resource-views).
+Acceptance requires an oversized HTTP payload in a real browser; the OPFS test
+covers a different backend.

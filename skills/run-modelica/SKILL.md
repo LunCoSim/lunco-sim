@@ -1101,3 +1101,9 @@ Saving commits those facts even during an in-flight source-root admission;
 closing drops the unsaved overlay while preserving the saved directory facts.
 Use the shared resource acceptance driver to cover edit, save, close and parse
 recovery, together with directed screenshots in the owned production session.
+
+Native file/folder renames relocate source and package provenance at that same
+owner, fence pre-rename admission and reload affected disk roots on the existing
+worker after the automatic class/save transaction. Exercise
+`scripts/api/test_asset_resource_renames.py` for open/closed directory moves,
+file rename/save/close/reopen, retired declarations and a missing resource.

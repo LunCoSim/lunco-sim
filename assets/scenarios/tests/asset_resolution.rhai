@@ -34,3 +34,14 @@ fn verify_resource_invalid(id, expected_source) {
         t_true(!status.ast_parsed, "invalid source is not admitted as a parsed generation"),
     ], "Resource invalid generation", "ASSET_RESOURCE_INVALID");
 }
+
+fn verify_resource_rename(id, expected_path, class_name) {
+    let source = query("GetDocumentSource", #{doc_id: id});
+    let status = query("CompileStatus", #{doc_id: id});
+    report_verdict([
+        t_true(source.origin.path == expected_path, "renamed document owns its current path"),
+        t_true(source.source.contains("package " + class_name), "renamed source owns its current declaration"),
+        t_true(!source.dirty, "rename preserves saved source"),
+        t_true(status.ast_parsed, "renamed source has a current valid parse"),
+    ], "Resource renamed source", "ASSET_RESOURCE_RENAME");
+}

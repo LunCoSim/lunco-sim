@@ -621,6 +621,12 @@ owner, including while an older worker admission is in flight. Closing a view
 drops its unsaved overlay and preserves saved facts; replacing a Twin retires
 that Twin's roots and dependent UI caches.
 
+Native file/directory renames relocate each affected source root, saved file,
+package provenance and document overlay together. Pre-rename admission results
+are fenced immediately. After the document/class/save transaction, the existing
+worker reloads affected disk roots in stable registration order; parsing and I/O
+stay off the UI thread. Closed sources follow the same relocation path.
+
 The storage URI boundary accepts RFC 8089's authority form (`file:///path`)
 and minimal absolute form (`file:/path`); both use the maintained `url` crate
 for native conversion and reject malformed escapes, queries and fragments.
@@ -634,6 +640,13 @@ and textures together. Detached byte workers retain discarded result slots. Scop
 replaces the maintained raster decoder instance: completed old decodes retain
 their old cache Arc and cannot publish into the new scope's image cache.
 Invalidation runs before workbench widgets read resources.
+
+TODO — browser HTTP allocation: the registered browser directory source uses
+Bevy's `HttpWasmAssetReader`, which buffers the full response before returning a
+reader. Its allocation therefore precedes the common consumer budget. Replace
+that backend with bounded streaming through the shared transport/asset owner,
+and add a browser regression for an oversized HTTP payload. OPFS streaming
+coverage does not establish this HTTP contract.
 
 Native source-directory preparation uses the storage owner's ordered listing,
 shared root containment and canonical identity checks. Escapes, repeated

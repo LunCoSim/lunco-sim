@@ -2002,3 +2002,9 @@ only unsaved facts. Independent document registrations retire on document close;
 Twin-owned registrations retire on Twin close. Resource-scope changes invalidate
 bytes and textures
 before another source can reuse the same displayed URI.
+
+Native file and directory renames relocate the root and each file/package's
+provenance, including saved facts and document overlays. Pre-rename load results
+are fenced; the existing worker reloads the affected disk source sets after the
+rename/class/save transaction. Closing or reopening a view cannot restore a
+retired path or namespace.

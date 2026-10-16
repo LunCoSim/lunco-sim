@@ -174,6 +174,128 @@ pub(super) fn publish_resource_context(
 mod tests {
     use super::*;
     #[test]
+    fn asset_resolution_contract_relocation() {
+        use lunco_modelica_ast::resource_uri::SourceFileFacts;
+        fn facts(uri: &str, source: &str) -> SourceFileFacts {
+            let parsed = rumoca_compile::compile::ParsedSourceDocument::parse(uri, source).unwrap();
+            SourceFileFacts::parsed(parsed.definition(), uri)
+        }
+        let old_uri = "/owner/models/Probe.mo";
+        let new_uri = "/owner/models/Renamed.mo";
+        let before = facts(old_uri, "package Probe end Probe;");
+        let after = facts(new_uri, "package Renamed end Renamed;");
+        let doc = lunco_doc::DocumentId::new(1);
+        let mut registry = SourceRootRegistry::default();
+        registry.register_disk_root("source", PathBuf::from("/owner/models"));
+        assert!(registry.complete_load(
+            "source",
+            0,
+            vec!["Probe".into()],
+            vec![before.clone()],
+            None
+        ));
+        registry
+            .roots
+            .get_mut("source")
+            .unwrap()
+            .refresh_document_source(doc, before.clone(), true);
+        let mut app = bevy::prelude::App::new();
+        app.insert_resource(registry);
+        app.init_resource::<super::super::PendingSourceRootReloads>();
+        app.add_observer(super::super::relocate_source_roots);
+        app.world_mut().trigger(lunco_workspace::FileRenamed {
+            twin: lunco_workspace::TwinId::new(1),
+            old_abs: PathBuf::from(old_uri),
+            new_abs: PathBuf::from(new_uri),
+            is_dir: false,
+        });
+        let mut registry = app.world_mut().resource_mut::<SourceRootRegistry>();
+        assert!(!registry.complete_load("source", 0, vec!["Probe".into()], vec![before], None));
+        let root = registry.roots.get_mut("source").unwrap();
+        assert_eq!(root.source_files[0].source_uri, new_uri);
+        assert_eq!(root.document_sources[&doc].packages[0].source_uri, new_uri);
+        // Automatic save can precede parsing. Its exact source identity must
+        // be replaced by the completed parse rather than surviving as an error.
+        let mut pending = root.document_sources[&doc].clone();
+        pending.error = Some("current parse pending".into());
+        root.refresh_document_source(doc, pending, true);
+        root.refresh_document_source(doc, after.clone(), true);
+        root.document_sources.remove(&doc);
+        let operation = root.operation_id;
+        assert!(registry.complete_load(
+            "source",
+            operation,
+            vec!["Renamed".into()],
+            vec![after],
+            None
+        ));
+        let context = ResourceContext::capture(&registry);
+        assert!(
+            context
+                .resolve("modelica://Renamed/Resources/plot.png")
+                .is_ok()
+        );
+        assert!(
+            context
+                .resolve("modelica://Probe/Resources/plot.png")
+                .is_err()
+        );
+        let root = registry.roots.get_mut("source").unwrap();
+        root.state = LoadState::Loading {
+            progress: 0.0,
+            started: web_time::Instant::now(),
+        };
+        let saved = facts(
+            new_uri,
+            "package Renamed package Saved end Saved; end Renamed;",
+        );
+        root.refresh_document_source(doc, saved, true);
+        drop(registry);
+        app.world_mut().trigger(lunco_workspace::FileRenamed {
+            twin: lunco_workspace::TwinId::new(1),
+            old_abs: PathBuf::from("/owner/models"),
+            new_abs: PathBuf::from("/owner/moved"),
+            is_dir: true,
+        });
+        let mut registry = app.world_mut().resource_mut::<SourceRootRegistry>();
+        let root = registry.roots.get_mut("source").unwrap();
+        assert!(
+            matches!(&root.kind, SourceRootKind::Disk { root_dir } if root_dir == Path::new("/owner/moved"))
+        );
+        assert_eq!(root.source_files[0].source_uri, "/owner/moved/Renamed.mo");
+        assert!(
+            root.pending_saved_sources
+                .contains_key("/owner/moved/Renamed.mo")
+        );
+        assert!(!root.pending_saved_sources.contains_key(new_uri));
+        root.document_sources.remove(&doc);
+        let current = root.operation_id;
+        assert!(!registry.complete_load("source", operation, vec!["Probe".into()], vec![], None));
+        let relocated = facts("/owner/moved/Renamed.mo", "package Renamed end Renamed;");
+        assert!(registry.complete_load(
+            "source",
+            current,
+            vec!["Renamed".into()],
+            vec![relocated],
+            None
+        ));
+        assert!(
+            ResourceContext::capture(&registry)
+                .resolve("modelica://Renamed.Saved/Resources/plot.png")
+                .is_ok()
+        );
+        match ResourceContext::capture(&registry)
+            .resolve("modelica://Renamed/Resources/plot.png")
+            .unwrap()
+        {
+            AssetReadTarget::Directory { directory, .. } => {
+                assert_eq!(directory.path(), Path::new("/owner/moved"))
+            }
+            _ => panic!("expected relocated directory"),
+        }
+    }
+
+    #[test]
     fn asset_resolution_contract_saved_admission() {
         let mut registry = SourceRootRegistry::default();
         registry.register_disk_root("source", PathBuf::from("/owner"));

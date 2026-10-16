@@ -1372,6 +1372,10 @@ publishes the immutable resource-to-asset context used by UI loaders. This lifec
 the document/runtime core so changing Twin discovery does not rebuild its engine
 implementation.
 
+Native rename notifications relocate root/file/package provenance and fence old
+admission results. Affected disk sources reload on the existing worker after the
+document's class/save transaction, including when no source view is open.
+
 **`lunco-modelica-library`**
 Production source-library capability shared by compiler, execution, and UI
 hosts. It owns the persisted local-root setting, native parsed-bundle admission,

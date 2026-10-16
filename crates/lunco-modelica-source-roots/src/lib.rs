@@ -125,6 +125,64 @@ pub struct SourceRoot {
 }
 
 impl SourceRoot {
+    fn relocate_sources(&mut self, rename: &lunco_workspace::FileRenamed) -> bool {
+        fn relocate(path: &mut PathBuf, rename: &lunco_workspace::FileRenamed) -> bool {
+            let Ok(relative) = path.strip_prefix(&rename.old_abs) else {
+                return false;
+            };
+            *path = if relative.as_os_str().is_empty() {
+                rename.new_abs.clone()
+            } else {
+                rename.new_abs.join(relative)
+            };
+            true
+        }
+        fn relocate_facts(
+            facts: &mut lunco_modelica_ast::resource_uri::SourceFileFacts,
+            rename: &lunco_workspace::FileRenamed,
+        ) {
+            let mut path = PathBuf::from(&facts.source_uri);
+            if relocate(&mut path, rename) {
+                facts.source_uri = lunco_assets_path::slashed(&path);
+            }
+            for package in &mut facts.packages {
+                let mut path = PathBuf::from(&package.source_uri);
+                if relocate(&mut path, rename) {
+                    package.source_uri = lunco_assets_path::slashed(&path);
+                }
+            }
+        }
+        let affected = match &mut self.kind {
+            SourceRootKind::Disk { root_dir } => {
+                let contains_entry = rename.old_abs.starts_with(&*root_dir);
+                relocate(root_dir, rename) || contains_entry
+            }
+            SourceRootKind::WorkspaceFile { path } => relocate(path, rename),
+            _ => false,
+        };
+        if !affected {
+            return false;
+        }
+        // Saved facts and live overlays share one relocated identity. In
+        // particular, a parse pending during an automatic save must not leave
+        // an invalid entry at the source's retired path.
+        for facts in self
+            .source_files
+            .iter_mut()
+            .chain(self.document_sources.values_mut())
+        {
+            relocate_facts(facts, rename);
+        }
+        self.pending_saved_sources = std::mem::take(&mut self.pending_saved_sources)
+            .into_values()
+            .map(|mut facts| {
+                relocate_facts(&mut facts, rename);
+                (facts.source_uri.clone(), facts)
+            })
+            .collect();
+        true
+    }
+
     pub fn effective_sources(&self) -> Vec<&lunco_modelica_ast::resource_uri::SourceFileFacts> {
         let overridden = self
             .document_sources
@@ -665,6 +723,65 @@ struct PendingSourceRootUnloads {
     terminal_error: Option<String>,
 }
 
+#[derive(Resource, Default)]
+struct PendingSourceRootReloads(std::collections::BTreeSet<String>);
+
+fn relocate_source_roots(
+    trigger: On<lunco_workspace::FileRenamed>,
+    mut registry: ResMut<SourceRootRegistry>,
+    mut reloads: ResMut<PendingSourceRootReloads>,
+    mut commands: Commands,
+) {
+    let rename = trigger.event();
+    let mut ids = registry.roots.keys().cloned().collect::<Vec<_>>();
+    ids.sort();
+    for id in ids {
+        let entry = registry.roots.get_mut(&id).expect("registered root");
+        if !entry.relocate_sources(rename) || !matches!(entry.kind, SourceRootKind::Disk { .. }) {
+            continue;
+        }
+        // Fence any admission captured before the filesystem transaction. The
+        // existing worker reload replaces compiler sources and parsed facts.
+        let operation = registry.allocate_operation_id();
+        let entry = registry.roots.get_mut(&id).expect("registered root");
+        match operation {
+            Ok(operation_id) => {
+                entry.operation_id = operation_id;
+                entry.state = LoadState::NotLoaded;
+                reloads.0.insert(id);
+            }
+            Err(error) => {
+                entry.state = LoadState::Failed(error.clone());
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "modelica-source-root-relocation-failed".into(),
+                    message: error,
+                });
+            }
+        }
+    }
+}
+
+fn reload_relocated_source_roots(
+    mut reloads: ResMut<PendingSourceRootReloads>,
+    mut registry: ResMut<SourceRootRegistry>,
+    channels: Option<Res<ModelicaChannels>>,
+) {
+    if reloads.0.is_empty() {
+        return;
+    }
+    // PostUpdate follows the rename's document/class/save transaction. Source
+    // preparation stays on the existing worker and observes its persisted text.
+    for id in std::mem::take(&mut reloads.0) {
+        let Some(channels) = channels.as_deref() else {
+            if let Some(entry) = registry.roots.get_mut(&id) {
+                entry.state = LoadState::Failed("Modelica worker is not installed".into());
+            }
+            continue;
+        };
+        ensure_loaded(&mut registry, &id, channels);
+    }
+}
+
 /// Installs source-root inventory and document discovery for every Modelica
 /// host, including headless execution. The inventory is application state;
 /// editor panels only present its load lifecycle.
@@ -676,6 +793,7 @@ impl Plugin for ModelicaSourceRootsPlugin {
             app.insert_resource(SourceRootRegistry::build());
         }
         app.init_resource::<PendingSourceRootUnloads>();
+        app.init_resource::<PendingSourceRootReloads>();
         app.init_resource::<resources::ResourceContextHandle>();
         app.add_systems(
             Update,
@@ -685,6 +803,11 @@ impl Plugin for ModelicaSourceRootsPlugin {
         app.add_observer(refresh_document_source_roots);
         app.add_observer(refresh_saved_document_source_roots);
         app.add_observer(retire_document_source_roots);
+        app.add_observer(relocate_source_roots);
+        app.add_systems(
+            PostUpdate,
+            reload_relocated_source_roots.run_if(resource_changed::<PendingSourceRootReloads>),
+        );
         app.add_observer(register_indexed_library_source_root);
         #[cfg(not(target_arch = "wasm32"))]
         {

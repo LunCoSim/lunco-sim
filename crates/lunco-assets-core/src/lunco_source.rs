@@ -486,6 +486,9 @@ fn library_asset_reader(root: &str) -> Box<dyn ErasedAssetReader> {
     }
     #[cfg(target_arch = "wasm32")]
     {
+        // TODO: stream browser HTTP bodies through the shared bounded reader.
+        // HttpWasmAssetReader materializes the response before returning its
+        // Reader, so consumer limits do not bound this backend's allocation.
         Box::new(
             bevy::asset::io::wasm::HttpWasmAssetReader::new(root).with_request_mapper(|path| {
                 std::borrow::Cow::Owned(crate::asset_path::http_asset_path(path))
