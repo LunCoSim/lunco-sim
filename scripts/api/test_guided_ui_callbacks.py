@@ -209,6 +209,20 @@ def main() -> None:
             wait_for_scene_time_selection(session, artifacts / "runtime.log", 30)
             command("QueryUsdPrim", path="/World")
             wait_for_ready(args.port)
+            command("OpenUsdSourceDocument",
+                source="lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda")
+            fixture = (ROOT / "assets/scenes/tests/twin_session_retirement/replacement/replacement.usda").resolve()
+            deadline = time.monotonic() + 15
+            while True:
+                documents = [entry for entry in command("ListOpenDocuments")["open_documents"]
+                    if entry["origin"].get("kind") == "file"
+                    and Path(entry["origin"].get("path", "")).resolve() == fixture]
+                if len(documents) == 1:
+                    break
+                if len(documents) > 1 or time.monotonic() >= deadline:
+                    raise RuntimeError(f"Expected the exact callback source document: {documents}")
+                time.sleep(.05)
+            verdict("verify_pointer_subscription", documents[0]["doc_id"])
             command("RunScenarioAsset", source_asset="lunco://scenarios/tests/guided_hud_teardown.rhai", owner_twin_id=owner)
             command("SetTimeTransport", playing=True)
             wait_for_ready(args.port)

@@ -144,7 +144,11 @@ on other documents, perform the lightweight document lookup and drop the hit
 before coordinate conversion or terrain work. For an active interaction, a
 fallback terrain raycast runs at most once per pointer per picking frame;
 direct analytic surface hits do not need that fallback. Queue one typed hook
-after resolution. Clear the subscription when the interaction ends; document
+after resolution with the subscription's exact scene-bound `ToolHookBinding`
+lease. Refreshing context replaces that lease; clear and teardown despawn it so
+already queued samples also reject. Do not dispatch retained subscriptions by
+tool name alone. New subscriptions reject during stop hooks and scene
+transitions. Clear the subscription when the interaction ends; document
 close, Twin close, and scene teardown own cleanup.
 Enter provides the first sample after a scene hit replaces a popup's
 previous-frame capture hit. Bevy can emit move events for both the pass-through

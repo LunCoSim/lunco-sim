@@ -764,7 +764,8 @@ stays available while that owning scene remains current.
 Run `scripts/api/test_guided_ui_callbacks.py --port PORT` against the production
 binary for held-press popup replacement, fresh selection, outside dismissal,
 scene teardown, installed menu replacement/reuse, deferred stop hooks and Twin
-replacement. The wrapper drives window input; the
+replacement, plus document pointer-subscription registration and cleanup.
+The wrapper drives window input; the
 isolated Twin's `hud_binding_probe.rhai` library supplies the runtime verdicts.
 The wrapper creates temporary application Rhai/JSON sources for native menu
 replacement and removes them after the owned session exits. The maintained USD

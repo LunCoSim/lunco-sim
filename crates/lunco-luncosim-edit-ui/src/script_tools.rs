@@ -42,6 +42,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
+use lunco_scripting_bridge_core::{ToolHookBinding, ToolHookBindingRetention};
 use lunco_spatial::coords::{
     ACTIVE_FRAME_NAME, ActiveFrameCoordinates, RENDER_FRAME_NAME, RenderPos,
 };
@@ -74,10 +75,26 @@ pub struct ScenePointerDispatch {
 #[derive(Clone)]
 struct ScenePointerMoveHook {
     interaction_id: String,
-    tool: String,
-    hook: String,
+    binding: Entity,
     context: BTreeMap<String, String>,
     owner_twin_id: Option<u64>,
+}
+
+impl ScenePointerDispatch {
+    fn remove_hooks(
+        &mut self,
+        mut remove: impl FnMut(DocumentId, &ScenePointerMoveHook) -> bool,
+        commands: &mut Commands,
+    ) {
+        self.move_hooks.retain(|doc, subscription| {
+            if remove(*doc, subscription) {
+                commands.entity(subscription.binding).try_despawn();
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 const MAX_PENDING_CURVE_VIEW_REQUESTS: usize = 64;
@@ -202,8 +219,17 @@ fn on_set_scene_pointer_move_hook(
     mut dispatch: ResMut<ScenePointerDispatch>,
     documents: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    active: Res<lunco_core::ActiveCommandId>,
+    bindings: Query<&ToolHookBinding>,
+    mut commands: Commands,
 ) -> Result<Ack, String> {
     let command = trigger.event();
+    if matches!(active.origin(), Some(lunco_core::CommandOrigin::Rhai { context, .. })
+        if context.phase == lunco_core::RuntimePhase::Stop)
+    {
+        return Err("pointer-move subscriptions are unavailable during scenario teardown".into());
+    }
     let doc = DocumentId::new(command.doc_id);
     if doc.is_unassigned() {
         return Err("pointer-move hook requires an assigned USD document".to_string());
@@ -211,31 +237,21 @@ fn on_set_scene_pointer_move_hook(
     if documents.host(doc).is_none() {
         return Err(format!("USD document {doc} is not open"));
     }
-    if command.interaction_id.is_empty()
-        || command.tool.is_empty()
-        || command.hook.is_empty()
-        || !command
-            .hook
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Err("pointer-move hook requires a registered tool and hook identifier".to_string());
+    if command.interaction_id.is_empty() {
+        return Err("pointer-move hook requires an interaction identity".to_string());
     }
-    let signature = format!("{}/1", command.hook);
-    if !lunco_tools::has_function(&command.tool, &signature) {
-        return Err(format!(
-            "Rhai tool '{}' has no {} handler",
-            command.tool, signature
-        ));
-    }
-    if dispatch.move_hooks.get(&doc).is_some_and(|active| {
-        active.interaction_id != command.interaction_id
-            || active.tool != command.tool
-            || active.hook != command.hook
-    }) {
-        return Err(format!(
-            "USD document {doc} already has an active pointer-move interaction"
-        ));
+    if let Some(subscription) = dispatch.move_hooks.get(&doc) {
+        let endpoint = bindings
+            .get(subscription.binding)
+            .map_err(|_| "pointer-move subscription binding has been retired".to_owned())?;
+        if subscription.interaction_id != command.interaction_id
+            || endpoint.tool != command.tool
+            || endpoint.hook != command.hook
+        {
+            return Err(format!(
+                "USD document {doc} already has an active pointer-move interaction"
+            ));
+        }
     }
     let owner_twin_id = workspace.as_deref().and_then(|workspace| {
         workspace
@@ -244,12 +260,19 @@ fn on_set_scene_pointer_move_hook(
             .and_then(|entry| workspace.0.twin_for(entry))
             .map(|twin| twin.raw())
     });
+    let binding = ToolHookBinding::for_scene(
+        command.tool.clone(),
+        command.hook.clone(),
+        owner_twin_id,
+        ToolHookBindingRetention::Surface,
+        scene.as_deref(),
+    )?;
+    dispatch.remove_hooks(|id, _| id == doc, &mut commands);
     dispatch.move_hooks.insert(
         doc,
         ScenePointerMoveHook {
             interaction_id: command.interaction_id.clone(),
-            tool: command.tool.clone(),
-            hook: command.hook.clone(),
+            binding: commands.spawn(binding).id(),
             context: command.context.clone(),
             owner_twin_id,
         },
@@ -264,6 +287,7 @@ fn on_set_scene_pointer_move_hook(
 fn on_clear_scene_pointer_move_hook(
     trigger: On<ClearScenePointerMoveHook>,
     mut dispatch: ResMut<ScenePointerDispatch>,
+    mut commands: Commands,
 ) -> Result<Ack, String> {
     let doc = DocumentId::new(trigger.event().doc_id);
     if doc.is_unassigned() {
@@ -282,7 +306,7 @@ fn on_clear_scene_pointer_move_hook(
             "USD document {doc} has a different active pointer-move interaction"
         ));
     }
-    dispatch.move_hooks.remove(&doc);
+    dispatch.remove_hooks(|id, _| id == doc, &mut commands);
     Ok(Ack::with_data(
         OpId::new(),
         api_value!({ "status": "cleared" }),
@@ -292,35 +316,27 @@ fn on_clear_scene_pointer_move_hook(
 pub(crate) fn clear_scene_pointer_move_hook_on_document_closed(
     trigger: On<lunco_doc_bevy::DocumentClosed>,
     mut dispatch: ResMut<ScenePointerDispatch>,
+    mut commands: Commands,
 ) {
-    dispatch.move_hooks.remove(&trigger.event().doc);
+    dispatch.remove_hooks(|doc, _| doc == trigger.event().doc, &mut commands);
 }
 
 pub(crate) fn clear_scene_pointer_move_hooks_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut dispatch: ResMut<ScenePointerDispatch>,
+    mut commands: Commands,
 ) {
-    let Some(workspace) = workspace else {
-        return;
-    };
-    let event = trigger.event();
-    let closed_documents: HashSet<_> = workspace
-        .0
-        .documents()
-        .iter()
-        .filter(|entry| {
-            entry.runtime_context == lunco_workspace::DocumentRuntimeOwner::LocalTwin(event.twin)
-        })
-        .map(|entry| entry.id)
-        .collect();
-    dispatch
-        .move_hooks
-        .retain(|doc, _| !closed_documents.contains(doc));
+    dispatch.remove_hooks(
+        |_, subscription| subscription.owner_twin_id == Some(trigger.event().twin.raw()),
+        &mut commands,
+    );
 }
 
-pub(crate) fn reset_scene_pointer_move_hooks(mut dispatch: ResMut<ScenePointerDispatch>) {
-    dispatch.move_hooks.clear();
+pub(crate) fn reset_scene_pointer_move_hooks(
+    mut dispatch: ResMut<ScenePointerDispatch>,
+    mut commands: Commands,
+) {
+    dispatch.remove_hooks(|_, _| true, &mut commands);
     dispatch.pending_moves.clear();
 }
 
@@ -1221,6 +1237,7 @@ fn prepare_usd_curve_view_product(
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneToolWorld<'w, 's> {
+    q_hook_bindings: Query<'w, 's, &'static ToolHookBinding>,
     q_selectable: Query<'w, 's, Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<'w, 's, Entity, With<lunco_core::MobilityRoot>>,
     q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
@@ -1927,6 +1944,10 @@ pub(crate) fn on_scene_pointer_event(
     if let TelemetryValue::Map(fields) = &mut context {
         if let Some(TelemetryValue::U64(doc)) = fields.get("doc_id") {
             if let Some(active) = dispatch.move_hooks.get(&DocumentId::new(*doc)) {
+                let Ok(binding) = world.q_hook_bindings.get(active.binding) else {
+                    warn!("[scene-pointer] pointer-move subscription binding has been retired");
+                    return;
+                };
                 fields.insert(
                     "active_pointer_move".to_string(),
                     tool_map(vec![
@@ -1936,11 +1957,11 @@ pub(crate) fn on_scene_pointer_event(
                         ),
                         (
                             "tool".to_string(),
-                            TelemetryValue::String(active.tool.clone()),
+                            TelemetryValue::String(binding.tool.clone()),
                         ),
                         (
                             "hook".to_string(),
-                            TelemetryValue::String(active.hook.clone()),
+                            TelemetryValue::String(binding.hook.clone()),
                         ),
                         (
                             "context".to_string(),
@@ -2338,11 +2359,15 @@ pub(crate) fn flush_scene_pointer_moves(
         let Some(subscription) = dispatch.move_hooks.get(&context.doc) else {
             continue;
         };
+        let Ok(binding) = world.q_hook_bindings.get(subscription.binding) else {
+            warn!("[scene-pointer] pointer-move subscription binding has been retired");
+            continue;
+        };
         let args = merge_pointer_move_context(context.args, &subscription.context);
         commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-            binding: None,
-            tool: subscription.tool.clone(),
-            hook: subscription.hook.clone(),
+            binding: Some(subscription.binding),
+            tool: binding.tool.clone(),
+            hook: binding.hook.clone(),
             args,
             owner_twin_id: subscription.owner_twin_id,
         });
@@ -2370,6 +2395,106 @@ register_commands!(
     on_clear_scene_pointer_move_hook,
     on_update_usd_curve_view
 );
+
+#[cfg(test)]
+mod pointer_hook_lifecycle_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use lunco_scripting_bridge_core::ToolHookBindingLifetime;
+
+    fn install(app: &mut App, doc: u64, twin: Option<u64>) -> Entity {
+        let binding = app
+            .world_mut()
+            .spawn(ToolHookBinding {
+                tool: "pointer_probe".into(),
+                hook: "on_move".into(),
+                owner_twin_id: twin,
+                retention: ToolHookBindingRetention::Surface,
+                lifetime: ToolHookBindingLifetime::Scene(None),
+                tool_scope: lunco_tools::ToolScope::Application,
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<ScenePointerDispatch>()
+            .move_hooks
+            .insert(
+                DocumentId::new(doc),
+                ScenePointerMoveHook {
+                    interaction_id: format!("interaction-{doc}"),
+                    binding,
+                    context: BTreeMap::new(),
+                    owner_twin_id: twin,
+                },
+            );
+        binding
+    }
+
+    #[test]
+    fn pointer_hook_retirement_releases_only_owned_leases() {
+        let mut app = App::new();
+        lunco_api::ensure_command_core(&mut app);
+        app.init_resource::<ScenePointerDispatch>()
+            .add_observer(clear_scene_pointer_move_hook_on_document_closed)
+            .add_observer(clear_scene_pointer_move_hooks_on_twin_closed);
+        register_all_commands(&mut app);
+        let cleared = install(&mut app, 1, Some(7));
+        let closed_document = install(&mut app, 2, Some(7));
+        let closed_twin = install(&mut app, 3, Some(7));
+        let retained = install(&mut app, 4, Some(8));
+
+        app.world_mut().trigger(ClearScenePointerMoveHook {
+            doc_id: 1,
+            interaction_id: "different-interaction".into(),
+        });
+        app.world_mut().flush();
+        assert!(app.world().get::<ToolHookBinding>(cleared).is_some());
+        app.world_mut().trigger(ClearScenePointerMoveHook {
+            doc_id: 1,
+            interaction_id: "interaction-1".into(),
+        });
+        app.world_mut().flush();
+        assert!(app.world().get::<ToolHookBinding>(cleared).is_none());
+        app.world_mut()
+            .trigger(lunco_doc_bevy::DocumentClosed::local(DocumentId::new(2)));
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .get::<ToolHookBinding>(closed_document)
+                .is_none()
+        );
+        // TwinClosed arrives after workspace membership may have been removed.
+        // The subscription's admitted owner is sufficient for retirement.
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(7),
+            root: Default::default(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(app.world().get::<ToolHookBinding>(closed_twin).is_none());
+        assert!(app.world().get::<ToolHookBinding>(retained).is_some());
+        assert_eq!(
+            app.world()
+                .resource::<ScenePointerDispatch>()
+                .move_hooks
+                .len(),
+            1
+        );
+
+        app.world_mut()
+            .run_system_once(reset_scene_pointer_move_hooks)
+            .unwrap();
+        assert!(app.world().get::<ToolHookBinding>(retained).is_none());
+        assert!(
+            app.world()
+                .resource::<ScenePointerDispatch>()
+                .move_hooks
+                .is_empty()
+        );
+        app.world_mut()
+            .run_system_once(reset_scene_pointer_move_hooks)
+            .unwrap();
+    }
+}
 
 #[cfg(test)]
 mod usd_curve_view_tests {

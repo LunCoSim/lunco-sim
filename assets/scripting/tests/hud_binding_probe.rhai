@@ -23,6 +23,35 @@ fn on_menu_action(args) { on_action(args.label) }
 // subsequent verdicts after that frame's deferred interaction callbacks.
 fn input_fence(context) { true }
 
+fn verify_pointer_subscription(doc) {
+    let request = #{doc_id: doc, interaction_id: "callback-probe",
+        tool: "runtime_ui", hook: "on_action", context: #{probe: "initial"}};
+    let registered = cmd("SetScenePointerMoveHook", request);
+    let competing_request = request;
+    competing_request.interaction_id = "other-probe";
+    let competing = cmd("SetScenePointerMoveHook", competing_request);
+    let stale_clear = cmd("ClearScenePointerMoveHook", #{doc_id: doc, interaction_id: "other-probe"});
+    request.context = #{probe: "refreshed"};
+    let refreshed = cmd("SetScenePointerMoveHook", request);
+    let invalid_request = request;
+    invalid_request.hook = "missing_hook";
+    let invalid = cmd("SetScenePointerMoveHook", invalid_request);
+    let cleared = cmd("ClearScenePointerMoveHook", #{doc_id: doc, interaction_id: "callback-probe"});
+    let next = cmd("SetScenePointerMoveHook", competing_request);
+    let next_clear = cmd("ClearScenePointerMoveHook", #{doc_id: doc, interaction_id: "other-probe"});
+    let repeated_clear = cmd("ClearScenePointerMoveHook", #{doc_id: doc, interaction_id: "other-probe"});
+    report_verdict([
+        t_true(registered.ok, "a registered endpoint binds to an open document"),
+        t_true(!competing.ok, "a competing interaction cannot replace its owner"),
+        t_true(!stale_clear.ok, "stale cleanup cannot retire another interaction"),
+        t_true(refreshed.ok, "the owning interaction can refresh its bound context"),
+        t_true(!invalid.ok, "invalid endpoint replacement rejects"),
+        t_true(cleared.ok, "owner cleanup succeeds after a rejected replacement"),
+        t_true(next.ok, "cleanup admits a fresh interaction"),
+        t_true(next_clear.ok && repeated_clear.ok, "cleanup is idempotent"),
+    ], "Pointer callback lifecycle", "POINTER_CALLBACK")
+}
+
 fn publish_menu(label) {
     open_context_menu([500.0, 200.0], [#{
         label: "Invoke " + label, tool: "hud_binding_probe", hook: "on_menu_action",
@@ -74,7 +103,13 @@ fn verify_teaching(author, expected) {
 // Called through both deferred queues by an on_stop hook. Scheduling must keep
 // the stopping caller's phase rather than turning it into a new UI/REPL author.
 fn verify_stopping_call(label) {
+    let pointer = cmd("SetScenePointerMoveHook", #{
+        doc_id: 0, interaction_id: "stopped-" + label,
+        tool: "hud_binding_probe", hook: "on_menu_action", context: #{},
+    });
     let checks = [
+        t_true(!pointer.ok && pointer.error.contains("scenario teardown"),
+            "deferred stop rejects pointer subscriptions at the lifecycle boundary"),
         t_true(!hint("stopped-" + label, "Rejected").ok, "deferred stop cannot create content"),
         t_true(!hud_perspectives("stopped-" + label, []).ok, "deferred stop cannot create scope"),
         t_true(!guided_hud_actions("stopped-" + label, "hud_binding_probe", "on_action", [
@@ -120,7 +155,7 @@ fn verify_stopped_requests(ids) {
     for id in ids {
         let result = command_result(id);
         checks.push(t_true(result.ok && result.status == "applied"
-            && result.data.stdout.contains("TESTS_OK 4"), "stopping request completed with its own verdict: " + result));
+            && result.data.stdout.contains("TESTS_OK 5"), "stopping request completed with its own verdict: " + result));
     }
     for card in cmd_data("InspectGuidedHud", #{}).cards {
         checks.push(t_true(!card.hud.starts_with("stopped-"), "deferred stop left no presentation"));

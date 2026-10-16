@@ -1305,6 +1305,8 @@ consumers. It depends on
 either UI package.
 Scene context menus consume `lunco-scripting-bridge-core` callback leases and
 transfer selected invocation ownership to the shared scripting queue.
+Document-scoped pointer-move subscriptions retain surface leases from the same
+owner; context replacement and teardown revoke queued samples by lease identity.
 
 **`lunco-luncosim-edit-gizmo-ui`**
 Focused transform-gizmo capability. It owns the `transform-gizmo-bevy`

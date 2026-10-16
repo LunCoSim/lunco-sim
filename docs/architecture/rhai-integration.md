@@ -198,7 +198,13 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   document has an active interaction. Policies use this owner context to
   commit placement; idle clicks do not discover interactions by traversing USD.
   `ClearScenePointerMoveHook { doc_id, interaction_id }`
-  cannot clear a different interaction. With no active subscriptions, the
+  cannot clear a different interaction. Each subscription owns a scene-bound
+  `ToolHookBinding` surface lease; every queued sample retains that exact lease.
+  Refreshing its context replaces the lease, and clearing or retiring the
+  subscription despawns it, revoking samples already queued. Twin cleanup uses
+  the admitted subscription owner even after workspace documents are removed.
+  New subscriptions reject during stop hooks or scene transitions; cleanup
+  remains idempotent. With no active subscriptions, the
   viewport drops pending samples before resolving scene identity. When another
   document is subscribed, unmatched hits are discarded after the lightweight
   document lookup and before coordinate conversion, terrain raycasting, or
