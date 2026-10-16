@@ -23,6 +23,11 @@
 //! and may change without changing what was spawned, so the lesson never
 //! infers identity from them.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListSpawnCatalog"], required_inputs: [] }
+}
+
 /// True if any spawned catalog root carries the exact content identity.
 fn has_structure(entry_id) {
     for e in list_entities() {
@@ -135,13 +140,29 @@ fn on_event(me, evt, ctx) {
 // every objective WITHOUT a click. With a window
 // open it returns () and a human builds the base.
 fn spawn_part(id, x, y, z) {
-    cmd("SpawnEntity", #{ entry_id: id, position: [x, y, z] });
+    let result = cmd("SpawnEntity", #{ entry_id: id, position: [x, y, z] });
+    if !result.ok { throw "Cannot place " + id + ": " + result.error; }
     notify_kind(`[debug] placed ${id}`, "info");
+}
+
+fn structures_available(me) {
+    let catalog = query("ListSpawnCatalog");
+    if catalog == () || catalog.entries == () { return false; }
+    let required = ["solar_tower", "habitat_fsh", "comms_mast", "isru_plant", "fsps", "landing_pad"];
+    for id in required {
+        let available = false;
+        for entry in catalog.entries {
+            if entry.entry_id == id { available = true; break; }
+        }
+        if !available { return false; }
+    }
+    true
 }
 
 fn task(me, ctx) {
     if !is_unattended() { return; }
     seq([
+        wait_until(Fn("structures_available")),
         // Illustrative layout only: the lesson checks catalog identity, not siting.
         once(|m| spawn_part("solar_tower", 20.0, 0.0, 0.0)),
         wait(0.5),

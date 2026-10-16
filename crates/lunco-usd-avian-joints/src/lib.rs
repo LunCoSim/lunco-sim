@@ -36,6 +36,7 @@ const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 /// edge while all bodies are still present makes subsequent component removal
 /// harmless.
 pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Result<(), String> {
+    let mut sleeping_islands = Vec::new();
     let mut graph_state: SystemState<(
         ResMut<PhysicsIslands>,
         ResMut<JointGraph>,
@@ -70,12 +71,16 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Resul
                     continue;
                 };
                 if island.joint_count() > 0 {
-                    let _ = islands.remove_joint(
+                    if let Some(island) = islands.remove_joint(
                         edge.id,
                         &mut body_islands,
                         &contact_graph,
                         &mut joint_graph,
-                    );
+                    ) && island.is_sleeping()
+                        && !sleeping_islands.contains(&island.id())
+                    {
+                        sleeping_islands.push(island.id());
+                    }
                 } else {
                     warn!(
                         "joint graph edge {:?} has no island joint count; treating it as already retired",
@@ -87,6 +92,9 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Resul
         }
     }
     graph_state.apply(world);
+    // Match Avian's joint-removal lifecycle: releasing a constraint must wake
+    // its sleeping island before any surviving endpoint can integrate freely.
+    WakeIslands(sleeping_islands).apply(world);
     Ok(())
 }
 
@@ -980,6 +988,53 @@ fn seat_joint_bodies(
         commands
             .entity(body1)
             .try_remove::<AuthoredInitialVelocity>();
+    }
+}
+
+#[cfg(test)]
+mod native_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_joint_removal_never_readmits_a_retired_constraint() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, PhysicsPlugins::default()));
+        let first = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, RigidBodyDisabled))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, RigidBodyDisabled))
+            .id();
+        for mode in 0..3 {
+            let mut entity = app.world_mut().spawn_empty();
+            match mode {
+                0 => {
+                    entity.insert((RevoluteJoint::new(first, second), JointDisabled));
+                }
+                1 => {
+                    entity.insert((RevoluteJoint::new(first, second), Disabled));
+                }
+                _ => {
+                    entity.insert((RevoluteJoint::new(first, second), JointDisabled, Disabled));
+                }
+            }
+            let joint = entity.id();
+            assert!(app.world().resource::<JointGraph>().get(joint).is_none());
+            app.world_mut().despawn(joint);
+            app.world_mut().flush();
+            assert!(app.world().resource::<JointGraph>().get(joint).is_none());
+        }
+        let joint = app
+            .world_mut()
+            .spawn((RevoluteJoint::new(first, second), JointDisabled))
+            .id();
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<(RevoluteJoint, JointDisabled)>();
+        app.world_mut().flush();
+        assert!(app.world().resource::<JointGraph>().get(joint).is_none());
     }
 }
 

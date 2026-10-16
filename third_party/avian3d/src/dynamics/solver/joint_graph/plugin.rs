@@ -18,8 +18,12 @@ use crate::{
 };
 use bevy::{
     ecs::{
-        component::ComponentId, entity_disabling::Disabled, lifecycle::HookContext,
-        query::QueryFilter, world::DeferredWorld,
+        component::{ComponentId, ComponentIdFor},
+        entity_disabling::Disabled,
+        event::EntityComponentsTrigger,
+        lifecycle::HookContext,
+        query::QueryFilter,
+        world::DeferredWorld,
     },
     prelude::*,
 };
@@ -118,18 +122,33 @@ impl<T: Component + EntityConstraint<2>> Plugin for JointGraphPlugin<T> {
 
 fn add_joint_to_graph<
     T: Component + EntityConstraint<2>,
-    E: EntityEvent,
+    E: EntityEvent + for<'a> Event<Trigger<'a> = EntityComponentsTrigger<'a>>,
     B: Bundle,
     F: QueryFilter,
 >(
     trigger: On<E, B>,
     query: Query<(&T, Has<JointCollisionDisabled>), F>,
+    joint_component: ComponentIdFor<T>,
+    joint_id_component: ComponentIdFor<JointComponentId>,
+    disabled_component: ComponentIdFor<Disabled>,
+    joint_disabled_component: ComponentIdFor<JointDisabled>,
     mut commands: Commands,
     mut body_islands: Query<&mut BodyIslandNode, Or<(With<Disabled>, Without<Disabled>)>>,
     mut contact_graph: ResMut<ContactGraph>,
     mut joint_graph: ResMut<JointGraph>,
     mut islands: Option<ResMut<PhysicsIslands>>,
 ) {
+    // Remove observers read the old archetype. Reactivation is valid only
+    // when the native joint and its identity survive the complete mutation.
+    // Despawn and compound removals have no surviving constraint to admit.
+    if !trigger.trigger().new_archetype.is_some_and(|next| {
+        next.contains(*joint_component)
+            && next.contains(*joint_id_component)
+            && !next.contains(*disabled_component)
+            && !next.contains(*joint_disabled_component)
+    }) {
+        return;
+    }
     let entity = trigger.event_target();
 
     let Ok((joint, collision_disabled)) = query.get(entity) else {

@@ -57,7 +57,7 @@ pub fn find_descendant_or_self<T: Component>(
 }
 
 pub use invariants::BigSpaceInvariantsPlugin;
-pub use navigation::{NavigationCommand, approach_factor, nav_setpoint, steering_command};
+pub use navigation::{NavigationCommand, nav_setpoint, steering_command};
 pub use scene_handoff::SceneSpatialHandoffSet;
 pub use world::{
     ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,

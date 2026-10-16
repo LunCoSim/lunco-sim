@@ -328,7 +328,7 @@ fn poll_undeclared_modelica_event(receiver) {
 }
 
 fn telemetry_history_count(name) {
-    let catalog = query("ListTelemetryChannels", #{});
+    let catalog = query("ListTelemetryChannels", #{ name: name });
     if catalog == () || catalog.channels == () { return -1; }
     for channel in catalog.channels {
         if channel.name == name {

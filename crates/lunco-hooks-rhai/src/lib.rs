@@ -21,9 +21,15 @@ use lunco_hooks::{
 };
 use rhai::{AST, Dynamic, Engine, Scope};
 
+mod integers;
 mod strings;
 
-pub use strings::register_string_functions;
+/// Install value operations shared by hooks and world-bound scripts. Unsigned
+/// ABI values retain their type and compare exactly with signed Rhai literals.
+pub fn register_value_functions(engine: &mut Engine) {
+    strings::register_string_functions(engine);
+    integers::register_integer_functions(engine);
+}
 
 /// Register the shared JSON-to-Rhai value bridge on an engine.
 ///
@@ -123,7 +129,7 @@ impl RhaiHook {
     ) -> Result<Self, String> {
         let mut engine = Engine::new();
         register_json(&mut engine);
-        register_string_functions(&mut engine);
+        register_value_functions(&mut engine);
 
         // Close the file-import hole BEFORE compiling anything. `Engine::new()`
         // installs rhai's `FileModuleResolver`, which reads arbitrary files

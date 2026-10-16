@@ -68,6 +68,7 @@ use lunco_usd_bevy_stage::{
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
@@ -179,12 +180,25 @@ struct JointTopologyIndex {
     refresh_pending: HashSet<bevy::asset::AssetId<UsdStageAsset>>,
 }
 
+impl SceneResource for JointTopologyIndex {}
+
 #[derive(Resource, Default)]
 struct PreparedJointTopologyTasks {
     pending: HashMap<bevy::asset::AssetId<UsdStageAsset>, PreparedJointTopologyTask>,
     failed: HashMap<bevy::asset::AssetId<UsdStageAsset>, FailedJointTopologyPreparation>,
     next_operation: u64,
     capacity_wait_revision: Option<u64>,
+}
+
+impl SceneResource for PreparedJointTopologyTasks {
+    fn clear_scene(&mut self) {
+        // Worker keys remain unique while retired in-flight jobs wind down.
+        let next_operation = self.next_operation;
+        *self = Self {
+            next_operation,
+            ..Self::default()
+        };
+    }
 }
 
 #[derive(SystemParam)]
@@ -488,6 +502,8 @@ impl Default for PendingUsdSimPrimWork {
     }
 }
 
+impl SceneResource for PendingUsdSimPrimWork {}
+
 impl JointTopologyIndex {
     fn observe_scene_change(
         &mut self,
@@ -633,23 +649,17 @@ fn invalidate_joint_topology_on_stage_asset_event(
     }
 }
 
-fn reset_joint_topology_state(
-    mut topology: ResMut<JointTopologyIndex>,
-    mut tasks: ResMut<PreparedJointTopologyTasks>,
+fn retire_joint_topology_work(
+    tasks: Res<PreparedJointTopologyTasks>,
     mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
 ) {
-    topology.by_stage.clear();
-    topology.refresh_pending.clear();
     for task in tasks.pending.values() {
         if let Some(key) = task.work_key {
             admission.cancel_queued(key);
         }
     }
-    tasks.pending.clear();
-    tasks.failed.clear();
-    tasks.capacity_wait_revision = None;
     if let Some(diagnostics) = diagnostics.as_deref_mut() {
         diagnostics.replace_producer("usd-sim-topology", std::iter::empty());
     }
@@ -1087,9 +1097,8 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
-        app.init_resource::<PendingUsdSimPrimWork>();
-        app.add_systems(lunco_core::SceneTeardown, reset_usd_sim_prim_work);
-        app.add_systems(lunco_core::SceneTeardown, reset_joint_topology_state);
+        app.init_scene_resource::<PendingUsdSimPrimWork>();
+        app.add_systems(lunco_core::SceneTeardown, retire_joint_topology_work);
         // Client-only: reconstruct a remote rover's wheels from its chassis
         // (kinematic followers — wheels are no longer replicated), then re-derive
         // the cosmetic visual roll. Chained so the visual spin layers on the
@@ -1106,9 +1115,9 @@ impl Plugin for UsdSimPlugin {
         .add_observer(forget_unprojected_usd_sim_prim)
         .add_observer(queue_invalidated_usd_sim_prim)
         .add_systems(PreUpdate, resolve_differential_coupling)
-        .init_resource::<GroundColliderPending>()
-        .init_resource::<JointTopologyIndex>()
-        .init_resource::<PreparedJointTopologyTasks>()
+        .init_scene_resource::<GroundColliderPending>()
+        .init_scene_resource::<JointTopologyIndex>()
+        .init_scene_resource::<PreparedJointTopologyTasks>()
         .init_resource::<lunco_core_runtime::SimulationProgress>()
         .add_systems(
             PreUpdate,
@@ -1818,7 +1827,13 @@ fn topology_change_affects_path(
     source_paths: &HashSet<String>,
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
 ) -> bool {
-    if source_paths.contains(path) {
+    if source_paths.iter().any(|source| {
+        source == path
+            || path == "/"
+            || source
+                .strip_prefix(path)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    }) {
         return true;
     }
     let Ok(path) = SdfPath::new(path) else {
@@ -4263,11 +4278,6 @@ fn queue_invalidated_usd_sim_prim(
     }
 }
 
-fn reset_usd_sim_prim_work(mut pending: ResMut<PendingUsdSimPrimWork>) {
-    pending.0.clear();
-    pending.1.clear();
-}
-
 #[cfg(test)]
 mod pending_sim_work_tests {
     use super::*;
@@ -4629,16 +4639,22 @@ mod pending_sim_work_tests {
     }
 
     #[test]
-    fn scene_teardown_clears_sim_projection_work() {
+    fn scene_teardown_retires_projection_work_and_rearms_discovery() {
         let mut app = App::new();
         let mut pending = PendingUsdSimPrimWork::default();
         pending.0.queue(Entity::from_bits(1));
-        app.insert_resource(pending)
-            .add_systems(lunco_core::SceneTeardown, reset_usd_sim_prim_work);
+        app.init_scene_resource::<PendingUsdSimPrimWork>();
+        app.insert_resource(pending);
 
-        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+        lunco_core::run_scene_teardown(app.world_mut());
 
-        assert!(!app.world().resource::<PendingUsdSimPrimWork>().0.has_work());
+        assert!(
+            !app.world()
+                .resource::<PendingUsdSimPrimWork>()
+                .0
+                .contains(Entity::from_bits(1))
+        );
+        assert!(app.world().resource::<PendingUsdSimPrimWork>().0.has_work());
     }
 }
 

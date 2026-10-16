@@ -1,46 +1,6 @@
-// ── The antenna mounts on anything, and nothing mounts it ───────────────────
-//
-// TEST-ONLY. Runs against `scenes/tests/antenna_mount.usda`.
-//
-// WHAT IT GUARDS. `components/comms/antenna.usda` owns both its hinges and
-// mounts by ANCESTRY: its `YawJoint` names its own root — a plain `Xform`, not a
-// body — which resolves to the nearest ancestor rigid body, i.e. whatever the
-// component was parented under. The host authors a `translate` and nothing else.
-//
-// The failure this exists to catch has no symptom. A yaw joint that never
-// attaches leaves the dish standing exactly where it was authored, pointing
-// somewhere plausible, on a vehicle that otherwise behaves perfectly. Every
-// other test in the project stayed green through it for as long as it existed:
-// `rocker_bogie` passed 9/9 with a dead antenna. The only trace was one `warn!`
-// about the `angle` port, in a log nothing reads.
-//
-// So the assertion is not "the prim is there" — it is that the joint ATTACHED
-// and the dish is ACTUALLY SLEWING, on every kind of host at once.
-//
-// ── Why three hosts in one scene ────────────────────────────────────────────
-//
-//   Rover   dynamic body, antenna is a direct child
-//   Mast    STATIC body, antenna is a SIBLING of the tower it stands on
-//   Bare    a body the SCENE invents — nothing from the catalogue at all
-//
-// One host would prove one host. The mast is the case that actually broke: its
-// tower is not an ancestor of the antenna, so the mount resolves only because
-// the mast's ROOT carries `PhysicsRigidBodyAPI`. Take that off and this is the
-// only thing in the project that notices. `Bare` proves the other direction —
-// that the component needs nothing of a host but a body to hang under.
-//
-// ── THE CONTROL ─────────────────────────────────────────────────────────────
-//
-// `Parked` is the same component on the same kind of body with the joint
-// switched off (`over "YawJoint" ( active = false )`). Without it, every assertion
-// below passes just as well against an engine that joints anything that asks —
-// including the things that asked not to be jointed. The control is what makes
-// "it attached" mean "it attached BECAUSE it was authored to".
-//
-// ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
-//
-// `emit("ANTENNA_MOUNT", "PASS"|"FAIL")` — the telemetry verdict `scene_test`
-// reads for its exit code.
+// Production acceptance for the shared articulated antenna on dynamic,
+// static, and independently authored hosts. Each joint must attach and slew.
+// The passive antenna control must contain no rigid bodies or joint mechanism.
 
 // The mounts under test. Every one is addressed as the ANTENNA prim the scene
 // authors plus the joint the COMPONENT owns, so this file never restates the
@@ -58,7 +18,7 @@ fn simulation_dependencies(me, ctx) {
     for mount in mounts() {
         reads.push(find_path(mount.path + "/YawJoint"));
     }
-    #{ modelica_entities: [], entity_reads: reads, entity_writes: [], query_reads: [], required_inputs: [] }
+    #{ modelica_entities: [], entity_reads: reads, entity_writes: [], query_reads: ["QueryUsdPrim"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -104,11 +64,16 @@ fn on_tick(me, ctx) {
     }
     let parked_path = "/AntennaMountTest/Parked/Antenna/YawJoint";
     let parked_prim = query("QueryUsdPrim", #{ path: parked_path });
+    let parked_head = query("QueryUsdPrim", #{
+        path: "/AntennaMountTest/Parked/Antenna/YawHead", schemas: true,
+    });
     verdict(#{
         mounts: seen,
         parked_host: find_path("/AntennaMountTest/Parked/Antenna"),
         parked_joint: find_path(parked_path),
-        parked_active: parked_prim.active,
+        parked_joint_absent: parked_prim.ok == false,
+        parked_body_absent: parked_head.api_schemas != ()
+            && !parked_head.api_schemas.contains("PhysicsRigidBodyAPI"),
     });
 }
 
@@ -158,17 +123,17 @@ fn verdict(s) {
         "the parked control's host is not in the scene, so the control proves " +
         "nothing — an absent mount and an absent HOST read identically here."));
 
-    f.push(t_true(s.parked_active == false,
-        "the parked control's authored YawJoint is not inactive in composed USD."));
+    f.push(t_true(s.parked_joint_absent && s.parked_body_absent,
+        "the passive control must not declare an articulated joint or rigid body."));
 
     f.push(t_true(s.parked_joint == -1,
-        "the authored inactive YawJoint was projected into live simulation."));
+        "the passive control projected a joint into live simulation."));
 
     print("[mount] ── results ─────────────────────────────────────────");
     for m in s.mounts {
         print("[mount]   " + m.id + "  angle=" + m.angle + "  peak=" + r4(m.peak));
     }
-    print("[mount]   parked  active=" + s.parked_active + "  runtime entity=" +
+    print("[mount]   parked  body_absent=" + s.parked_body_absent + "  runtime entity=" +
           s.parked_joint + " (must be absent)");
 
     report_verdict(f, "ANTENNA MOUNT", "ANTENNA_MOUNT");

@@ -43,7 +43,7 @@ fn fail(me, message) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = assembly_edit::inspect(item.doc_id, ROOT);
@@ -52,16 +52,16 @@ fn find_document() {
             }
         }
     }
-    -1
+    ()
 }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "ListOpenDocuments", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.elapsed = 0.0;
     this.done = false;
 }
@@ -69,9 +69,9 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "physics builder fixture document was not discoverable"); }
             return;
         }
@@ -141,7 +141,15 @@ fn on_tick(me, ctx) {
         || invalid_joint.ok || invalid_placement.ok
         || invalid_existing.ok || invalid_collider.ok || invalid_hinge_parent.ok
         || invalid_fixed.ok {
-        fail(this, "semantic assembly tools did not enforce their explicit input contract");
+        fail(this, "semantic assembly tools did not enforce their explicit input contract: "
+            + #{ body: body_plan.error, joint: joint_plan.error, fixed: fixed_plan.error,
+                existing: existing_plan.error, hinge: existing_hinge.error,
+                invalid_joint_accepted: invalid_joint.ok,
+                invalid_placement_accepted: invalid_placement.ok,
+                invalid_existing_accepted: invalid_existing.ok,
+                invalid_collider_accepted: invalid_collider.ok,
+                invalid_hinge_parent_accepted: invalid_hinge_parent.ok,
+                invalid_fixed_accepted: invalid_fixed.ok });
         return;
     }
 

@@ -59,11 +59,23 @@ fn create_runtime_point(me) {
         world_position: point3([0.0, 0.0, 0.0], "active_physics"),
         surface_world_position: point3([0.0, 0.0, 0.0], "active_physics"),
     });
-    if result == () || result.ok != true || result.path != POINT {
+    if result == () || (result.ok != true && result.status != "pending") || result.path != POINT {
         this.failure = "route editor could not add the runtime-layer waypoint through its public hook";
         return;
     }
+    this.pending_edit = result;
     this.waiting_for = "runtime waypoint authoring";
+}
+
+fn runtime_point_committed(me) {
+    let result = this.pending_edit;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return false; }
+    if result.ok != true {
+        this.failure = "runtime waypoint edit failed: " + result.to_string();
+        return true;
+    }
+    trigger_zone(this.doc, POINT) == "route_P0"
 }
 
 fn verify_restored_trigger(me) {
@@ -91,6 +103,7 @@ fn on_start(me, ctx) {
     this.done = false;
     this.doc = -1;
     this.restored = false;
+    this.pending_edit = ();
     this.failure = "";
     this.waiting_for = "route test document";
     subscribe("TASK_FAILED");
@@ -113,6 +126,8 @@ fn task(me, ctx) {
                 seq([
                     check(Fn("route_point_is_new")),
                     once(Fn("create_runtime_point")),
+                    check(Fn("test_state_is_valid")),
+                    wait_until(Fn("runtime_point_committed")),
                     check(Fn("test_state_is_valid")),
                     once(Fn("report_new_waypoint_pass")),
                 ]),

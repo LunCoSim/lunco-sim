@@ -1274,10 +1274,14 @@ pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
                     H::Bool(
                         reader
                             .stage()
-                            .stage_metadata("metersPerUnit")
-                            .ok()
-                            .flatten()
-                            .is_some(),
+                            .root_layer()
+                            .data()
+                            .has_field(&SdfPath::abs_root(), "metersPerUnit")
+                            || reader.stage().session_layer().is_some_and(|layer| {
+                                layer
+                                    .data()
+                                    .has_field(&SdfPath::abs_root(), "metersPerUnit")
+                            }),
                     ),
                 ),
                 ("fixed_hz", H::Float(lunco_core_runtime::FIXED_HZ)),

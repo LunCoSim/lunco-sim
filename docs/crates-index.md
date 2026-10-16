@@ -155,7 +155,7 @@ crates. Project declarations are generated from the schema source by
 | **`lunco-scene-selection`** | Render-free scene-lifetime selection state and the shared selection-to-telemetry-focus projection. It is independent from scene mutation commands so exposure and other headless consumers do not inherit the command layer's dependency closure. |
 | **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. Native catalog preflight receives the discovered source's admitted Twin root for composition dependencies. It retires closed-mount entries and scan generations at `TwinClosed`, and prunes retired document-private mounts before the next catalog scan. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose, `QueryUsdPrim` for one composed USD prim, and `QueryUsdPrims` for deterministic multi-prim reads from one composed-stage snapshot. Native Sdf values serialize directly into the typed API ABI, preserving precision and empty arrays. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
-| **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
+| **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution from the shared composed reader, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. Scene-test discovery uses scoped Twin roots and the shared prepared USD asset reads. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
 | **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), WGSL-reflected param schema, typed `ShaderTexture`/`PreparedShaderImage` asset-worker preparation, CDLOD vertex attribute, and slot-backed live shader inputs through `lunco-port-core`. Carries typed float-texture patches to the renderer. Names no material type. |
 
@@ -728,6 +728,10 @@ admission, Twin-backed stage loading, and live document projection belong to
 `lunco-usd-bevy-runtime-core`, so document-only hosts can use this package
 without the complete visual/simulation bundle. Public query-provider
 registration belongs to `lunco-usd-queries`.
+The command owner prepares new composition dependencies through bounded core
+work admission before its original atomic journal commit. Its registered scene
+resource retires pending callbacks, receipts, holds and weak result destinations;
+only its monotonic operation identities have application lifetime.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
@@ -830,7 +834,7 @@ leases so cached asset reloads consume current native inputs. The index holds
 weak readers; the document projection lease owns publication and retirement.
 Render-free Twin/document projection state shared by headless runtime,
 authoring, terrain, validation, and UI adapters. It owns the
-`DocBackedTwinScenes` lease map, the `twin://` stage-to-document resolver,
+`DocBackedTwinScenes` lease map, the exact stage-asset/document lease resolver,
 `UsdDocumentUserOwned`, `LiveRebuildExempt`, and the event-driven
 `TwinProjectionWake` signal. It depends on the stage-asset identity and asset
 path contracts, but it does not load or compose USD stages and does not depend
@@ -1035,7 +1039,8 @@ projection-preparation boundary), `UsdSimProcessed`, the coalesced
 `PendingEntityWork` lifecycle queue, `PendingDifferential`, and
 `GroundColliderPending`, keeping shared contracts out of either large
 implementation crate and allowing scene runners to avoid the full vehicle
-projector.
+projector. The ground readiness flag implements the shared scene-resource
+lifetime contract at this owner.
 
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
@@ -1319,7 +1324,9 @@ consumers. It depends on
 either UI package.
 
 **`lunco-luncosim-edit-gizmo-ui`**
-Focused transform-gizmo capability. It owns the `transform-gizmo-bevy`
+Focused transform-gizmo capability. The vendored `transform-gizmo-bevy` integration
+uses Bevy pointer state for both picking and transform evaluation; its provenance
+records the maintained fork revision. It owns the `transform-gizmo-bevy`
 frontend, render-space proxy lifecycle, camera binding, and live/preview pose
 transaction conversion into the existing scene/USD command owners. It has no
 panel registration or scene-selection policy, so changes to editor panels do
@@ -1464,6 +1471,9 @@ Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
 
 **`lunco-modelica-solver`**
 Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session; the execution host supplies checked FMI components and owns worker lifecycle. This keeps solver-specific numerical dependencies and low-level integration tests out of the compiler host's source boundary.
+Both session types use Rumoca's Model Exchange host for initialization, input
+transactions and observations. The fixed-step adapter supplies only its RK4
+numerical plugin through the host's derivative capability.
 It consumes the pure experiment solver registry with host features disabled,
 so a standalone solver build has no Bevy dependency.
 

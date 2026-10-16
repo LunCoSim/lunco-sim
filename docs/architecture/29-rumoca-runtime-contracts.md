@@ -248,7 +248,7 @@ endpoint substitution.
 | FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
 | Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
 | Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
-| Visible values and algebraic refresh policy | `SolveRuntime::visible_values_for_names` and `rumoca-eval-solve::projection_policy` | Fixed prediction integration uses the same input slots, visible-value reader, tolerance, and iteration budget. |
+| Component initialization, input transactions, algebraic refresh and observations | Rumoca Model Exchange host (`MeRetainedComponent` / `MeSimulationSession`) | Both adaptive and fixed sessions use this owner. Fixed RK4 supplies its numerical plugin through the retained derivative capability; initial equations run before the first observation. |
 | Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps and reject unsupported event/discrete/clock/table models. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |

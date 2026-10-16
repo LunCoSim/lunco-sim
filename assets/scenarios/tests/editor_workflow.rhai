@@ -12,24 +12,24 @@ fn fail(me, message) {
 
 fn find_usd_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
-        if item.kind == "usd" && item.active == true
+        if item.kind == "usd"
             && item.origin != () && item.origin.kind == "file"
             && item.origin.path.ends_with("editor_workflow.usda") {
             return item.doc_id;
         }
     }
-    -1
+    ()
 }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims", "GetDiagnostics", "SyncUsdDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.phase = "discover";
     this.elapsed = 0.0;
     this.done = false;
@@ -44,9 +44,9 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_usd_document();
-        if this.doc < 0 { return; }
+        if this.doc == () { return; }
     }
 
     if this.phase == "discover" {
@@ -84,7 +84,7 @@ fn on_tick(me, ctx) {
             "editor workflow wrote a file even though authored autosave was disabled",
         ));
         this.checks.push(t_true(
-            checked.inspection.dirty == true && checked.lint.projection_ready == true
+            checked.inspection.dirty == true && checked.lint.complete == true
                 && checked.generation > this.before_generation,
             "checkpoint did not preserve the changed generation and dirty authored state after lint",
         ));

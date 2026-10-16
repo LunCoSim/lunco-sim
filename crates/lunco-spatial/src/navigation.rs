@@ -6,7 +6,7 @@
 //! signed steering convention, heading recovery, arrival braking, and
 //! invalid-pose handling cannot diverge.
 
-use bevy::math::{DVec3, Vec3};
+use bevy::math::DVec3;
 
 use crate::{SteeringGeometry, coords::GridPos};
 
@@ -42,10 +42,10 @@ impl NavigationCommand {
 /// a vehicle class, heading, or throttle value.
 pub fn nav_setpoint(
     pos: GridPos,
-    fwd: Vec3,
+    fwd: DVec3,
     target: GridPos,
     speed: f64,
-    radius: f32,
+    radius: f64,
     steering_geometry: SteeringGeometry,
 ) -> Option<NavigationCommand> {
     if !speed.is_finite() || speed < 0.0 || !radius.is_finite() || radius <= 0.0 {
@@ -55,7 +55,7 @@ pub fn nav_setpoint(
     let offset = target - pos;
     let to_xz = DVec3::new(offset.x, 0.0, offset.z);
     let to_len = to_xz.length();
-    let fwd_xz = DVec3::new(fwd.x as f64, 0.0, fwd.z as f64);
+    let fwd_xz = DVec3::new(fwd.x, 0.0, fwd.z);
     let fwd_len = fwd_xz.length();
     if !to_len.is_finite() || !fwd_len.is_finite() || !offset.y.is_finite() {
         return None;
@@ -66,7 +66,7 @@ pub fn nav_setpoint(
     // support/contact height, so using `offset.length()` here would keep a
     // rover outside its horizontal arrival radius forever and make it drive
     // through the target before the state machine can advance the leg.
-    if to_len < radius as f64 {
+    if to_len < radius {
         return Some(NavigationCommand {
             throttle: 0.0,
             steer: 0.0,
@@ -78,8 +78,8 @@ pub fn nav_setpoint(
         return None;
     }
 
-    let to = (to_xz / to_len).as_vec3();
-    let fwd = (fwd_xz / fwd_len).as_vec3();
+    let to = to_xz / to_len;
+    let fwd = fwd_xz / fwd_len;
     let cross_yaw = fwd.z * to.x - fwd.x * to.z;
     let dot = fwd.dot(to);
 
@@ -104,9 +104,10 @@ pub fn nav_setpoint(
         });
     }
 
-    let alignment = dot as f64;
-    let throttle =
-        speed * (0.25 + 0.75 * alignment).clamp(0.25, 1.0) * approach_factor(to_len, radius);
+    // Retain travel authority outside the arrival circle: reducing demand
+    // there can balance a grade before the destination is reached.
+    let alignment = dot;
+    let throttle = speed * (0.25 + 0.75 * alignment).clamp(0.25, 1.0);
     Some(NavigationCommand {
         throttle,
         steer: steering_command(cross_yaw, to_len, steering_geometry),
@@ -121,7 +122,7 @@ pub fn nav_setpoint(
 /// performs its own conversion to the signed knuckle angle. Geometry only
 /// affects the physical steering authority, while command sign, forward travel,
 /// and arrival handling stay in this shared law.
-pub fn steering_command(cross_yaw: f32, distance: f64, steering_geometry: SteeringGeometry) -> f64 {
+pub fn steering_command(cross_yaw: f64, distance: f64, steering_geometry: SteeringGeometry) -> f64 {
     // Differential steering has direct yaw authority. Ackermann steering is a
     // finite-radius vehicle, so scale the normalized curvature by horizontal
     // target distance: distant targets request a broad arc and close targets
@@ -134,12 +135,7 @@ pub fn steering_command(cross_yaw: f32, distance: f64, steering_geometry: Steeri
     // `cross_yaw` is positive for a target to the vehicle's left. The public
     // drive surface is positive-to-the-right for every authored rover, so the
     // one shared command sign is negative here.
-    (-(cross_yaw as f64) * gain).clamp(-1.0, 1.0)
-}
-
-/// Scale the command as it enters the authored acceptance radius.
-pub fn approach_factor(distance: f64, radius: f32) -> f64 {
-    ((distance - radius as f64) / (radius as f64 * 2.0)).clamp(0.15, 1.0)
+    (-cross_yaw * gain).clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]
@@ -150,7 +146,7 @@ mod tests {
     fn ackermann_rear_target_rolls_into_heading_recovery() {
         let command = nav_setpoint(
             GridPos(DVec3::ZERO),
-            Vec3::new(0.0, 0.0, -1.0),
+            DVec3::new(0.0, 0.0, -1.0),
             GridPos(DVec3::new(0.0, 0.0, 4.0)),
             0.4,
             1.0,
@@ -168,7 +164,7 @@ mod tests {
     fn differential_rear_target_still_turns_in_place() {
         let command = nav_setpoint(
             GridPos(DVec3::ZERO),
-            Vec3::new(0.0, 0.0, -1.0),
+            DVec3::new(0.0, 0.0, -1.0),
             GridPos(DVec3::new(0.0, 0.0, 4.0)),
             0.4,
             1.0,

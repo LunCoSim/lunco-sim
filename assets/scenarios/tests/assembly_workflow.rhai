@@ -24,12 +24,12 @@ fn fail(me, message) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "ListSpawnCatalog", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "ListSpawnCatalog", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims", "SyncUsdDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
-    this.doc = -1;
+    this.doc = ();
     this.synced = false;
     this.phase = "discover";
     this.asset = "";
@@ -63,11 +63,11 @@ fn prim_exists(doc, path) {
 
 fn find_usd_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" { return item.doc_id; }
     }
-    -1
+    ()
 }
 
 fn document_is_saved_copy(doc) {
@@ -103,7 +103,7 @@ fn catalog_entry() {
     ()
 }
 
-fn attached_relationships(me) {
+fn attachment_report(me) {
     let component = assembly_edit::inspect(me.doc, COMPONENT);
     let part = query("QueryUsdPrim", #{
         path: COMPONENT,
@@ -129,9 +129,13 @@ fn attached_relationships(me) {
         || !array_has(host_sockets, me.socket)
         || host.children == () || !array_has(host.children, COMPONENT)
         || !array_has(host.children, JOINT) {
-        return false;
+        return #{ ok: false, error: #{
+            component: component.error, part: part.error, socket: socket.error, host: host.error,
+            part_joint: part_joint, socket_part: socket_part,
+            host_sockets: host_sockets, children: host.children,
+        }};
     }
-    assembly_audit::mount_contract_report((), [#{
+    let audit = assembly_audit::mount_contract_report((), [#{
         host: HOST,
         socket: me.socket,
         component: COMPONENT,
@@ -139,7 +143,8 @@ fn attached_relationships(me) {
         socket_kind: SOCKET_KIND,
         joint_kind: JOINT_KIND,
         asset: me.asset,
-    }]).ok
+    }]);
+    #{ ok: audit.ok, error: audit.errors }
 }
 
 fn detached_relationships(me) {
@@ -156,9 +161,9 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_usd_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "no open USD document was discoverable"); }
             return;
         }
@@ -170,7 +175,7 @@ fn on_tick(me, ctx) {
                 return;
             }
             let description = assembly_edit::describe(this.doc);
-            if !query_ok(description) || description.doc != this.doc {
+            if !query_ok(description) || description.doc_id != this.doc {
                 fail(this, "assembly_edit describe did not identify the open document");
                 return;
             }
@@ -181,7 +186,7 @@ fn on_tick(me, ctx) {
     // A scene restart recompiles the authored scenario. The saved document
     // origin distinguishes that post-reload state from the initial scene and
     // also lets an undo-triggered re-projection continue without re-attaching.
-    if this.phase == "discover" && document_is_saved_copy(this.doc) {
+    if this.phase == "discover" && (document_is_saved_copy(this.doc) || prim_exists(this.doc, COMPONENT)) {
         let entry = catalog_entry();
         if entry == () {
             if this.elapsed > 12.0 { fail(this, "saved workflow could not restore its socket selection"); }
@@ -201,7 +206,9 @@ fn on_tick(me, ctx) {
             if this.elapsed > 12.0 { fail(this, "document dirty state was not discoverable after reload"); }
             return;
         }
-        if prim_exists(this.doc, COMPONENT) {
+        if !document_is_saved_copy(this.doc) {
+            this.phase = "check_attached";
+        } else if prim_exists(this.doc, COMPONENT) {
             // SaveAs + RestartScene produces a clean saved document. Undo
             // makes that same document dirty again; after redo the component
             // is present while dirty, so the workflow can finish without
@@ -210,9 +217,6 @@ fn on_tick(me, ctx) {
         } else {
             this.phase = "check_undo";
         }
-        this.elapsed = 0.0;
-    } else if this.phase == "discover" && prim_exists(this.doc, COMPONENT) {
-        this.phase = "check_attached";
         this.elapsed = 0.0;
     }
 
@@ -257,9 +261,10 @@ fn on_tick(me, ctx) {
 
     if this.phase == "check_attached" {
         if this.elapsed < 1.0 { return; }
-        if !attached_relationships(this) {
+        let attached = attachment_report(this);
+        if !attached.ok {
             if this.elapsed < 12.0 { return; }
-            fail(this, "attach relationship inspection failed");
+            fail(this, "attach relationship inspection failed: " + attached.error);
             return;
         }
 
@@ -293,9 +298,10 @@ fn on_tick(me, ctx) {
             fail(this, "reload did not restore a clean saved document");
             return;
         }
-        if !attached_relationships(this) {
+        let attached = attachment_report(this);
+        if !attached.ok {
             if this.elapsed < 12.0 { return; }
-            fail(this, "saved attachment did not survive reload");
+            fail(this, "saved attachment did not survive reload: " + attached.error);
             return;
         }
         let undo = assembly_edit::undo(this.doc);
@@ -327,9 +333,26 @@ fn on_tick(me, ctx) {
 
     if this.phase == "check_redo" {
         if this.elapsed < 1.0 { return; }
-        if !attached_relationships(this) {
+        let attached = attachment_report(this);
+        if !attached.ok {
             if this.elapsed < 12.0 { return; }
-            fail(this, "redo did not restore the complete attachment");
+            fail(this, "redo did not restore the complete attachment: " + attached.error);
+            return;
+        }
+        let save = assembly_edit::save_document(this.doc);
+        if !save.ok {
+            fail(this, "SaveDocument rejected the restored attachment: " + save.error);
+            return;
+        }
+        this.phase = "check_saved";
+        this.elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == "check_saved" {
+        if document_is_dirty(this.doc) != false {
+            if this.elapsed < 12.0 { return; }
+            fail(this, "SaveDocument did not publish clean authored state to the workspace");
             return;
         }
         this.done = true;

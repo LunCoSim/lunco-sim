@@ -79,22 +79,24 @@ fn load_input_bindings_defaults(
         state.scan_started = true;
     }
 
+    // Inspect one complete catalog snapshot. A ready descriptor must remain
+    // eligible while another asset in that snapshot is still loading.
+    if state.candidates.iter().any(|candidate| {
+        assets.get(&candidate.handle).is_none()
+            && !asset_server
+                .get_load_state(candidate.handle.id())
+                .is_some_and(|state| state.is_failed())
+    }) {
+        return;
+    }
     let candidates = std::mem::take(&mut state.candidates);
-    let mut pending = Vec::new();
     let mut failed_paths = Vec::new();
     let mut inspected_assets = Vec::new();
     let mut selected: Option<(String, String)> = None;
 
     for candidate in candidates {
         let Some(asset) = assets.get(&candidate.handle) else {
-            let load_failed = asset_server
-                .get_load_state(candidate.handle.id())
-                .is_some_and(|load_state| load_state.is_failed());
-            if !load_failed {
-                pending.push(candidate);
-            } else {
-                failed_paths.push(candidate.path);
-            }
+            failed_paths.push(candidate.path);
             continue;
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
@@ -121,11 +123,6 @@ fn load_input_bindings_defaults(
             return;
         }
         selected = Some((candidate.path, asset.text.clone()));
-    }
-
-    state.candidates = pending;
-    if !state.candidates.is_empty() {
-        return;
     }
 
     state.completed = true;

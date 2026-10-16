@@ -13,8 +13,8 @@ from runtime import BINARY, ROOT, ProductionSession, get_json, wait_for_ready
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=4198)
-    parser.add_argument("--phase", choices=("loading", "late", "all"), default="all",
-                        help="early replacement, late admission/fault recovery, or both")
+    parser.add_argument("--phase", choices=("loading", "physics", "late", "all"), default="all",
+                        help="menu replacement, native physics admission, fault recovery, or all phases")
     # Logical pixel positions measured from the production screenshot at the
     # default desktop scale. Override them for another window/font scale.
     parser.add_argument("--file", type=float, nargs=2, default=(18, 14))
@@ -72,9 +72,9 @@ def main():
             ready = get_json(args.port, "/api/ready")["data"]
             return any(item["kind"] == "scene_load" for item in ready["pending"])
 
-        def replacement_projected():
+        def prim_projected(path="/World"):
             try:
-                prim = execute("QueryUsdPrim", path="/World")
+                prim = execute("QueryUsdPrim", path=path)
             except RuntimeError as error:
                 # Between retirement and the replacement mount there is no
                 # live stage to query. Require a uniquely mounted stage and
@@ -107,7 +107,7 @@ def main():
 
         execute("OpenTwin", path=str(candidate))
         wait_for(lambda: execute("ListOpenDocuments")["open_documents"], "replacement document")
-        wait_for(replacement_projected, "initial replacement scene projection")
+        wait_for(prim_projected, "initial replacement scene projection")
         wait_for_ready(args.port)
         # The later topology query requires a real completed Avian sample.
         # Admission can fault before the first step of the scene under test.
@@ -139,7 +139,7 @@ def main():
                 raise RuntimeError("load completed before the menu replacement gesture; no cancellation proof")
             click(args.replacement)
             wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(candidate), "menu-selected replacement")
-            wait_for(replacement_projected, "replacement scene projection")
+            wait_for(prim_projected, "replacement scene projection")
             wait_for_ready(args.port)
             verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
             # Let running preparation results arrive after retirement, then require
@@ -162,7 +162,7 @@ def main():
             execute("OpenTwin", path=str(candidate))
             wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(candidate),
                      "replacement after queued clear")
-            wait_for(replacement_projected, "replacement after outgoing cancellation")
+            wait_for(prim_projected, "replacement after outgoing cancellation")
             wait_for_ready(args.port)
             verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
             time.sleep(1)
@@ -177,7 +177,7 @@ def main():
                      and not set(outgoing).intersection(
                          doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]),
                      "final rapid replacement admission")
-            wait_for(replacement_projected, "final rapid replacement projection")
+            wait_for(prim_projected, "final rapid replacement projection")
             wait_for_ready(args.port)
             verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
             time.sleep(1)
@@ -198,16 +198,51 @@ def main():
             time.sleep(1)
             verdict("verify_cleared_loading", str(outgoing_root), "/SandboxScene")
             execute("OpenTwin", path=str(candidate))
-            wait_for(replacement_projected, "successful replacement after clear-only cancellation")
+            wait_for(prim_projected, "successful replacement after clear-only cancellation")
             wait_for_ready(args.port)
             verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+        if args.phase in ("physics", "all"):
+            cases = [
+                (ROOT / "assets/tutorials/basic/slope_test.usda", "/SlopeTest", "/Rover/HingeL"),
+                (ROOT / "assets/scenes/tests/battery_mounts.usda", "/BatteryMountsTest", "/RockerBogie/HingeL"),
+            ]
+            for source_path, retired_root, joint in cases:
+                execute("OpenFile", path=str(source_path))
+                wait_for(lambda: any(doc.get("origin", {}).get("path") == str(source_path)
+                                     for doc in execute("ListOpenDocuments")["open_documents"]),
+                         "the exact articulated source document")
+
+                def native_admission_pending():
+                    if not prim_projected(retired_root + joint):
+                        return False
+                    state = get_json(args.port, "/api/ready")["data"]
+                    topology = execute("PhysicsPerformance")
+                    return state if (state["world_hold"] and not state["ready"]
+                                     and topology["pending_joints"] > 0) else False
+
+                state = wait_for(native_admission_pending,
+                                 "projected native joints awaiting admission", timeout=90)
+                retired = [doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]]
+                print("Observed native admission: " + json.dumps(state), flush=True)
+                execute("OpenTwin", path=str(candidate))
+                wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(candidate),
+                         "replacement of articulated loading Twin")
+                wait_for(prim_projected, "replacement after native admission cancellation")
+                wait_for_ready(args.port)
+                verdict("verify_loading_replacement", retired, str(candidate), retired_root)
+                time.sleep(1)
+                verdict("verify_loading_replacement", retired, str(candidate), retired_root)
+            session.capture_screenshot(ROOT / "target/twin-physics-admission-replaced.png")
         if args.phase in ("late", "all"):
             cases = [
                 ("late-admission", "sandbox_ramp_placement", "/SandboxRampPlacement"),
-                ("terminal-fault", "descent_lander_runtime", "/LanderTest"),
+                ("terminal-fault", "modelica_initialization_failure", "/ModelicaRuntimeContracts"),
             ]
             for label, scene, retired_root in cases:
-                execute("LoadScene", path="lunco://scenes/tests/" + scene + ".usda")
+                if label == "terminal-fault":
+                    execute("OpenFile", path=str(ROOT / "assets/scenes/tests" / (scene + ".usda")))
+                else:
+                    execute("LoadScene", path="lunco://scenes/tests/" + scene + ".usda")
 
                 def boundary_reached():
                     state = get_json(args.port, "/api/ready")["data"]
@@ -224,19 +259,20 @@ def main():
                 print("Observed " + label + ": " + json.dumps(state), flush=True)
                 retired = [doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]]
                 session.capture_screenshot(ROOT / ("target/twin-" + label + "-before.png"))
+                cleared_twin = execute("ListTwin", limit=0)["root"]
                 execute("ClearScene")
                 wait_for_ready(args.port)
-                verdict("verify_cleared_loading", str(candidate), retired_root)
+                verdict("verify_cleared_loading", cleared_twin, retired_root)
                 session.capture_screenshot(ROOT / ("target/twin-" + label + "-cleared.png"))
                 time.sleep(1)
-                verdict("verify_cleared_loading", str(candidate), retired_root)
+                verdict("verify_cleared_loading", cleared_twin, retired_root)
                 execute("OpenTwin", path=str(candidate))
                 wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(candidate)
                          and execute("ListOpenDocuments")["open_documents"]
                          and not set(retired).intersection(
                              doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]),
                          "fresh replacement after " + label)
-                wait_for(replacement_projected, "replacement projection after " + label)
+                wait_for(prim_projected, "replacement projection after " + label)
                 wait_for_ready(args.port)
                 verdict("verify_loading_replacement", retired, str(candidate), retired_root)
                 print("PASS: clear and replacement after " + label, flush=True)

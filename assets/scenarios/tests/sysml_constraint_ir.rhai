@@ -219,35 +219,35 @@ fn on_tick(me, ctx) {
         "missing provider observations are inconclusive, never false"));
 
     let observations = [
-        #{path: [left], provider: "external", state: "value", value: 1.0},
-        #{path: [right], provider: "external", state: "value", value: 2.0}
+        #{path: [left], provider: "external", provider_generation: 1, document_id: (), document_generation: (), state: "value", value: 1.0},
+        #{path: [right], provider: "external", provider_generation: 1, document_id: (), document_generation: (), state: "value", value: 2.0}
     ];
     let passed = evaluation_model.evaluate_constraint(
         sum_name, observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(passed.verdict == "pass"
         && passed.expression_results[0] == true,
-        "typed provider observations produce a passing verdict"));
+        "typed provider observations produce a passing verdict: " + passed.diagnostics.to_string()));
 
     observations[1].value = 1.0;
     let failed = evaluation_model.evaluate_constraint(
         sum_name, observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(failed.verdict == "fail"
         && failed.expression_results[0] == false,
-        "a typed false relation produces a failure verdict"));
+        "a typed false relation produces a failure verdict: " + failed.diagnostics.to_string()));
 
     let stale_observations = [
-        #{path: [left], provider: "telemetry", state: "stale", detail: "sample expired"},
-        #{path: [right], provider: "telemetry", state: "value", value: 2.0}
+        #{path: [left], provider: "telemetry", provider_generation: 1, document_id: (), document_generation: (), state: "stale", detail: "sample expired"},
+        #{path: [right], provider: "telemetry", provider_generation: 1, document_id: (), document_generation: (), state: "value", value: 2.0}
     ];
     let stale = evaluation_model.evaluate_constraint(
         sum_name, stale_observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(stale.verdict == "inconclusive" && stale.diagnostics.len() > 0,
-        "stale telemetry is inconclusive and diagnostically visible"));
+        "stale telemetry is inconclusive and diagnostically visible: " + stale.diagnostics.to_string()));
 
     let invalid_observations = [
-        #{path: [left], provider: "usd", state: "invalid",
+        #{path: [left], provider: "usd", stage_generation: 0, doc_id: (), document_generation: (), state: "invalid",
             detail: "non-finite stage value"},
-        #{path: [right], provider: "usd", state: "value", value: 2.0}
+        #{path: [right], provider: "usd", stage_generation: 0, doc_id: (), document_generation: (), state: "value", value: 2.0}
     ];
     let invalid_result = evaluation_model.evaluate_constraint(
         sum_name, invalid_observations, 1.0e-9, 1.0e-9);

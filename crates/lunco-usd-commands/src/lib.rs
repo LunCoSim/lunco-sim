@@ -26,6 +26,8 @@
 //! so File menus, picker dialogs, and `twin.toml` parsers see USD
 //! without any central edit.
 
+mod authoring_preparation;
+
 use lunco_usd_document::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +38,9 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_api_core::ApiErrorCode;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{ActiveCommandId, Command, CommandResults, on_command, register_commands};
+use lunco_core::{
+    ActiveCommandId, AppSceneExt, Command, CommandResults, on_command, register_commands,
+};
 use lunco_doc::OpenOutcome;
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;
@@ -251,6 +255,7 @@ impl Plugin for UsdCommandsPlugin {
         }
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdEditSessions>();
+        authoring_preparation::install(app);
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
         // the workbench plugin hasn't been added yet — we still own
@@ -278,13 +283,18 @@ impl Plugin for UsdCommandsPlugin {
         // into calls on this pipeline.
         app.init_resource::<PendingUsdLoads>();
         app.add_observer(on_browser_usd_file);
-        app.init_resource::<PendingUsdDiscards>();
+        app.init_scene_resource::<PendingUsdDiscards>();
+        app.add_systems(lunco_core::SceneTeardown, retire_usd_discards_for_scene);
         app.add_systems(
             Update,
             (drain_pending_usd_file_loads, drain_pending_usd_discards),
         );
         app.register_deferred_command::<ApplyUsdOp>()
             .register_deferred_command::<ApplyUsdOps>()
+            .register_deferred_command::<AttachComponent>()
+            .register_deferred_command::<DetachComponent>()
+            .register_deferred_command::<AttachProgram>()
+            .register_deferred_command::<SetDomeLight>()
             .register_deferred_command::<ApplyUsdTransientOps>()
             .register_deferred_command::<CreateUsdProposal>()
             .register_deferred_command::<ReviewUsdProposal>()
@@ -295,6 +305,7 @@ impl Plugin for UsdCommandsPlugin {
         app.add_observer(sync_workspace_on_doc_opened);
         app.add_observer(sync_workspace_on_doc_changed);
         app.add_observer(sync_workspace_on_doc_saved);
+        app.add_observer(retire_usd_discard_on_save);
         app.add_observer(sync_workspace_on_doc_closed);
         app.add_observer(clear_usd_edit_session_on_document_closed);
         // A3 auto-bridge: when the journal appears, hand it to the registry
@@ -385,7 +396,7 @@ pub(crate) struct PendingUsdLoads {
 
 /// A confirmed file reset whose source is being read off the ECS thread.
 struct PendingUsdDiscard {
-    doc: DocumentId,
+    lease: authoring_preparation::DocumentLease,
     path: PathBuf,
     task: Task<Result<PreparedUsdSource, String>>,
     command_id: Option<u64>,
@@ -395,6 +406,41 @@ struct PendingUsdDiscard {
 #[derive(Resource, Default)]
 struct PendingUsdDiscards {
     tasks: Vec<PendingUsdDiscard>,
+}
+
+impl lunco_core::SceneResource for PendingUsdDiscards {}
+
+fn retire_pending_usd_discards(world: &mut World, doc: Option<DocumentId>) {
+    let pending = std::mem::take(&mut world.resource_mut::<PendingUsdDiscards>().tasks);
+    let mut retained = Vec::new();
+    for discard in pending {
+        if doc.is_some_and(|doc| discard.lease.document() != doc) {
+            retained.push(discard);
+        } else {
+            let error = format!(
+                "USD discard for {} cancelled because its source lease ended",
+                discard.lease.document()
+            );
+            warn!("[DiscardUsd] {error}");
+            finish_command_result(
+                world,
+                discard.command_id,
+                discard.correlation_id,
+                Err(error),
+                ApiErrorCode::CommandRejected,
+            );
+        }
+    }
+    world.resource_mut::<PendingUsdDiscards>().tasks = retained;
+}
+
+fn retire_usd_discards_for_scene(world: &mut World) {
+    retire_pending_usd_discards(world, None);
+}
+
+fn retire_usd_discard_on_save(trigger: On<lunco_doc_bevy::DocumentSaved>, mut commands: Commands) {
+    let doc = trigger.event().doc;
+    commands.queue(move |world: &mut World| retire_pending_usd_discards(world, Some(doc)));
 }
 
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
@@ -906,7 +952,7 @@ fn on_discard_usd_document(
                         .resource::<PendingUsdDiscards>()
                         .tasks
                         .iter()
-                        .any(|pending| pending.doc == doc)
+                        .any(|pending| pending.lease.document() == doc)
                     {
                         Err(format!(
                             "USD document {doc} already has a discard in progress"
@@ -916,6 +962,21 @@ fn on_discard_usd_document(
                         // review plans at admission so none can commit while the
                         // asynchronous source read is in flight.
                         world.resource_mut::<UsdEditSessions>().remove_document(doc);
+                        let lease = match authoring_preparation::DocumentLease::capture(world, doc)
+                        {
+                            Ok(lease) => lease,
+                            Err(error) => {
+                                warn!("[DiscardUsd] {error}");
+                                finish_command_result(
+                                    world,
+                                    command_id,
+                                    correlation_id,
+                                    Err(error),
+                                    ApiErrorCode::CommandRejected,
+                                );
+                                return;
+                            }
+                        };
                         let task_path = path.clone();
                         let task = AsyncComputeTaskPool::get().spawn(async move {
                             let storage = lunco_storage::FileStorage::new();
@@ -932,7 +993,7 @@ fn on_discard_usd_document(
                             .resource_mut::<PendingUsdDiscards>()
                             .tasks
                             .push(PendingUsdDiscard {
-                                doc,
+                                lease,
                                 path,
                                 task,
                                 command_id,
@@ -954,8 +1015,8 @@ fn on_discard_usd_document(
 }
 
 /// Poll explicit discard reads and commit only against the same resident file
-/// document that requested them. A closed or Save-As-rebound document is
-/// rejected rather than applying bytes to a different document identity.
+/// document and runtime lease that requested them. Source edits, stage changes,
+/// closure and Save-As rebinding reject and retire the pending read.
 fn drain_pending_usd_discards(world: &mut World) {
     if world.resource::<PendingUsdDiscards>().tasks.is_empty() {
         return;
@@ -963,6 +1024,21 @@ fn drain_pending_usd_discards(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingUsdDiscards>().tasks);
     let mut still_pending = Vec::new();
     for mut discard in pending {
+        if !discard.lease.is_current(world) {
+            let error = format!(
+                "USD document {} changed its source or runtime lease while discard was reading",
+                discard.lease.document()
+            );
+            warn!("[DiscardUsd] {error}");
+            finish_command_result(
+                world,
+                discard.command_id,
+                discard.correlation_id,
+                Err(error),
+                ApiErrorCode::CommandRejected,
+            );
+            continue;
+        }
         let result = match block_on(future::poll_once(&mut discard.task)) {
             None => {
                 still_pending.push(discard);
@@ -975,22 +1051,22 @@ fn drain_pending_usd_discards(world: &mut World) {
             Ok(source) => {
                 let current_path = world
                     .resource::<DocumentRegistry<UsdDocument>>()
-                    .host(discard.doc)
+                    .host(discard.lease.document())
                     .and_then(|host| host.document().origin().canonical_path())
                     .map(Path::to_path_buf);
                 if current_path.as_deref() != Some(discard.path.as_path()) {
                     Err(format!(
                         "USD document {} changed identity while discard was reading",
-                        discard.doc
+                        discard.lease.document()
                     ))
                 } else {
                     let (doc, outcome) = world
                         .resource_mut::<DocumentRegistry<UsdDocument>>()
                         .reset_prepared_file(discard.path.clone(), source);
-                    if doc != discard.doc {
+                    if doc != discard.lease.document() {
                         Err(format!(
                             "discard source resolved to document {doc}, expected {}",
-                            discard.doc
+                            discard.lease.document()
                         ))
                     } else {
                         match outcome {
@@ -1015,11 +1091,11 @@ fn drain_pending_usd_discards(world: &mut World) {
                             }
                             lunco_doc::OpenOutcome::KeptUnparsable => Err(format!(
                                 "discard source for {} is not valid USDA",
-                                discard.doc
+                                discard.lease.document()
                             )),
                             other => Err(format!(
                                 "discard of {} did not reset the resident file ({other:?})",
-                                discard.doc
+                                discard.lease.document()
                             )),
                         }
                     }
@@ -1128,6 +1204,8 @@ fn on_save_document(
             let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
             registry.host_mut(doc_id).expect("save retains the document owner").document_mut().mark_saved();
             registry.note_saved(doc_id);
+            drop(registry);
+            world.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
             Ok(Ack::with_data(OpId::new(), lunco_api_core::api_value!({ "doc_id": doc_id.raw(), "path": path.display().to_string() })))
         })();
         if let Err(error) = &result { warn!("[SaveUsd] {error}"); }
@@ -1225,8 +1303,8 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 }
 
 /// Supply the document owner with its resolver-backed authoring context. A
-/// canonical stage's immutable dependency closure is reused by revision; an
-/// unmounted file document rebuilds its root recipe from current opinions.
+/// canonical stage's immutable dependency closure is reused by revision.
+/// Unmounted files acquire their closure through the preparation worker.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) -> Result<(), String> {
     let update = if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
     {
@@ -1244,14 +1322,7 @@ fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) -> Result<(), St
             None
         }
     } else {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Some((None, unmounted_document_authoring_recipe(world, doc)?))
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Some((None, None))
-        }
+        None
     };
     if let Some((revision, recipe)) = update {
         if let Some(host) = world
@@ -1262,49 +1333,6 @@ fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) -> Result<(), St
         }
     }
     Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn unmounted_document_authoring_recipe(
-    world: &World,
-    doc: DocumentId,
-) -> Result<Option<lunco_usd_compose::recipe::StageRecipe>, String> {
-    let Some(document) = world
-        .get_resource::<DocumentRegistry<UsdDocument>>()
-        .and_then(|registry| registry.host(doc))
-        .map(|host| host.document())
-    else {
-        return Ok(None);
-    };
-    let DocumentOrigin::File { path, .. } = document.origin() else {
-        return Ok(None);
-    };
-    if let Some(error) = document.parse_error() {
-        return Err(format!(
-            "USD document {doc} has a parse error and cannot be composed for authoring: {error}"
-        ));
-    }
-    let path = path.clone();
-    let (root_id, assets_root, twin_root) = document_composition_context(world, doc, &path)?;
-    let anchor = lunco_usd_compose::recipe::StageRecipe::new(root_id, Default::default());
-    let input = lunco_usd_authoring::author::document_stage_recipe(
-        document.data(),
-        document.runtime_data(),
-        document.view_data(),
-        Some(&anchor),
-    )
-    .map_err(|error| format!("cannot capture USD document layers: {error}"))?;
-    let recipe = lunco_usd_compose::fetch_recipe_with_roots(
-        input,
-        assets_root.as_deref(),
-        twin_root.as_deref(),
-        lunco_usd_compose::recipe::StageClosureLimits::default(),
-    )
-    .map_err(|error| format!("cannot resolve USD document composition: {error}"))?;
-    for diagnostic in &recipe.dependency_diagnostics {
-        warn!("[UsdAuthoringRecipe] {diagnostic}");
-    }
-    Ok(Some(recipe))
 }
 
 #[on_command(CreateUsdProposal)]
@@ -1320,60 +1348,58 @@ fn on_create_usd_proposal(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        if let Err(error) = refresh_authoring_recipe(world, command.doc_id) {
-            warn!("[CreateUsdProposal] {error}");
-            return finish_command_result(
-                world,
-                command_id,
-                correlation_id,
-                Err(error),
-                ApiErrorCode::CommandRejected,
-            );
-        }
-        let outcome = match world
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(command.doc_id)
-            .map(|host| host.document())
-        {
-            None => Err(format!("unknown USD document {}", command.doc_id)),
-            Some(document) => {
-                let validation =
-                    validate_proposal(document, command.scope, command.parent_gen, &command.ops);
-                if !validation.is_valid() {
-                    Err(format!(
-                        "USD proposal validation failed: {}",
-                        proposal_diagnostics(&validation.diagnostics)
-                    ))
-                } else {
-                    let id = world.resource_mut::<UsdEditSessions>().insert(
-                        command.doc_id,
-                        command.scope,
-                        command.label,
-                        command.parent_gen,
-                        validation,
-                        command.ops,
-                    );
-                    let generation = world
-                        .resource::<DocumentRegistry<UsdDocument>>()
-                        .host(command.doc_id)
-                        .map(|host| host.generation())
-                        .unwrap_or_default();
-                    Ok(proposal_ack(
-                        id,
-                        command.doc_id,
-                        "created",
-                        generation,
-                        UsdProposalState::Pending,
-                    ))
-                }
-            }
-        };
-        finish_command_result(
+        let preparation_ops = command.ops.clone();
+        authoring_preparation::run(
             world,
+            command.doc_id,
+            &preparation_ops,
             command_id,
             correlation_id,
-            outcome,
-            ApiErrorCode::CommandRejected,
+            move |world| {
+                let outcome = match world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .host(command.doc_id)
+                    .map(|host| host.document())
+                {
+                    None => Err(format!("unknown USD document {}", command.doc_id)),
+                    Some(document) => {
+                        let validation = validate_proposal(
+                            document,
+                            command.scope,
+                            command.parent_gen,
+                            &command.ops,
+                        );
+                        if !validation.is_valid() {
+                            Err(format!(
+                                "USD proposal validation failed: {}",
+                                proposal_diagnostics(&validation.diagnostics)
+                            ))
+                        } else {
+                            let id = world.resource_mut::<UsdEditSessions>().insert(
+                                command.doc_id,
+                                command.scope,
+                                command.label,
+                                command.parent_gen,
+                                validation,
+                                command.ops,
+                            );
+                            let generation = world
+                                .resource::<DocumentRegistry<UsdDocument>>()
+                                .host(command.doc_id)
+                                .map(|host| host.generation())
+                                .unwrap_or_default();
+                            Ok(proposal_ack(
+                                id,
+                                command.doc_id,
+                                "created",
+                                generation,
+                                UsdProposalState::Pending,
+                            ))
+                        }
+                    }
+                };
+                outcome
+            },
         );
     });
 }
@@ -1474,127 +1500,136 @@ fn on_commit_usd_proposal(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let outcome = match world
+        let Some(proposal) = world
             .resource::<UsdEditSessions>()
             .proposal(proposal_id)
             .cloned()
-        {
-            None => Err(format!("unknown USD proposal {}", proposal_id.0)),
-            Some(proposal) => {
-                if let Err(error) = refresh_authoring_recipe(world, proposal.doc) {
-                    warn!("[CommitUsdProposal] {error}");
-                    return finish_command_result(
-                        world,
-                        command_id,
-                        correlation_id,
-                        Err(error),
-                        ApiErrorCode::CommandRejected,
-                    );
-                }
-                let current = world
-                    .resource::<DocumentRegistry<UsdDocument>>()
-                    .host(proposal.doc)
-                    .map(|host| {
-                        (
-                            host.generation(),
-                            host.document().base_revision(),
-                            host.document().origin().session_uri(),
-                            validate_proposal(
-                                host.document(),
-                                proposal.scope,
-                                proposal.parent_generation,
-                                &proposal.ops,
-                            ),
-                        )
-                    });
-                let Some((generation, base_revision, origin, validation)) = current else {
-                    let error = format!("unknown USD document {}", proposal.doc);
-                    world.resource_mut::<UsdEditSessions>().remove(proposal.id);
-                    return finish_command_result(
-                        world,
-                        command_id,
-                        correlation_id,
-                        Err(error),
-                        ApiErrorCode::CommandRejected,
-                    );
-                };
-                let externally_stale = world
-                    .resource::<DocumentRegistry<UsdDocument>>()
-                    .stale_docs()
-                    .contains(&proposal.doc);
-                let conflict = if proposal.state != UsdProposalState::Pending {
-                    Some(format!(
-                        "proposal {} is not pending (state={})",
-                        proposal.id.0,
-                        proposal.state.as_str()
-                    ))
-                } else if generation != proposal.parent_generation {
-                    Some(format!(
-                        "stale document generation: proposal parent {}, current {}",
-                        proposal.parent_generation, generation
-                    ))
-                } else if base_revision != proposal.base_revision {
-                    Some(format!(
-                        "stale authored layer revision: proposal {}, current {}",
-                        proposal.base_revision, base_revision
-                    ))
-                } else if origin != proposal.origin {
-                    Some("document origin changed since proposal creation".to_owned())
-                } else if externally_stale {
-                    Some("backing USD file changed on disk since proposal creation".to_owned())
-                } else if !validation.is_valid() {
-                    Some(proposal_diagnostics(&validation.diagnostics))
-                } else {
-                    None
-                };
-                if let Some(conflict) = conflict {
-                    world
-                        .resource_mut::<UsdEditSessions>()
-                        .mark_conflict(proposal.id, conflict.clone());
-                    Err(format!(
-                        "USD proposal {} conflict: {conflict}",
-                        proposal.id.0
-                    ))
-                } else {
-                    match apply_ops_as_change_set_result(
-                        world,
-                        proposal.doc,
-                        proposal.label.clone(),
-                        proposal.ops.clone(),
-                        Some(proposal.parent_generation),
-                    ) {
-                        Ok((mut ack, _)) => {
-                            claim_user_document_if_projected(world, proposal.doc);
-                            let edit = ack.data.take().unwrap_or_default();
-                            world.resource_mut::<UsdEditSessions>().remove(proposal.id);
-                            ack.data = Some(lunco_api_core::api_value!({
-                                "proposal": proposal.id.0,
-                                "doc_id": proposal.doc.raw(),
-                                "action": "committed",
-                                "edit": edit,
-                                "diagnostics": [],
-                            }));
-                            Ok(ack)
-                        }
-                        Err(error) => {
-                            world
-                                .resource_mut::<UsdEditSessions>()
-                                .mark_conflict(proposal.id, error.clone());
-                            Err(format!(
-                                "USD proposal {} could not be committed: {error}",
-                                proposal.id.0
-                            ))
-                        }
-                    }
-                }
-            }
+        else {
+            finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(format!("unknown USD proposal {}", proposal_id.0)),
+                ApiErrorCode::CommandRejected,
+            );
+            return;
         };
-        finish_command_result(
+        let preparation_ops = proposal.ops.clone();
+        authoring_preparation::run(
             world,
+            proposal.doc,
+            &preparation_ops,
             command_id,
             correlation_id,
-            outcome,
-            ApiErrorCode::CommandRejected,
+            move |world| {
+                let outcome = match world
+                    .resource::<UsdEditSessions>()
+                    .proposal(proposal_id)
+                    .cloned()
+                {
+                    None => Err(format!("unknown USD proposal {}", proposal_id.0)),
+                    Some(proposal) => {
+                        if let Err(error) = refresh_authoring_recipe(world, proposal.doc) {
+                            warn!("[CommitUsdProposal] {error}");
+                            return Err(error);
+                        }
+                        let current = world
+                            .resource::<DocumentRegistry<UsdDocument>>()
+                            .host(proposal.doc)
+                            .map(|host| {
+                                (
+                                    host.generation(),
+                                    host.document().base_revision(),
+                                    host.document().origin().session_uri(),
+                                    validate_proposal(
+                                        host.document(),
+                                        proposal.scope,
+                                        proposal.parent_generation,
+                                        &proposal.ops,
+                                    ),
+                                )
+                            });
+                        let Some((generation, base_revision, origin, validation)) = current else {
+                            let error = format!("unknown USD document {}", proposal.doc);
+                            world.resource_mut::<UsdEditSessions>().remove(proposal.id);
+                            return Err(error);
+                        };
+                        let externally_stale = world
+                            .resource::<DocumentRegistry<UsdDocument>>()
+                            .stale_docs()
+                            .contains(&proposal.doc);
+                        let conflict = if proposal.state != UsdProposalState::Pending {
+                            Some(format!(
+                                "proposal {} is not pending (state={})",
+                                proposal.id.0,
+                                proposal.state.as_str()
+                            ))
+                        } else if generation != proposal.parent_generation {
+                            Some(format!(
+                                "stale document generation: proposal parent {}, current {}",
+                                proposal.parent_generation, generation
+                            ))
+                        } else if base_revision != proposal.base_revision {
+                            Some(format!(
+                                "stale authored layer revision: proposal {}, current {}",
+                                proposal.base_revision, base_revision
+                            ))
+                        } else if origin != proposal.origin {
+                            Some("document origin changed since proposal creation".to_owned())
+                        } else if externally_stale {
+                            Some(
+                                "backing USD file changed on disk since proposal creation"
+                                    .to_owned(),
+                            )
+                        } else if !validation.is_valid() {
+                            Some(proposal_diagnostics(&validation.diagnostics))
+                        } else {
+                            None
+                        };
+                        if let Some(conflict) = conflict {
+                            world
+                                .resource_mut::<UsdEditSessions>()
+                                .mark_conflict(proposal.id, conflict.clone());
+                            Err(format!(
+                                "USD proposal {} conflict: {conflict}",
+                                proposal.id.0
+                            ))
+                        } else {
+                            match apply_ops_as_change_set_result(
+                                world,
+                                proposal.doc,
+                                proposal.label.clone(),
+                                proposal.ops.clone(),
+                                Some(proposal.parent_generation),
+                            ) {
+                                Ok((mut ack, _)) => {
+                                    claim_user_document_if_projected(world, proposal.doc);
+                                    let edit = ack.data.take().unwrap_or_default();
+                                    world.resource_mut::<UsdEditSessions>().remove(proposal.id);
+                                    ack.data = Some(lunco_api_core::api_value!({
+                                        "proposal": proposal.id.0,
+                                        "doc_id": proposal.doc.raw(),
+                                        "action": "committed",
+                                        "edit": edit,
+                                        "diagnostics": [],
+                                    }));
+                                    Ok(ack)
+                                }
+                                Err(error) => {
+                                    world
+                                        .resource_mut::<UsdEditSessions>()
+                                        .mark_conflict(proposal.id, error.clone());
+                                    Err(format!(
+                                        "USD proposal {} could not be committed: {error}",
+                                        proposal.id.0
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                };
+                outcome
+            },
         );
     });
 }
@@ -1612,33 +1647,37 @@ fn on_apply_usd_ops(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let _span = bevy::log::info_span!(
-            "usd_apply_ops_document",
-            operation_count = command.ops.len(),
-        )
-        .entered();
-        let outcome = match apply_ops_as_change_set_result(
+        let preparation_ops = command.ops.clone();
+        authoring_preparation::run(
             world,
             command.doc_id,
-            command.label,
-            command.ops,
-            command.parent_gen,
-        ) {
-            Ok((ack, _)) => {
-                claim_user_document_if_projected(world, command.doc_id);
-                Ok(ack)
-            }
-            Err(error) => Err(error),
-        };
-        if let Err(error) = &outcome {
-            bevy::log::warn!("[ApplyUsdOps] {} rejected: {error}", command.doc_id);
-        }
-        finish_command_result(
-            world,
+            &preparation_ops,
             command_id,
             correlation_id,
-            outcome,
-            ApiErrorCode::CommandRejected,
+            move |world| {
+                let _span = bevy::log::info_span!(
+                    "usd_apply_ops_document",
+                    operation_count = command.ops.len(),
+                )
+                .entered();
+                let outcome = match apply_ops_as_change_set_result(
+                    world,
+                    command.doc_id,
+                    command.label,
+                    command.ops,
+                    command.parent_gen,
+                ) {
+                    Ok((ack, _)) => {
+                        claim_user_document_if_projected(world, command.doc_id);
+                        Ok(ack)
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = &outcome {
+                    bevy::log::warn!("[ApplyUsdOps] {} rejected: {error}", command.doc_id);
+                }
+                outcome
+            },
         );
     });
 }
@@ -1656,42 +1695,46 @@ fn on_apply_usd_transient_ops(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let _span = bevy::log::info_span!(
-            "usd_apply_transient_ops",
-            document_id = ?command.doc_id,
-            operation_count = command.ops.len(),
-        )
-        .entered();
-        let total = command.ops.len();
-        let outcome = apply_transient_ops_result(
+        let preparation_ops = command.ops.clone();
+        authoring_preparation::run(
             world,
             command.doc_id,
-            command.parent_gen,
-            command.label,
-            command.ops,
-        )
-        .and_then(|(ack, applied)| {
-            if applied == total {
-                Ok(ack)
-            } else {
-                Err(format!(
-                    "USD document {} applied {applied}/{total} transient operations",
-                    command.doc_id
-                ))
-            }
-        });
-        if let Err(error) = &outcome {
-            bevy::log::warn!(
-                "[ApplyUsdTransientOps] {} rejected: {error}",
-                command.doc_id
-            );
-        }
-        finish_command_result(
-            world,
+            &preparation_ops,
             command_id,
             correlation_id,
-            outcome,
-            ApiErrorCode::CommandRejected,
+            move |world| {
+                let _span = bevy::log::info_span!(
+                    "usd_apply_transient_ops",
+                    document_id = ?command.doc_id,
+                    operation_count = command.ops.len(),
+                )
+                .entered();
+                let total = command.ops.len();
+                let outcome = apply_transient_ops_result(
+                    world,
+                    command.doc_id,
+                    command.parent_gen,
+                    command.label,
+                    command.ops,
+                )
+                .and_then(|(ack, applied)| {
+                    if applied == total {
+                        Ok(ack)
+                    } else {
+                        Err(format!(
+                            "USD document {} applied {applied}/{total} transient operations",
+                            command.doc_id
+                        ))
+                    }
+                });
+                if let Err(error) = &outcome {
+                    bevy::log::warn!(
+                        "[ApplyUsdTransientOps] {} rejected: {error}",
+                        command.doc_id
+                    );
+                }
+                outcome
+            },
         );
     });
 }
@@ -1714,74 +1757,87 @@ fn on_apply_usd_op(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let _span = bevy::log::info_span!(
-            "usd_apply_one_op_document",
-            affected_path_count = paths.len(),
-        )
-        .entered();
-        let paths_for_error = paths.clone();
-        let result = match refresh_authoring_recipe(world, doc)
-            .and_then(|()| expand_usd_geometry_ops(vec![op]))
-        {
-            Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
-            Ok(mut expanded) if expanded.len() == 1 => {
-                let expanded_op = expanded.remove(0);
-                match validate_live_attribute_types(world, doc, std::slice::from_ref(&expanded_op))
-                {
-                    Ok(()) => world
-                        .resource_mut::<DocumentRegistry<UsdDocument>>()
-                        .apply_mutation(
-                            doc,
-                            match parent_gen {
-                                Some(parent) => {
-                                    lunco_doc::Mutation::local_against(parent, expanded_op)
-                                }
-                                None => lunco_doc::Mutation::local(expanded_op),
-                            },
-                        )
-                        .map_err(|reject| lunco_doc::DocumentError::Internal(reject.to_string())),
-                    Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
-                }
-            }
-            Ok(expanded) => apply_ops_as_change_set_result(
-                world,
-                doc,
-                "Apply procedural USD geometry",
-                expanded,
-                parent_gen,
-            )
-            .map(|(ack, _)| ack)
-            .map_err(lunco_doc::DocumentError::Internal),
-        };
-        let outcome = result
-            .map(|mut ack| {
-                claim_user_document_if_projected(world, doc);
-                ack.data = Some(usd_ack_data(
-                    doc,
-                    &target_layers,
-                    &paths,
-                    ack.new_gen.unwrap_or_default(),
-                    None,
-                    world.get_resource::<lunco_doc_bevy::JournalResource>(),
-                ));
-                bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
-                ack
-            })
-            .map_err(|reject| {
-                format!(
-                    "USD document {doc} edit at {:?} rejected: {reject}",
-                    paths_for_error
-                )
-            });
-        if let Err(error) = &outcome {
-            bevy::log::warn!("[ApplyUsdOp] {error}");
-        }
-        finish_command_result(
+        let preparation_ops = vec![op.clone()];
+        authoring_preparation::run(
             world,
+            doc,
+            &preparation_ops,
             command_id,
             correlation_id,
-            outcome,
-            ApiErrorCode::CommandRejected,
+            move |world| {
+                let _span = bevy::log::info_span!(
+                    "usd_apply_one_op_document",
+                    affected_path_count = paths.len(),
+                )
+                .entered();
+                let paths_for_error = paths.clone();
+                let result = match refresh_authoring_recipe(world, doc)
+                    .and_then(|()| expand_usd_geometry_ops(vec![op]))
+                {
+                    Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
+                    Ok(mut expanded) if expanded.len() == 1 => {
+                        let expanded_op = expanded.remove(0);
+                        match validate_live_attribute_types(
+                            world,
+                            doc,
+                            std::slice::from_ref(&expanded_op),
+                        ) {
+                            Ok(()) => world
+                                .resource_mut::<DocumentRegistry<UsdDocument>>()
+                                .apply_mutation(
+                                    doc,
+                                    match parent_gen {
+                                        Some(parent) => {
+                                            lunco_doc::Mutation::local_against(parent, expanded_op)
+                                        }
+                                        None => lunco_doc::Mutation::local(expanded_op),
+                                    },
+                                )
+                                .map_err(|reject| {
+                                    lunco_doc::DocumentError::Internal(reject.to_string())
+                                }),
+                            Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
+                        }
+                    }
+                    Ok(expanded) => apply_ops_as_change_set_result(
+                        world,
+                        doc,
+                        "Apply procedural USD geometry",
+                        expanded,
+                        parent_gen,
+                    )
+                    .map(|(ack, _)| ack)
+                    .map_err(lunco_doc::DocumentError::Internal),
+                };
+                let outcome = result
+                    .map(|mut ack| {
+                        claim_user_document_if_projected(world, doc);
+                        ack.data = Some(usd_ack_data(
+                            doc,
+                            &target_layers,
+                            &paths,
+                            ack.new_gen.unwrap_or_default(),
+                            None,
+                            world.get_resource::<lunco_doc_bevy::JournalResource>(),
+                        ));
+                        bevy::log::debug!(
+                            "[ApplyUsdOp] {} → gen {}",
+                            doc,
+                            ack.new_gen.unwrap_or(0)
+                        );
+                        ack
+                    })
+                    .map_err(|reject| {
+                        format!(
+                            "USD document {doc} edit at {:?} rejected: {reject}",
+                            paths_for_error
+                        )
+                    });
+                if let Err(error) = &outcome {
+                    bevy::log::warn!("[ApplyUsdOp] {error}");
+                }
+                outcome
+            },
         );
     });
 }
@@ -1888,27 +1944,7 @@ pub fn on_redo_usd_document(
 // AttachComponent — build-from-parts (doc 48 §3.1)
 // ─────────────────────────────────────────────────────────────────────
 
-/// Apply a lowered [`UsdOp`] sequence to `doc` as **one document history group**
-/// and one journal change set (H10).
-///
-/// A command that lowers to many primitive ops (`AttachComponent` → multiple base ops,
-/// plus optional socket/rotation/axis ops; `realign_component_ops` → 4) must not
-/// journal them as N independent entries:
-/// one undo would then peel off ONE op and leave the object half-attached. The
-/// journal's change-set API exists for exactly this
-/// ([`lunco_doc_bevy::JournalResource::change_set`] → `Journal::begin_change_set`),
-/// and the auto-recorder on the registry appends with `change_set: None`, so every
-/// entry recorded inside the closure inherits the ambient set with no per-op code.
-/// `UndoManager::take_undo_group` then undoes the whole group.
-///
-/// **Every multi-op USD handler should route through this** — including the
-/// `realign_component_ops` call sites in `lunco-luncosim-edit-ui`.
-///
-/// The generic document host validates the complete sequence against a clone before
-/// committing it. A malformed multi-op intent therefore applies zero operations;
-/// a valid intent is committed as one history group even without a journal.
-///
-/// Returns `(applied, total)`.
+/// Shared acknowledgement payload for committed USD document edits.
 fn usd_ack_data(
     doc: DocumentId,
     target_layers: &[String],
@@ -2196,6 +2232,8 @@ fn usd_int_array(values: impl IntoIterator<Item = i32>) -> String {
     result
 }
 
+/// Commit the complete lowered sequence as one document history group and
+/// journal change set. Validation rejects the entire candidate before mutation.
 fn apply_ops_as_change_set_result(
     world: &mut World,
     doc: DocumentId,
@@ -2641,38 +2679,12 @@ fn live_runtime_port_exists(
     false
 }
 
-pub(crate) fn apply_ops_as_change_set(
-    world: &mut World,
-    doc: DocumentId,
-    label: impl Into<String>,
-    ops: Vec<UsdOp>,
-) -> (usize, usize) {
-    let total = match expand_usd_geometry_ops(ops.clone()) {
-        Ok(expanded) => expanded.len(),
-        Err(error) => {
-            bevy::log::warn!("[usd] {error}");
-            return (0, 1);
-        }
-    };
-    let applied = match apply_ops_as_change_set_result(world, doc, label, ops, None) {
-        Ok(_) => total,
-        Err(error) => {
-            bevy::log::warn!("[usd] {error}");
-            0
-        }
-    };
-    if applied == total && total != 0 {
-        claim_user_document_if_projected(world, doc);
-    }
-    (applied, total)
-}
-
 /// Attach a component asset to a host body as a jointed child, deriving the
 /// joint anchor from the placement so it is authored once, not twice. Lowers to
 /// the primitive [`UsdOp`]s in [`lunco_usd_core::attach::attach_component_ops`].
 ///
 /// The whole lowering is applied inside **one journal change set**
-/// ([`apply_ops_as_change_set`]), so the attach is **one undo unit**: undo removes
+/// ([`apply_ops_as_change_set_result`]), so the attach is **one undo unit**: undo removes
 /// the part, its placement, its joint, and the joint's anchors together.
 ///
 /// The generic compound boundary validates the complete lowered sequence before
@@ -3172,47 +3184,28 @@ fn on_attach_component(
     trigger: On<AttachComponent>,
     mut commands: Commands,
     active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
 ) {
-    let doc = trigger.event().doc_id;
-    let spec = trigger.event().spec.clone();
+    let command = trigger.event().clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let outcome = match refresh_authoring_recipe(world, doc)
-            .and_then(|()| validate_attach_component(world, doc, &spec)) {
-            Err(error) => Err(error),
-            Ok(()) => {
-                let ops = lunco_usd_core::attach::attach_component_ops(&spec);
-                let label = format!("Attach {} to {}", spec.name, spec.host_path);
-                let (applied, total) = apply_ops_as_change_set(world, doc, label, ops);
-                if applied != total {
-                    Err(format!(
-                        "attach {} applied {applied}/{total} operations",
-                        spec.name
-                    ))
-                } else {
-                    bevy::log::info!(
-                        "[AttachComponent] {doc}: attached `{}` to `{}` ({total} ops, one change set)",
-                        spec.name,
-                        spec.host_path
-                    );
-                    Ok(Ack::with_data(
-                        OpId::new(),
-                        lunco_api_core::api_value!({
-                            "component_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.name),
-                            "joint_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.joint_name),
-                        }),
-                    ))
-                }
-            }
-        };
-        if let Err(error) = &outcome {
-            bevy::log::warn!("[AttachComponent] attach rejected: {error}");
-        }
-        if let Some(command_id) = command_id {
-            if let Some(mut results) = world.get_resource_mut::<CommandResults>() {
-                results.record(command_id, outcome);
-            }
-        }
+        let ops = lunco_usd_core::attach::attach_component_ops(&command.spec);
+        let preparation_ops = ops.clone();
+        authoring_preparation::run(world, command.doc_id, &preparation_ops, command_id, correlation_id, move |world| {
+            validate_attach_component(world, command.doc_id, &command.spec)?;
+            let label = format!("Attach {} to {}", command.spec.name, command.spec.host_path);
+            let (mut ack, total) = apply_ops_as_change_set_result(world, command.doc_id, label, ops, None)?;
+            claim_user_document_if_projected(world, command.doc_id);
+            ack.data = Some(lunco_api_core::api_value!({
+                "component_path": format!("{}/{}", command.spec.host_path.trim_end_matches('/'), command.spec.name),
+                "joint_path": format!("{}/{}", command.spec.host_path.trim_end_matches('/'), command.spec.joint_name),
+            }));
+            bevy::log::info!("[AttachComponent] {}: attached `{}` to `{}` ({total} ops, one change set)", command.doc_id, command.spec.name, command.spec.host_path);
+            Ok(ack)
+        });
     });
 }
 
@@ -3221,89 +3214,96 @@ fn on_detach_component(
     trigger: On<DetachComponent>,
     mut commands: Commands,
     active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
 ) {
     let command = trigger.event().clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let outcome = match refresh_authoring_recipe(world, command.doc_id)
-            .and_then(|()| validate_detach_component(world, command.doc_id, &command.spec))
-        {
-            Err(error) => Err(error),
-            Ok(()) => {
-                let ops = lunco_usd_core::attach::detach_component_ops(&command.spec);
+        let ops = lunco_usd_core::attach::detach_component_ops(&command.spec);
+        let preparation_ops = ops.clone();
+        authoring_preparation::run(
+            world,
+            command.doc_id,
+            &preparation_ops,
+            command_id,
+            correlation_id,
+            move |world| {
+                validate_detach_component(world, command.doc_id, &command.spec)?;
                 let label = format!("Detach {}", command.spec.component_path);
-                let (applied, total) = apply_ops_as_change_set(world, command.doc_id, label, ops);
-                if applied != total {
-                    Err(format!(
-                        "detach {} applied {applied}/{total} operations",
-                        command.spec.component_path
-                    ))
-                } else {
-                    bevy::log::info!(
-                        "[DetachComponent] {}: removed `{}` and `{}` ({total} ops, one change set)",
-                        command.doc_id,
-                        command.spec.component_path,
-                        command.spec.joint_path
-                    );
-                    Ok(Ack::with_data(
-                        OpId::new(),
-                        lunco_api_core::api_value!({
-                            "component_path": command.spec.component_path,
-                            "joint_path": command.spec.joint_path,
-                            "socket_path": command.spec.socket_path,
-                        }),
-                    ))
-                }
-            }
-        };
-        if let Err(error) = &outcome {
-            bevy::log::warn!("[DetachComponent] detach rejected: {error}");
-        }
-        if let Some(command_id) = command_id {
-            if let Some(mut results) = world.get_resource_mut::<CommandResults>() {
-                results.record(command_id, outcome);
-            }
-        }
+                let (mut ack, total) =
+                    apply_ops_as_change_set_result(world, command.doc_id, label, ops, None)?;
+                claim_user_document_if_projected(world, command.doc_id);
+                bevy::log::info!(
+                    "[DetachComponent] {}: removed `{}` and `{}` ({total} ops, one change set)",
+                    command.doc_id,
+                    command.spec.component_path,
+                    command.spec.joint_path
+                );
+                ack.data = Some(lunco_api_core::api_value!({
+                    "component_path": command.spec.component_path,
+                    "joint_path": command.spec.joint_path,
+                    "socket_path": command.spec.socket_path,
+                }));
+                Ok(ack)
+            },
+        );
     });
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// AttachProgram — source-backed simulation program authoring
-// ─────────────────────────────────────────────────────────────────────
-
 #[on_command(AttachProgram)]
-fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
+fn on_attach_program(
+    trigger: On<AttachProgram>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
     let command = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
         let ops = match lunco_usd_core::program::program_attach_ops(&command.spec) {
             Ok(ops) => ops,
             Err(error) => {
-                bevy::log::warn!(
-                    "[AttachProgram] {} rejected before authoring: {}",
-                    command.doc_id,
-                    error
+                warn!("[AttachProgram] {}: {error}", command.doc_id);
+                finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(error),
+                    ApiErrorCode::CommandRejected,
                 );
                 return;
             }
         };
-        let label = format!(
-            "Attach program {} to {}",
-            command.spec.name, command.spec.host_path
+        let preparation_ops = ops.clone();
+        authoring_preparation::run(
+            world,
+            command.doc_id,
+            &preparation_ops,
+            command_id,
+            correlation_id,
+            move |world| {
+                let label = format!(
+                    "Attach program {} to {}",
+                    command.spec.name, command.spec.host_path
+                );
+                let (ack, total) =
+                    apply_ops_as_change_set_result(world, command.doc_id, label, ops, None)?;
+                claim_user_document_if_projected(world, command.doc_id);
+                bevy::log::info!(
+                    "[AttachProgram] {}: attached `{}` to `{}` ({total} ops, one change set)",
+                    command.doc_id,
+                    command.spec.name,
+                    command.spec.host_path
+                );
+                Ok(ack)
+            },
         );
-        let (applied, total) = apply_ops_as_change_set(world, command.doc_id, label, ops);
-        if applied == total {
-            bevy::log::info!(
-                "[AttachProgram] {}: attached `{}` to `{}` ({total} ops, one change set)",
-                command.doc_id,
-                command.spec.name,
-                command.spec.host_path
-            );
-        } else {
-            bevy::log::warn!(
-                "[AttachProgram] {} rejected during authoring: {applied}/{total} ops applied",
-                command.doc_id
-            );
-        }
     });
 }
 
@@ -3316,7 +3316,7 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
 /// image-based lighting.
 ///
 /// **This is the only way to change the environment at runtime.** It lowers to
-/// [`UsdOp`]s and goes through [`apply_ops_as_change_set`], so the edit saves,
+/// [`UsdOp`]s and goes through [`apply_ops_as_change_set_result`], so the edit saves,
 /// journals, undoes as ONE unit, and replicates — exactly like any other USD
 /// edit. Writing to the `Skybox`/`GeneratedEnvironmentMapLight` components
 /// directly would light the local viewport and be invisible to all four of
@@ -3328,13 +3328,10 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
 /// texture.
 #[Command(default)]
 pub struct SetDomeLight {
-    /// Document to author into. `None` = the workspace's active document.
+    /// Document to author into. `None` uses the authoritative mounted scene's document.
     pub doc_id: Option<DocumentId>,
-    /// Prim path of the dome. `None` = `/World/Sky`.
-    ///
-    /// It must live **under the stage's `defaultPrim` subtree** (`/World` in
-    /// every scene here) — a prim authored outside it composes into the layer
-    /// but is never mounted, so the sky would silently not appear.
+    /// Prim path of the dome. `None` selects `Sky` below the authoritative
+    /// mounted root. Documents outside that scene require an explicit path.
     pub path: Option<String>,
     /// `inputs:texture:file` — the HDRI, resolved relative to the stage layer
     /// (e.g. `../hdri/lunar_horizon_2k.hdr`). Equirectangular (`.hdr`, `.png`)
@@ -3348,7 +3345,7 @@ pub struct SetDomeLight {
     pub color: Option<[f32; 3]>,
     /// `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case
     /// is yaw only (`[0, heading, 0]`).
-    pub rotation: Option<[f32; 3]>,
+    pub rotation: Option<[f64; 3]>,
     /// `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves
     /// the sky black. The lunar case: real bounce light, no visible sky.
     pub skybox: Option<bool>,
@@ -3358,73 +3355,70 @@ pub struct SetDomeLight {
 fn on_set_dome_light(
     trigger: On<SetDomeLight>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    asset_server: Res<AssetServer>,
+    mounts: Option<Res<lunco_core::SceneMountState>>,
     roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
 ) {
     let cmd = trigger.event();
-
-    // The running scene's root is the single entity that knows both things this
-    // command needs: which document to author into, and which prim to author
-    // under. Ask it for both, rather than counting registry entries (the
-    // registry also holds terrain and script documents, so "the only one" is not
-    // a thing that exists) or hardcoding `/World` (the sandbox scene is rooted
-    // at `/SandboxScene`, and a prim authored under a non-existent parent
-    // composes into the layer and is then never mounted — an invisible sky).
-    let root = match roots.iter().collect::<Vec<_>>()[..] {
-        [root] => root,
-        [] => {
-            bevy::log::warn!("[SetDomeLight] no scene is loaded — nothing to author a dome onto");
-            return;
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    let target = (|| -> Result<_, String> {
+        let root = mounts
+            .as_ref()
+            .and_then(|mounts| mounts.active_root())
+            .and_then(|root| roots.get(root).ok());
+        let scene_doc = root.and_then(|root| {
+            backed.as_ref().and_then(|backed| {
+                lunco_usd_bevy_twin::scene_document_for(backed, root.stage_handle.id())
+            })
+        });
+        let doc = cmd.doc_id.or(scene_doc).ok_or(
+            "SetDomeLight requires an explicit USD document or a document-backed active scene",
+        )?;
+        let path = match &cmd.path {
+            Some(path) => path.clone(),
+            None => {
+                if scene_doc != Some(doc) {
+                    return Err("SetDomeLight requires an explicit path for a document outside the active scene".into());
+                }
+                let root =
+                    root.ok_or("SetDomeLight requires a mounted root for its default path")?;
+                format!("{}/Sky", root.path.trim_end_matches('/'))
+            }
+        };
+        let (parent, name) = path
+            .rsplit_once('/')
+            .ok_or("SetDomeLight requires an absolute prim path")?;
+        if !path.starts_with('/') || name.is_empty() {
+            return Err("SetDomeLight requires an absolute path with a prim name".into());
         }
-        _ => {
-            bevy::log::warn!(
-                "[SetDomeLight] several scenes are mounted — pass `doc` and `path` explicitly"
-            );
-            return;
-        }
-    };
-
-    let doc = match cmd.doc_id {
-        Some(doc) => doc,
-        None => {
-            let Some(doc) = backed.as_ref().and_then(|b| {
-                lunco_usd_bevy_twin::scene_document_for(b, &asset_server, root.stage_handle.id())
-            }) else {
-                bevy::log::warn!(
-                    "[SetDomeLight] the running scene is a raw-file scene (not doc-backed), so it \
-                     has no document to journal into — open it as a Twin, or pass `doc`"
-                );
-                return;
-            };
-            doc
-        }
-    };
-
-    // Default the dome to a `Sky` prim directly under the scene's *mounted root*
-    // — `/SandboxScene/Sky`, `/World/Sky`, … — which is inside the subtree the
-    // stage actually mounts, and so is the one place a new prim is guaranteed to
-    // compose AND appear.
-    let path = cmd.path.clone().unwrap_or_else(|| {
-        let root_path = root.path.trim_end_matches('/');
-        format!("{root_path}/Sky")
-    });
-
-    // Split `/SandboxScene/Sky` → parent `/SandboxScene`, name `Sky`: `AddPrim`
-    // takes them separately.
-    let Some((parent, name)) = path.rsplit_once('/') else {
-        bevy::log::warn!("[SetDomeLight] `{path}` is not an absolute prim path");
-        return;
-    };
-    let parent = if parent.is_empty() { "/" } else { parent }.to_string();
-    let name = name.to_string();
-    if name.is_empty() {
-        bevy::log::warn!("[SetDomeLight] `{path}` has no prim name");
-        return;
-    }
-
+        Ok((
+            doc,
+            if parent.is_empty() { "/" } else { parent }.to_string(),
+            name.to_string(),
+            path,
+        ))
+    })();
     let cmd = cmd.clone();
     commands.queue(move |world: &mut World| {
+        let (doc, parent, name, path) = match target {
+            Ok(target) => target,
+            Err(error) => {
+                warn!("[SetDomeLight] {error}");
+                finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(error),
+                    ApiErrorCode::CommandRejected,
+                );
+                return;
+            }
+        };
         let root = LayerId::root();
         let mut ops = vec![UsdOp::AddPrim {
             edit_target: root.clone(),
@@ -3474,13 +3468,26 @@ fn on_set_dome_light(
             ops.push(UsdOp::SetRotate {
                 edit_target: root.clone(),
                 path: path.clone(),
-                value: [x as f64, y as f64, z as f64],
+                value: [x, y, z],
             });
         }
 
-        let (applied, n) = apply_ops_as_change_set(world, doc, "Set dome light", ops);
-        bevy::log::info!(
-            "[SetDomeLight] {doc}: authored `{path}` ({applied}/{n} ops, one change set)"
+        let preparation_ops = ops.clone();
+        authoring_preparation::run(
+            world,
+            doc,
+            &preparation_ops,
+            command_id,
+            correlation_id,
+            move |world| {
+                let (ack, total) =
+                    apply_ops_as_change_set_result(world, doc, "Set dome light", ops, None)?;
+                claim_user_document_if_projected(world, doc);
+                bevy::log::info!(
+                    "[SetDomeLight] {doc}: authored `{path}` ({total} ops, one change set)"
+                );
+                Ok(ack)
+            },
         );
     });
 }
@@ -3555,7 +3562,7 @@ mod change_set_tests {
             "/Rig/Chassis",
             "Wheel",
             "constraint_47",
-            "components/mobility/wheel.usda",
+            "inline-component.usda",
             [0.5, -0.3, 1.2],
             AttachJoint::Revolute { axis: Axis::X },
         )
@@ -3571,7 +3578,10 @@ mod change_set_tests {
         // The A3 auto-bridge, done by hand (the system that does this in-app is
         // `wire_usd_journal_handle`): the recorder is what journals each op.
         registry.set_journal(journal.clone());
-        let (doc, _) = registry.open_file("/tmp/lunco_h10_attach.usda", RIG.to_string());
+        let doc = registry.allocate(
+            RIG.to_string(),
+            lunco_doc::PathlessOrigin::untitled("inline-rig.usda"),
+        );
         world.insert_resource(registry);
         (world, doc, journal)
     }
@@ -3587,12 +3597,9 @@ mod change_set_tests {
             "the attach lowering is multi-op — that is the whole finding"
         );
 
-        let (applied, total) = apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
-        assert_eq!(
-            (applied, total),
-            (n, n),
-            "every op applies onto a valid host"
-        );
+        let (_, total) = apply_ops_as_change_set_result(&mut world, doc, "Attach Wheel", ops, None)
+            .expect("valid compound edit");
+        assert_eq!(total, n, "every op applies onto a valid host");
         assert_eq!(
             world
                 .resource::<DocumentRegistry<UsdDocument>>()
@@ -3659,10 +3666,9 @@ mod change_set_tests {
             },
         ];
 
-        assert_eq!(
-            apply_ops_as_change_set(&mut world, doc, "Invalid compound", ops),
-            (0, 2)
-        );
+        let error = apply_ops_as_change_set_result(&mut world, doc, "Invalid compound", ops, None)
+            .expect_err("the invalid compound edit must reject");
+        assert!(error.contains("/Rig/Missing"), "{error}");
         assert_eq!(
             world
                 .resource::<DocumentRegistry<UsdDocument>>()
@@ -3683,13 +3689,17 @@ mod change_set_tests {
     fn applies_without_a_journal() {
         let mut world = World::new();
         let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let (doc, _) = registry.open_file("/tmp/lunco_h10_nojournal.usda", RIG.to_string());
+        let doc = registry.allocate(
+            RIG.to_string(),
+            lunco_doc::PathlessOrigin::untitled("inline-rig.usda"),
+        );
         world.insert_resource(registry);
 
         let ops = attach_component_ops(&wheel_spec());
         let n = ops.len();
-        let (applied, total) = apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
-        assert_eq!((applied, total), (n, n));
+        let (_, total) = apply_ops_as_change_set_result(&mut world, doc, "Attach Wheel", ops, None)
+            .expect("valid compound edit");
+        assert_eq!(total, n);
     }
 }
 
@@ -3713,11 +3723,13 @@ mod tests {
         assert_eq!(first.origin().display_name(), "same # %.usda");
         assert!(first.parse_error().is_none());
         assert!(first.is_dirty());
-        assert!(
+        let error =
             prepare_browser_usd_document(DocumentId::new(103), "invalid.usda".into(), &[0xff])
                 .err()
-                .unwrap()
-                .contains("invalid UTF-8")
+                .expect("invalid bytes must reject at the native source owner");
+        assert!(
+            error.starts_with("browser file `invalid.usda`: "),
+            "{error}"
         );
     }
 

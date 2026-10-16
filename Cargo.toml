@@ -259,10 +259,8 @@ parry3d-f64 = { path = "third_party/parry3d-f64" }
 # Scalar aligned-mask serialization for Bevy reflection; see vendor provenance.
 glam = { path = "third_party/glam" }
 
-# transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
-# Pin the fork revision because its Bevy picking backend must apply the same
-# GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
-transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
+# Native pointer input and viewport mapping; see vendor provenance.
+transform-gizmo-bevy = { path = "third_party/transform-gizmo-bevy" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"

@@ -9061,15 +9061,11 @@ dependencies = [
 name = "lunco-modelica-solver"
 version = "0.1.0"
 dependencies = [
- "indexmap",
- "log",
  "lunco-experiments",
  "rumoca-compile",
- "rumoca-eval-solve",
  "rumoca-ir-solve",
  "rumoca-sim",
  "rumoca-solver",
- "web-time",
 ]
 
 [[package]]
@@ -10760,6 +10756,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc",
@@ -10971,6 +10968,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_math",
  "bevy_reflect",
+ "lunco-core",
  "lunco-mobility",
 ]
 
@@ -13127,6 +13125,7 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "rayon",
+ "robust",
  "rstar",
  "simba",
  "slab",
@@ -16827,7 +16826,6 @@ dependencies = [
 [[package]]
 name = "transform-gizmo-bevy"
 version = "0.9.0"
-source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53#8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53"
 dependencies = [
  "bevy_app",
  "bevy_asset",

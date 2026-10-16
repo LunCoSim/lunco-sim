@@ -965,7 +965,6 @@ fn on_set_rhai_policy(
     trigger: On<SetRhaiPolicy>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     use lunco_usd_core::commands::ApplyUsdOp;
@@ -980,9 +979,7 @@ fn on_set_rhai_policy(
         );
         return;
     };
-    let Some(doc) =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root.stage_handle.id())
-    else {
+    let Some(doc) = lunco_usd_bevy_twin::scene_document_for(&backed, root.stage_handle.id()) else {
         warn!(
             "[policy] the mounted scene is not Twin document-backed; open it through a Twin to author a policy"
         );

@@ -19,9 +19,11 @@ pub fn read_authored_real(
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<f64>, ()> {
+    if !reader.has_authored_attribute(path, attr) {
+        return Ok(None);
+    }
     match reader.real(path, attr) {
         Some(value) => Ok(Some(value)),
-        None if !reader.has_authored_attribute(path, attr) => Ok(None),
         None => Err(()),
     }
 }

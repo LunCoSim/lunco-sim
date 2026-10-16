@@ -648,6 +648,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::UsdDocumentProjection => {
                         "UsdDocumentProjection"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::UsdDocumentAuthoring => {
+                        "UsdDocumentAuthoring"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::UsdDependentStageProjection => {
                         "UsdDependentStageProjection"
                     }

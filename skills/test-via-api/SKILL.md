@@ -162,6 +162,13 @@ fail-loud missing endpoint, control, asset, identity, and provenance cases.
 Use this narrow gate after changing the tool or its authored fixture; a parse
 pass alone does not prove the namespaced calls work in production.
 
+Terminal runtime faults end scene tests during startup preparation as well as
+stepped execution. Inspect the exact fault and fix its owner or authored
+negative action; extending the readiness timeout cannot clear a terminal fault.
+Model recompilation holds fixed execution, so assert retained model-state
+revisions and the resulting output instead of requiring a Simulation observer
+to see the temporary absence of an output during preparation.
+
 The live port-owner collision contract is covered the same way:
 
 ```bash
@@ -573,6 +580,16 @@ It proves both a declared Modelica participant and the visible error status for
 an attached source with no port contract. Do not treat a prim appearing in the
 scene tree or a fire-and-forget command acknowledgement as a running model.
 
+Scene-test `_EVIDENCE` telemetry crosses the process boundary as bounded typed
+`LUNCO_SCENE_TEST_EVIDENCE` JSON lines. Keep internal observations as typed maps
+and arrays; emit separate owner records rather than a single run-wide Rhai
+string. For exact-state reference maintenance, use
+`scripts/capture_deterministic_physics_reference.py` to capture paired production
+profiles into a separate candidate. All behavior and deliberate-mismatch checks
+remain enabled. Require exact paired agreement and replay the maintained profiles
+before accepting a reference update. The contract and capture ownership are in
+[deterministic runtime boundaries](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md#scene-test-evidence-transport).
+
 ## Diagnosing common failures
 
 - **Non-Unicode native CLI arguments**: the process rejects them with exit code
@@ -665,3 +682,20 @@ document through typed document operations, saves it with a literal filename,
 and admits it through the Twin's default scene to verify its Modelica source
 equation and loaded canonical stage. API `Exit` must release both the process
 and port.
+
+The scene wrapper supplies the maintained deterministic-physics reference to
+each headless run. Override its path with `LUNCOSIM_DETERMINISM_REFERENCE`; a
+missing reference is a harness error. Keep exact-reference mismatches visible.
+For one telemetry channel, use `ListTelemetryChannels {name}` before querying
+its retained history instead of materializing the complete catalog in Rhai.
+An intermediate milestone must not emit a terminal PASS payload when the
+observer still owes later assertions. Publish milestone facts as structured
+data and reserve the terminal verdict for the complete gate.
+
+Resolve authored camera and avatar probes through their exact USD path. A retired
+application camera can retain its presentation name while its viewport role has
+ended; a display-name scan does not identify the current scene's avatar.
+
+For gizmo acceptance, inject pointer events through the production input API. Both
+the picking backend and transform frontend consume Bevy `PointerLocation`; do not
+move the OS cursor or mutate the native `Window` to make a test gesture work.

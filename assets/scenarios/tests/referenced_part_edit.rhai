@@ -5,7 +5,7 @@ const PREVIEW = 15401;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "InspectUsdViewport"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

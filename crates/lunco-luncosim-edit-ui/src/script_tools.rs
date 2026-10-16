@@ -328,7 +328,6 @@ fn on_set_usd_view_preview_transform(
     trigger: On<SetUsdViewPreviewTransform>,
     documents: Res<DocumentRegistry<UsdDocument>>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    asset_server: Res<AssetServer>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Option<Res<ActivePhysicsFrame>>,
     q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
@@ -352,9 +351,8 @@ fn on_set_usd_view_preview_transform(
     let prim = q_prim
         .get(entity)
         .map_err(|_| "preview transform target is not a USD prim".to_string())?;
-    let target_doc =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, prim.stage_handle.id())
-            .ok_or_else(|| "preview transform target has no document-backed scene".to_string())?;
+    let target_doc = lunco_usd_bevy_twin::scene_document_for(&backed, prim.stage_handle.id())
+        .ok_or_else(|| "preview transform target has no document-backed scene".to_string())?;
     if target_doc != doc {
         return Err("preview transform target belongs to another USD document".to_string());
     }
@@ -525,15 +523,8 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                 "InspectUsdCurveView document ownership is unavailable",
             ));
         };
-        let Some(asset_server) = world.get_resource::<AssetServer>() else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::InternalError,
-                "InspectUsdCurveView asset server is unavailable",
-            ));
-        };
-        let target_doc =
-            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, prim.stage_handle.id())
-                .ok_or_else(|| {
+        let target_doc = lunco_usd_bevy_twin::scene_document_for(backed, prim.stage_handle.id())
+            .ok_or_else(|| {
                 ApiQueryError::new(
                     ApiErrorCode::EntityNotFound,
                     "InspectUsdCurveView target has no document-backed scene",
@@ -664,7 +655,6 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
 fn on_update_usd_curve_view(
     trigger: On<UpdateUsdCurveView>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    asset_server: Res<AssetServer>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_look: Query<&lunco_render::PbrLook>,
@@ -717,12 +707,8 @@ fn on_update_usd_curve_view(
     {
         return Err("curve view geometry is not a descendant of its anchor".to_string());
     }
-    let target_doc = lunco_usd_bevy_twin::scene_document_for(
-        &backed,
-        &asset_server,
-        root_prim.stage_handle.id(),
-    )
-    .ok_or_else(|| "curve view target has no document-backed scene".to_string())?;
+    let target_doc = lunco_usd_bevy_twin::scene_document_for(&backed, root_prim.stage_handle.id())
+        .ok_or_else(|| "curve view target has no document-backed scene".to_string())?;
     if target_doc != doc {
         return Err("curve view targets belong to another USD document".to_string());
     }
@@ -1243,7 +1229,6 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     input_bindings: Res<'w, InputBindingsSettings>,
     scene_interaction: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    asset_server: Res<'w, AssetServer>,
     coordinates: ActiveFrameCoordinates<'w, 's>,
     q_annotations: Query<'w, 's, (Entity, &'static SurfaceCurveAnnotation)>,
     annotation_images: Option<Res<'w, SurfaceAnnotationImages>>,
@@ -1315,7 +1300,6 @@ pub(crate) fn on_scene_click_script_tool(
         &world.local_avatar,
         &world.q_links,
         &world.backed,
-        &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
         &world.scene_interaction,
@@ -1354,7 +1338,6 @@ fn scene_tool_context(
     local_avatar: &TheLocalEmbodiment,
     q_links: &Query<&ControlLink>,
     backed: &lunco_usd_bevy_twin::DocBackedTwinScenes,
-    asset_server: &AssetServer,
     coordinates: &ActiveFrameCoordinates<'_, '_>,
     input_bindings: &InputBindingsSettings,
     scene_interaction: &lunco_interaction_core::SceneInteractionMode,
@@ -1503,9 +1486,7 @@ fn scene_tool_context(
             "target_path".to_string(),
             TelemetryValue::String(path.path.clone()),
         ));
-        if let Some(doc) =
-            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
-        {
+        if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(backed, path.stage_handle.id()) {
             context.push(("doc_id".to_string(), TelemetryValue::U64(doc.raw())));
         }
     }
@@ -1538,9 +1519,7 @@ fn scene_tool_context(
         }
     }
     if let Some(path) = context_prim {
-        if let Some(doc) =
-            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
-        {
+        if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(backed, path.stage_handle.id()) {
             if !context.iter().any(|(name, _)| name == "doc_id") {
                 context.push(("doc_id".to_string(), TelemetryValue::U64(doc.raw())));
             }
@@ -1652,11 +1631,9 @@ fn scene_tool_context(
                 context.retain(|(key, _)| key != name);
                 context.push((name.into(), value));
             }
-            if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
-                backed,
-                asset_server,
-                prim.stage_handle.id(),
-            ) {
+            if let Some(doc) =
+                lunco_usd_bevy_twin::scene_document_for(backed, prim.stage_handle.id())
+            {
                 context.retain(|(key, _)| key != "doc_id");
                 context.push(("doc_id".into(), TelemetryValue::U64(doc.raw())));
             }
@@ -1909,7 +1886,6 @@ pub(crate) fn on_scene_pointer_event(
         &world.local_avatar,
         &world.q_links,
         &world.backed,
-        &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
         &world.scene_interaction,
@@ -2191,11 +2167,9 @@ fn scene_pointer_move_args(
     // component of its own. Resolve the closest authored scene identity just
     // as click routing does before scoping the hover to its document.
     let hit_prim = nearest_scene_prim(entity, &world.q_prim, &world.q_parents)?;
-    let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
-        &world.backed,
-        &world.asset_server,
-        hit_prim.stage_handle.id(),
-    ) else {
+    let Some(doc) =
+        lunco_usd_bevy_twin::scene_document_for(&world.backed, hit_prim.stage_handle.id())
+    else {
         return None;
     };
     if !move_hooks.contains_key(&doc) {

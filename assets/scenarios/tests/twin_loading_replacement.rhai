@@ -23,6 +23,10 @@ fn verify_loading_replacement(retired_ids, replacement_root, retired_root) {
     let current = query("QueryUsdPrim", #{ path: "/World" });
     checks.push(t_true(current != () && current.path == "/World" && current.spawned == true,
         "the replacement scene root is projected"));
+    let physics = query("PhysicsPerformance");
+    checks.push(t_true(physics.ok != false && physics.bodies == 0 && physics.colliders == 0
+        && physics.joints == 0 && physics.joint_graph_edges == 0 && physics.pending_joints == 0,
+        "the empty replacement owns no outgoing native or pending physics topology: " + physics.to_string()));
     report_verdict(checks, "Twin replacement during loading", "TWIN_LOADING_REPLACEMENT")
 }
 

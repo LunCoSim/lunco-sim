@@ -464,3 +464,9 @@ same-path preview entities must never own a mounted wheel's support ray.
   have only `driveLaw`.
 - ❌ Creating a new rover assembly before reading the nearest shipped exemplar,
   its composing scene, and its behavior test.
+
+Rover command authority is authored once in `RoverCommandAuthority.mo`, consumed
+by both shared drive laws. `drive`/`brake` select direct program control;
+`modelica_waypoint` selects program guidance. Raw session `SetPorts` commands
+require possession and remain inactive without it. Verify mode boundaries with
+`modelica_drive_law` and real travel with the matching drivetrain scene gate.

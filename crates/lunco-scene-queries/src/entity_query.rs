@@ -98,7 +98,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             ));
         };
         let pos = pos.0;
-        let rot = rot.0.as_quat();
+        let rot = rot.0;
         // Object scale is authored on the object itself. Ancestor/grid scale is
         // not part of the rigid active-frame pose contract.
         let scale = transform.map_or(Vec3::ONE, |tf| tf.scale);

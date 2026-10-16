@@ -1,6 +1,8 @@
 //! Various unsorted geometrical and logical operators.
 
 pub use self::ccw_face_normal::ccw_face_normal;
+#[cfg(feature = "dim3")]
+pub(crate) use self::ccw_face_normal::tetrahedron_orientation;
 pub use self::center::center;
 
 #[cfg(feature = "alloc")]

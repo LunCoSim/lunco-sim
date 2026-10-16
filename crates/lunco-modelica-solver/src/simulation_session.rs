@@ -95,10 +95,8 @@ pub fn live_from_fmi_component(
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
     match spec.id.as_str() {
-        "fixedrk4" => {
-            FixedStepSession::from_continuous_model(component.runtime_view().model(), options, None)
-                .map(|session| LiveStepper::Fixed(Box::new(session)))
-        }
+        "fixedrk4" => FixedStepSession::from_fmi_component(component, options)
+            .map(|session| LiveStepper::Fixed(Box::new(session))),
         "rk45" => rumoca_sim::rk45::SimulationSession::from_fmi_component(component, options)
             .map(|session| LiveStepper::Adaptive(Box::new(session))),
         _ => Err(SimulationDiagnosticError::Solver(format!(

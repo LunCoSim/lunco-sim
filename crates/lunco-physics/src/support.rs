@@ -473,7 +473,8 @@ pub struct PhysicsSupportContact {
     pub probe_origin: DVec3,
     /// Probe direction in the owning body's local physics frame.
     pub probe_direction: DVec3,
-    /// Probe distance at the authored/rest support pose.
+    /// Non-negative probe distance at the authored/rest support pose. A rigid
+    /// wheel mount has zero travel and its probe starts at the tire contact.
     pub probe_length: f64,
 }
 

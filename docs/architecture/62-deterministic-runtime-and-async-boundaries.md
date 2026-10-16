@@ -489,7 +489,16 @@ An unclassified bridge call has no owner route; its `scope`, `cycle`, and
 `sim_tick()`, `dt()`, and `elapsed_seconds()` return a Rhai error outside
 simulation execution, stopping only that invocation. Missing mandatory
 simulation clock resources still raise the existing scene runtime fault after
-the cycle check.
+the cycle check. `dt()` reads the configured `Time<Fixed>` timestep, including
+lifecycle initialization at SimTick zero; an unadvanced delta is not the
+simulation's configured integration step. The shared Rhai value bridge keeps
+unsigned counters and identities typed and compares them exactly with signed
+integer literals, without conversion through floating point.
+
+The scene-test runner checks the runtime owner's terminal fault after every
+preparation update as well as at stepped completion. Both paths use the same
+expected-fault classification and verification-report owner; a startup fault
+cannot become a readiness timeout or stand alongside a passing verdict.
 
 The scenario owner currently supplies this context for fixed scenario passes,
 paused lifecycle/event passes, and one-shot REPL/tool evaluations. Fixed passes
@@ -1608,3 +1617,42 @@ These findings and their owner-specific file evidence are maintained in
 The simulator can claim whole-simulation determinism only when these phases
 close with production evidence. Current stable ordering is a necessary first
 phase, not that final claim.
+
+The fixed-step Modelica adapter uses Rumoca's Model Exchange host for checked
+initialization, input transactions, algebraic refresh and output publication.
+`FixedStepSession` supplies a `MeIntegratorBackend` plugin that takes exactly
+four classical RK4 derivative stages per configured step on its integer-indexed
+time grid. A cubic continuous extension reads retained stages and never calls
+the component during sampling. The host owns derivative-capability activation,
+accepted-step validation, and the complete initial-equation solve. A raw lowered
+start vector is not an initialized participant.
+
+Native GJK simplex projection uses adaptive tetrahedron orientation predicates
+for containment and native triangle queries for boundary witnesses and feature
+identity. EPA uses the same orientation owner for seed winding and the existing
+stable triangle-normal calculation for its faces. The maintained GeoRust
+`robust` dependency supplies exact sidedness for thin support simplices; ordinary
+cross products do not define that admission predicate. Inline regressions in
+`lunco-physics` cover the actual large-triangle/cylinder and large-cuboid/cylinder
+geometry sent by the continuous-contact owner. Query failures remain visible.
+
+## Scene-test evidence transport
+
+The production scene-test runner emits each typed `_EVIDENCE` event as one
+`LUNCO_SCENE_TEST_EVIDENCE` JSON line at its external process boundary. Individual
+encoded events use the existing 64 KiB evidence bound; an oversized or unencodable
+event reports a diagnostic. Internal producers retain `TelemetryValue` maps and
+arrays. Large observations stream as separate owner records rather than one
+unbounded Rhai string or retained run-wide object. Verification reports continue
+to retain their bounded summary and non-pass details through the same observer.
+
+`multi_rover_stress.rhai` captures actual physics, Modelica and articulated rows
+at its selected ticks while keeping every assertion enabled. The external
+`scripts/capture_deterministic_physics_reference.py` adapter reads the maintained
+profile matrix and requires exact agreement between two independent production
+processes per profile. It accepts only the existing-reference comparison failure
+during capture; behavior, clock, roster and deliberate-mismatch checks must pass.
+It writes a separate candidate with binary, input and log hashes. Replace the
+maintained reference only after paired agreement, then replay its production
+profiles against the candidate. Each launch owns an explicit API port and verifies
+process identity and port release.

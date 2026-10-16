@@ -99,6 +99,20 @@ impl Default for UsdPrimPath {
     }
 }
 
+/// Whether this exact stage owns the current authoritative scene mount.
+/// Preview and inactive document stages do not hold the simulation clock.
+pub fn is_authoritative_scene_stage(world: &World, scene_id: AssetId<UsdStageAsset>) -> bool {
+    let Some(root) = world
+        .get_resource::<lunco_core::SceneMountState>()
+        .and_then(lunco_core::SceneMountState::active_root)
+    else {
+        return false;
+    };
+    world
+        .get::<UsdPrimPath>(root)
+        .is_some_and(|path| path.stage_handle.id() == scene_id)
+}
+
 /// Monotonic signal that a USD-to-ECS scene projection may have changed.
 ///
 /// Consumers use this resource as an invalidation signal for derived indexes;
@@ -437,6 +451,53 @@ pub fn instance_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_scene_stage_follows_the_exact_live_mount() {
+        let mut world = World::new();
+        let old = Handle::<UsdStageAsset>::default();
+        let replacement: Handle<UsdStageAsset> =
+            bevy::asset::uuid_handle!("5ce7e000-0000-4000-8000-000000000002");
+        assert!(!is_authoritative_scene_stage(&world, old.id()));
+        let old_root = world
+            .spawn(UsdPrimPath {
+                stage_handle: old.clone(),
+                path: "/World".into(),
+                ..Default::default()
+            })
+            .id();
+        let new_root = world
+            .spawn(UsdPrimPath {
+                stage_handle: replacement.clone(),
+                path: "/World".into(),
+                ..Default::default()
+            })
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(old_root, true);
+        mounts.register_root(new_root, false);
+        world.insert_resource(mounts);
+        assert!(is_authoritative_scene_stage(&world, old.id()));
+        assert!(
+            !is_authoritative_scene_stage(&world, replacement.id()),
+            "a separate preview/import cannot hold the active simulation"
+        );
+        world
+            .resource_mut::<lunco_core::SceneMountState>()
+            .begin_replacement();
+        assert!(
+            !is_authoritative_scene_stage(&world, old.id()),
+            "a retired root is invalid before its deferred despawn"
+        );
+        world
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(new_root, true);
+        assert!(is_authoritative_scene_stage(&world, replacement.id()));
+        assert!(
+            !is_authoritative_scene_stage(&world, old.id()),
+            "reused prim names do not transfer a stage lease"
+        );
+    }
     use bevy::ecs::system::SystemState;
 
     #[test]

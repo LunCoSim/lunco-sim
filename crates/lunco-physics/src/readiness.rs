@@ -53,6 +53,9 @@
 //! that filter, and `lunco-environment`, `lunco-cosim` and `lunco-mobility` build
 //! their force queries from it.
 
+#[cfg(test)]
+use lunco_core::AppSceneExt;
+
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use lunco_readiness::{HeldForReadiness, ReadinessSet, ReadinessState};
@@ -265,7 +268,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core_runtime::SimTick>()
-            .init_resource::<PhysicsHolds>()
+            .init_scene_resource::<PhysicsHolds>()
             .init_resource::<Time<Physics>>()
             .add_plugins(ReadinessEffectPlugin);
         app

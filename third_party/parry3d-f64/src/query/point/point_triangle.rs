@@ -137,7 +137,7 @@ impl PointQueryWithLocation for Triangle {
                     return ProjectionInfo::OnBC;
                 }
 
-                ProjectionInfo::OnFace(0, va, vb, vc)
+                ProjectionInfo::OnFace(0, vb, vc, n * n)
             }
             #[cfg(feature = "dim3")]
             {
@@ -145,13 +145,13 @@ impl PointQueryWithLocation for Triangle {
 
                 #[cfg(feature = "improved_fixed_point_support")]
                 {
-                    let scaled_n = ab.cross(ac);
+                    let scaled_n = Triangle::new(Vector::ZERO, ab, ac).robust_scaled_normal();
                     n = scaled_n.try_normalize(0.0).unwrap_or(scaled_n);
                 }
 
                 #[cfg(not(feature = "improved_fixed_point_support"))]
                 {
-                    n = ab.cross(ac);
+                    n = Triangle::new(Vector::ZERO, ab, ac).robust_scaled_normal();
                 }
 
                 let vc = n.dot(ab.cross(ap));
@@ -171,7 +171,7 @@ impl PointQueryWithLocation for Triangle {
 
                 let clockwise = if n.dot(ap) >= 0.0 { 0 } else { 1 };
 
-                ProjectionInfo::OnFace(clockwise, va, vb, vc)
+                ProjectionInfo::OnFace(clockwise, vb, vc, n.length_squared())
             }
         }
 
@@ -212,14 +212,13 @@ impl PointQueryWithLocation for Triangle {
                     TrianglePointLocation::OnEdge(1, bcoords),
                 );
             }
-            ProjectionInfo::OnFace(face_side, va, vb, vc) => {
+            ProjectionInfo::OnFace(face_side, vb, vc, area_squared) => {
                 // Voronoï region of the face.
                 if DIM != 2 {
-                    // NOTE: in some cases, numerical instability
-                    // may result in the denominator being zero
-                    // when the triangle is nearly degenerate.
-                    if va + vb + vc != 0.0 {
-                        let denom = 1.0 / (va + vb + vc);
+                    // The squared face area owns the denominator; summing
+                    // signed barycentric numerators can cancel on thin faces.
+                    if area_squared > 0.0 {
+                        let denom = 1.0 / area_squared;
                         let v = vb * denom;
                         let w = vc * denom;
                         let bcoords = [1.0 - v - w, v, w];
@@ -234,55 +233,42 @@ impl PointQueryWithLocation for Triangle {
             }
         }
 
-        // Special treatment if we work in 2d because in this case we really are inside of the
-        // object.
-        if solid {
-            (
+        // Only a nondegenerate 2D triangle has solid interior. A 3D
+        // triangle's degenerate boundary remains the union of its segments.
+        #[cfg(not(feature = "dim3"))]
+        if solid && ab.perp_dot(ac) != 0.0 {
+            return (
                 PointProjection::new(true, pt),
                 TrianglePointLocation::OnSolid,
-            )
-        } else {
-            // We have to project on the closest edge.
-
-            // TODO: this might be optimizable.
-            // TODO: be careful with numerical errors.
-            let v = ab_ap / (ab_ap - ab_bp); // proj on ab = a + ab * v
-            let w = ac_ap / (ac_ap - ac_cp); // proj on ac = a + ac * w
-            let u = (ac_bp - ab_bp) / (ac_bp - ab_bp + ab_cp - ac_cp); // proj on bc = b + bc * u
-
-            let bc = c - b;
-            let d_ab = ap.length_squared() - (ab.length_squared() * v * v);
-            let d_ac = ap.length_squared() - (ac.length_squared() * w * w);
-            let d_bc = bp.length_squared() - (bc.length_squared() * u * u);
-
-            let proj;
-            let loc;
-
-            if d_ab < d_ac {
-                if d_ab < d_bc {
-                    // ab
-                    let bcoords = [1.0 - v, v];
-                    proj = a + ab * v;
-                    loc = TrianglePointLocation::OnEdge(0, bcoords);
-                } else {
-                    // bc
-                    let bcoords = [1.0 - u, u];
-                    proj = b + bc * u;
-                    loc = TrianglePointLocation::OnEdge(1, bcoords);
-                }
-            } else if d_ac < d_bc {
-                // ac
-                let bcoords = [1.0 - w, w];
-                proj = a + ac * w;
-                loc = TrianglePointLocation::OnEdge(2, bcoords);
-            } else {
-                // bc
-                let bcoords = [1.0 - u, u];
-                proj = b + bc * u;
-                loc = TrianglePointLocation::OnEdge(1, bcoords);
-            }
-
-            (PointProjection::new(true, proj), loc)
+            );
         }
+        #[cfg(feature = "dim3")]
+        let _ = solid;
+
+        use crate::shape::{Segment, SegmentPointLocation};
+        let vertices = [a, b, c];
+        let mut best = None;
+        for (edge, [first, second]) in [[0, 1], [1, 2], [0, 2]].into_iter().enumerate() {
+            let (projection, location) = Segment::new(vertices[first], vertices[second])
+                .project_local_point_and_get_location(pt, false);
+            let distance = (pt - projection.point).length_squared();
+            if best
+                .as_ref()
+                .is_some_and(|(previous, _, _)| distance >= *previous)
+            {
+                continue;
+            }
+            let location = match location {
+                SegmentPointLocation::OnVertex(0) => TrianglePointLocation::OnVertex(first as u32),
+                SegmentPointLocation::OnVertex(1) => TrianglePointLocation::OnVertex(second as u32),
+                SegmentPointLocation::OnEdge(weights) => {
+                    TrianglePointLocation::OnEdge(edge as u32, weights)
+                }
+                _ => unreachable!(),
+            };
+            best = Some((distance, compute_result(pt, projection.point), location));
+        }
+        let (_, projection, location) = best.expect("a triangle has three boundary segments");
+        (projection, location)
     }
 }

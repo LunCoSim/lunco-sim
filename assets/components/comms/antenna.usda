@@ -6,19 +6,12 @@
 )
 
 def Xform "CommsAntenna" (
-    prepend apiSchemas = "LunCoCatalogAPI"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
-    documentation = "Two-axis parabolic antenna mechanism with scene-selected pointing. Its articulated mechanism is parked by default; scenes activate it and connect a target when needed."
+    documentation = "Passive parabolic antenna geometry carried by its parent. Use antenna_tracking.usda when two-axis articulated pointing is required."
 )
 {
     uniform bool lunco:spawnable = false
-    # The host supplies one complete target direction when pointing is active.
-    custom double inputs:target_mount_x
-    double inputs:target_mount_x.connect = []
-    custom double inputs:target_mount_y
-    double inputs:target_mount_y.connect = []
-    custom double inputs:target_mount_z
-    double inputs:target_mount_z.connect = []
     def Cylinder "Mast"
     {
         uniform token axis = "Y"
@@ -30,22 +23,14 @@ def Xform "CommsAntenna" (
         bool physics:collisionEnabled = false
     }
     def Xform "YawHead" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         double3 xformOp:translate = (0.0, 0.8, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float physics:mass = 0.800000011920929
-        float3 physics:diagonalInertia = (0.003000000026077032, 0.004800000227987766, 0.003000000026077032)
-        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = false
         def Xform "DishGimbal" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         )
         {
-            float physics:mass = 0.6000000238418579
-            float3 physics:diagonalInertia = (0.035999998450279236, 0.017999999225139618, 0.035999998450279236)
-            bool physics:rigidBodyEnabled = false
             bool physics:collisionEnabled = false
             def Cylinder "DishYoke"
             {
@@ -63,7 +48,7 @@ def Xform "CommsAntenna" (
                 double3 xformOp:scale = (0.6, 0.6, 0.6)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 def NurbsPatch "Reflector" (
-                    prepend apiSchemas = "LunCoLatheAPI"
+                    prepend apiSchemas = ["LunCoLatheAPI"]
                 )
                 {
                     uniform bool doubleSided = true
@@ -87,7 +72,7 @@ def Xform "CommsAntenna" (
                     bool physics:collisionEnabled = false
                 }
                 def Xform "LinkAperture" (
-                    prepend apiSchemas = "LunCoLinkAPI"
+                    prepend apiSchemas = ["LunCoLinkAPI"]
                     documentation = "Dish feed phase centre: connectivity endpoint and link-beam origin."
                 )
                 {
@@ -117,7 +102,7 @@ def Xform "CommsAntenna" (
                         }
                     }
                     def Sphere "CommsIndicator" (
-                        prepend apiSchemas = "MaterialBindingAPI"
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         double radius = 0.055
@@ -139,37 +124,5 @@ def Xform "CommsAntenna" (
         prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
     )
     {
-    }
-    def Xform "AntennaTrackerController" (
-        active = false
-        prepend apiSchemas = "LunCoProgramAPI"
-    )
-    {
-        uniform token info:implementationSource = "sourceAsset"
-        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/AntennaTracker.mo@
-        custom double inputs:target_mount_x
-        double inputs:target_mount_x.connect = </CommsAntenna.inputs:target_mount_x>
-        custom double inputs:target_mount_y
-        double inputs:target_mount_y.connect = </CommsAntenna.inputs:target_mount_y>
-        custom double inputs:target_mount_z
-        double inputs:target_mount_z.connect = </CommsAntenna.inputs:target_mount_z>
-    }
-    def PhysicsRevoluteJoint "YawJoint" (active = false)
-    {
-        rel physics:body0 = </CommsAntenna>
-        rel physics:body1 = </CommsAntenna/YawHead>
-        uniform token physics:axis = "Y"
-        float inputs:angle
-        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:az>
-    }
-    def PhysicsRevoluteJoint "ElevationJoint" (active = false)
-    {
-        rel physics:body0 = </CommsAntenna/YawHead>
-        rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
-        uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.0, 0.0, 0.0)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
-        float inputs:angle
-        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:el>
     }
 }

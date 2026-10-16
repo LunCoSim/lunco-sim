@@ -78,7 +78,11 @@ parameters, and read-only world queries. Top-level initialization runs in its
 own `Initialization` phase after the plan commits. Dependency planning may
 resolve identities but cannot access live ports, issue commands, mutate the
 world, or emit events. Invalid or unresolved ids fail that source revision
-with a diagnostic. Unbarriered port access and Modelica event delivery
+with a diagnostic. Shared Rhai value operations preserve unsigned API values
+and compare signed integer literals exactly; never coerce document ids or
+revisions through floats or use negative identity sentinels. At tick-zero
+initialization, `dt()` is the configured fixed timestep.
+Unbarriered port access and Modelica event delivery
 fail visibly. Connected Modelica event edges are sampled only while the
 simulation clock advances, after `SimTickSet` and before Rhai; this gives an
 initially active output its producer tick after scenario readiness. USD
@@ -201,6 +205,10 @@ For a scene-derived message queue, compose Bevy's message registration with
 callbacks while preserving message counters. Application queues stay unregistered.
 Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
 owners use `run_scene_teardown`. Both share the replacement/reload boundary.
+Native USD resync scopes include descendants: an ancestor or root resync must
+invalidate cached joint/wheel facts before admission can consume them again.
+Support footprints accept zero rest travel for rigid wheel mounts; reject
+negative or non-finite probe distances at the initialization owner.
 Script backends register `ScenarioDriver::retire_removed_model` so interactive
 attachments on retiring entities stop during the removal flush before scene
 resources reset. Independent source-document lifetime does not extend the
@@ -1280,3 +1288,8 @@ cover mechanisms that the production query/command surface cannot observe.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.
+
+For native removal observers, validate the destination archetype before
+reactivation. Despawn and compound component removal must not re-admit a retiring
+joint. Include Bevy-disabled entities in teardown ownership queries; disabled
+entities retain components and lifecycle hooks.

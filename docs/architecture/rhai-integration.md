@@ -584,6 +584,10 @@ if command != () { drive(subject, command.throttle, command.steer); }
 
 `world_pos`/`world_vector` and the vector helpers handle the floating-origin
 (`big_space`) frame correctly — use them instead of reading raw `Transform`.
+The navigation calculation keeps position, heading and arrival radius in
+double precision. It retains the requested travel authority outside the
+horizontal arrival circle, then brakes inside it; reducing demand before that
+boundary can balance a grade short of the destination.
 Route sequencing, enable/disable state, point edits, and route presentation are
 authored Rhai policy over USD queries and typed commands. There is no native
 `PathFollower` component and no second Rust autopilot path.

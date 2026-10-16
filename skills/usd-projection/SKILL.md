@@ -116,6 +116,12 @@ native composed values, including registered schema opinions. The shared
 value; callers do not supply a duplicate schema default. Camera-path schema
 opinions require the authored `LunCoCameraPathAPI` application.
 
+Read composition-arc identity through fallible `UsdRead::has_composition_arc`.
+The worker snapshots the native fact; live authoring uses
+`CanonicalStages::reader_for_composed_query` to consume the admitted prepared
+plan before a canonical stage opens and live state after edits. Missing lazy
+stage state does not imply that a projected referenced child is uneditable.
+
 Read activation through fallible `UsdRead::is_active`. Native read errors reject
 worker snapshot admission, visual hierarchy admission, structural reconciliation,
 physics bounds/collider reads and inspection; they never imply an active prim.
@@ -466,10 +472,12 @@ mutation through the same projection boundary.
 
 ```rust
 commands.trigger(ApplyUsdOp { doc_id: doc, parent_gen: None, op });      // one op
-apply_ops_as_change_set(world, doc, "Edit material", ops);       // N ops, ONE undo unit
+commands.trigger(ApplyUsdOps {
+    doc_id: doc, parent_gen: None, label: "Edit material".into(), ops,
+}); // one atomic edit and undo unit
 ```
 
-Prefer `apply_ops_as_change_set` whenever an intent lowers to more than one op —
+Use `ApplyUsdOps` whenever an intent lowers to more than one op —
 a loop of `ApplyUsdOp` journals N independent entries, and undo then peels off
 one and leaves the object half-edited.
 
@@ -503,6 +511,25 @@ Partial ancestor sink notices are accumulated into that one completion event.
 The reference admission owner retains the source asset handle and prepares
 the layer closure before authoring its native arc. The canonical stage sink
 projects the resulting composed namespace through the normal ECS queues.
+
+Document commands prepare newly introduced layer dependencies before the atomic
+journal transaction through `lunco-usd-commands` and shared bounded admission.
+Reuse `UsdOp::composition_dependencies` and the native composition owner; do not
+fetch bytes or split the plan in a UI/tool. A pending `cmd` result carries a ticket,
+not a successful edit: await `command_result(id)` before dependent commands or a
+verdict. Preparation uses the shared render-free `is_authoritative_scene_stage`
+check for its simulation hold and `PinnedDocumentRuntimeOwner` for its runtime
+lease. Preview work cannot hold the active scene. Verify cold reference-child
+overrides and warm restoration with
+`scripts/api/test_route_runtime_persistence.py`, plus `route_authoring_history`.
+Unmounted file documents must prepare existing dependencies on the same worker;
+command dispatch must not read the dependency closure synchronously. Pending
+discards share the document preparation lease and retire on close, save or scene
+teardown. Verify that a newer edit makes an in-flight discard reject without
+resetting its opinions or history.
+Cancellation must reject the receipt, release its progress hold and drop its
+callback/result slot; a matching revision alone cannot authorize publication into
+a replaced document or stage.
 
 Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).
@@ -538,9 +565,15 @@ path. Both come from the scene root:
 
 ```rust
 roots: Query<&UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>
-let doc = lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root.stage_handle.id())?;
+let doc = lunco_usd_bevy_twin::scene_document_for(&backed, root.stage_handle.id())?;
 let parent = &root.path;            // "/SandboxScene", "/World", …
 ```
+
+`DocBackedTwinScenes` resolves the exact current stage asset lease. The
+shared composed reader supplies native prim existence and composition-arc ownership for
+live persistence. Editor focus, file-name suffixes and an unprepared document
+composition cache do not identify the destination of a scene edit.
+
 
 Two failure modes this exists to prevent:
 

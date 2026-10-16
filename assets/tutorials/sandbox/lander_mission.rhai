@@ -30,6 +30,15 @@
 //! ("AiAgent" = autopilot, "Owner"/"Operator" = a person), and it's true however
 //! the student got there — click it or use the authored handoff path.
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/LanderTest/SkidRover");
+    #{ modelica_entities: [find_path("/LanderTest/Lander"),
+           find_path("/LanderTest/Lander/GNC"), rover],
+       entity_reads: [find_path("/LanderTest/Route/P0"),
+           find_path("/LanderTest/Route/P1"), find_path("/LanderTest/Route/P2")],
+       entity_writes: [rover], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. The scene's
     // embedded scenarios do the flying; mission() coaches over their events.
@@ -71,27 +80,27 @@ fn lander_autopilot_takeover(me) {
 }
 
 fn lander_drive_gate_1(me) {
-    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 0.7, 4.0)
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P0")), 0.7, 4.0)
 }
 
 fn lander_gate_1_done(me) {
-    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget1")), 4.0)
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P0")), 4.0)
 }
 
 fn lander_drive_gate_2(me) {
-    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 0.7, 4.0)
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P1")), 0.7, 4.0)
 }
 
 fn lander_gate_2_done(me) {
-    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget2")), 4.0)
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P1")), 4.0)
 }
 
 fn lander_drive_gate_3(me) {
-    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 0.7, 4.0)
+    nav_to(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P2")), 0.7, 4.0)
 }
 
 fn lander_gate_3_done(me) {
-    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/RoverTarget3")), 4.0)
+    arrived(find("/LanderTest/SkidRover"), world_pos(find("/LanderTest/Route/P2")), 4.0)
 }
 
 fn lander_brake(me) {

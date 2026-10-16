@@ -454,11 +454,13 @@ impl EPA {
             let normal = point.support_direction?.try_normalize()?;
             return Some((point.orig1, point.orig2, normal));
         } else if simplex.dimension() == 3 {
-            let dp1 = self.vertices[1] - self.vertices[0];
-            let dp2 = self.vertices[2] - self.vertices[0];
-            let dp3 = self.vertices[3] - self.vertices[0];
-
-            if dp1.cross(dp2).dot(dp3) > 0.0 {
+            if utils::tetrahedron_orientation(
+                self.vertices[0].point,
+                self.vertices[1].point,
+                self.vertices[2].point,
+                self.vertices[3].point,
+            ) < 0.0
+            {
                 self.vertices.swap(1, 2)
             }
 

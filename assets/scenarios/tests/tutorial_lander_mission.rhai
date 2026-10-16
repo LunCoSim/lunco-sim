@@ -11,6 +11,13 @@ fn verdict(pass, reason) {
     }
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/LanderTest/Lander"),
+           find_path("/LanderTest/Lander/GNC"), find_path("/LanderTest/SkidRover")],
+       entity_reads: [find_path("/LanderTest/Route/P2")],
+       entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.possess_count = 0;
     this.port_writes = 0;
@@ -39,7 +46,7 @@ fn on_event(me, evt, ctx) {
         if !this.done { this.done = true; verdict(false, "the built-in lander mission failed"); }
     } else if evt.name == "course_complete" && !this.done {
         let rover = find("/LanderTest/SkidRover");
-        let goal = find("/LanderTest/RoverTarget3");
+        let goal = find("/LanderTest/Route/P2");
         let reached_goal = false;
         if rover >= 0 && goal >= 0 {
             reached_goal = arrived(rover, world_pos(goal), 6.0);

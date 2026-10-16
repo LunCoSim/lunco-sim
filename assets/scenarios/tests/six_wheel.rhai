@@ -25,7 +25,7 @@
 // `prelude/nav.rhai` (`yaw_delta_deg`, which reports right-hand yaw POSITIVE).
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/SixWheelTest/Rover")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
+    #{ modelica_entities: [find_path("/SixWheelTest/Rover")], entity_reads: vessel_descendants(find_path("/SixWheelTest/Rover")), entity_writes: [], query_reads: ["QueryUsdPrim"], required_inputs: [] }
 }
 
 fn port_value(target, name, direction) {
@@ -309,6 +309,8 @@ fn on_tick(me, ctx) {
                 render_off: this.render_off,
                 render_off_right: this.render_off_right,
                 asset_contract: this.asset_contract,
+                nav_arrived: this.nav_arrived,
+                ground_arrived: this.ground_arrived,
             });
             return;
         } else if leg >= this.command_timeout {

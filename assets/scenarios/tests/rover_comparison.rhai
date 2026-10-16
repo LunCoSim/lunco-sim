@@ -72,7 +72,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/RoverComparison/Medium"),
             find_path("/RoverComparison/Awful"),
         ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: vessel_descendants(find_path("/RoverComparison/Lanes")), entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 
@@ -191,7 +191,7 @@ fn on_tick(me, ctx) {
                 }
                 let end_z = last_z - COURSE_RUNOUT_M;
                 let goal = [at[0], at[1], end_z];
-                this.goals[i] = goal;
+                this.goals.push(goal);
                 print("[rover-comparison] " + this.names[i] + " lane x=" + r2(at[0]) +
                       "  " + mine.len() + " station(s)  -> z=" + r2(end_z));
             }

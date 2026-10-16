@@ -37,6 +37,19 @@ curve. Retiring the source reclaims both, including on stage re-projection;
 their affine clock-parent references do not establish lifetime ownership.
 The camera-path discovery cache uses the registered scene-resource boundary too.
 
+Joint topology follows the native USD resync scope: resyncing a source or any
+ancestor, including the stage root, invalidates its cached joints and wheel
+facts. Document undo and source replacement must not retain removed constraints
+as admission requirements.
+The topology index, preparation task store, pending simulation projection work
+and ground readiness flag register through `init_scene_resource` at their
+owners. Shutdown cancels queued topology jobs and releases their progress keys;
+the final reset drops all cached rows and completion handles, preserves only
+the monotonic worker operation counter, and rearms source discovery.
+Native joint retirement also applies Avian's island wake command, matching
+its normal joint-removal hook. Surviving endpoints resume integration when a
+sleeping constrained assembly is detached.
+
 ## One transition boundary
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
@@ -605,6 +618,47 @@ native-worker gate's Command host verifies exact scene projection before
 signaling its retained Application orchestrator. Authored Rhai proves cancellation of running and queued
 outgoing jobs, source retirement, same-name successor isolation, and rejection
 of imports from the closed owner.
+
+USD document Save and Save-As publish `DocumentSaved` from the command owner
+after the durable write and saved-baseline update. `lunco-usd-commands` alone
+mirrors save/change/close events into workspace metadata in every host; the UI
+owns browser presentation. This keeps dirty indicators and document retirement
+consistent across native API, headless scene tests, and workbench consumers.
+
+Native removal observers must inspect Bevy's destination archetype before
+reactivating a disabled constraint. A removal during despawn has no destination;
+a compound removal may also remove the joint or its identity. Avian's joint
+admission observer therefore requires a surviving enabled native joint and
+identity in the destination archetype. This applies to preview closure and
+cancelled admission as well as full scene retirement. Teardown queries include
+Bevy-disabled entities, which still own native components and removal hooks.
+
+The physics owner registers scene-derived continuous contacts and diagnostics,
+constraint order and position scope, dynamic island masses, escape bounds and
+reports, holds, and step debt. Final teardown drops retained collider geometry
+and re-arms topology discovery even if no replacement physics tick occurs.
+Physics integration settings retain their explicit application lifetime.
+
+Live authoring resolves its document from the entity's exact projected stage
+lease in `DocBackedTwinScenes`. The shared composed reader supplies prim validity and
+composition-arc ownership for move, rotation, complete pose, property, connection
+and deletion persistence. A retired stage cannot acquire another document by
+reusing its name, and editor focus does not select a scene mutation destination.
+
+`lunco-usd-commands` registers pending document-dependency preparations as a
+scene resource. Its teardown observer first cancels admission keys, rejects
+outstanding command receipts and releases `UsdDocumentAuthoring` holds; resource
+reset then drops continuations and result slots. Workers hold weak publication
+slots and cannot retain completed recipes after their request retires. Document
+close applies the same boundary to the addressed document. Before commit, the
+owner validates its exact document and stage lease, including resolver revision.
+Pending discards use that same lease and scene-resource boundary. Closing their
+document or saving it rejects and drops the pending source read; a stale discard
+cannot reset newer opinions or history.
+The render-free scene owner supplies `is_authoritative_scene_stage` to both
+projection and document preparation. It reads the exact active mount and stage
+identity, so preview/import work cannot hold the simulation, and an old root
+loses authority before its deferred despawn even when a new root reuses its path.
 
 ## See also
 

@@ -1472,7 +1472,7 @@ fn build_world_engine_base(
     engine.on_print(route_world_rhai_print);
 
     lunco_hooks_rhai::register_json(&mut engine);
-    lunco_hooks_rhai::register_string_functions(&mut engine);
+    lunco_hooks_rhai::register_value_functions(&mut engine);
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
 
@@ -1661,7 +1661,7 @@ fn build_world_engine_base(
                 return Dynamic::UNIT;
             };
             let Some(command) =
-                spatial_bridge::navigation_command(id as u64, target, speed, radius as f32)
+                spatial_bridge::navigation_command(id as u64, target, speed, radius)
             else {
                 return Dynamic::UNIT;
             };

@@ -18,9 +18,18 @@ pub fn ccw_face_normal(pts: [Vector; 2]) -> Option<Vector> {
 #[inline]
 #[cfg(feature = "dim3")]
 pub fn ccw_face_normal(pts: [Vector; 3]) -> Option<Vector> {
-    let ab = pts[1] - pts[0];
-    let ac = pts[2] - pts[0];
-    let res = ab.cross(ac);
+    crate::shape::Triangle::new(pts[0], pts[1], pts[2])
+        .robust_scaled_normal()
+        .try_normalize()
+}
 
-    res.try_normalize()
+/// Adaptive orientation sign without precision narrowing, including thin simplices.
+#[cfg(feature = "dim3")]
+pub(crate) fn tetrahedron_orientation(a: Vector, b: Vector, c: Vector, d: Vector) -> f64 {
+    let coordinate = |p: Vector| robust::Coord3D {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+    };
+    robust::orient3d(coordinate(a), coordinate(b), coordinate(c), coordinate(d))
 }

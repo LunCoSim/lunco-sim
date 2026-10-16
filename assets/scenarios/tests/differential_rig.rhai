@@ -24,15 +24,22 @@
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [],
-       entity_reads: [
-           find_path("/DiffRigTest/Rig/HingeL"),
-           find_path("/DiffRigTest/Rig/HingeR"),
-       ],
-       entity_writes: [],
-       query_reads: [], required_inputs: [] }
+       entity_reads: vessel_descendants(find_path("/DiffRigTest/Rig")),
+       entity_writes: [find_path("/DiffRigTest/Rig/RockerL"), find_path("/DiffRigTest/Rig/RockerR")],
+       query_reads: ["QueryPhysicsState"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
+    this.phase = "done";
+    // This slow compliant mechanism must keep integrating below Avian's
+    // ordinary visual sleep threshold until its measured relation settles.
+    for path in ["/DiffRigTest/Rig/RockerL", "/DiffRigTest/Rig/RockerR"] {
+        if !set(find_path(path), "SleepThreshold.angular", 0.001) {
+            fail_fast("native angular sleep threshold was not available for " + path,
+                      "DIFFERENTIAL RIG", "DIFF_RIG");
+            return;
+        }
+    }
     this.t = 0.0;
     this.settle_s = 8.0;    // drop onto the stand, then ring down
     this.sample_s = 1.0;
@@ -82,6 +89,9 @@ fn on_tick(me, ctx) {
 
     if this.t >= this.settle_s {
         this.phase = "done";
+        for path in ["/DiffRigTest/Rig/RockerL", "/DiffRigTest/Rig/RockerR"] {
+            print("[diff] final " + path + ": " + query("QueryPhysicsState", #{id: find_path(path)}));
+        }
         verdict(#{ l: al, r: ar, peak_l: this.peak_l, coupled: this.coupled });
     }
 }

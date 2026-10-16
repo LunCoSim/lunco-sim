@@ -13,6 +13,12 @@ const PARENT_INVERSE_ROTATION = [0.0, -0.3420201433, 0.0, 0.9396926208];
 const MAX_POSITION_ERROR = 0.0001;
 const MAX_ROTATION_ERROR = 0.000001;
 
+fn simulation_dependencies(me, ctx) {
+    let target = find_path(TARGET_PATH);
+    #{ modelica_entities: [], entity_reads: [target], entity_writes: [target],
+       query_reads: ["QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

@@ -19,9 +19,7 @@
 
 use bevy::prelude::*;
 use lunco_doc::{DocumentId, OpenOutcome};
-use lunco_doc_bevy::{
-    DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved, SaveAsDocument,
-};
+use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentRegistry, SaveAsDocument};
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
@@ -104,8 +102,6 @@ impl Plugin for UsdUiPlugin {
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(register_workspace_stage_on_doc_user_owned);
         app.add_observer(drop_workspace_stage_on_doc_closed);
-        app.add_observer(sync_workspace_on_doc_saved);
-        app.add_observer(sync_workspace_on_doc_closed);
         app.add_observer(on_usd_document_ready_status);
         app.add_observer(on_save_as_document_ui);
 
@@ -311,41 +307,7 @@ fn on_save_as_document_ui(
     if let Some(host) = registry.host_mut(doc) {
         host.document_mut().mark_saved();
     }
-    commands.trigger(DocumentSaved::local(doc));
-}
-
-/// Reflect USD Save and Save-As origin changes into the generic Workspace.
-fn sync_workspace_on_doc_saved(
-    trigger: On<DocumentSaved>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else {
-        return;
-    };
-    let origin = host.document().origin().clone();
-    if let Some(path) = origin.canonical_path() {
-        workspace.recents.push_loose(path.to_path_buf());
-    }
-    if let Some(entry) = workspace.document_mut(doc) {
-        entry.title = origin.display_name();
-        entry.origin = origin;
-    }
-}
-
-/// Remove the Workspace shadow entry when a USD registry document closes.
-fn sync_workspace_on_doc_closed(
-    trigger: On<DocumentClosed>,
-    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-) {
-    let Some(mut workspace) = workspace else {
-        return;
-    };
-    workspace.close_document(trigger.event().doc);
+    commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc));
 }
 
 /// Poll the registry for USD documents whose file changed on disk behind the

@@ -1,0 +1,62 @@
+#usda 1.0
+(
+    defaultPrim = "CommsAntenna"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "CommsAntenna" (
+    prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    documentation = "Two-axis articulated antenna. References the shared antenna geometry and owns its rigid bodies, joints, and controller. Connect all target_mount inputs at AntennaTrackerController before running."
+)
+{
+    def Xform "YawHead" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 0.800000011920929
+        float3 physics:diagonalInertia = (0.003000000026077032, 0.004800000227987766, 0.003000000026077032)
+        def Xform "DishGimbal" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            float physics:mass = 0.6000000238418579
+            float3 physics:diagonalInertia = (0.035999998450279236, 0.017999999225139618, 0.035999998450279236)
+        }
+    }
+    def Xform "AntennaTrackerController" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/AntennaTracker.mo@
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = None
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = None
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = None
+        custom float outputs:az
+        float outputs:az.connect = None
+        custom float outputs:el
+        float outputs:el.connect = None
+    }
+    def PhysicsRevoluteJoint "YawJoint"
+    {
+        rel physics:body0 = </CommsAntenna>
+        rel physics:body1 = </CommsAntenna/YawHead>
+        uniform token physics:axis = "Y"
+        custom float inputs:angle
+        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:az>
+    }
+    def PhysicsRevoluteJoint "ElevationJoint"
+    {
+        rel physics:body0 = </CommsAntenna/YawHead>
+        rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
+        uniform token physics:axis = "X"
+        custom float inputs:angle
+        float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:el>
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+}

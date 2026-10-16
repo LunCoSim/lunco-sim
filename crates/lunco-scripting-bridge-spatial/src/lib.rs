@@ -90,7 +90,7 @@ pub fn navigation_command(
     vessel_gid: u64,
     target: DVec3,
     speed: f64,
-    radius: f32,
+    radius: f64,
 ) -> Option<NavigationCommand> {
     with_world(|world| {
         let entity = resolve_entity(world, vessel_gid)?;
@@ -100,7 +100,7 @@ pub fn navigation_command(
             pose.get(world).ok()?.pose(entity)?
         };
         let target = GridPos(target);
-        let fwd = VehicleFrame::forward(rotation).as_vec3();
+        let fwd = VehicleFrame::forward(rotation);
         lunco_spatial::nav_setpoint(pos, fwd, target, speed, radius, geometry)
     })
     .flatten()

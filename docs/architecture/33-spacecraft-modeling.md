@@ -344,6 +344,16 @@ Both `RoverDrivetrain` and `RoverAckermannDrivetrain` apply
 parameter aligns navigation's −Z forward with the authored wheel travel frame
 (default zero; body-local +X uses −π/2).
 The Twin must keep front/rear stations, wheel axle and this heading consistent.
+
+`RoverCommandAuthority` is the shared Modelica command selector for both drive
+laws. Session input acts only while possessed and no authored program is active.
+An active program selects either direct throttle/steer or waypoint guidance via
+`autopilot_enable`. Rhai `drive` and `brake` select direct program control;
+`modelica_waypoint` selects guidance. The controller consumes the same command
+surface in every mode. Unowned manual input stays inactive, and releasing port
+holds restores authored values. The production `modelica_drive_law` gate covers
+unowned rejection, claimed manual actuation, and unpossessed program actuation;
+`ackermann_parity` and `six_independent_parity` verify real commanded travel.
 The heading axis defaults to `+Y` (flat car steer, identical to the
 `from_rotation_y`), a motorcycle fork authors e.g. `(0, 0.91, 0.42)` for a ~25°
 rake. **Remaining for full fidelity** (deferred): gyroscopic precession — balance

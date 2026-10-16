@@ -76,6 +76,7 @@ STRESS_SEED=12345    # FIXED: repeat the stress profile's jitter dt sequence
 BUILD=1
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 JOBS=4               # independent production processes, not Bevy test threads
+SCENE_API_PORT_BASE="${SCENE_API_PORT_BASE:-4900}"
 
 # ── Per-scene wall-clock bound ──────────────────────────────────────────────
 #
@@ -87,6 +88,7 @@ JOBS=4               # independent production processes, not Bevy test threads
 SCENE_TIMEOUT="${SCENE_TIMEOUT:-900}"
 READINESS_TIMEOUT="${READINESS_TIMEOUT:-420}"
 SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
+DETERMINISM_REFERENCE="${LUNCOSIM_DETERMINISM_REFERENCE:-$REPO_ROOT/scripts/tests/fixtures/deterministic-physics-reference.json}"
 
 # ── Arguments ───────────────────────────────────────────────────────────────
 #
@@ -208,6 +210,10 @@ if [[ ! -x "$BIN" ]]; then
     echo "production binary is missing or not executable: $BIN" >&2
     exit 2
 fi
+if [[ ! -f "$DETERMINISM_REFERENCE" ]]; then
+    echo "determinism reference is missing: $DETERMINISM_REFERENCE" >&2
+    exit 2
+fi
 
 # Classify through the production binary's composed-USD + Rhai discovery. This
 # is the only source of truth for scene-test execution domains.
@@ -315,9 +321,11 @@ run_one_scene() {
     # can spin forever inside one physics step, so the runner must report a
     # named hang rather than wedge the complete gate.
     LUNCOSIM_CONFIG="$LOG_DIR/config-${name}${suffix}-$$-$index" \
-        timeout --kill-after=10 "$SCENE_TIMEOUT" \
-        "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
-        "$@" --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
+        LUNCOSIM_BIN="$BIN" python3 scripts/api/run_headless_scene_test.py \
+        --port "$((SCENE_API_PORT_BASE + index))" --log "$log" --timeout "$SCENE_TIMEOUT" -- \
+        --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
+        --determinism-reference "$DETERMINISM_REFERENCE" \
+        "$@" --readiness-timeout "$READINESS_TIMEOUT"
     code=$?
 
     # The one-line summary `luncosim test` prints last; falls back to the exit code.
@@ -326,7 +334,7 @@ run_one_scene() {
         0) status="PASS" ;;
         1) status="FAIL" ;;
         2) status="NO-VERDICT" ;;
-        # 124 is `timeout`'s own exit: the scene never finished. Named, not folded
+        # 124 is the owned process boundary's timeout: the scene never finished. Named, not folded
         # into ERROR — a hang and a crash need different investigations.
         124) status="HUNG(${SCENE_TIMEOUT}s)" ;;
         *) status="ERROR($code)" ;;
@@ -505,6 +513,22 @@ if ((runtime_persistence_selected)); then
     echo
     echo "==> route runtime persistence pass (manifest-backed production Twin)"
     if ! LUNCOSIM_BIN="$BIN" python3 scripts/api/test_route_runtime_persistence.py; then
+        overall=1
+    fi
+fi
+
+startup_fault_selected=0
+for scene in "${SCENES[@]}"; do
+    if [[ "$(basename "$scene" .usda)" == "modelica_initialization_failure" ]]; then
+        startup_fault_selected=1
+        break
+    fi
+done
+if ((startup_fault_selected)); then
+    echo
+    echo "==> terminal startup-fault process boundary"
+    if ! LUNCOSIM_BIN="$BIN" python3 scripts/api/test_scene_runner_startup_fault.py \
+        --port "${STARTUP_FAULT_API_PORT:-4721}" --log "$LOG_DIR/startup_runtime_fault.log"; then
         overall=1
     fi
 fi

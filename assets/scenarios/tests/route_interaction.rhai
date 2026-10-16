@@ -209,10 +209,7 @@ fn report(me, passed, message) {
 
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(ROOT + "/Subject");
-    let reads = [subject];
-    for entity in list_entities() {
-        if entity.name == "Avatar" { reads.push(entity.id); }
-    }
+    let reads = [subject, find_path(ROOT + "/Avatar")];
     #{ modelica_entities: [subject], entity_reads: reads, entity_writes: [],
        query_reads: ["InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "ReadExposures", "QueryEntity"],
        required_inputs: [] }
@@ -250,14 +247,8 @@ fn next_input_frame() {
 }
 
 fn native_avatar_yaw() {
-    let avatar = ();
-    for entity in list_entities() {
-        if entity.name == "Avatar" {
-            if avatar != () { return (); }
-            avatar = entity.id;
-        }
-    }
-    if avatar == () { return (); }
+    let avatar = find_path(ROOT + "/Avatar");
+    if avatar < 0 { return (); }
     let pose = query("QueryEntity", #{ id: avatar });
     if pose == () || pose.ok == false || pose.euler == () { return (); }
     pose.euler[0]
@@ -470,9 +461,9 @@ fn prepare_route_and_add_unpossessed(me) {
     });
     this.checks.push(t_true(wrong_view_owner != () && wrong_view_owner.ok == false,
         "curve-view inspection rejects a mismatched document identity"));
-    if unused.status != "missing" || unused.under_arc != true
+    if unused.status != "missing" || unused.under_arc != false
         || unused.composed_exists != false {
-        this.failure = "ResolveUsdTarget did not report an absent referenced child as missing";
+        this.failure = "ResolveUsdTarget gave a composed identity to an absent referenced child: " + unused.to_string();
         return;
     }
 
@@ -1332,7 +1323,8 @@ fn complete_route_curve_view_checks(me) {
 fn timeout(me) {
     if !this.done {
         report(this, false,
-            "route interaction timed out waiting for " + this.waiting_for);
+            if this.failure != "" { this.failure }
+            else { "route interaction timed out waiting for " + this.waiting_for });
     }
 }
 
@@ -1514,6 +1506,10 @@ fn route_interaction_tree() {
         once(Fn("complete_route_curve_view_checks")),
         check(Fn("test_state_is_valid")),
     ])
+}
+
+fn on_tick(me, ctx) {
+    if !this.done && this.failure != "" { report(this, false, this.failure); }
 }
 
 fn task(me, ctx) {

@@ -2230,11 +2230,10 @@ fn existing_rigid_body_plan(doc, edit_target, path, mass, center_of_mass,
     let body = query("QueryUsdPrim", #{
         doc_id: doc,
         path: path,
-        attrs: ["physics:mass", "physics:centerOfMass", "physics:diagonalInertia"],
         children: false,
     });
     if !query_ok(body) {
-        return plan_error(path + ": existing body prim is unavailable");
+        return plan_error(path + ": existing body prim is unavailable: " + body.error);
     }
     if body.type_name != "Xform" {
         return plan_error(path + ": existing movable body must be an Xform");
@@ -2367,12 +2366,8 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
-// Editor previews backed by the mounted Twin can briefly expose a newer
-// composed generation than the document-scoped query guard has indexed.  The
-// live-stage query is the same composed USD identity in that case; use it only
-// for this explicit projection-lag error.  Detached/forked documents retain
-// the strict document-scoped failure so callers never silently read another
-// stage.
+// Preserve the requested document identity through projection admission.
+// An unfinished generation remains an explicit query failure at its owner.
 fn composed_query(doc, params) {
     let scoped = params;
     // The query provider uses an explicit document when one is supplied and
@@ -2380,15 +2375,7 @@ fn composed_query(doc, params) {
     // not serialize it as an explicit doc_id because the typed provider
     // correctly rejects non-numeric document identities.
     if doc != () { scoped.doc_id = doc; }
-    let record = query("QueryUsdPrim", scoped);
-    if query_ok(record) {
-        return record;
-    }
-    let error = record.error;
-    if error != () && error.contains("projection is not current") {
-        return query("QueryUsdPrim", params);
-    }
-    record
+    query("QueryUsdPrim", scoped)
 }
 
 /// Return one structured authoring record for an exact composed prim.
@@ -2437,7 +2424,7 @@ fn authoring_context(doc, path, edit_target) {
         children: false,
     });
     if !query_ok(prim) {
-        return plan_error(path + ": composed prim is unavailable");
+        return plan_error(path + ": composed prim is unavailable: " + prim.error);
     }
 
     let sockets = [];

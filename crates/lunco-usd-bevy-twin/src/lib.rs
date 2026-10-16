@@ -451,17 +451,22 @@ impl DocBackedTwinScenes {
     }
 }
 
-/// Resolve the editable USD document backing a `UsdStageAsset` loaded through
-/// `twin://<name>/<rel>`.
+/// Resolve the document holding this exact projected stage lease.
+/// Names and editor focus do not grant ownership of a retired stage.
 pub fn scene_document_for(
     backed: &DocBackedTwinScenes,
-    asset_server: &AssetServer,
     scene: AssetId<UsdStageAsset>,
 ) -> Option<DocumentId> {
-    let asset_path = asset_server.get_path(scene)?;
-    let rel_path = asset_path.path().to_string_lossy();
-    let (name, rel) = lunco_assets_core::split_twin_rel(&rel_path)?;
-    backed.doc_for(name, rel)
+    let mut owners = backed
+        .map
+        .iter()
+        .filter_map(|(doc, source)| (source.stage_id == Some(scene)).then_some(*doc));
+    let owner = owners.next()?;
+    if owners.next().is_some() {
+        error!(?scene, "projected USD stage has multiple document owners");
+        return None;
+    }
+    Some(owner)
 }
 
 /// Read the stage identity committed by the document projection owner.
@@ -583,6 +588,25 @@ mod tests {
         backed.track_private_mount(doc, "private-again".into());
         backed.track(doc, twin, "private-again".into(), "scene.usda".into());
         assert_eq!(backed.forget_document(doc), Some("private-again".into()));
+    }
+
+    #[test]
+    fn document_resolution_requires_the_exact_current_stage_lease() {
+        let first = DocumentId::new(1);
+        let replacement = DocumentId::new(2);
+        let twin = TwinId::new(1);
+        let old_stage: AssetId<UsdStageAsset> = AssetIndex::from_bits(11).into();
+        let new_stage: AssetId<UsdStageAsset> = AssetIndex::from_bits(12).into();
+        let mut backed = DocBackedTwinScenes::new(Default::default());
+        backed.track(first, twin, "shared-name".into(), "scene.usda".into());
+        backed.mark_applied(first, old_stage, 0);
+        assert_eq!(scene_document_for(&backed, old_stage), Some(first));
+        backed.release_twin(twin);
+        backed.track(replacement, twin, "shared-name".into(), "scene.usda".into());
+        assert_eq!(scene_document_for(&backed, old_stage), None);
+        backed.mark_applied(replacement, new_stage, 0);
+        assert_eq!(scene_document_for(&backed, old_stage), None);
+        assert_eq!(scene_document_for(&backed, new_stage), Some(replacement));
     }
 
     #[test]

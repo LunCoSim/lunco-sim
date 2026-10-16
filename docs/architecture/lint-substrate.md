@@ -399,10 +399,10 @@ vocabulary the claim is made in.**
 itself a body to its nearest ancestor body, and
 `joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body` in
 `lunco-usd-avian` pins that the loader does it. That resolution is the whole
-mounting mechanism for a *component*: `components/comms/antenna.usda` names its
+mounting mechanism for a *component*: `components/comms/antenna_tracking.usda` names its
 own root `Xform` for `body0` because it is referenced onto rovers, landers, masts
-and ground stations and knows none of their paths. Parenting **is** the
-attachment. Reading "not itself a body" as the fault reported 73 antennas, dishes
+and ground stations and knows none of their paths. The joint attaches the
+resolved bodies; passive geometry follows the ordinary hierarchy. Reading "not itself a body" as the fault reported 73 antennas, dishes
 and booms as broken mechanisms; the fact is now "resolves to no body", and
 `missing` in the fact table means exactly that.
 

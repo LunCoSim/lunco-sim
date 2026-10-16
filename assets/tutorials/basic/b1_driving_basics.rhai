@@ -6,6 +6,13 @@
 //! on real actions, never a timer (see first_drive.rhai for the pattern this
 //! follows).
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/DrivingBasics/Rover");
+    #{ modelica_entities: [rover],
+       entity_reads: vessel_descendants(find_path("/DrivingBasics")),
+       entity_writes: [rover], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     // The application catalog selects the scene before this scenario starts.
     // Ordering belongs to the catalog; this script owns only its observable

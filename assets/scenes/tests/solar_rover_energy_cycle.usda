@@ -2,53 +2,32 @@
 (
     defaultPrim = "SolarRoverTest"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# Deterministic integration test for the authored solar-rover stack.
-#
-# It reuses the playable demo intact: USD owns the assembled rover, panel,
-# electrical membership and wires; Modelica owns the sun tracker and synthesized
-# electrical island; the scene-level route program owns navigation; Rhai below owns
-# only the bounded test phases and verdict. No test-only Rust mechanism or
-# authored Sun-vector bypass is involved.
-#
-# The production scene's root name is retained deliberately. Its route and
-# component connections use absolute authored targets below `/SolarRoverTest`.
-# Renaming the referenced root would test broken targets instead of the rover.
-#
-# The reduced capacity and panel area are test parameters, not a second power
-# topology: they make one loaded/idle energy cycle observable in seconds while
-# retaining the same battery, panel, bus, and environment-probe components.
-# The capacity remains large enough for the rover to perform the authored
-# route before its voltage-dependent motor torque physically collapses.
-#
-# Run after building this worktree's production binary:
-#   target/debug/luncosim test --scene assets/scenes/tests/solar_rover_energy_cycle.usda
 
 def Xform "SolarRoverTest" (
     prepend references = @lunco://scenes/luncosim/solar_rover_demo.usda@</SolarRoverTest>
 )
 {
-    over "SolarRover"
+    over "SolarRover" (
+        documentation = "Energy-cycle fixture starts facing its first route waypoint so the bounded load phase measures forward travel as well as electrical discharge."
+    )
     {
+        custom double3 xformOp:rotateXYZ = (0.0, -119.05460409907714, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
         over "Battery"
         {
-            float inputs:capacity = 0.10
-            float inputs:soc_init = 0.55
+            float inputs:capacity = 0.10000000149011612
+            float inputs:soc_init = 0.550000011920929
         }
-
         over "YawHead"
         {
             over "SolarPanel"
             {
-                double parameters:area = 0.10
+                double parameters:area = 0.1
             }
         }
     }
-
-    # Keep the scene-level route inert until the energy-cycle observer has
-    # recorded the tracked-sun baseline, then start it through the event bus.
     over "Route"
     {
         over "Program"
@@ -56,11 +35,9 @@ def Xform "SolarRoverTest" (
             float inputs:enabled = 0.0
         }
     }
-
     over "Scenario"
     {
         custom string lunco:scenario = "solar-rover-energy-cycle"
-
         over "Mission" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

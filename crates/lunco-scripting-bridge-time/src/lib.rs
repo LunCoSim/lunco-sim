@@ -39,15 +39,15 @@ pub fn dt() -> Result<f64, String> {
             report_runtime_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
             return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
-        let delta = time.delta_secs_f64();
+        let delta = time.timestep().as_secs_f64();
         if !delta.is_finite() || delta <= 0.0 {
             report_runtime_contract_fault(
                 world,
                 "fixed-clock-invalid",
-                format!("Time<Fixed>.delta must be finite and positive, got {delta:?}"),
+                format!("Time<Fixed>.timestep must be finite and positive, got {delta:?}"),
             );
             return Err(format!(
-                "deterministic simulation clock has invalid fixed delta {delta:?}"
+                "deterministic simulation clock has invalid fixed timestep {delta:?}"
             ));
         }
         Ok(delta)

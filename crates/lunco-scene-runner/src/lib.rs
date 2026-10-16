@@ -188,6 +188,10 @@ const DEFAULT_SEED: u64 = 0x5EED_1EAF_C0FF_EE01;
 /// [`parse_scene_test_report`].
 pub const SCENE_TEST_REPORT_PREFIX: &str = "LUNCO_SCENE_TEST_REPORT ";
 
+/// One typed evidence event at the external process boundary. Each event is
+/// bounded independently so diagnostic captures need not retain the full run.
+pub const SCENE_TEST_EVIDENCE_PREFIX: &str = "LUNCO_SCENE_TEST_EVIDENCE ";
+
 /// Typed summary emitted by `luncosim test --verification` after a run.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SceneTestRunReport {
@@ -686,18 +690,43 @@ fn parse_verdict_payload(payload: &TelemetryValue) -> Option<(VerificationVerdic
     Some((verdict, details))
 }
 
-fn capture_verification_evidence(
+fn capture_scene_test_evidence(
     trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut verdict: ResMut<Verdict>,
 ) {
-    if verdict.verification.is_none() {
-        return;
-    }
     let event = trigger.event();
     let is_summary =
         event.name.ends_with("_EVIDENCE") || event.name.ends_with("_EVIDENCE_STREAM_SUMMARY");
     let is_result = event.name.ends_with("_EVIDENCE_RESULT");
     if !is_summary && !is_result {
+        return;
+    }
+
+    let wire = SceneTestEvidenceEvent {
+        name: event.name.clone(),
+        sim_tick: event.sim_tick,
+        data: event.data.clone(),
+    };
+    match serde_json::to_string(&wire) {
+        Ok(encoded) if encoded.len() <= MAX_SCENE_TEST_EVIDENCE_BYTES => {
+            println!("{SCENE_TEST_EVIDENCE_PREFIX}{encoded}");
+        }
+        Ok(_) => {
+            verdict.details_truncated = true;
+            eprintln!(
+                "scene-test evidence {} exceeded the per-event byte budget",
+                event.name
+            );
+        }
+        Err(error) => {
+            verdict.details_truncated = true;
+            eprintln!(
+                "could not encode scene-test evidence {}: {error}",
+                event.name
+            );
+        }
+    }
+    if verdict.verification.is_none() {
         return;
     }
 
@@ -1432,6 +1461,44 @@ fn scene_load_failure_cleanup_problem(
     remaining_prim.map(|path| format!("rejected scene prim '{path}' remains projected"))
 }
 
+/// Finish a scene gate on the runtime owner's terminal fault, including while
+/// preparation holds the simulation clock at zero.
+fn finish_terminal_runtime_fault(app: &App, cli: &Cli, context: &str) -> Option<u8> {
+    let expected_runtime = &app.world().resource::<ExpectedRuntimeFaults>().0;
+    let fault = app
+        .world()
+        .get_resource::<lunco_core::RuntimeFaults>()
+        .and_then(|faults| faults.first.as_ref())?;
+    if expected_runtime.contains(fault.kind) {
+        println!(
+            "luncosim test PASS  scene={}  expected terminal runtime fault kind={} subject={}  {context}",
+            cli.scene, fault.kind, fault.subject
+        );
+        return Some(finish_scene_test(
+            app,
+            cli,
+            if cli.verification.is_some() { 2 } else { 0 },
+            SceneTestProcessStatus::NoVerdict,
+            None,
+        ));
+    }
+    println!("luncosim test FAIL  scene={}  {context}", cli.scene);
+    println!(
+        "  terminal runtime fault kind={} subject={} detail={}",
+        fault.kind, fault.subject, fault.detail
+    );
+    Some(finish_scene_test(
+        app,
+        cli,
+        1,
+        SceneTestProcessStatus::RunnerError,
+        Some(format!(
+            "Terminal runtime fault kind={} subject={} detail={}",
+            fault.kind, fault.subject, fault.detail
+        )),
+    ))
+}
+
 fn finish_scene_test(
     app: &App,
     cli: &Cli,
@@ -2045,7 +2112,7 @@ pub fn run() -> u8 {
     });
     app.init_resource::<VerificationSourceRevision>();
     app.add_observer(catch_verdict);
-    app.add_observer(capture_verification_evidence);
+    app.add_observer(capture_scene_test_evidence);
     app.init_resource::<ExpectedFaults>();
     app.add_observer(catch_expected_fault);
     app.init_resource::<ExpectedRuntimeFaults>();
@@ -2104,6 +2171,11 @@ pub fn run() -> u8 {
                 );
             }
             app.update();
+            if let Some(result) =
+                finish_terminal_runtime_fault(&app, &cli, "during scene preparation")
+            {
+                return result;
+            }
             waits += 1;
             std::thread::yield_now();
             if scene_materialized(app.world_mut()) || app.should_exit().is_some() {
@@ -2170,6 +2242,11 @@ pub fn run() -> u8 {
                 );
             }
             app.update();
+            if let Some(result) =
+                finish_terminal_runtime_fault(&app, &cli, "during scene preparation")
+            {
+                return result;
+            }
             waits += 1;
             std::thread::yield_now();
             if app.should_exit().is_some() {
@@ -2225,6 +2302,11 @@ pub fn run() -> u8 {
                 );
             }
             app.update();
+            if let Some(result) =
+                finish_terminal_runtime_fault(&app, &cli, "during scene preparation")
+            {
+                return result;
+            }
             waits += 1;
             std::thread::yield_now();
             if app.should_exit().is_some() {
@@ -2594,49 +2676,13 @@ pub fn run() -> u8 {
         cli.jitter, cli.seed, cli.tick_hz
     );
 
-    // A PASS cannot stand while the engine is still reporting a terminal
-    // runtime fault. This is a separate causal boundary from wiring: a
-    // rejected client-prediction loop, non-finite force, or an explicitly
-    // world-pausing escape policy must be reported as that fault, not disguised
-    // as a dangling connection. The default object-scoped escape action is
-    // recoverable and keeps the rest of the solver available to this verdict.
     let expected_runtime = app.world().resource::<ExpectedRuntimeFaults>().0.clone();
-    if let Some(fault) = app
-        .world()
-        .get_resource::<lunco_core::RuntimeFaults>()
-        .and_then(|faults| faults.first.as_ref())
-    {
-        if expected_runtime.contains(fault.kind) {
-            println!(
-                "luncosim test PASS  scene={}  expected terminal runtime fault kind={} subject={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
-                cli.scene, fault.kind, fault.subject
-            );
-            return finish_scene_test(
-                &app,
-                &cli,
-                if cli.verification.is_some() { 2 } else { 0 },
-                SceneTestProcessStatus::NoVerdict,
-                None,
-            );
-        }
-        println!(
-            "luncosim test FAIL  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
-            cli.scene
-        );
-        println!(
-            "  terminal runtime fault kind={} subject={} detail={}",
-            fault.kind, fault.subject, fault.detail
-        );
-        return finish_scene_test(
-            &app,
-            &cli,
-            1,
-            SceneTestProcessStatus::RunnerError,
-            Some(format!(
-                "Terminal runtime fault kind={} subject={} detail={}",
-                fault.kind, fault.subject, fault.detail
-            )),
-        );
+    if let Some(result) = finish_terminal_runtime_fault(
+        &app,
+        &cli,
+        &format!("ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}"),
+    ) {
+        return result;
     }
 
     if !expected_runtime.is_empty() {

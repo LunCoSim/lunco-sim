@@ -489,6 +489,8 @@ pub enum SimulationProgressOwner {
     SceneReferences,
     /// Live projection of an authored USD document revision.
     UsdDocumentProjection,
+    /// Resolve new composition dependencies before an atomic document edit.
+    UsdDocumentAuthoring,
     /// Preparation and replacement of an authored dependent USD stage.
     UsdDependentStageProjection,
     /// Native asset address preparation and its exact live USD projection.

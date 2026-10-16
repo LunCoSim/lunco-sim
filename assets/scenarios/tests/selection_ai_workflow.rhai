@@ -14,7 +14,7 @@ fn has_operation(operations, name) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "InspectUsdViewport", "InspectUsdSelection", "InspectUsdInspectionPresets", "ResolveUsdTarget"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -42,7 +42,7 @@ fn ready(preview, doc) {
 }
 
 fn selection_doc(selection) {
-    if selection.doc_id != () { selection.doc_id } else { selection.doc }
+    selection.doc_id
 }
 
 fn primary_view(preview, doc) {
@@ -233,7 +233,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(invalid_diff.ok == false,
             "candidate diff rejects an unbounded path request"));
         let groups = authoring_inspection::group_diagnostics([#{
-            domain: "usd", rule: "missing_source", severity: "error",
+            domain: "usd", code: "missing_source", severity: "error",
             subject: PART, message: "test finding",
         }]);
         this.checks.push(t_true(groups.ok && groups.groups.len() == 1

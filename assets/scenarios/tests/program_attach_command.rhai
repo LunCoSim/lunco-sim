@@ -7,7 +7,7 @@
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "CosimStatus"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "CosimStatus"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -16,6 +16,7 @@ fn on_start(me, ctx) {
     this.done = false;
     this.source_only_sent = false;
     this.source_only_error = false;
+    this.rejection_verified = false;
     this.doc = ();
     this.plant = -1;
     this.plant_read_tracked = false;
@@ -37,6 +38,10 @@ fn authored_prim_exists(doc, path) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
+    if this.elapsed > 25.0 {
+        fail(this, "AttachProgram did not produce a projected running program within 25 seconds");
+        return;
+    }
 
     if !this.sent && this.elapsed >= 1.0 {
         let docs = query("ListOpenDocuments");
@@ -55,6 +60,24 @@ fn on_tick(me, ctx) {
             return;
         }
 
+        if !this.rejection_verified {
+            let before = query("InspectUsdDocument", #{doc_id: this.doc}).generation;
+            let rejected = cmd("AttachProgram", #{doc_id: this.doc, spec: #{
+                edit_target: "@runtime@", host_path: this.host, name: "RejectedProgram",
+                source_asset: "lunco://models/Balloon.mo",
+                inputs: [#{name: "height", type_name: "double", default_value: 1.0,
+                    connection: this.host + ".outputs:position_y"}],
+                outputs: [], realtime_safe: false,
+            }});
+            this.rejection_verified = rejected != () && rejected.ok == false
+                && rejected.status == "rejected" && rejected.error.contains("exactly one")
+                && query("InspectUsdDocument", #{doc_id: this.doc}).generation == before
+                && !authored_prim_exists(this.doc, this.host + "/RejectedProgram");
+            if !this.rejection_verified {
+                fail(this, "invalid AttachProgram did not reject atomically with its terminal diagnostic");
+                return;
+            }
+        }
         let plant_path = this.host + "/Plant";
         if authored_prim_exists(this.doc, plant_path) {
             this.sent = true;
@@ -82,8 +105,12 @@ fn on_tick(me, ctx) {
         }
     }
 
-    if this.sent && this.plant < 0 {
-        this.plant = find("/ProgramAttachTest/Ball/Plant");
+    if this.sent {
+        let plant = find_path("/ProgramAttachTest/Ball/Plant");
+        if plant != this.plant {
+            this.plant = plant;
+            this.plant_read_tracked = false;
+        }
     }
 
     if this.sent && this.plant >= 0 {
@@ -91,7 +118,7 @@ fn on_tick(me, ctx) {
             this.plant_read_tracked = track_entity_read(this.plant);
             if !this.plant_read_tracked { return; }
         }
-        let ports = query("ListPorts", #{ entity: this.plant });
+        let ports = query("ListPorts", #{ api_id: this.plant });
         let status = query("CosimStatus");
         // Entity registration and port projection are separate lifecycle edges.
         // A missing provider payload is a wait, not a pass and not an iterable
@@ -147,6 +174,7 @@ fn on_tick(me, ctx) {
         if has_height && has_net_force && running && this.source_only_error {
             this.done = true;
             report_verdict([
+                t_true(this.rejection_verified, "invalid attachment is rejected without changing the document"),
                 t_true(this.plant >= 0, "attached program prim was not projected"),
                 t_true(has_height, "Modelica input port `height` was not exposed"),
                 t_true(has_net_force, "Modelica output port `netForce` was not exposed"),
@@ -157,7 +185,4 @@ fn on_tick(me, ctx) {
         }
     }
 
-    if this.elapsed > 25.0 {
-        fail(this, "AttachProgram did not produce a projected running program within 25 seconds");
-    }
 }

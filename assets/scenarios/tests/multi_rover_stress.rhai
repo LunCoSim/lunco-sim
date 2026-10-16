@@ -84,6 +84,14 @@ fn read_authored_translation(path) {
     ()
 }
 
+fn modelica_state_fields(variables) {
+    let names = variables.keys();
+    names.sort();
+    let fields = [];
+    for name in names { fields.push(name + "=" + state_scalar(variables[name])); }
+    fields
+}
+
 fn modelica_clock_state(rovers, capture_values, profile, tick, kind) {
     let model_count = 0;
     let variables_count = 0;
@@ -109,10 +117,15 @@ fn modelica_clock_state(rovers, capture_values, profile, tick, kind) {
                     let fields_count = variables.len();
                     variables_count += fields_count;
                     if fields_count == 0 { complete = false; }
-                    if capture_values && profile != "" {
-                        let current = modelica_reference_failure(profile, kind,
-                            tick, state_scalar(lane_x), variables);
-                        if failure == "" && current != "" { failure = current; }
+                    if capture_values {
+                        let fields = modelica_state_fields(variables);
+                        emit("DETERMINISM_STATE_EVIDENCE", #{ profile: profile,
+                            kind: kind, tick: tick.to_string(), identity: state_scalar(lane_x), value: fields });
+                        if profile != "" {
+                            let current = modelica_reference_failure(profile, kind,
+                                tick, state_scalar(lane_x), fields);
+                            if failure == "" && current != "" { failure = current; }
+                        }
                     }
                 } else {
                     complete = false;
@@ -267,6 +280,9 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
             row += "," + state_vector(wheel.tire_force_n);
             row += "," + state_scalar(wheel.sample_tick);
         }
+        emit("DETERMINISM_STATE_EVIDENCE", #{ profile: profile,
+            kind: if modelica_kind == "final_modelica" { "final_physics" } else { "physics" },
+            tick: tick.to_string(), identity: identity, value: row });
         physics_records.push(#{ identity: identity, row: row });
     }
 
@@ -384,7 +400,7 @@ fn reference_value_failure(profile, kind, tick, identity, actual) {
     ""
 }
 
-fn modelica_reference_failure(profile, kind, tick, identity, variables) {
+fn modelica_reference_failure(profile, kind, tick, identity, actual_fields) {
     let expected = query("ReadDeterminismReference", #{
         profile: profile,
         kind: kind,
@@ -403,8 +419,8 @@ fn modelica_reference_failure(profile, kind, tick, identity, variables) {
         return "reference is missing " + kind
             + " tick " + tick.to_string() + " identity " + identity;
     }
-    let fields = variables.keys();
-    fields.sort();
+    let fields = [];
+    for row in actual_fields { fields.push(row.split("=")[0]); }
     let expected_fields = expected.value.split(";");
     if fields.len() != expected_fields.len() {
         let expected_names = [];
@@ -425,7 +441,7 @@ fn modelica_reference_failure(profile, kind, tick, identity, variables) {
     }
     for i in 0..fields.len() {
         let field = fields[i];
-        let actual = field + "=" + state_scalar(variables[field]);
+        let actual = actual_fields[i];
         if actual != expected_fields[i] {
             return "Modelica state differs at tick " + tick.to_string()
                 + " identity " + identity + " variable " + field
@@ -456,20 +472,25 @@ fn sample_reference_failure(profile, tick, sample, rover_count,
     failure
 }
 
-fn articulated_reference_failure(profile, tick, records, rover_paths, kind) {
-    if records.len() != rover_paths.len() {
-        return "articulated rover roster changed at tick " + tick.to_string();
-    }
+fn read_articulated_checkpoint(rover_paths, rovers, tick, profile, kind) {
+    if rover_paths.len() != rovers.len() { return #{ valid: false, failure: "articulated rover roster changed" }; }
     let failure = "";
-    for record in records {
+    let valid = true;
+    for i in 0..rovers.len() {
+        let record = trace_articulated_body_state(tick, rover_paths[i], rovers[i]);
         if record.valid != true {
-            return "no articulated body state was available for " + record.rover_path;
+            valid = false;
+            if failure == "" { failure = "no articulated body state was available for " + record.rover_path; }
+        } else {
+            emit("DETERMINISM_STATE_EVIDENCE", #{ profile: profile,
+                kind: kind, tick: tick.to_string(), identity: record.rover_path, value: record.bodies });
+            if profile != "" {
+                let current = reference_value_failure(profile, kind, tick, record.rover_path, record.bodies);
+                if failure == "" && current != "" { failure = current; }
+            }
         }
-        let current = reference_value_failure(
-            profile, kind, tick, record.rover_path, record.bodies);
-        if failure == "" && current != "" { failure = current; }
     }
-    failure
+    #{ valid: valid, failure: failure }
 }
 
 fn deterministic_profile_selection(rover_count) {
@@ -538,6 +559,9 @@ fn deterministic_profile_selection(rover_count) {
             "reference profile metadata does not match the requested run"
         },
         final_tick: reference.final_tick,
+        parameters: #{ rover_count: rover_count, scene: scene,
+            thread_setting: thread_setting, jitter: parameters.jitter,
+            seed: parameters.seed, tick_hz: parameters.tick_hz },
     }
 }
 
@@ -550,6 +574,7 @@ fn on_start(me, ctx) {
     this.distance = [];
     this.targets = [];
     this.deterministic_trace_ticks = [];
+    this.capture_parameters = ();
     this.determinism_profile = "";
     this.determinism_comparison_valid = false;
     this.determinism_comparison_failure = "";
@@ -674,6 +699,7 @@ fn on_start(me, ctx) {
 
     let profile_selection = deterministic_profile_selection(this.rovers.len());
     this.determinism_profile = profile_selection.profile;
+    this.capture_parameters = profile_selection.parameters;
     this.determinism_comparison_valid = profile_selection.valid;
     this.determinism_comparison_failure = profile_selection.failure;
     this.determinism_final_tick = profile_selection.final_tick;
@@ -751,14 +777,11 @@ fn on_tick(me, ctx) {
         }
     }
     if scenario_tick == 11 || scenario_tick == 80 {
-        let articulated = [];
-        for i in 0..this.rovers.len() {
-            articulated.push(trace_articulated_body_state(
-                scenario_tick, this.rover_paths[i], this.rovers[i]));
-        }
+        let articulated = read_articulated_checkpoint(this.rover_paths, this.rovers,
+            scenario_tick, this.determinism_profile, "articulated");
+        this.deterministic_trace_valid = this.deterministic_trace_valid && articulated.valid;
         if this.determinism_profile != "" {
-            let failure = articulated_reference_failure(this.determinism_profile,
-                scenario_tick, articulated, this.rover_paths, "articulated");
+            let failure = articulated.failure;
             this.determinism_comparison_valid = this.determinism_comparison_valid
                 && failure == "";
             if this.determinism_comparison_failure == "" {
@@ -863,20 +886,20 @@ fn on_tick(me, ctx) {
         }
     }
     this.final_stage_tick = scenario_tick;
-    let final_articulated = [];
-    for i in 0..this.rovers.len() {
-        final_articulated.push(trace_articulated_body_state(
-            scenario_tick, this.rover_paths[i], this.rovers[i]));
-    }
+    let final_articulated = read_articulated_checkpoint(this.rover_paths, this.rovers,
+        scenario_tick, this.determinism_profile, "final_articulated");
+    this.deterministic_trace_valid = this.deterministic_trace_valid && final_articulated.valid;
     if this.determinism_profile != "" {
-        let failure = articulated_reference_failure(this.determinism_profile,
-            scenario_tick, final_articulated, this.rover_paths, "final_articulated");
+        let failure = final_articulated.failure;
         this.determinism_comparison_valid = this.determinism_comparison_valid
             && failure == "";
         if this.determinism_comparison_failure == "" {
             this.determinism_comparison_failure = failure;
         }
     }
+    emit("DETERMINISM_PROFILE_EVIDENCE", #{ profile: this.determinism_profile,
+        parameters: this.capture_parameters, first_behavior_tick: this.deterministic_trace_ticks[1].to_string(),
+        final_tick: scenario_tick.to_string(), effective_compute_width: this.physics_compute_threads });
     let checks = [];
     checks.push(t_true(this.on_start_tick == 0,
         "on_start ran at the shared global SimTick zero baseline"));
@@ -922,6 +945,7 @@ fn on_tick(me, ctx) {
             "rover " + i + " did not move under the shared patrol command"));
     }
     for rover in this.rovers { modelica_waypoint_stop(rover); }
+    emit("DETERMINISM_VERDICT_EVIDENCE", #{ profile: this.determinism_profile, checks: checks });
     report_verdict(checks, "MULTI-ROVER STRESS", "MULTI_ROVER_STRESS");
     this.phase = "done";
 }

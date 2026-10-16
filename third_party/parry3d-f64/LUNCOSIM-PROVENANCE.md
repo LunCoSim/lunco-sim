@@ -72,3 +72,19 @@ queries exactly. No previous contact or polytope becomes a new query's geometry.
 Dependency updates must pass native overlapping-cylinder, finite-feature and
 witness tests, plus the production drive, continuous-contact, landing-impact
 and rover-leg gates. Cross-platform replay remains a separate verification gate.
+
+Tetrahedral containment and EPA seed winding use adaptive `robust::orient3d`
+predicates. The maintained GeoRust dependency already supplies orientation to
+Spade in this graph; no suitable exact predicate exists in Parry's utility
+owner. Face normals reuse `Triangle::robust_scaled_normal`. These owners keep
+thin, widely spaced support simplices consistent across GJK reduction and EPA
+admission. Exact large-triangle/cylinder and large-cuboid/cylinder regressions
+exercise the production continuous-contact geometry, including touching and
+separated witnesses. No tolerance widening or alternate collision query is used.
+
+Triangle point projection uses its squared face area as the barycentric
+denominator. A degenerate 3D triangle has no solid interior: its projection is
+the nearest native segment witness, with the corresponding vertex or edge
+identity. The continuous consumer's collinear-triangle test verifies both solid
+flags return finite boundary geometry; physical_rover_controls exercises this
+path through real native contact and joint solves.

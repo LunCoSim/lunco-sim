@@ -531,7 +531,7 @@ fn camera_enum(spec, field, allowed, path, label) {
     let value = spec[field];
     if value == () { return #{ ok: true, value: () }; }
     if type_of(value) != "string" || !allowed.contains(value) {
-        return failure("scene_recipe", path + ": " + label + " must be one of " + allowed.join(", "));
+        return failure("scene_recipe", path + ": " + label + " must be one of " + allowed.to_string());
     }
     #{ ok: true, value: value }
 }

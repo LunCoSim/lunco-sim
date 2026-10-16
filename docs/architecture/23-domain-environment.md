@@ -194,14 +194,17 @@ co-simulation consumer faults. The authoring action is to connect one valid
 source id to the generic target triplet or resolve the lint finding before
 running the model.
 
-The shared communications antenna follows that rule. Its controller and hinge
-joints are inactive, and its nested links are non-dynamic by default. A scene
-that points the dish must compose a named `LunCoDirectionTargetAPI` asset,
-connect that target's probe outputs to `target_mount_x/y/z`, and explicitly
-activate the controller, joints, and link bodies. A scene with no selected
-station keeps the passive default and does not need a `SolarSystem` for the
-antenna. A station whose authored position is relative to a celestial body
-still needs the scene's celestial composition to resolve that position.
+The passive antenna, `components/comms/antenna.usda`, contains geometry and its
+directional endpoint, with no nested rigid bodies, joints or controller. It
+follows its parent through the ordinary hierarchy. The articulated
+`components/comms/antenna_tracking.usda` references that geometry and owns its
+two rigid links, hinge joints, mass properties and `AntennaTrackerController`.
+A pointing scene references this component and connects a named
+`LunCoDirectionTargetAPI` probe directly to the controller's
+`inputs:target_mount_x/y/z`. Those inputs have no target defaults. The plain
+antenna Xform does not duplicate this interface. A passive antenna needs no
+station or `SolarSystem`; a target positioned relative to a celestial body
+still requires that scene's celestial composition.
 
 ## Invariants
 

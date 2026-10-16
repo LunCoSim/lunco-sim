@@ -2,46 +2,22 @@
 (
     defaultPrim = "AntennaMountTest"
     upAxis = "Y"
-    metersPerUnit = 1
-    doc = "One antenna component mounted on three host kinds with a passive control: active mounts must attach and slew to DSS Goldstone."
+    metersPerUnit = 1.0
+    documentation = "One antenna component mounted on three host kinds with a passive control: active mounts must attach and slew to DSS Goldstone."
 )
 
-# ── Scene: Antenna Mount Test ────────────────────────────────────────────────
-#
-# `components/comms/antenna.usda` owns BOTH its hinges and mounts by ANCESTRY:
-# its `YawJoint` names its own root, a plain `Xform`, which resolves to the
-# nearest ancestor rigid body — whatever it happens to be parented under. The
-# host authors a `translate` and nothing else.
-#
-# This fixture checks the same component on three host kinds and keeps one
-# passive control:
-#
-#   Rover        dynamic body, antenna is a direct child        (skid_rover)
-#   Mast         STATIC body, antenna is a SIBLING of the tower (comms_mast)
-#   Bare         a body this scene declares itself, no catalogue host at all
-#
-# The mast checks that the antenna joint resolves its mount through the declared
-# body relationship. Each active mount explicitly selects DSS Goldstone; the
-# parked control retains the component's no-target default.
-# `Bare` is the anti-catalogue case: proof the component needs NOTHING from a
-# host but a body to hang under, so a scene can mount one on a prim it invents.
-#
-# ── The control ──────────────────────────────────────────────────────────────
-#
-# `Parked` mounts the same component on a dynamic body with no target connection.
-# It confirms the shared component stays inert until a scene opts in.
 def Xform "AntennaMountTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "The antenna component on four host kinds plus a parked control — the mount contract, end to end."
+    documentation = "The antenna component on four host kinds plus a parked control — the mount contract, end to end."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
-    # Celestial content is OPT-IN per scene, and this scene needs it to place the
-    # named Goldstone ground station. Antennas below select that station through
-    # explicit direction connections.
+    double lunco:anchor:lat = -85.0
+    double lunco:anchor:lon = 60.0
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
@@ -52,123 +28,130 @@ def Xform "AntennaMountTest" (
     )
     {
     }
-
-    # This lunar site supplies a nontrivial mount frame for the Goldstone target;
-    # the verdict below requires a measurable yaw slew on every active mount.
-    double lunco:anchor:lat = -85.0
-    double lunco:anchor:lon = 60.0
-    double lunco:anchor:height = 0.0
-    int lunco:anchor:body = 301
-
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
-        double3 xformOp:translate = (-14.0, 0.5, 0)
+        double3 xformOp:translate = (-14.0, 0.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        over "Comms"
+        over "Comms" (
+            references = @lunco://components/comms/antenna_tracking.usda@</CommsAntenna>
+        )
         {
-            double inputs:target_mount_x.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_x>
-            double inputs:target_mount_y.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_y>
-            double inputs:target_mount_z.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_z>
-            over "AntennaTrackerController" (active = true) { }
-            over "YawJoint" (active = true) { }
-            over "ElevationJoint" (active = true) { }
+            over "AntennaTrackerController"
+            {
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </AntennaMountTest/Rover/Comms/Environment.outputs:dss_goldstone_mount_z>
+            }
+            over "YawJoint"
+            {
+            }
+            over "ElevationJoint"
+            {
+            }
             over "YawHead"
             {
-                bool physics:rigidBodyEnabled = true
-                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+                over "DishGimbal"
+                {
+                }
             }
         }
     }
-
-    # (No lander. It mounts the same antenna the same way — a direct child of a
-    # dynamic body, which `Rover` already covers — and it drags in the plume,
-    # landing-leg and light wires, which target shader parameters no build can
-    # claim: `ShaderLook::driven` is populated nowhere outside its own unit test,
-    # so those wires never land and the harness fails the scene on a dead
-    # subsystem this test is not about. Put the lander back when that is fixed.)
-
     def Xform "Mast" (
         prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
     )
     {
-        double3 xformOp:translate = (14.0, 0, 0)
+        double3 xformOp:translate = (14.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        over "Antenna"
+        over "Antenna" (
+            references = @lunco://components/comms/antenna_tracking.usda@</CommsAntenna>
+        )
         {
-            double inputs:target_mount_x.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_x>
-            double inputs:target_mount_y.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_y>
-            double inputs:target_mount_z.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_z>
-            over "AntennaTrackerController" (active = true) { }
-            over "YawJoint" (active = true) { }
-            over "ElevationJoint" (active = true) { }
+            over "AntennaTrackerController"
+            {
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </AntennaMountTest/Mast/Antenna/Environment.outputs:dss_goldstone_mount_z>
+            }
+            over "YawJoint"
+            {
+            }
+            over "ElevationJoint"
+            {
+            }
             over "YawHead"
             {
-                bool physics:rigidBodyEnabled = true
-                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+                over "DishGimbal"
+                {
+                }
             }
         }
     }
-
-    # A host this scene invents: a plain static box, nothing from the catalogue.
-    # If the antenna needs anything of a host beyond "be a body", this is where
-    # it shows.
     def Cube "Bare" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, 0.5, 14.0)
+        double3 xformOp:translate = (0.0, 0.5, 14.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.4, 0.42, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.41999998688697815, 0.44999998807907104)]
         bool physics:rigidBodyEnabled = false
-
         def "Antenna" (
-            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+            references = @lunco://components/comms/antenna_tracking.usda@</CommsAntenna>
         )
         {
-            double3 xformOp:translate = (0, 0.5, 0)
+            double3 xformOp:translate = (0.0, 0.5, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            double inputs:target_mount_x.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_x>
-            double inputs:target_mount_y.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_y>
-            double inputs:target_mount_z.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_z>
-            over "AntennaTrackerController" (active = true) { }
-            over "YawJoint" (active = true) { }
-            over "ElevationJoint" (active = true) { }
+            over "AntennaTrackerController"
+            {
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </AntennaMountTest/Bare/Antenna/Environment.outputs:dss_goldstone_mount_z>
+            }
+            over "YawJoint"
+            {
+            }
+            over "ElevationJoint"
+            {
+            }
             over "YawHead"
             {
-                bool physics:rigidBodyEnabled = true
-                over "DishGimbal" { bool physics:rigidBodyEnabled = true }
+                over "DishGimbal"
+                {
+                }
             }
         }
     }
-
-    # ── THE CONTROL ── same component, same kind of host, joint switched off.
     def Cube "Parked" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, 0.5, 20.0)
+        double3 xformOp:translate = (0.0, 0.5, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.45, 0.35, 0.35)]
+        color3f[] primvars:displayColor = [(0.44999998807907104, 0.3499999940395355, 0.3499999940395355)]
         bool physics:rigidBodyEnabled = false
-
         def "Antenna" (
             prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
         )
         {
-            double3 xformOp:translate = (0, 0.5, 0)
+            double3 xformOp:translate = (0.0, 0.5, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-
         }
     }
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "antenna-mount"
-
         def Scope "Test" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

@@ -32,7 +32,7 @@ fn simulation_dependencies(me, ctx) {
     let lander = find_path(LANDER);
     if lander >= 0 { entity_reads.push(lander); }
     #{
-        modelica_entities: [],
+        modelica_entities: [lander, find_path(LANDER + "/GNC")],
         entity_reads: entity_reads,
         entity_writes: [],
         query_reads: [],

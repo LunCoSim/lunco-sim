@@ -1,5 +1,7 @@
 //! Stable ordering for XPBD constraints that mutate shared solver bodies.
 
+use lunco_core::AppSceneExt;
+
 use std::time::Duration;
 
 use crate::order::{ordered_physics_entities, report_invalid_physics_order};
@@ -107,9 +109,9 @@ impl Plugin for DeterministicJointSolverPlugin {
         );
         remove_native_joint_systems(app);
         app.register_type::<JointDisabled>();
-        app.init_resource::<PhysicsHolds>()
-            .init_resource::<JointSolverOrder>()
-            .init_resource::<PhysicsJointPositionScope>()
+        app.init_scene_resource::<PhysicsHolds>()
+            .init_scene_resource::<JointSolverOrder>()
+            .init_scene_resource::<PhysicsJointPositionScope>()
             .add_systems(
                 PhysicsSchedule,
                 prepare_joint_solver_order
@@ -589,3 +591,7 @@ fn report_joint_solver_fault(
         error!("[physics] stopping the step: {detail}");
     }
 }
+
+impl lunco_core::SceneResource for JointSolverOrder {}
+
+impl lunco_core::SceneResource for PhysicsJointPositionScope {}

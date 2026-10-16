@@ -103,7 +103,7 @@ def Xform "SandboxRampPlacement" (
     {
         custom string lunco:scenario = "sandbox-ramp-placement"
         def Scope "Test" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -111,11 +111,11 @@ def Xform "SandboxRampPlacement" (
         }
     }
     def Cube "ZSupport" (
-        prepend apiSchemas = "PhysicsCollisionAPI"
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         custom double3 xformOp:translate = (1000.0, 4.0, 0.0)
-        custom token[] xformOpOrder = ["xformOp:translate", "xformOp:scale", "xformOp:rotateXYZ"]
+        custom token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         custom double3 xformOp:scale = (8.0, 0.5, 30.0)
         bool physics:collisionEnabled = true
         custom double3 xformOp:rotateXYZ = (0.0, 0.0, 17.1887)

@@ -198,6 +198,11 @@ the hard thing to keep.
 
 ## 4. ECS-native cosim
 
+Initial support validation consumes the mobility owner's exact footprint.
+Its rest probe distance is non-negative: a rigid wheel mount has zero travel,
+with the probe origin at the tire contact. Negative or non-finite distances
+remain invalid and hold admission with an owner diagnostic.
+
 The substrate is **already ECS**, and [`14-simulation-layers.md`](14-simulation-layers.md)
 already states the principle "**Participants are ECS entities**." Make the Modelica
 stepper a full ECS citizen by mapping every part of a model onto ECS:
@@ -376,7 +381,12 @@ and the simulation clock—not from turning an adaptive session's nominal `dt` i
 a promise. The profile currently requires continuous, event-free,
 external-table-free models. Stability and bounded-state analysis are still model
 responsibilities; a future linearly-implicit backend may extend the profile for
-stiffer systems.
+stiffer systems. Rumoca's Model Exchange host owns initialization, component
+input transactions, algebraic refresh and observations. The fixed solver is a
+`MeIntegratorBackend` plugin; it evaluates derivatives only through the host's
+retained capability. Initial equations settle before its first stage, and a
+cubic continuous extension samples the four retained stages without new
+component evaluations.
 
 **The property limitations** (compiler-enforced — the profile's "type system"):
 

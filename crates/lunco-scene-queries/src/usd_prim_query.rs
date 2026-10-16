@@ -120,8 +120,58 @@ fn attr_api_value(
     let Some(value) = view.attr_value(prim, name) else {
         return Ok(ApiValue::Unit);
     };
-    lunco_api_core::api_value_from_serializable(&value)
+    usd_value_api_value(&value)
         .map_err(|error| format!("QueryUsdPrim: cannot serialize `{prim}.{name}`: {error}"))
+}
+
+/// Half values use a bit-preserving u16 serde representation. The query ABI
+/// exposes numeric values instead, widened exactly to f64, including nested
+/// arrays and dictionaries. Other native USD serialization remains unchanged.
+fn usd_value_api_value(
+    value: &openusd::sdf::Value,
+) -> Result<ApiValue, lunco_api_core::ApiValueError> {
+    use openusd::sdf::Value;
+    macro_rules! half_array {
+        ($values:expr, $variant:ident) => {
+            $values
+                .iter()
+                .map(|value| usd_value_api_value(&Value::$variant(*value)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(ApiValue::Array)
+        };
+    }
+    match value {
+        Value::Half(value) => Ok(ApiValue::Float(f64::from(*value))),
+        Value::Quath(value) => Ok(api_value!([
+            f64::from(value.w),
+            f64::from(value.x),
+            f64::from(value.y),
+            f64::from(value.z)
+        ])),
+        Value::Vec2h(value) => Ok(api_value!([f64::from(value.x), f64::from(value.y)])),
+        Value::Vec3h(value) => Ok(api_value!([
+            f64::from(value.x),
+            f64::from(value.y),
+            f64::from(value.z)
+        ])),
+        Value::Vec4h(value) => Ok(api_value!([
+            f64::from(value.x),
+            f64::from(value.y),
+            f64::from(value.z),
+            f64::from(value.w)
+        ])),
+        Value::HalfVec(values) => half_array!(values, Half),
+        Value::QuathVec(values) => half_array!(values, Quath),
+        Value::Vec2hVec(values) => half_array!(values, Vec2h),
+        Value::Vec3hVec(values) => half_array!(values, Vec3h),
+        Value::Vec4hVec(values) => half_array!(values, Vec4h),
+        Value::Dictionary(values) | Value::UnregisteredDictionary(values) => values
+            .iter()
+            .map(|(name, value)| usd_value_api_value(value).map(|value| (name.clone(), value)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ApiValue::Map),
+        _ => lunco_api_core::api_value_from_serializable(value),
+    }
 }
 
 fn is_visual_geometry(type_name: &str) -> bool {
@@ -803,6 +853,51 @@ fn is_mounted_document_stage(
 mod query_generation_tests {
     use super::can_read_applied_stage_generation;
     #[test]
+    fn half_values_are_numeric_through_arrays_and_dictionaries() {
+        use openusd::{gf, sdf::Value};
+        let h = gf::f16::from_f64(1.5);
+        let v = gf::Vec3h { x: h, y: h, z: h };
+        let q = gf::Quath {
+            w: h,
+            x: h,
+            y: h,
+            z: h,
+        };
+        let native = Value::Dictionary(
+            [
+                ("scalar".to_owned(), Value::Half(h)),
+                ("samples".to_owned(), Value::HalfVec(vec![h])),
+                ("vectors".to_owned(), Value::Vec3hVec(vec![v])),
+                ("rotations".to_owned(), Value::QuathVec(vec![q])),
+                ("empty".to_owned(), Value::HalfVec(Vec::new())),
+            ]
+            .into(),
+        );
+        let value = super::usd_value_api_value(&native)
+            .expect("half values have a numeric API representation");
+        assert_eq!(
+            value.get("scalar"),
+            Some(&lunco_api_core::ApiValue::Float(1.5))
+        );
+        assert_eq!(
+            value.get("samples"),
+            Some(&lunco_api_core::api_value!([1.5]))
+        );
+        assert_eq!(
+            value.get("vectors"),
+            Some(&lunco_api_core::api_value!([[1.5, 1.5, 1.5]]))
+        );
+        assert_eq!(
+            value.get("rotations"),
+            Some(&lunco_api_core::api_value!([[1.5, 1.5, 1.5, 1.5]]))
+        );
+        assert_eq!(
+            value.get("empty"),
+            Some(&lunco_api_core::ApiValue::Array(Vec::new()))
+        );
+    }
+
+    #[test]
     fn explicit_queries_accept_a_stage_applied_ahead_of_ecs_cursor() {
         assert!(can_read_applied_stage_generation(8, Some(8), true));
     }
@@ -1043,8 +1138,7 @@ fn execute_query_paths(
     let live_document = if doc.is_none() {
         live_stage.and_then(|stage| {
             let backed = world.get_resource::<DocBackedTwinScenes>()?;
-            let asset_server = world.get_resource::<AssetServer>()?;
-            scene_document_for(backed, asset_server, stage)
+            scene_document_for(backed, stage)
         })
     } else {
         None
@@ -1363,7 +1457,12 @@ fn read_prim_from_reader(
     };
 
     let type_name = view.type_name(prim).unwrap_or_default();
-    let names = requested.clone().unwrap_or_else(|| view.attr_names(prim));
+    let names = requested.clone().unwrap_or_else(|| {
+        view.attr_names(prim)
+            .into_iter()
+            .filter(|name| view.has_authored_attribute(prim, name))
+            .collect()
+    });
     let mut attrs = Vec::new();
     for name in names {
         attrs.push((name.clone(), attr_api_value(view, prim, &name)?));
