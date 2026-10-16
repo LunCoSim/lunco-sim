@@ -297,49 +297,131 @@ pub fn scan_library(dir: &Path) -> Vec<String> {
     rels
 }
 
-/// Read all files with `extension` below a caller-selected native source root.
+/// Inventory every file below a caller-selected native source root.
 ///
 /// Asset consumers use this instead of implementing another recursive
 /// filesystem walk. The returned paths are stable and absolute on native so
-/// diagnostics retain the same URI that the source-root owner supplied. A
-/// read failure is reported separately from the files that did load; callers
-/// can therefore keep the source-root admission atomic while still surfacing
-/// every failed path.
+/// diagnostics retain the same URI that the source-root owner supplied.
+/// Traversal and identity failures are reported separately; callers admit the
+/// inventory atomically while surfacing every failed path.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_files_with_extension(
-    root: &Path,
-    extension: &str,
-) -> (Vec<(String, String)>, Vec<String>) {
+pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
     let mut files = Vec::new();
     let mut diagnostics = Vec::new();
+    if !root.is_absolute() {
+        return (
+            files,
+            vec![format!(
+                "source root must be an admitted absolute directory: {}",
+                root.display()
+            )],
+        );
+    }
+    let mut visited = std::collections::HashSet::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
+        let identity = match lunco_storage::canonicalize_file_path(&dir) {
+            Ok(identity) => identity,
+            Err(error) => {
+                diagnostics.push(format!("cannot identify {}: {error}", dir.display()));
+                continue;
+            }
+        };
+        if !visited.insert(identity) {
+            diagnostics.push(format!(
+                "source directory is reachable more than once: {}",
+                dir.display()
+            ));
+            continue;
+        }
+        let entries = match lunco_storage::read_directory_sync(&dir) {
             Ok(entries) => entries,
             Err(error) => {
                 diagnostics.push(format!("cannot read {}: {error}", dir.display()));
                 continue;
             }
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case(extension))
-            {
-                match lunco_assets_core::read_asset_file_string(&path) {
-                    Ok(source) => files.push((path.display().to_string(), source)),
-                    Err(error) => {
-                        diagnostics.push(format!("cannot read {}: {error}", path.display()));
+        for path in entries {
+            let relative = match path.strip_prefix(root) {
+                Ok(relative) => relative,
+                Err(error) => {
+                    diagnostics.push(format!(
+                        "source entry {} has no owning root: {error}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            let resolved = match lunco_assets_core::existing_path_within_root(root, relative) {
+                Ok(Some(resolved)) => resolved,
+                Ok(None) => {
+                    diagnostics.push(format!("source entry disappeared: {}", path.display()));
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(format!("cannot resolve {}: {error}", path.display()));
+                    continue;
+                }
+            };
+            match lunco_storage::entry_kind_file_sync(&resolved) {
+                Ok(lunco_storage::StorageEntryKind::Directory) => stack.push(path),
+                Ok(lunco_storage::StorageEntryKind::File) => {
+                    if !visited.insert(resolved) {
+                        diagnostics.push(format!(
+                            "source file is reachable more than once: {}",
+                            path.display()
+                        ));
+                        continue;
                     }
+                    if path.to_str().is_none() {
+                        diagnostics.push(format!(
+                            "source path cannot be represented as a UTF-8 identity: {}",
+                            path.display()
+                        ));
+                        continue;
+                    }
+                    files.push(path);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    diagnostics.push(format!("cannot inspect {}: {error}", path.display()))
                 }
             }
         }
     }
-    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files.sort();
+    diagnostics.sort();
+    (files, diagnostics)
+}
+
+/// Read selected UTF-8 sources from the common containment-checked inventory.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_files_with_extension(
+    root: &Path,
+    extension: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let (paths, mut diagnostics) = inventory_files(root);
+    let mut files = Vec::new();
+    for path in paths.into_iter().filter(|path| {
+        path.extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    }) {
+        // Inventory is an identity snapshot. Byte reads revalidate containment
+        // against the current filesystem and consume the resolved path.
+        let source = path
+            .strip_prefix(root)
+            .map_err(std::io::Error::other)
+            .and_then(|relative| {
+                lunco_assets_core::existing_path_within_root(root, relative)?
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+            })
+            .and_then(|resolved| lunco_assets_core::read_asset_file_string(&resolved));
+        match source {
+            Ok(source) => files.push((lunco_assets_path::slashed(&path), source)),
+            Err(error) => diagnostics.push(format!("cannot read {}: {error}", path.display())),
+        }
+    }
     diagnostics.sort();
     (files, diagnostics)
 }
@@ -744,6 +826,49 @@ mod tests {
                 .map(|asset| asset.rel.as_str())
                 .collect::<Vec<_>>(),
             vec!["vessels/rovers/skid_rover.usda", "shaders/regolith.wgsl"]
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod source_root_contract_tests {
+    use super::*;
+    #[test]
+    fn asset_resolution_contract() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("literal # %.mo"), "model A end A;").unwrap();
+        let (files, errors) = read_files_with_extension(&root, "mo");
+        assert_eq!(files.len(), 1);
+        assert!(errors.is_empty());
+        std::fs::write(
+            folder.path().join("outside.mo"),
+            "model Outside end Outside;",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(folder.path().join("outside.mo"), root.join("escape.mo"))
+            .unwrap();
+        std::os::unix::fs::symlink(&root, root.join("cycle")).unwrap();
+        let (files, errors) = read_files_with_extension(&root, "mo");
+        assert_eq!(files.len(), 1);
+        assert!(
+            errors.iter().any(|error| error.contains("outside")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("more than once")),
+            "{errors:?}"
+        );
+        assert!(read_files_with_extension(Path::new("relative"), "mo").1[0].contains("absolute"));
+        use std::os::unix::ffi::OsStringExt;
+        let invalid_name = std::ffi::OsString::from_vec(b"invalid\xff.mo".to_vec());
+        std::fs::write(root.join(invalid_name), "model Invalid end Invalid;").unwrap();
+        assert!(
+            read_files_with_extension(&root, "mo")
+                .1
+                .iter()
+                .any(|error| error.contains("UTF-8 identity"))
         );
     }
 }

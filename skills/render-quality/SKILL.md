@@ -55,10 +55,40 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    isolated separately. The High Gaussian filter uses normal bias 4.0,
    scaled by cascade texel size; keep its metre-valued depth bias and the
    physical Sun unchanged.
+   Inspect the live light bias as well as the preset: saved Graphics values
+   override changed preset defaults. For diagonal boundaries in close grain,
+   isolate the raw procedural noise from lighting and geometry. Shared lattice
+   corners must be identical; run the `noise_continuity` graphics fixture for
+   the GPU value/gradient contract. Reload shader libraries with `ReloadShader`
+   using an empty path so imported modules and their consumers refresh together.
 3. Check the authored light and shadow contract, GPU shadow-resource status,
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   For terrain shadows that separate at LOD transitions, verify that the
+   authored vertex stage runs in both forward and `PREPASS_PIPELINE` variants.
+   Use Bevy's `lod_view_world_position` for morph distance in shadow views;
+   their ordinary view origin belongs to the light. Keep the shared material
+   uniform bound in depth-only passes. Run the `vertex_shadow_alignment`
+   graphics fixture: both lit-vacated and shadowed-displaced probes must appear,
+   with no red disagreement pixels.
+   Enable `DepthPrepass`, `NormalPrepass`, and `MotionVectorPrepass` through the
+   existing reflected `add` interface when checking optional camera passes.
+   Declare the camera dependency in the scenario. The terrain appearance and
+   vertex-shadow fixtures exercise these variants; shader compilation errors
+   fail the graphics gate. Motion-vector view flags occur on forward pipelines
+   too, so previous-position varyings/bindings need the prepass guard as well.
+   Include the separate diagnostic material: run
+   `scripts/api/test_terrain_overlay_prepasses.py --output <evidence-dir>`
+   (add `--windowed` for a desktop view). It exercises slope, LOD-depth, and
+   restored production rendering with all prepasses active. Both vertex stages
+   use the shared `terrain_morph_weight` law and the viewing camera's LOD origin.
+   Reject GPU validation errors in the process log even when domain
+   `RuntimeDiagnostics` is clear; a new screenshot can contain a retained frame
+   after GPU submission fails.
+   For scaled terrain lighting, run `terrain_normal_transform`: world-to-local
+   normals use the transpose of the local-to-world linear transform, rather
+   than the inverse used for positions.
    For measured shadow cost, use the diagnostics-enabled render owner's four
    `lunco_shadow_*` GPU spans described in `performance-profiling`. Confirm
    timestamp coverage and keep profiler attribution separate from unprofiled
@@ -66,13 +96,32 @@ any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
    Static and streamed terrain remain native CSM casters and receivers so
    terrain shades objects and objects shade ground. The heightfield cache
    supplies ground self-shadow; cached tiles use `csm_far = 0` to avoid a
-   fragment march at every distance. For panel power, read the wired probe's
-   `sun_visibility`, `sun_irradiance_w_m2` and panel `available_power_w`.
+   fragment march at every distance. The `shadow_cache_sampling` fixture checks
+   the GPU cache's endpoint-inclusive grid, including fractional interpolation
+   and border clamping, plus the current below-horizon gate inside CSM range.
+   Keep a committed cache bound across night; run the `sunrise_shadow_cache`
+   editor fixture to verify repeated crossings, upload acknowledgements and one
+   resident GPU allocation. Pending bakes retain a sampled presentation value;
+   they must not block fixed physics. CPU light/cache agreement alone does not
+   prove shader uniform freshness. Run `scripts/api/test_sun_material_precision.py`
+   with an isolated `--output` directory; repeat for
+   `--scene assets/scenes/tests/sun_material_precision_dem.usda` to cover streamed
+   materials. `--windowed` uses the same gate in a desktop view. The GPU compares
+   horizon signs with the native light and tests zero/positive angular radius.
+   Retain daytime coalescing while always publishing local horizon crossings;
+   static `HorizonMap` owners must enter the same material feed as DEM owners.
+   Cache UVs must map
+   the CPU bake nodes to texel centres before filtering.
+   For panel power, read the wired probe's `sun_visibility`,
+   `sun_irradiance_w_m2` and panel `available_power_w`.
    Physical samples use the f64 terrain oracle and selected optical proxies.
    See `docs/architecture/terrain-layered-rendering.md` for the production
    gates. Do not infer whole-body night occlusion from a finite DEM.
    The layered shader keeps measured landform normals and adds filtered
-   sub-metre clump/grain normals; unresolved slopes contribute to roughness.
+   sub-metre clump/grain normals. Each noise octave fades independently between
+   two and four pixels per period, and its removed slope variance contributes
+   to roughness. Inspect the fine-grain band as well as broad clumps in close
+   views; a whole-stack cutoff can hide resolvable grain while leaving blobs.
    Relief remaps have continuous slopes at their clipping thresholds. The
    DEM normal-map weight selects the landform band without erasing the grain
    tangent slope; use full weight when the measured map owns those slopes.
@@ -147,7 +196,10 @@ marker into another frame. Modelica and Avian keep their ordinary fixed-step
 cadence while their celestial-derived inputs change from the shared sample.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
-the behavior. The direction is in the active camera's view coordinates, the
+the behavior. Radius comes from the selected light's authored `inputs:angle`,
+shared with terrain penumbra. Opaque scene depth clips the disc independently
+of terrain shadow visibility; run `sun_disc_occlusion` for authored radius and
+half-disc occlusion. The direction is in the active camera's view coordinates, the
 same frame as the shader's view rays. `SunRenderState` comes from the
 generic `sun` direction resolver after the scene light is finalized through
 BigSpace. `SunState` supplies irradiance only. The renderer projects the
@@ -170,7 +222,11 @@ collar starts on the measured crop boundary and blends its edge profile to the
 matching sphere outside the crop. Derive its width from measured crop-edge
 relief and one-sided slope, using a 0.60 relief-grade sizing target.
 Continue the slope over one posting and fade the single nearest boundary
-signal toward the sphere. Geometry and material fade share one width sized from maximum edge relief;
+signal toward the sphere over at least one full crop width. A narrow exterior
+can turn broad edge relief into a steep artificial dark rim. Check the
+`terrain_surface_continuation` graphics verdict and ground views with the
+physical Sun and shadow settings unchanged. Geometry and material fade share
+one width sized from crop scale and maximum edge relief;
 each corner contributes once. Preserve the native inner posting lattice, then
 reduce exterior ring density to the outer boundary with at least 32 segments per side. Queries and colliders remain bounded to the DEM, whose samples
 stay unchanged. Globe tiles clip against the collar's outer boundary with
@@ -208,8 +264,10 @@ Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 budget does not by itself prove that detail was refused. High currently uses
 depth 9 with a 256-tile budget and 65 vertices per tile (about 3 cm per
 interval at the deepest level over a 1 km crop). The shared terrain kernel
-evaluates bump gradients analytically and transfers unresolved slope variance
-into roughness. Apply lunar
+evaluates bump gradients analytically, filters each octave by its pixel
+footprint, and transfers unresolved slope variance into roughness. The
+`noise_continuity` GPU fixture checks fully resolved, partially resolved, and
+unresolved spectra in both 2D and 3D. Apply lunar
 photometry to the engine-selected Sun contribution only; putting it in
 `base_color` also changes fill and earthshine.
 

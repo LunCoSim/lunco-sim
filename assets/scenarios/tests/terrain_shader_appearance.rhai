@@ -1,11 +1,12 @@
 // The image and the production render diagnostics are the graphics verdict.
 // The camera is authored in USD so near/middle/far coverage is stable and this
-// scenario carries no vehicle-specific or renderer-only behavior.
+// scenario also enables the native depth, normal, and motion-vector passes.
 const TEST_KIND = "graphics";
 const WAIT_S = 3.0;
+const CAMERA = "/TerrainShaderAppearance/TerrainCamera";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+    #{ modelica_entities: [], entity_reads: [find_path(CAMERA)], entity_writes: [find_path(CAMERA)],
        query_reads: ["TerrainLodStatus"], required_inputs: [] }
 }
 
@@ -15,6 +16,12 @@ fn zero_u64(value) { value.to_string() == "0" }
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
+    let camera = find_path(CAMERA);
+    report_verdict([
+        t_true(add(camera, "DepthPrepass"), "could not enable native depth prepass"),
+        t_true(add(camera, "NormalPrepass"), "could not enable native normal prepass"),
+        t_true(add(camera, "MotionVectorPrepass"), "could not enable native motion prepass"),
+    ], "TERRAIN PREPASS VARIANTS", "TERRAIN_PREPASS_VARIANTS");
     notify_kind("Terrain shader appearance: capturing settled near/middle/far relief.", "info");
 }
 

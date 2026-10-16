@@ -19,6 +19,7 @@ native-allocator = ["dep:mimalloc"]
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
+    "lunco-assets-runtime/ui",
     "dep:lunco-modelica-assets",
     "dep:lunco-assets-datasets",
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).

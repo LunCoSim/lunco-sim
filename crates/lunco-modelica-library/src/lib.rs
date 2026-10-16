@@ -11,3 +11,5 @@ pub mod worker_bridge;
 
 pub use settings::LibrarySettings;
 pub use source_library::SourceLibraryPlugin;
+
+pub mod package_paths;

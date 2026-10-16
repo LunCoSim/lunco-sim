@@ -7543,6 +7543,9 @@ dependencies = [
 [[package]]
 name = "lunco-assets-path"
 version = "0.1.0-dev"
+dependencies = [
+ "percent-encoding",
+]
 
 [[package]]
 name = "lunco-assets-processing"
@@ -7568,6 +7571,9 @@ dependencies = [
  "anyhow",
  "bevy",
  "crossbeam-channel",
+ "egui",
+ "egui_extras",
+ "image",
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-assets-path",
@@ -7576,6 +7582,7 @@ dependencies = [
  "lunco-storage",
  "lunco-twin",
  "lunco-workspace",
+ "mime_guess2",
  "serde",
  "serde_json",
  "tempfile",
@@ -8822,6 +8829,7 @@ name = "lunco-modelica-ast"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lunco-assets-path",
  "lunco-hooks",
  "rumoca-compile",
  "rumoca-core",
@@ -8837,6 +8845,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "lunco-assets-core",
+ "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-doc",
  "lunco-hash",
@@ -8965,18 +8974,12 @@ dependencies = [
 name = "lunco-modelica-icon-ui"
 version = "0.1.0"
 dependencies = [
- "bevy",
  "egui",
- "egui_extras",
- "image",
- "lunco-assets-path",
- "lunco-assets-runtime",
  "lunco-modelica-ast",
  "lunco-theme",
  "lyon_geom",
  "lyon_path",
  "lyon_tessellation",
- "web-time",
 ]
 
 [[package]]
@@ -9005,14 +9008,17 @@ dependencies = [
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-doc",
+ "lunco-modelica-ast",
  "lunco-modelica-index",
  "lunco-settings",
  "rumoca-compile",
+ "rumoca-core",
  "ruzstd 0.7.3",
  "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]
@@ -9087,6 +9093,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-document",
  "lunco-modelica-index",
+ "lunco-modelica-library",
  "lunco-modelica-runtime",
  "lunco-twin",
  "lunco-workspace",
@@ -9700,6 +9707,7 @@ dependencies = [
 name = "lunco-scene-validation"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "lunco-api",
  "lunco-api-core",
@@ -9995,6 +10003,7 @@ dependencies = [
 name = "lunco-storage"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "async-trait",
  "futures-lite",
  "js-sys",
@@ -11310,6 +11319,8 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_dock",
+ "lunco-assets-core",
+ "lunco-assets-runtime",
  "lunco-capture",
  "lunco-control-core",
  "lunco-core",
@@ -11323,6 +11334,7 @@ dependencies = [
  "lunco-render-recovery",
  "lunco-settings",
  "lunco-status-core",
+ "lunco-storage",
  "lunco-telemetry-core",
  "lunco-theme",
  "lunco-time",
@@ -11367,6 +11379,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-assets-path",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",

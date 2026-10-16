@@ -14,9 +14,17 @@
 #import bevy_pbr::{
     mesh_functions,
     view_transformations::position_world_to_clip,
-    forward_io::VertexOutput,
+    forward_io,
     mesh_view_bindings::view,
 }
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::prepass_io::VertexOutput
+#ifdef MOTION_VECTOR_PREPASS
+#import bevy_pbr::prepass_bindings::previous_view_uniforms
+#endif
+#else
+#import bevy_pbr::forward_io::VertexOutput
+#endif
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
 //!@ui      mode        1 2   "Diagnostic (1 slope, 2 LOD depth)"
@@ -33,7 +41,7 @@
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
 
-#import lunco::terrain::{surface_annotation_color, terrain_detail_position}
+#import lunco::terrain::{surface_annotation_color, terrain_detail_position, terrain_morph_weight}
 @group(#{MATERIAL_BIND_GROUP}) @binding(16)
 var surface_annotations: texture_2d<f32>;
 
@@ -61,6 +69,11 @@ struct GeoVertex {
     @location(10) edge_mask: vec4<f32>,
 };
 
+fn morph_weight(vertex: GeoVertex, world_position: vec3<f32>, eye: vec3<f32>) -> f32 {
+    return terrain_morph_weight(world_position, eye, material.morph_start, material.morph_end,
+        vertex.edge_mask, material.stitch_edges);
+}
+
 @vertex
 fn vertex(vertex: GeoVertex) -> VertexOutput {
     var out: VertexOutput;
@@ -69,18 +82,8 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         world_from_local,
         vec4<f32>(vertex.position, 1.0),
     );
-    let dist = distance(base_world.xyz, view.world_position);
-    var morph = 0.0;
-    if (material.morph_end > material.morph_start) {
-        morph = smoothstep(material.morph_start, material.morph_end, dist);
-    }
-    let edge_stitch = max(
-        max(vertex.edge_mask.x * material.stitch_edges.x,
-            vertex.edge_mask.y * material.stitch_edges.y),
-        max(vertex.edge_mask.z * material.stitch_edges.z,
-            vertex.edge_mask.w * material.stitch_edges.w),
-    );
-    let m = max(morph, edge_stitch);
+    // Shadow cameras carry the viewing camera's LOD origin separately.
+    let m = morph_weight(vertex, base_world.xyz, view.lod_view_world_position);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     let local_normal = normalize(mix(vertex.normal, vertex.morph_normal, m));
     out.world_position = mesh_functions::mesh_position_local_to_world(
@@ -88,10 +91,32 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         vec4<f32>(local_pos, 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+#ifdef PREPASS_PIPELINE
+#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
-        local_normal,
-        vertex.instance_index,
-    );
+        local_normal, vertex.instance_index);
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    let previous_view = previous_view_uniforms.view_from_world;
+    let previous_eye = -vec3(
+        dot(previous_view[0].xyz, previous_view[3].xyz),
+        dot(previous_view[1].xyz, previous_view[3].xyz),
+        dot(previous_view[2].xyz, previous_view[3].xyz));
+    let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
+    let previous_base = mesh_functions::mesh_position_local_to_world(
+        previous_transform, vec4(vertex.position, 1.0));
+    let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
+    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+        previous_transform, vec4(mix(vertex.position, vertex.morph_target, previous_m), 1.0));
+#endif
+#else
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+        local_normal, vertex.instance_index);
+#endif
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;
 #endif
@@ -115,7 +140,7 @@ fn lod_color(lod: u32) -> vec3<f32> {
 }
 
 @fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fragment(in: forward_io::VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     var colour = vec3<f32>(0.5, 0.5, 0.5);
     if (material.mode < 1.5) {

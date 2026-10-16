@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**276 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**277 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -119,7 +119,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (10 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
@@ -3742,6 +3742,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `id` | `String` |  The singleton panel's stable id. |
 
+#### `OpenAssetResource`
+
+ Open or refresh an asset through its registered UI byte loader. Missing, invalid
+ and unsupported resources remain visible in the shared resource window.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `uri` | `String` |  Standard resource URI or a registered logical asset address. |
+
 #### `OpenEphemeralSource`
 
  Open an ephemeral generated document in the read-only source viewer.
@@ -4168,7 +4179,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 276 commands from the runtime schema; scanned 1002 .rs files for docs (0 parse failure(s) skipped).
+<!-- 277 commands from the runtime schema; scanned 1007 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred
 -->

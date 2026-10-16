@@ -14,6 +14,7 @@ import time
 import uuid
 
 from runtime import BINARY, ProductionSession, ROOT, wait_for_ready
+from run_editor_scene_test import wait_for_scene
 
 PORT = int(os.environ.get("LUNCOSIM_API_PORT", "4193"))
 SOURCE = ROOT / "assets/scenarios/tests/path_interoperability.rhai"
@@ -104,6 +105,7 @@ def exercise_usd_model_source(session, root, model_name):
     wait_for(session, lambda: filename in [file["relative_path"] for file in execute(session, "ListTwin").get("files", [])], "saved USD Twin admission")
     execute(session, "OpenFile", path=str(path))
     reopened = wait_for(session, lambda: usd_document(session, filename), "literal USD source readback")
+    wait_for_scene(session, str(path), timeout=90)
     wait_for_ready(session.port)
     wait_for(session, literal_model_ready, "literal Modelica source equation result")
     execute(session, "InspectUsdDocument", doc_id=reopened, path="/World/LiteralProbe")

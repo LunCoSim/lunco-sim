@@ -437,8 +437,11 @@ pub fn project_environment_sun_to_light(
     } else {
         Vec3::Y
     };
-    if transform.forward().angle_between(emit_direction) > 2.0e-5 {
-        transform.look_to(emit_direction, up);
+    // Compare rendered rotations directly: a tiny source change can cross the
+    // horizon even when a float direction dot product rounds to one.
+    let rotation = Transform::IDENTITY.looking_to(emit_direction, up).rotation;
+    if transform.rotation != rotation {
+        transform.rotation = rotation;
     }
     if let Some(irradiance) = sun.as_deref().and_then(|state| state.irradiance_lux) {
         if (light.illuminance - irradiance).abs() > irradiance.abs().max(1.0) * 5.0e-3 {

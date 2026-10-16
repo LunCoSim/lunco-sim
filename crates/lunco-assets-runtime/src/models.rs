@@ -26,13 +26,17 @@ fn modelica_file(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
 }
 
-fn asset_relative_path(path: &Path, root: &Path) -> String {
-    path.strip_prefix(root)
-        .expect("walked Modelica path must be below its root")
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>()
-        .join("/")
+fn asset_relative_path(path: &Path, root: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|error| format!("source has no owning package root: {error}"))?;
+    if relative.to_str().is_none() {
+        return Err(format!(
+            "Modelica source path cannot be represented as a UTF-8 identity: {}",
+            relative.display()
+        ));
+    }
+    Ok(lunco_assets_path::slashed(relative))
 }
 
 fn read_source(path: &Path) -> Result<String, String> {
@@ -51,7 +55,7 @@ fn walk_package(
             walk_package(&path, package_root, out)?;
         } else if modelica_file(&path) {
             out.push((
-                asset_relative_path(&path, package_root),
+                asset_relative_path(&path, package_root)?,
                 read_source(&path)?,
             ));
         }

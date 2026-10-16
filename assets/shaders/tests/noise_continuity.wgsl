@@ -1,0 +1,63 @@
+// GPU regression for lattice continuity and octave footprint filtering.
+// Green is the numerical contract; red identifies a value/gradient mismatch
+// or an incorrectly filtered octave spectrum.
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::noise::{vnoise, vnoise_gradient, vnoise2d, vnoise2d_gradient, fbm_rot, fbm_rot_gradient, fbm2d, fbm2d_gradient}
+
+struct Material {
+    unused: f32,
+}
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    let cell = floor(in.uv * 64.0);
+    let origin = vec3(-6800.0 + cell.x, 1234.0, -6800.0 + cell.y);
+    let epsilon = 0.002;
+    var valid = true;
+    for (var axis = 0u; axis < 3u; axis++) {
+        var p = origin + vec3(0.37, 0.43, 0.61);
+        p[axis] = origin[axis];
+        var delta = vec3(0.0);
+        delta[axis] = epsilon;
+        let left = vnoise_gradient(p - delta);
+        let right = vnoise_gradient(p + delta);
+        // The cubic interpolant has a continuous value and first derivative.
+        // This tolerance includes f32 coordinate spacing at these magnitudes.
+        valid = valid && abs(left.x - right.x) < 0.015
+            && length(left.yzw - right.yzw) < 0.06
+            && abs(vnoise(p) - vnoise_gradient(p).x) < 0.0001;
+    }
+    for (var axis = 0u; axis < 2u; axis++) {
+        var p = origin.xz + vec2(0.37, 0.61);
+        p[axis] = origin.xz[axis];
+        var delta = vec2(0.0);
+        delta[axis] = epsilon;
+        let left = vnoise2d_gradient(p - delta);
+        let right = vnoise2d_gradient(p + delta);
+        valid = valid && abs(left.x - right.x) < 0.015
+            && length(left.yz - right.yz) < 0.06
+            && abs(vnoise2d(p) - vnoise2d_gradient(p).x) < 0.0001;
+    }
+    // An unresolved octave becomes its mean with zero slope. A half-resolved
+    // base octave keeps exactly half its contrast and slope; higher octaves
+    // are already unresolved, and must not amplify the surviving base octave.
+    let p = origin + vec3(0.37, 0.43, 0.61);
+    let filter_window = vec2(2.0, 2.0);
+    let resolved = fbm_rot_gradient(p, 3, 0.5, 0.0, filter_window);
+    let unresolved = fbm_rot_gradient(p, 3, 0.5, 1.0, filter_window);
+    let partial = fbm_rot_gradient(p, 3, 0.5, 1.0 / 3.0, filter_window);
+    let base = vnoise_gradient(p);
+    valid = valid && abs(resolved.x - fbm_rot(p, 3, 0.5)) < 0.0001
+        && length(unresolved - vec4(0.5, 0.0, 0.0, 0.0)) < 0.0001
+        && abs(partial.x - (0.5 + 0.5 * (base.x - 0.5) / 1.75)) < 0.0001
+        && length(partial.yzw - 0.5 * base.yzw / 1.75) < 0.0001;
+    let resolved2 = fbm2d_gradient(p.xz, 3, 0.5, 0.0, filter_window);
+    let unresolved2 = fbm2d_gradient(p.xz, 3, 0.5, 1.0, filter_window);
+    let partial2 = fbm2d_gradient(p.xz, 3, 0.5, 1.0 / 3.0, filter_window);
+    let base2 = vnoise2d_gradient(p.xz);
+    valid = valid && abs(resolved2.x - fbm2d(p.xz, 3, 0.5)) < 0.0001
+        && length(unresolved2 - vec3(0.5, 0.0, 0.0)) < 0.0001
+        && abs(partial2.x - (0.5 + 0.5 * (base2.x - 0.5) / 1.75)) < 0.0001
+        && length(partial2.yz - 0.5 * base2.yz / 1.75) < 0.0001;
+    return select(vec4(1.0, 0.0, 0.0, 1.0), vec4(0.0, 1.0, 0.0, 1.0), valid);
+}

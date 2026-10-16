@@ -44,7 +44,6 @@
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The outcome of resolving a URI. Handlers build one of these; the
@@ -53,7 +52,7 @@ use std::sync::Arc;
 ///
 /// Kept deliberately small — the union of "things a click on a link
 /// inside an engineering document typically means". Add a variant
-/// only when the existing four don't express an intent cleanly.
+/// only when the existing variants do not express the intent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UriResolution {
     /// Open (or focus) a document identified by an opaque string the
@@ -67,14 +66,13 @@ pub enum UriResolution {
         /// prim path, whatever the handler needs).
         identifier: String,
     },
-    /// Open a file-system resource — used for things like
-    /// `modelica://Package/Resources/Images/foo.png` or
-    /// `usd://.../texture.exr`.
+    /// Preview a resource through the shared asynchronous asset byte loaders.
     OpenResource {
-        /// Absolute path the handler resolved from the URI. The
-        /// workbench's image/file loaders take over from here.
-        path: PathBuf,
+        /// Original URI; semantic interpretation runs at its owner on a worker.
+        uri: String,
     },
+    /// A registered scheme rejected this URI. Keep the rejection in-app.
+    Rejected { message: String },
     /// Navigate to an anchor inside an already-open document (e.g. a
     /// `#Section2` fragment in a Documentation block).
     NavigateAnchor {
@@ -109,8 +107,7 @@ pub trait UriHandler: Send + Sync + 'static {
     fn scheme(&self) -> &'static str;
 
     /// Turn a full URI string (including scheme) into a resolution.
-    /// Called on the main thread; must be cheap (no I/O beyond
-    /// filesystem checks).
+    /// Called on the main thread; must be cheap and perform no I/O.
     fn resolve(&self, uri: &str) -> UriResolution;
 }
 
@@ -143,10 +140,10 @@ impl UriRegistry {
     /// including malformed input — so callers only need one branch
     /// for the unhappy path.
     pub fn dispatch(&self, uri: &str) -> UriResolution {
-        let Some(scheme_end) = uri.find("://") else {
+        let Some(scheme) = lunco_assets_path::uri_scheme(uri) else {
             return UriResolution::NotHandled;
         };
-        let scheme = uri[..scheme_end].to_ascii_lowercase();
+        let scheme = scheme.to_ascii_lowercase();
         match self.by_scheme.get(&scheme) {
             Some(h) => h.resolve(uri),
             None => UriResolution::NotHandled,

@@ -47,11 +47,8 @@ impl Plugin for NativeLibraryIndexerPlugin {
             (drain_native_library_install, drive_native_library_dataset).chain(),
         );
 
-        let settings = app
-            .world()
-            .resource::<lunco_modelica_library::LibrarySettings>();
-        let Some(root) =
-            lunco_modelica_library::source_library::configured_native_library_root(settings)
+        let Some(root) = lunco_assets_runtime::library::primary_filesystem_library_root()
+            .map(std::path::Path::to_path_buf)
         else {
             return;
         };
@@ -66,15 +63,15 @@ impl Plugin for NativeLibraryIndexerPlugin {
                 bytes_done: 0,
                 bytes_total: 0,
             });
-            app.insert_resource(start_native_index(root));
+            app.insert_resource(start_native_index(root, true));
         }
     }
 }
 
-fn start_native_index(root: std::path::PathBuf) -> NativeLibraryInstallSlot {
+fn start_native_index(root: std::path::PathBuf, rebuild: bool) -> NativeLibraryInstallSlot {
     let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_native_index(slot.clone(), root, cancel.clone());
+    spawn_native_index(slot.clone(), root, cancel.clone(), rebuild);
     NativeLibraryInstallSlot {
         state: slot,
         cancel,
@@ -85,6 +82,7 @@ fn spawn_native_index(
     slot: NativeInstallSlot,
     root: std::path::PathBuf,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    rebuild: bool,
 ) {
     bevy::tasks::AsyncComputeTaskPool::get()
         .spawn(async move {
@@ -93,6 +91,16 @@ fn spawn_native_index(
                 root.display()
             );
             let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let source =
+                    LibrarySource::filesystem(root.clone()).map_err(|error| error.to_string())?;
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Ok(());
+                }
+                lunco_assets_runtime::library::install_global_library_sources(vec![source])
+                    .map_err(|error| error.to_string())?;
+                if !rebuild && root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
+                    return Ok(());
+                }
                 lunco_modelica_assets::indexer::run_with_cancel(
                     lunco_modelica_assets::indexer::Options::for_source_root(root.clone()),
                     Some(cancel.clone()),
@@ -124,7 +132,7 @@ fn spawn_native_index(
             set_install_state(
                 &slot,
                 LibraryLoadState::Ready {
-                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
+                    file_count: lunco_modelica_library::source_library::source_file_count(),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 },
@@ -171,26 +179,32 @@ fn on_native_library_index_action(
     {
         return;
     }
-    let Some(root) =
-        lunco_modelica_library::source_library::configured_native_library_root(&settings)
-    else {
-        return;
-    };
+    let root =
+        match lunco_modelica_library::source_library::configured_native_library_root(&settings) {
+            Ok(Some(root)) => root,
+            Ok(None) => {
+                commands.insert_resource(LibraryLoadState::Failed(
+                    "no configured source library is installed".into(),
+                ));
+                return;
+            }
+            Err(error) => {
+                commands.insert_resource(LibraryLoadState::Failed(error.to_string()));
+                return;
+            }
+        };
     if let Some(existing) = existing {
         existing
             .cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    lunco_assets_runtime::library::install_global_library_sources(vec![LibrarySource::Filesystem(
-        root.clone(),
-    )]);
     commands.insert_resource(LibraryLoadState::Loading {
         phase: LibraryLoadPhase::Parsing,
         bytes_done: 0,
         bytes_total: 0,
     });
     commands.insert_resource(NativeLibraryIndexLoad::new());
-    commands.insert_resource(start_native_index(root));
+    commands.insert_resource(start_native_index(root, true));
 }
 
 fn drive_native_library_dataset(
@@ -198,8 +212,12 @@ fn drive_native_library_dataset(
     slot: Option<Res<NativeLibraryInstallSlot>>,
     index_load: Option<Res<NativeLibraryIndexLoad>>,
     mut state: ResMut<LibraryLoadState>,
+    settings: Res<lunco_modelica_library::LibrarySettings>,
     mut commands: Commands,
 ) {
+    if settings.local_root_override.is_some() {
+        return;
+    }
     let Some(registry) = registry else { return };
     // A configured source root is already owned by the Modelica lifecycle
     // below. The generic dataset state must not overwrite its ready/indexing
@@ -245,34 +263,26 @@ fn drive_native_library_dataset(
         DatasetState::Cancelled => *state = LibraryLoadState::NotStarted,
         DatasetState::Failed(error) => *state = LibraryLoadState::Failed(error.clone()),
         DatasetState::Installed => {
-            let Some(root) = lunco_modelica_library::source_library::source_library_root_path()
-            else {
-                *state = LibraryLoadState::Failed(
-                    "dataset is installed but no Modelica source tree exists in the cache".into(),
-                );
-                return;
-            };
-            lunco_assets_runtime::library::install_global_library_sources(vec![
-                LibrarySource::Filesystem(root.clone()),
-            ]);
-            if root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
-                *state = LibraryLoadState::Ready {
-                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                };
-                if index_load.is_none() {
-                    commands.insert_resource(NativeLibraryIndexLoad::new());
+            let root = match lunco_modelica_library::source_library::source_library_root_path() {
+                Ok(Some(root)) => root,
+                Ok(None) => {
+                    *state = LibraryLoadState::Failed(
+                        "dataset is installed but no source tree exists".into(),
+                    );
+                    return;
                 }
-                return;
-            }
+                Err(error) => {
+                    *state = LibraryLoadState::Failed(error.to_string());
+                    return;
+                }
+            };
             *state = LibraryLoadState::Loading {
                 phase: LibraryLoadPhase::Parsing,
                 bytes_done: 0,
                 bytes_total: 0,
             };
             commands.insert_resource(NativeLibraryIndexLoad::new());
-            commands.insert_resource(start_native_index(root));
+            commands.insert_resource(start_native_index(root, false));
         }
     }
 }

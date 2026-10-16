@@ -68,7 +68,7 @@ pub enum TwinRootsError {
     LogicalIdentityMismatch { requested: String, assigned: String },
     #[error("invalid Twin overlay path `{0}`")]
     InvalidOverlayPath(String),
-    #[error("Twin asset resolution failed ({0:?}): {1}")]
+    #[error("asset resolution failed ({0:?}): {1}")]
     AssetResolution(std::io::ErrorKind, String),
     #[error("Twin root resolution failed ({0:?}): {1}")]
     RootResolution(std::io::ErrorKind, String),
@@ -94,7 +94,7 @@ pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
 /// different scheme (or no scheme at all). The parsing inverse of [`twin_uri`].
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
     let (scheme, rest) = crate::asset_path::split_scheme(uri)?;
-    split_twin_rel((scheme == TWIN_SCHEME).then_some(rest)?)
+    split_twin_rel((scheme.eq_ignore_ascii_case(TWIN_SCHEME)).then_some(rest)?)
 }
 
 /// Split the scheme-stripped remainder of a `twin://` address — the
@@ -190,7 +190,7 @@ pub fn stable_source_path(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn canonical_root(root: &Path) -> Result<PathBuf, TwinRootsError> {
-    std::fs::canonicalize(root).map_err(|error| {
+    crate::canonical_directory_root(root).map_err(|error| {
         TwinRootsError::RootResolution(error.kind(), format!("{}: {error}", root.display()))
     })
 }
@@ -739,12 +739,8 @@ impl TwinRoots {
     }
 }
 
-/// Read a Twin-root file through the storage backend. The ONLY native/web
-/// divergence in this source: native = `FileStorage` (std::fs, via the sync
-/// wrapper — this runs on Bevy's async IO pool); web = `OpfsStorage` (async OPFS
-/// read), which is the same tree the networking client writes a downloaded
-/// scenario into. Going through storage is what lets `twin://` serve a downloaded
-/// scenario on the web, where there is no filesystem.
+/// Storage failures retain the requested Twin identity in diagnostics.
+#[cfg(target_arch = "wasm32")]
 fn storage_read_error(path: &Path, error: lunco_storage::StorageError) -> AssetReaderError {
     match error {
         lunco_storage::StorageError::NotFound => AssetReaderError::NotFound(path.to_path_buf()),
@@ -756,16 +752,92 @@ fn storage_read_error(path: &Path, error: lunco_storage::StorageError) -> AssetR
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn read_bytes(full: &Path) -> Result<Vec<u8>, AssetReaderError> {
-    lunco_storage::read_file_sync(full).map_err(|error| storage_read_error(full, error))
+async fn open_reader(full: &Path) -> Result<Box<dyn Reader>, AssetReaderError> {
+    Ok(Box::new(crate::native_reader::open_asset_file(full)?))
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn read_bytes(full: &Path) -> Result<Vec<u8>, AssetReaderError> {
+async fn open_reader(full: &Path) -> Result<Box<dyn Reader>, AssetReaderError> {
     lunco_storage::OpfsStorage::new()
-        .read(&lunco_storage::StorageHandle::File(full.to_path_buf()))
+        .open_reader(&lunco_storage::StorageHandle::File(full.to_path_buf()))
         .await
+        .map(|reader| Box::new(TwinOpfsReader(reader)) as Box<dyn Reader>)
         .map_err(|error| storage_read_error(full, error))
+}
+
+#[cfg(target_arch = "wasm32")]
+struct TwinOpfsReader(lunco_storage::opfs_storage::OpfsReader);
+
+#[cfg(target_arch = "wasm32")]
+impl bevy::tasks::futures_lite::io::AsyncRead for TwinOpfsReader {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl bevy::tasks::futures_lite::io::AsyncSeek for TwinOpfsReader {
+    fn poll_seek(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        pos: std::io::SeekFrom,
+    ) -> std::task::Poll<std::io::Result<u64>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_seek(cx, pos)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Reader for TwinOpfsReader {
+    fn seekable(
+        &mut self,
+    ) -> Result<&mut dyn bevy::asset::io::SeekableReader, bevy::asset::io::ReaderNotSeekableError>
+    {
+        Ok(self)
+    }
+}
+
+struct SharedBytes(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Overlay readers pin the immutable revision without copying its payload.
+struct OverlayReader(bevy::tasks::futures_lite::io::Cursor<SharedBytes>);
+
+impl bevy::tasks::futures_lite::io::AsyncRead for OverlayReader {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl bevy::tasks::futures_lite::io::AsyncSeek for OverlayReader {
+    fn poll_seek(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        pos: std::io::SeekFrom,
+    ) -> std::task::Poll<std::io::Result<u64>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_seek(cx, pos)
+    }
+}
+
+impl Reader for OverlayReader {
+    fn seekable(
+        &mut self,
+    ) -> Result<&mut dyn bevy::asset::io::SeekableReader, bevy::asset::io::ReaderNotSeekableError>
+    {
+        Ok(self)
+    }
 }
 
 /// Build the `twin://` [`AssetSourceBuilder`] over `roots`. Register in each
@@ -781,9 +853,8 @@ pub fn twin_asset_source(roots: &TwinRoots) -> AssetSourceBuilder {
 }
 
 /// `AssetReader` that splits `<name>/<rel>`, looks the Twin root up by name, and
-/// reads `<root>/<rel>` into memory (`VecReader`). In-memory reading sidesteps
-/// the lifetime dance of returning a borrowed file handle from an `async fn` in
-/// the trait, and matches how the wasm file readers already work.
+/// streams `<root>/<rel>` through storage. Consumer budgets apply before any
+/// full-payload allocation on either native files or browser OPFS snapshots.
 struct TwinReader {
     roots: TwinRoots,
 }
@@ -828,7 +899,7 @@ fn asset_reader_error(error: TwinRootsError) -> AssetReaderError {
 impl AssetReader for TwinReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
         let Some(path) = crate::asset_path::relative_path(&crate::asset_path::slashed(path)) else {
-            return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
+            return Err::<Box<dyn Reader>, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
         // In-memory overlay wins over the on-disk file (E1b: a scene document's
         // composed source projected into the live world). Keyed by the exact
@@ -838,13 +909,16 @@ impl AssetReader for TwinReader {
             .overlay_for(path.as_path())
             .map_err(asset_reader_error)?
         {
-            return Ok(VecReader::new((*bytes).clone()));
+            return Ok(
+                Box::new(OverlayReader(bevy::tasks::futures_lite::io::Cursor::new(
+                    SharedBytes(bytes),
+                ))) as Box<dyn Reader>,
+            );
         }
         let Some(full) = self.resolve(path.as_path()).map_err(asset_reader_error)? else {
-            return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
+            return Err::<Box<dyn Reader>, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
-        let bytes = read_bytes(&full).await?;
-        Ok(VecReader::new(bytes))
+        open_reader(&full).await
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
@@ -878,6 +952,69 @@ impl AssetReader for TwinReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn asset_resolution_contract_twin_stream() {
+        use bevy::tasks::futures_lite::{
+            future::block_on,
+            io::{AsyncReadExt, AsyncSeekExt},
+        };
+        block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let file = root.path().join("payload.bin");
+            std::fs::write(&file, b"original").unwrap();
+            let roots = TwinRoots::default();
+            let name = roots.register("generic", root.path()).unwrap();
+            let reader = TwinReader { roots };
+            let path = PathBuf::from(format!("{name}/payload.bin"));
+            let mut stream = AssetReader::read(&reader, &path).await.unwrap();
+            // The open handle has not copied bytes. Truncating before the
+            // first poll changes what the consumer receives.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_len(0)
+                .unwrap();
+            let mut byte = [0];
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+            std::fs::write(&file, b"original").unwrap();
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 1);
+            assert_eq!(
+                stream
+                    .seekable()
+                    .unwrap()
+                    .seek(std::io::SeekFrom::Current(0))
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                stream
+                    .seekable()
+                    .unwrap()
+                    .seek(std::io::SeekFrom::End(-1))
+                    .await
+                    .unwrap(),
+                7
+            );
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 1);
+            assert_eq!(&byte, b"l");
+            let bytes = Arc::new(b"overlay".to_vec());
+            reader
+                .roots
+                .set_overlay(&name, "payload.bin", bytes.clone())
+                .unwrap();
+            let count = Arc::strong_count(&bytes);
+            let mut overlay = AssetReader::read(&reader, &path).await.unwrap();
+            assert_eq!(Arc::strong_count(&bytes), count + 1);
+            assert_eq!(overlay.read(&mut byte).await.unwrap(), 1);
+            assert_eq!(&byte, b"o");
+            drop(overlay);
+            assert_eq!(Arc::strong_count(&bytes), count);
+        });
+    }
 
     #[test]
     fn twin_mount_snapshot_revision_retires_equal_root_reopens() {

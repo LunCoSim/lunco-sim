@@ -6,6 +6,7 @@ license.workspace = true
 description = "Modelica source-library admission, artifacts, and worker bridge"
 
 [dependencies]
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
@@ -14,6 +15,8 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-settings = { path = "../lunco-settings" }
 rumoca-compile.workspace = true
+rumoca-core.workspace = true
+web-time.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bincode.workspace = true

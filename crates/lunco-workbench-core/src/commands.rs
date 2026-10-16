@@ -73,3 +73,11 @@ pub struct SetRequiredPerspective {
 /// Reset the shell to its required or first registered perspective.
 #[Command(default)]
 pub struct ResetToDefaultPerspective {}
+
+/// Open or refresh an asset through its registered UI byte loader. Missing, invalid
+/// and unsupported resources remain visible in the shared resource window.
+#[Command(default)]
+pub struct OpenAssetResource {
+    /// Standard resource URI or a registered logical asset address.
+    pub uri: String,
+}

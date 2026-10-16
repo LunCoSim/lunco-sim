@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    documentation = "GPU terrain normal world/local round trip under rotation and nonuniform scale; green is success."
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+    kind = "assembly"
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/terrain_normal_transform.rhai@
+    }
+    def Scope "Looks"
+    {
+        def Material "Normal"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Normal/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/terrain_normal_transform.wgsl@
+                custom token outputs:surface = ""
+            }
+        }
+    }
+    def Plane "Panel" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double width = 10.0
+        double length = 10.0
+        custom rel material:binding = </World/Looks/Normal>
+        custom double3 xformOp:scale = (2.0, 0.5, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:scale", "xformOp:rotateXYZ"]
+        custom double3 xformOp:rotateXYZ = (17.0, 37.0, 11.0)
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1.0
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        float focalLength = 18.0
+    }
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera
+        token lunco:activeCamera.timeSamples = {
+            0.0: "Camera",
+        }
+    }
+}

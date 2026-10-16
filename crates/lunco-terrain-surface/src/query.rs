@@ -756,6 +756,15 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         } else {
             None
         };
+        let shadow_caches = QueryState::<(Entity, &lunco_environment::HorizonShadowCache, Has<lunco_environment::horizon::ShadowCacheBakeTask>, Option<&crate::stream_viz::TileShadowCache>)>::try_new(world)
+            .map(|mut query| query.iter(world).map(|(entity, cache, pending, bound)| {
+                let stats = world.get_resource::<lunco_render::data_texture::DataTextureUpdates>()
+                    .and_then(|updates| updates.uploaded.get(&cache.image.id()));
+                api_value!({ "source": entity.to_bits(), "image": format!("{:?}", cache.image.id()),
+                    "sampled_sun_local": cache.sampled_sun_local().to_array(), "pending": pending, "bound": bound.map(|cache| cache.on),
+                    "uploads": stats.map(|stats| api_value!({ "batches": stats.batches, "bytes": stats.bytes,
+                        "sequence": stats.sequence, "texture_allocations": stats.texture_allocations })) })
+            }).collect::<Vec<_>>());
         let mut continuations: Vec<_> = continuation_query.iter(world).map(|(entity, continuation, look, visibility, ready, mesh)| {
             let source = world.get::<lunco_materials::ShaderLook>(continuation.source);
             let source_reflection = world.get::<lunco_materials::ShaderLookSourceInterface>(continuation.source);
@@ -854,6 +863,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             "visual_foci": visual_foci,
             "continuations": continuations,
             "shadow_meshes": shadow_meshes,
+            "shadow_caches": shadow_caches,
             "tiles": tiles,
         })))
     }

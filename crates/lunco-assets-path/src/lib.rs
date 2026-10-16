@@ -302,8 +302,8 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
 /// have a different owner and must arrive URI-encoded from `lunco-storage`.
 pub fn canonicalize_root(reference: &str) -> String {
     let reference = slashed(reference);
-    if has_scheme(&reference) {
-        return reference;
+    if let Some((scheme, rest)) = split_scheme(&reference) {
+        return uri(scheme, rest);
     }
     let rel = reference.strip_prefix('/').unwrap_or(&reference);
     slashed(normalize(Path::new(rel)))
@@ -321,7 +321,7 @@ pub fn split_scheme(reference: &str) -> Option<(&str, &str)> {
 
 /// Build `scheme://rel`. The inverse of [`split_scheme`].
 pub fn uri(scheme: &str, rel: &str) -> String {
-    format!("{scheme}://{rel}")
+    format!("{}://{rel}", scheme.to_ascii_lowercase())
 }
 
 /// Whether a reference resolves WITHOUT an anchor — either already addressable
@@ -566,4 +566,62 @@ mod tests {
             assert!(!is_safe_relative_path(path));
         }
     }
+}
+
+/// Decode one standard URI component exactly once. Internal asset addresses
+/// preserve literal percent signs and must not pass through this boundary.
+pub fn decode_uri_component(encoded: &str) -> Result<String, String> {
+    let bytes = encoded.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'%'
+            && !(bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit)
+                && bytes.get(index + 2).is_some_and(u8::is_ascii_hexdigit))
+        {
+            return Err("malformed URI percent escape".into());
+        }
+    }
+    let decoded = percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|error| format!("URI component is not UTF-8: {error}"))?
+        .into_owned();
+    if decoded.contains('\0') {
+        return Err("URI component contains NUL".into());
+    }
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod uri_contract_tests {
+    use super::*;
+    #[test]
+    fn asset_resolution_contract() {
+        assert_eq!(
+            canonicalize_root("LUNCO://literal # %.bin"),
+            "lunco://literal # %.bin"
+        );
+        assert_eq!(
+            canonicalize("../module.rhai", "TwIn://Owner/scripts/main.rhai"),
+            "twin://Owner/module.rhai"
+        );
+        assert_eq!(
+            decode_uri_component("literal%20%23%20%25.bin").unwrap(),
+            "literal # %.bin"
+        );
+        for invalid in ["%GG", "%", "%0", "%FF", "%00"] {
+            assert!(decode_uri_component(invalid).is_err(), "{invalid}");
+        }
+    }
+}
+
+/// Recognize the standard URI scheme grammar, including `file:/path`.
+/// Callers interpreting raw native paths must first use their native boundary.
+pub fn uri_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.split_once(':')?;
+    let mut chars = scheme.chars();
+    let first = chars.next()?;
+    (first.is_ascii_alphabetic()
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
+        }))
+    .then_some(scheme)
 }

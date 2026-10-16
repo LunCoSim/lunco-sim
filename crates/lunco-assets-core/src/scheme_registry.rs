@@ -81,7 +81,7 @@ impl SchemeRegistry {
         self.handlers
             .write()
             .map(|mut h| {
-                h.insert(scheme.into(), Arc::new(root));
+                h.insert(scheme.into().to_ascii_lowercase(), Arc::new(root));
             })
             .map_err(|_| SchemeRegistryError::RegistryPoisoned)
     }
@@ -101,7 +101,7 @@ impl SchemeRegistry {
             .handlers
             .read()
             .map_err(|_| SchemeRegistryError::RegistryPoisoned)?
-            .get(scheme)
+            .get(&scheme.to_ascii_lowercase())
             .cloned();
         match handler {
             Some(handler) => handler(rest),

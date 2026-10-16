@@ -89,16 +89,7 @@ impl std::fmt::Display for ModelicaSourceRootContentError {
 
 impl std::error::Error for ModelicaSourceRootContentError {}
 
-fn uri_scheme(value: &str) -> Option<&str> {
-    let (scheme, _) = value.split_once(':')?;
-    let mut chars = scheme.chars();
-    let first = chars.next()?;
-    (first.is_ascii_alphabetic()
-        && chars.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
-        }))
-    .then_some(scheme)
-}
+use lunco_assets_path::uri_scheme;
 
 fn has_windows_drive_prefix(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -446,6 +437,7 @@ pub struct ModelicaCompiler {
 
 #[derive(Clone)]
 struct SourceSetContribution {
+    source_files: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
     roots: std::collections::HashSet<String>,
     revision: u64,
     content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
@@ -972,6 +964,15 @@ impl ModelicaCompiler {
             mut diagnostics,
             content_closure,
         } = prepared;
+        let source_files = parsed
+            .iter()
+            .map(|document| {
+                lunco_modelica_ast::resource_uri::SourceFileFacts::parsed(
+                    document.definition(),
+                    document.uri(),
+                )
+            })
+            .collect();
         let file_count = files.len();
         // A source root is one semantic unit. Do not publish a partial package:
         // the compile owner must either see every member or a terminal load
@@ -992,6 +993,7 @@ impl ModelicaCompiler {
                 self.source_set_contributions.insert(
                     id.clone(),
                     SourceSetContribution {
+                        source_files,
                         roots: parsed_roots,
                         revision,
                         content_closure: content_closure.clone(),
@@ -1046,6 +1048,18 @@ impl ModelicaCompiler {
             .unwrap_or_default();
         namespaces.sort_unstable();
         namespaces
+    }
+
+    /// Package storage facts from the exact admitted ASTs. URI consumers must
+    /// not infer the containing source from a package name or a cache layout.
+    pub fn source_root_source_facts(
+        &self,
+        source_set_id: &str,
+    ) -> Vec<lunco_modelica_ast::resource_uri::SourceFileFacts> {
+        self.source_set_contributions
+            .get(source_set_id)
+            .map(|contribution| contribution.source_files.clone())
+            .unwrap_or_default()
     }
 
     /// Remove one previously installed source set and recompute all derived

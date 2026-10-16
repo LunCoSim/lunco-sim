@@ -21,3 +21,5 @@ pub use rumoca_core::{
 };
 /// Rumoca's parsed definition tree consumed by AST/fact extractors.
 pub use rumoca_ir_ast::StoredDefinition;
+
+pub mod resource_uri;

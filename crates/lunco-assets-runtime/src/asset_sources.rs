@@ -122,11 +122,14 @@ fn unregister_twin_root(
 /// that want to pre-register a root before the first scene load.
 pub fn register_lunco_asset_sources(app: &mut App) -> std::io::Result<TwinRoots> {
     let assets_dir = lunco_assets_core::assets_dir_abs()?;
+    app.register_asset_source(
+        crate::library::LIBRARY_SCHEME,
+        crate::library::library_asset_source(),
+    );
 
-    #[cfg(target_arch = "wasm32")]
     app.register_asset_source(
         bevy::asset::io::AssetSourceId::Default,
-        lunco_assets_core::lunco_source::web_asset_source(&assets_dir),
+        lunco_assets_core::lunco_source::directory_asset_source(&assets_dir),
     );
 
     // Engine asset *library* under a NAMED, location-independent scheme so a
@@ -166,6 +169,12 @@ pub fn register_lunco_asset_sources(app: &mut App) -> std::io::Result<TwinRoots>
             .map_err(Into::into)
         })
         .expect("register the canonical lunco asset scheme");
+    schemes
+        .register(crate::library::LIBRARY_SCHEME, |rest| {
+            crate::library::library_resource_local_path(std::path::Path::new(rest))
+                .map_err(Into::into)
+        })
+        .expect("register source-library asset scheme");
     let roots = twin_roots.clone();
     schemes
         .register(lunco_assets_core::TWIN_SCHEME, move |rest| {

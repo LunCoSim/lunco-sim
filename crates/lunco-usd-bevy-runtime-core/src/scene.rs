@@ -58,7 +58,7 @@ fn incomplete_composition_runtime_context(
     path: &str,
     coordinator: &SceneTransitionCoordinator,
 ) -> Result<lunco_core::RuntimeExecutionContext, &'static str> {
-    let route = if path.starts_with("twin://") {
+    let route = if lunco_assets_core::parse_twin_uri(path).is_some() {
         let generation = coordinator
             .lifecycle_generation()
             .ok_or("the loading Twin has no active lifecycle generation")?;

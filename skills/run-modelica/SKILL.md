@@ -1084,3 +1084,26 @@ request an external source library. Use Rumoca’s
 `compile::source_root_dependencies` for lexical/import-aware dependency facts,
 then admit those namespaces through the shared source-root registry. Do not
 scan type strings or special-case import aliases such as `SI`.
+
+For documentation/Bitmap resources, use the admitted package URI and the shared
+asset resource path. Scheme matching is case-insensitive; percent-encode standard
+URI components. A nested package keeps its qualified resource directory even when
+stored in its parent's `.mo` file. `OpenAssetResource { uri }` opens the common
+preview and displays pending/missing/invalid outcomes. Verify the rendered result
+in an owned windowed session; compiler or byte-read success alone does not prove
+an image was displayed. Do not derive a resource path from the source cache or
+from the component palette, which does not enumerate package declarations.
+
+An editor view inside an admitted directory must retain that directory owner.
+Its current parsed generation overlays only its source file; sibling-file
+members remain admitted. Pending/invalid parses reject resource requests.
+Saving commits those facts even during an in-flight source-root admission;
+closing drops the unsaved overlay while preserving the saved directory facts.
+Use the shared resource acceptance driver to cover edit, save, close and parse
+recovery, together with directed screenshots in the owned production session.
+
+Native file/folder renames relocate source and package provenance at that same
+owner, fence pre-rename admission and reload affected disk roots on the existing
+worker after the automatic class/save transaction. Exercise
+`scripts/api/test_asset_resource_renames.py` for open/closed directory moves,
+file rename/save/close/reopen, retired declarations and a missing resource.

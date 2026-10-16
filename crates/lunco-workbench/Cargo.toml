@@ -17,6 +17,9 @@ api = [
 ] # `web-time` is already an unconditional dep
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime", features = ["ui"] }
+lunco-storage = { path = "../lunco-storage" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # `bevy_render` facade feature: the workbench's viewport and graphics menu
 # `bevy::render::{RenderApp, RenderDevice, WgpuSettings, RenderStartup}`

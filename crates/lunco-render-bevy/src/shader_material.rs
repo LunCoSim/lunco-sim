@@ -62,7 +62,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::shader::{Shader, ShaderImport, Source as ShaderSource};
+use bevy::shader::{Shader, ShaderDefVal, ShaderImport, ShaderRef, Source as ShaderSource};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -162,7 +162,8 @@ pub struct ShaderMaterial {
     /// case) = Bevy's default mesh vertex shader, so the fragment-only path is
     /// unchanged. A supplied vertex shader must declare the exact same
     /// `Material` uniform ABI as the fragment shader; the fragment schema owns
-    /// packing for both stages.
+    /// packing for both stages. The vertex source must support both native
+    /// forward and `PREPASS_PIPELINE` output interfaces.
     pub vertex_shader: Option<Handle<Shader>>,
     /// Reflected parameter layout for [`shader`](Self::shader). Starts with the
     /// built-in layout and is replaced when the shader source is available.
@@ -337,47 +338,29 @@ impl Material for ShaderMaterial {
         self.alpha_mode
     }
 
+    /// Custom vertex stages may read the shared material uniform in a depth-only
+    /// pass. Register Bevy's native prepass program so its material-binding and
+    /// draw selection retain that group before per-instance specialization.
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://bevy_pbr/prepass/prepass.wgsl".into()
+    }
+
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        // `specialize` runs for *every* pass that uses this material, including
-        // the depth/normal **prepass**. Our per-instance `.wgsl` only defines a
-        // main-pass `@fragment` (it returns a colour); it has none of the
-        // prepass entry points/outputs. Overwriting the prepass fragment shader
-        // with it produces an invalid `prepass_pipeline` — tolerated by Vulkan,
-        // rejected by WebGPU's stricter validation (frames dropped in-browser).
-        // So only swap the fragment shader for non-prepass pipelines; let the
-        // prepass keep Bevy's default shader (it only needs depth/normals).
-        //
-        // DETECTION IS BY DEBUG LABEL, and that is a known soft spot (T30): no
-        // structural "this is the prepass" signal reaches `Material::specialize`
-        // — bevy's prepass pipeline calls it with the same `MaterialPipelineKey`
-        // as the main pass (the `MeshPipelineKey` prepass bits describe the
-        // VIEW's enabled prepasses, not which pass is being specialized), so the
-        // pipeline's own label ("prepass_pipeline") is the only discriminator
-        // available here. If a bevy upgrade renames or drops the label, this
-        // silently classifies the prepass as a main pass again and re-installs
-        // the invalid fragment shader. The assert below trips in dev builds the
-        // moment labels disappear entirely; a rename within the "prepass" family
-        // still matches `contains`.
-        let is_prepass = descriptor
-            .label
-            .as_ref()
-            .is_some_and(|l| l.contains("prepass"));
+        // Bevy marks the actual pass in the vertex definitions. View-level
+        // prepass key bits also occur on main pipelines and cannot distinguish it.
+        let is_prepass = descriptor.vertex.shader_defs.iter().any(|definition| {
+            matches!(definition, ShaderDefVal::Bool(name, true) if name == "PREPASS_PIPELINE")
+        });
         // Authored `doubleSided` — every pass, including the shadow/prepass ones:
         // a single-sided shadow of a double-sided surface peels away from it.
         if key.bind_group_data.double_sided {
             descriptor.primitive.cull_mode = None;
         }
-        debug_assert!(
-            descriptor.label.is_some(),
-            "pipeline descriptor carries no debug label; ShaderMaterial::specialize \
-             detects the prepass by label and would mis-specialize it — find a \
-             structural prepass signal for this bevy version"
-        );
         // The ONE place the native/web shading split lives. `lunco::terrain`
         // (terrain_surface.wgsl) keys its noise dimensionality and octave budget
         // off this def, which is what let the six terrain shaders collapse to one
@@ -395,56 +378,51 @@ impl Material for ShaderMaterial {
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader = key.bind_group_data.shader.clone();
             }
-            // Per-instance VERTEX stage (CDLOD geomorph). Same non-prepass guard:
-            // our geomorph `.wgsl` defines only a main-pass `@vertex`, so the
-            // prepass keeps Bevy's default vertex shader (un-morphed depth — a
-            // sub-tile mismatch acceptable for the debug LOD view). When set, the
-            // mesh carries `ATTRIBUTE_MORPH_TARGET` + `ATTRIBUTE_MORPH_NORMAL`, so rebuild
-            // the vertex layout to feed `@location(8)` and `@location(9)`. Meshes without it use the fragment-only path
-            // above and never reach here (`vertex_shader` is `None`).
-            if let Some(vertex) = &key.bind_group_data.vertex_shader {
-                descriptor.vertex.shader = vertex.clone();
-                // Only the CDLOD tiles carry the morph attributes; a plain mesh
-                // with a custom vertex stage keeps the default P/N/UV layout —
-                // asking `get_layout` for attributes the mesh doesn't have is an
-                // error, not a fallback.
-                if layout.0.contains(ATTRIBUTE_MORPH_TARGET) {
-                    let vertex_layout = layout.0.get_layout(&[
-                        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-                        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-                        Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
-                        ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
-                        ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
-                        ATTRIBUTE_MORPH_EDGE.at_shader_location(10),
-                    ])?;
-                    descriptor.vertex.buffers = vec![vertex_layout];
-                } else if layout.0.contains(ATTRIBUTE_GLOBE_DIRECTION) {
-                    let mut attributes = vec![
-                        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-                        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-                    ];
-                    if layout.0.contains(Mesh::ATTRIBUTE_UV_0) {
-                        attributes.push(Mesh::ATTRIBUTE_UV_0.at_shader_location(2));
-                        descriptor.vertex.shader_defs.push("VERTEX_UVS_A".into());
-                        if let Some(fragment) = descriptor.fragment.as_mut() {
-                            fragment.shader_defs.push("VERTEX_UVS_A".into());
-                        }
-                    }
-                    attributes.push(ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11));
-                    let vertex_layout = layout.0.get_layout(&attributes)?;
-                    descriptor.vertex.buffers = vec![vertex_layout];
-
-                    // The globe material owns a dedicated body-direction
-                    // inter-stage field. Define the same interface variant for
-                    // both linked stages; the mesh input is the explicit
-                    // location-11 semantic above.
-                    descriptor
-                        .vertex
-                        .shader_defs
-                        .push("LUNCO_GLOBE_DIRECTION".into());
+        }
+        // Authored vertex deformation applies to color, depth, normal, and shadow
+        // passes. The source selects Bevy's matching output ABI with PREPASS_PIPELINE.
+        if let Some(vertex) = &key.bind_group_data.vertex_shader {
+            descriptor.vertex.shader = vertex.clone();
+            // Only the CDLOD tiles carry the morph attributes; a plain mesh
+            // with a custom vertex stage keeps the default P/N/UV layout —
+            // asking `get_layout` for attributes the mesh doesn't have is an
+            // error, not a fallback.
+            if layout.0.contains(ATTRIBUTE_MORPH_TARGET) {
+                let vertex_layout = layout.0.get_layout(&[
+                    Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                    Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                    Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+                    ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
+                    ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
+                    ATTRIBUTE_MORPH_EDGE.at_shader_location(10),
+                ])?;
+                descriptor.vertex.buffers = vec![vertex_layout];
+            } else if layout.0.contains(ATTRIBUTE_GLOBE_DIRECTION) {
+                let mut attributes = vec![
+                    Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                    Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                ];
+                if layout.0.contains(Mesh::ATTRIBUTE_UV_0) {
+                    attributes.push(Mesh::ATTRIBUTE_UV_0.at_shader_location(2));
+                    descriptor.vertex.shader_defs.push("VERTEX_UVS_A".into());
                     if let Some(fragment) = descriptor.fragment.as_mut() {
-                        fragment.shader_defs.push("LUNCO_GLOBE_DIRECTION".into());
+                        fragment.shader_defs.push("VERTEX_UVS_A".into());
                     }
+                }
+                attributes.push(ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11));
+                let vertex_layout = layout.0.get_layout(&attributes)?;
+                descriptor.vertex.buffers = vec![vertex_layout];
+
+                // The globe material owns a dedicated body-direction
+                // inter-stage field. Define the same interface variant for
+                // both linked stages; the mesh input is the explicit
+                // location-11 semantic above.
+                descriptor
+                    .vertex
+                    .shader_defs
+                    .push("LUNCO_GLOBE_DIRECTION".into());
+                if let Some(fragment) = descriptor.fragment.as_mut() {
+                    fragment.shader_defs.push("LUNCO_GLOBE_DIRECTION".into());
                 }
             }
         }

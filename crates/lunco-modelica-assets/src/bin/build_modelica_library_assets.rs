@@ -112,6 +112,10 @@ mod native {
 
         if source_roots.is_empty() {
             let Some(root) = lunco_modelica_library::source_library::source_library_root_path()
+                .unwrap_or_else(|error| {
+                    eprintln!("source library root: {error}");
+                    std::process::exit(1);
+                })
             else {
                 eprintln!(
                     "error: no source root on disk (run `lunco-assets -- download` first \

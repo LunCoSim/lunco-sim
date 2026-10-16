@@ -160,6 +160,8 @@ for scene in "${SCENES[@]}"; do
         reason="production luncosim exited $code"
     elif grep -Eqi 'panicked|Encountered a panic|thread .*panicked' "$log"; then
         reason="production render reported a panic"
+    elif grep -Eqi 'wgpu validation error|wgpu device lost|failed to process shader|failed to create shader module' "$log"; then
+        reason="production GPU validation or shader compilation failed"
     elif ! grep -Fq "recording drained (${RENDER_FRAMES} frames)" "$log"; then
         reason="recording did not drain exactly ${RENDER_FRAMES} frames"
     elif [[ "$frame_count" -ne "$RENDER_FRAMES" || ! -s "$first" || ! -s "$last" ]]; then
@@ -197,6 +199,59 @@ for scene in "${SCENES[@]}"; do
     if [[ -z "$reason" && "$name" == "terrain_shader_appearance" ]]; then
         if ! grep -Fq 'TERRAIN LOD STREAM: PASS' "$log"; then
             reason="authored terrain stream did not report a settled selected cover"
+        elif ! grep -Fq 'TERRAIN PREPASS VARIANTS: PASS' "$log"; then
+            reason="authored terrain camera did not enable its native prepasses"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" =~ ^(noise_continuity|terrain_normal_transform|shadow_cache_sampling)$ ]]; then
+        # Numerical GPU panels turn red on a contract violation. Ignore the
+        # frame margin; the authored panel covers the central half.
+        read -r green_min red_max < <(
+            convert "$last" -crop "$((RENDER_WIDTH / 2))x$((RENDER_HEIGHT / 2))+$((RENDER_WIDTH / 4))+$((RENDER_HEIGHT / 4))" \
+                -format '%[fx:minima.g] %[fx:maxima.r]' info: 2>/dev/null
+        )
+        if ! awk -v green="${green_min:-0}" -v red="${red_max:-1}" \
+            'BEGIN { exit !(green > 0.5 && red < 0.3) }'; then
+            reason="GPU numerical panel contains a failure or is missing (green-min=${green_min:-unavailable} red-max=${red_max:-unavailable})"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" == "sun_disc_occlusion" ]]; then
+        # Authored angle/direction failures are red. Opaque depth must cover
+        # exactly the left half of the sky disc while the right remains visible.
+        blue=$(convert "$last" -fx 'b > 0.8 && r < 0.2 && g < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        green=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        yellow=$(convert "$last" -fx 'r > 0.8 && g > 0.8 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        red=$(convert "$last" -fx 'r > 0.8 && g < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        left_yellow=$(convert "$last" -crop "$((RENDER_WIDTH / 2))x${RENDER_HEIGHT}+0+0" \
+            -fx 'r > 0.8 && g > 0.8 && b < 0.2' -format '%[fx:mean]' info: 2>/dev/null)
+        if ! awk -v blue="${blue:-0}" -v green="${green:-0}" -v yellow="${yellow:-0}" \
+            -v red="${red:-1}" -v left="${left_yellow:-1}" \
+            'BEGIN { exit !(blue > 0.49 && blue < 0.51 && green > 0.49 && yellow > 0.00001 && yellow < 0.002 && red < 0.00001 && left < 0.00001) }'; then
+            reason="authored Sun disc or opaque occlusion failed (blue=$blue green=$green yellow=$yellow red=$red left-yellow=$left_yellow)"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" == "vertex_shadow_alignment" ]]; then
+        if ! grep -Fq 'VERTEX PREPASS VARIANTS: PASS' "$log"; then
+            reason="authored vertex camera did not enable its native prepasses"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" =~ ^(vertex_shadow_alignment|sun_material_precision|sun_material_precision_dem)$ ]]; then
+        # Both numerical probes must be visible; disagreement with native
+        # rendering state turns a probe red.
+        green_coverage=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        cyan_coverage=$(convert "$last" -fx 'g > 0.8 && b > 0.8 && r < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        red_coverage=$(convert "$last" -fx 'r > 0.8 && g < 0.2' \
+            -format '%[fx:mean]' info: 2>/dev/null)
+        if ! awk -v green="${green_coverage:-0}" -v cyan="${cyan_coverage:-0}" \
+            -v red="${red_coverage:-1}" \
+            'BEGIN { exit !(green > 0.0001 && cyan > 0.0001 && red < 0.00001) }'; then
+            reason="native rendering probes failed or are missing (green=${green_coverage:-unavailable} cyan=${cyan_coverage:-unavailable} red=${red_coverage:-unavailable})"
         fi
     fi
 
@@ -265,6 +320,24 @@ for scene in "${SCENES[@]}"; do
             reason="terrain relief bands are black, flat, or tonally indistinguishable (mean=${terrain_mean:-unavailable} std=${terrain_std:-unavailable} far=${far_std:-unavailable} middle=${middle_std:-unavailable} near=${near_std:-unavailable})"
         else
             echo "    pixels — terrain mean=${terrain_mean} std=${terrain_std} far=${far_mean}/${far_std} middle=${middle_mean}/${middle_std} near=${near_mean}/${near_std}"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$RENDER_QUALITY" == "high" && "$name" =~ ^sun_material_precision(_dem)?$ ]]; then
+        # Keep the material resident while crossing the horizon and changing
+        # the authored angle; an initial frame alone cannot exercise coalescing.
+        if ! python3 scripts/api/test_sun_material_precision.py \
+            --port "$RENDER_API_PORT" --scene "$REPO_ROOT/assets/scenes/tests/${name}.usda" \
+            --output "$output/transitions" >"$output/transitions.log" 2>&1; then
+            reason="live Sun material GPU transitions failed; see $output/transitions.log"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" == "terrain_shader_appearance" ]]; then
+        if ! python3 scripts/api/test_terrain_overlay_prepasses.py \
+            --port "$RENDER_API_PORT" --quality "$RENDER_QUALITY" \
+            --output "$output/overlays" >"$output/overlays.log" 2>&1; then
+            reason="terrain diagnostic prepass transitions failed; see $output/overlays.log"
         fi
     fi
 

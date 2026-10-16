@@ -8,6 +8,7 @@ fn simulation_dependencies(me, ctx) {
 }
 
 fn boundary_matches(error_m) { error_m < 0.005 }
+fn width_matches(width_m, minimum_m) { width_m + 0.000001 >= minimum_m }
 
 fn check_continuation(me, ctx) {
     let failures = [];
@@ -27,9 +28,15 @@ fn check_continuation(me, ctx) {
             "the DEM source shader is not reflected and valid"));
         failures.push(t_true(!boundary_matches(80.0),
             "the boundary validator must reject a displaced corner"));
+        let minimum_width = 2.0 * collar.half_extent_m
+            * (1.0 + 1.0 / (collar.source_resolution.to_int() - 1).to_float());
+        failures.push(t_true(!width_matches(minimum_width * 0.5, minimum_width),
+            "the continuation validator must reject a compressed perimeter rim"));
         for width in collar.widths_m {
             failures.push(t_true(abs(width - collar.widths_m[0]) < 0.000001,
                 "DEM exterior must use one shared transition distance"));
+            failures.push(t_true(width_matches(width, minimum_width),
+                "DEM exterior compresses broad terrain into a narrow rim"));
         }
         let spokes = collar.corner_spokes;
         let maximum_corner_grade = 0.0;

@@ -12,8 +12,8 @@
 //!
 //! See `docs/architecture/render-decoupling.md`.
 
+mod data_texture;
 mod env_light;
-mod float_texture;
 mod gpu_culling;
 pub mod horizon_shade;
 mod light_transform_safety;
@@ -166,7 +166,7 @@ impl Plugin for LuncoRenderPlugin {
         }
         scene_camera::build(app);
         gpu_culling::build(app);
-        float_texture::build(app);
+        data_texture::build(app);
         light_transform_safety::build(app);
         local_light_shadow_relevance::build(app);
         shadow_view_schedule::build(app);

@@ -1,123 +1,38 @@
-//! Modelica scheme handler for [`UriRegistry`](lunco_workbench_core::uri::UriRegistry).
-//!
-//! Handles both flavours of `modelica://` URI defined in MLS Annex D:
-//!
-//! * **Class references** — `modelica://Modelica.Blocks.Examples.PID`,
-//!   optionally with an anchor: `...#Overview`. Resolved to
-//!   [`UriResolution::OpenDocument`] (or `NavigateAnchor` when
-//!   `#anchor` is present) with `doc_kind = "modelica"`.
-//!
-//! * **Resource references** — `modelica://Modelica.Blocks/Resources/
-//!   Images/foo.png`. The portion up to the first `/` is the class
-//!   path (dotted), the remainder is a subpath inside that class's
-//!   package directory on disk. Resolved to
-//!   [`UriResolution::OpenResource`] pointing at the concrete file
-//!   under the source library cache.
-//!
-//! Registered from [`crate::ui::commands::ModelicaCommandsPlugin::build`]
-//! (`ui/commands.rs`); the observer in this module then translates
-//! `UriClicked` with `doc_kind == "modelica"` into the existing
-//! [`lunco_modelica_ui_core::OpenClass`] command — so clicks in Documentation reuse the same
-//! drill-in pipeline as clicks from the Welcome tab or the canvas.
-
-use std::path::PathBuf;
+//! Modelica link interpretation. Resource links retain their URI and enter the
+//! shared workbench preview; class links use the existing class-open command.
 
 use bevy::prelude::*;
+use lunco_modelica_ast::resource_uri::ModelicaUri;
 use lunco_workbench_core::uri::{UriClicked, UriHandler, UriResolution};
 
-/// Handler for `modelica://` URIs.
+/// Modelica link semantics; resource I/O runs through the shared asset loader.
 pub struct ModelicaUriHandler;
-
 impl UriHandler for ModelicaUriHandler {
     fn scheme(&self) -> &'static str {
         "modelica"
     }
-
     fn resolve(&self, uri: &str) -> UriResolution {
-        // Strip `modelica://` prefix case-insensitively. `UriRegistry`
-        // lower-cases the scheme for dispatch, but the rest of the
-        // URI is passed through verbatim — tolerant of `Modelica://`
-        // we sometimes see in older source library docs.
-        let Some(body) = uri
-            .strip_prefix("modelica://")
-            .or_else(|| uri.strip_prefix("Modelica://"))
-        else {
-            return UriResolution::NotHandled;
-        };
-
-        // Split off anchor fragment (`#Overview` → "Overview") before
-        // parsing so the anchor doesn't end up attached to a class
-        // path or filename.
-        let (body, anchor) = match body.split_once('#') {
-            Some((b, a)) => (b, Some(a.to_string())),
-            None => (body, None),
-        };
-
-        if body.is_empty() {
-            return UriResolution::NotHandled;
-        }
-
-        // Split on the FIRST `/`. Modelica convention:
-        //   `A.B.C`              → class reference (no slash)
-        //   `A.B.C/path/to/file` → resource under class A.B.C's
-        //                          package directory (slash present)
-        match body.split_once('/') {
-            Some((class_dotted, subpath)) => resolve_resource(class_dotted, subpath),
-            None => {
-                if let Some(anchor) = anchor {
-                    UriResolution::NavigateAnchor {
-                        identifier: body.to_string(),
-                        anchor,
-                    }
-                } else {
-                    UriResolution::OpenDocument {
-                        doc_kind: "modelica",
-                        identifier: body.to_string(),
-                    }
-                }
-            }
+        match ModelicaUri::parse(uri) {
+            Ok(Some(parsed)) if parsed.resource.is_some() => UriResolution::OpenResource {
+                uri: uri.to_owned(),
+            },
+            Ok(Some(parsed)) => match parsed.fragment {
+                Some(anchor) => UriResolution::NavigateAnchor {
+                    identifier: parsed.qualified,
+                    anchor,
+                },
+                None => UriResolution::OpenDocument {
+                    doc_kind: "modelica",
+                    identifier: parsed.qualified,
+                },
+            },
+            Ok(None) => UriResolution::NotHandled,
+            Err(message) => UriResolution::Rejected { message },
         }
     }
 }
 
-/// Compute the on-disk path for a `modelica://Pkg.Sub/Resources/...`
-/// URI. Walks down from the source library cache root (`lunco_assets_core::library_dir()`)
-/// using each dotted segment as a directory. Packages outside the
-/// source library tree (user workspace libraries) aren't resolved yet — that's
-/// a follow-up once the Twin / user-library path map is available
-/// from the workbench crate.
-fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
-    let library_root = lunco_modelica_library::source_library::source_library_cache_dir();
-    let mut path: PathBuf = library_root;
-    for segment in rumoca_core::qualified_name_segments(class_dotted) {
-        if segment.is_empty() {
-            return UriResolution::NotHandled;
-        }
-        path.push(segment);
-    }
-    for segment in subpath.split('/') {
-        if segment.is_empty() {
-            continue;
-        }
-        path.push(segment);
-    }
-    if path.exists() {
-        UriResolution::OpenResource { path }
-    } else {
-        // Degrade to `External` rather than `NotHandled` — the
-        // renderer can then show the raw URI + a tooltip telling the
-        // user the resource wasn't found, rather than silently
-        // swallowing the click.
-        UriResolution::NotHandled
-    }
-}
-
-/// Observer: translate `UriClicked` events for `modelica://` URIs
-/// into the concrete [`lunco_modelica_ui_core::OpenClass`] command
-/// command. Non-Modelica resolutions are ignored — other domain
-/// observers pick them up. Resource opens + anchor navigation are
-/// logged at `debug` for now (no domain command yet wires them; a
-/// follow-up task picks those up).
+/// Dispatch class links through the existing Modelica class owner.
 pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) {
     let ev = trigger.event();
     match &ev.resolution {
@@ -140,17 +55,6 @@ pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) 
                 qualified: identifier.clone(),
                 action: lunco_modelica_ui_core::ClassAction::View,
             });
-        }
-        UriResolution::OpenResource { path } => {
-            // TODO: pipe to a generic "open this file" command once
-            // the workbench has one. For source library Documentation links
-            // most resources are images already rendered inline, so
-            // this path mostly fires for intentional right-click
-            // "open resource" flows we haven't built yet.
-            bevy::log::debug!(
-                "modelica URI resource click (not yet routed): {}",
-                path.display()
-            );
         }
         _ => {}
     }
@@ -191,9 +95,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_body_returns_not_handled() {
+    fn empty_body_is_rejected() {
         let h = ModelicaUriHandler;
-        assert_eq!(h.resolve("modelica://"), UriResolution::NotHandled);
+        assert!(matches!(
+            h.resolve("modelica://"),
+            UriResolution::Rejected { .. }
+        ));
     }
 
     #[test]

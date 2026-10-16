@@ -28,6 +28,7 @@ wasm-bindgen-test = "0.3.76"
 # Wasm-only: `WebStorage` (localStorage) + `OpfsStorage` (binary assets via
 # OPFS). Native builds use `FileStorage` (std::fs) and pull none of this.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+async-channel = "2.5"
 web-sys = { workspace = true, features = [
     "Window",
     "Storage",

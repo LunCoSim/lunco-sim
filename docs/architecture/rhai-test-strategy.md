@@ -279,6 +279,17 @@ recipes and their acceptance scenes stay in the owning Twin.
    The production discovery API lives in `lunco-scene-validation`, alongside
    the asset and stage validation it reuses; the scene mutation crate does not
    own test inventory.
+   Discovery admits each scene through `lunco-twin::root_for_file` and
+   `TwinRoots`, composes its Twin-relative source identity, and prepares the
+   composed asset references through the same `PreparedAssetPaths` owner as
+   runtime loading. `resolve_program` consumes that prepared USD reader;
+   source bytes come from the shared Twin/library asset reader. Test membership
+   uses the source's catalogue location rather than its temporary mount
+   authority. The catalogue reuses mounts within one isolated admission scope
+   and does not execute programs or depend on the process working directory.
+   Bare search paths retain layer-local precedence and Twin-root search;
+   `./` and `../` paths remain strictly relative to their contributing layer.
+   Missing or malformed test sources remain terminal discovery errors.
    Omission means deterministic headless execution; `TEST_KIND = "graphics"`
    selects the GPU-backed pixel-capture renderer, `TEST_KIND =
    "render-contract"` selects the GPU-backed offscreen host for render
