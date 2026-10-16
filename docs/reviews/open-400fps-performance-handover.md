@@ -10163,3 +10163,19 @@ the next capture can distinguish worker lifetimes from dispatch gaps. It does
 not change query assignment, correction order or geometry. The native
 `SubstepSchedule` already uses Bevy's single-threaded executor. This older
 instrumented cohort is diagnostic evidence, not candidate FPS acceptance.
+
+### Current UI integration — 2026-10-16
+
+Integrated source `f0285d63c` preserves main's scoped HUD and popup callback
+lifetimes. The normal default production build passes. Headless PID 2253284
+(API 4382) and windowed PID 2277746 (API 4384) pass all six authored plume
+checks at tick 241. The windowed UI preparation gate passes nine checks on
+PID 2309467/API 4382; the real window/input callback driver passes 18 authored
+assertions on PID 2310822/API 4384. All owned sessions exit and release their
+ports. Logs use `target/cosim-ui-integration-*`.
+
+The generated command reference combines fresh windowed and headless schemas
+with the unchanged optional networking schema, yielding all 275 commands.
+Fresh definitions take precedence. Networking source is unchanged since the
+recorded shared-stepping schema; no networking host is launched for validation.
+No full-Twin performance result is inferred from these focused gates.

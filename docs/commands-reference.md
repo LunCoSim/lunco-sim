@@ -4158,9 +4158,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 264 commands regenerated from the GUI runtime schema; 11 unchanged optional
-     networking entries retained from the canonical reference. Scanned 998 .rs
-     files for docs (0 parse failure(s) skipped).
+<!-- 275 commands from the runtime schema; scanned 999 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred
 -->
