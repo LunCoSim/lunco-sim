@@ -477,7 +477,7 @@ pub(crate) fn finish_twin_report(
 /// The checks above are what the LOADER itself would refuse — compiled, because
 /// they are the loader's own code paths. This is the other half: rules about what
 /// is merely WRONG, authored in `assets/scripting/policy/lint_<domain>.rhai` and
-/// replaceable on a running sim (`bind_policy("lint.usd", …)`). One linter per
+/// installed through deterministic application/Twin policy manifests. One linter per
 /// domain: a USD rule, a Modelica rule and a script rule share no vocabulary.
 ///
 /// The facts are the ones the pre-flight already computed — `report.info` per

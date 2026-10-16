@@ -30,6 +30,7 @@ use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use lunco_core::AppSceneExt;
 use lunco_core::MobilityRoot;
 use lunco_physics::drive::{CoordinateDrive, integrate_coordinate_drive};
 use lunco_port_core::Port;
@@ -117,8 +118,8 @@ impl Plugin for LunCoMobilityPlugin {
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
 
-        app.init_resource::<DynamicFixedBodies>()
-            .init_resource::<DifferentialSolverOrder>()
+        app.init_scene_resource::<DynamicFixedBodies>()
+            .init_scene_resource::<DifferentialSolverOrder>()
             .add_systems(
                 PhysicsSchedule,
                 prepare_differential_order
@@ -3334,3 +3335,7 @@ mod suspension_visuals_tests {
         assert!((spring_tf.translation.y - 0.25f32).abs() < 1e-6);
     }
 }
+
+impl lunco_core::SceneResource for DynamicFixedBodies {}
+
+impl lunco_core::SceneResource for DifferentialSolverOrder {}

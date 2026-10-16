@@ -371,3 +371,16 @@ trace is not a session replay log.
   reading the closest shipped production exemplar and its runtime test.
 - ❌ Forking a production controller only to rename the vehicle — keep reusable
   equations and put vehicle-specific facts in USD-authorized parameters.
+
+Rover command authority is authored once in `RoverCommandAuthority.mo`, consumed
+by both shared drive laws. `drive`/`brake` select direct program control;
+`modelica_waypoint` selects program guidance. Raw session `SetPorts` commands
+require possession and remain inactive without it. Verify mode boundaries with
+`modelica_drive_law` and real travel with the matching drivetrain scene gate.
+Keep navigation inputs in double precision and preserve travel authority until
+the authored arrival circle is reached. Validate slope arrival through the real
+sensor event; a stopped rover outside the circle has not arrived.
+
+Fixed-step Modelica programs initialize through the same Rumoca Model Exchange
+host as adaptive programs. Verify authored initial equations and connected t=0
+observations before motion; a lowered start guess is not an initialized state.

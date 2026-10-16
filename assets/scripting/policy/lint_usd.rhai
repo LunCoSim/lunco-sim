@@ -1,15 +1,9 @@
 // ── USD lint policy — the rules, in rhai ────────────────────────────────────
 //
-// Hook `lint.usd`, entry `lint_usd(facts)`. Registered at startup from this file
-// (the authored application policy manifest) and REPLACEABLE AT RUNTIME:
-//
-//     bind_policy("lint.usd", "lint_usd", my_source)    // from any scenario/REPL
-//     unbind_policy("lint.usd")                          // remove the active rules
-//
-// so a rule can be written, tried and tightened by an explicit RunLint command
-// against the selected composed stage, with no rebuild. That is the point of
-// authoring rules here instead of in Rust: a rule you cannot try immediately is
-// a rule nobody writes.
+// Hook `lint.usd`, entry `lint_usd(facts)`. The authored application/Twin
+// policy manifest installs this deterministic contract. Edit its authored
+// source and reload that policy layer, then use RunLint against the selected
+// composed stage. Inline non-deterministic bindings cannot replace it.
 //
 // ── WHAT A RULE MAY SEE ─────────────────────────────────────────────────────
 //

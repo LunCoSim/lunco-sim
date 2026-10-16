@@ -887,6 +887,12 @@ curl -s :4101/api/commands \
 The response carries the actual payload or an error. Commands that complete
 immediately may return their result directly; deferred commands keep this same
 request open until their owning handler produces the result.
+An admission handler that queues work returns `Result<CommandOutcome, String>`
+with `Pending`; it must not record a successful acknowledgement before the
+queued invocation executes. The owner completes or retires that pending result
+through `finish_command_result`. If the handler instead records a synchronous
+admission failure, the API dispatcher returns it on the deferred transport
+correlation immediately. No queued operation is required to report that failure.
 
 Long-running lifecycles (queued, progress, cancel) remain domain state, such as
 an experiment's `RunStatus`, and are read through the owning query provider.

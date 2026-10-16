@@ -224,7 +224,12 @@ unrequested datasets remain quiet. `SceneTransitionStarted` retires outstanding 
 `SceneTeardown` removes domain data derived from the outgoing scene.
 
 Rust also validates the generic menu tree and replaces that provider's
-contribution; selected actions route through the existing Rhai tool hook. Twin
+contribution. The UI host binds every leaf to an explicit provider-owned
+`ToolHookBinding` lease before publishing it. Each installation has a fresh
+widget identity; replacement retires that root and its endpoints. Selection
+creates a scene-bound invocation child, so application menus can remain
+installed across resets while old input and queued work are revoked.
+Selected actions route through the shared bound Rhai tool queue. Twin
 contributions are cleared on `TwinClosed`, and a late contribution for an
 already-closed Twin is discarded. An absent optional hook clears its
 contribution; a fault or malformed action map is warned and queues no asset
@@ -361,6 +366,23 @@ When a composed USD scene authors `LunCoPolicy` prims, those policies form a
 scene-owned layer above the application and Twin manifest layers. Removing a
 USD policy restores the lower compiled layer; a malformed authored override
 remains unavailable and blocks that seam rather than silently falling through.
+Full scene teardown reconciles that USD layer to empty before replacement
+projection, including policy-owned synthesizer selectors. Its source handles
+and prepared-fact caches reset at the registered scene-resource boundary; the
+next pass refreshes even when an admitted source retains its identity.
+The synthesizer bridge follows effective-registry changes and records its actual
+registrations independently of policy definitions, so earlier Twin retirement
+cannot erase the information needed to unregister an outgoing selector.
+
+Inline `bind_policy` and `unbind_policy` mutate the caller's existing application
+or Twin layer through `ScriptedPolicyRegistry`. Twin callers must hold the exact
+active Twin and committed scene generation. Application callers cannot replace
+or unbind an effective Twin policy, and USD-authored policies require editing
+their USD owner. A failed inline compilation removes the prior implementation
+in the calling layer; unbinding a Twin implementation retains its scope claim
+until that layer reloads or closes. Twin closure restores the retained
+application layer. Application-owned inline bindings keep their explicit
+application lifetime.
 
 Policy loading is dynamic. A source or manifest error is recorded in
 `PolicyLoadReport` and exposed through `policy_status()`. A failed replacement

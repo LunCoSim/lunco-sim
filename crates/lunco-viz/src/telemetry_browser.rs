@@ -80,7 +80,7 @@ pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
 
 /// Runtime-authored view intent for the telemetry browser.
 ///
-/// The browser remains the owner of its egui-local state; commands publish a
+/// The browser owns its presentation state; commands publish a
 /// typed request here and the panel consumes it on its next render. This keeps
 /// HTTP/Rhai automation independent of a concrete dock layout or panel object.
 #[derive(Resource, Clone, Debug, Default)]
@@ -88,6 +88,8 @@ pub struct TelemetryBrowserView {
     pub filter: String,
     pub signal: String,
 }
+
+impl lunco_core::SceneResource for TelemetryBrowserView {}
 
 /// Presentation-only preferences for the telemetry browser.
 ///
@@ -202,7 +204,7 @@ fn drop_queue_id() -> egui::Id {
 }
 
 fn drop_queue(ctx: &egui::Context) -> DropQueue {
-    ctx.data_mut(|d| {
+    crate::scene_state::scene_data(ctx, |d| {
         if let Some(existing) = d.get_temp(drop_queue_id()) {
             existing
         } else {
@@ -224,7 +226,7 @@ pub fn queue_plot_drop(ctx: &egui::Context, req: PlotDropRequest) {
 /// Drain pending plot-drop requests. Called by the canvas host once
 /// per frame; it inserts a node per request into its scene (see
 /// [`plot_node_at`]). Draining semantics: requests queued while no
-/// canvas is open stay queued until one drains them.
+/// canvas is open stay queued until one drains them or the scene retires.
 pub fn drain_plot_drops(ctx: &egui::Context) -> Vec<PlotDropRequest> {
     drop_queue(ctx)
         .lock()
@@ -905,10 +907,12 @@ impl TelemetryCatalogBuildState {
     }
 }
 
-pub(crate) fn clear_telemetry_catalog(mut build: ResMut<TelemetryCatalogBuildState>) {
-    let next_key = build.catalog.key.wrapping_add(1);
-    *build = TelemetryCatalogBuildState::default();
-    build.catalog.key = next_key;
+impl lunco_core::SceneResource for TelemetryCatalogBuildState {
+    fn clear_scene(&mut self) {
+        let next_key = self.catalog.key.wrapping_add(1);
+        *self = Self::default();
+        self.catalog.key = next_key;
+    }
 }
 
 fn read_entity_catalog_facts(
@@ -2144,7 +2148,12 @@ fn unit_tooltip(unit: Option<&str>) -> &'static str {
 /// Telemetry channel browser panel. Registered by
 /// [`crate::LuncoVizPlugin`]; no host wiring needed for the panel
 /// itself. See the module docs for the two plot-creation doors.
-pub struct TelemetryBrowserPanel {
+#[derive(Default)]
+pub struct TelemetryBrowserPanel;
+
+/// Scene-owned presentation buffers, including while the panel is hidden.
+#[derive(Resource)]
+pub(crate) struct TelemetryBrowserState {
     filter: String,
     visibility_cache: Option<VisibilityCache>,
     visible_rows: Vec<VisibleTelemetryRow>,
@@ -2175,7 +2184,7 @@ struct RequestedSignalSelection {
     resolved: Option<SignalRef>,
 }
 
-impl Default for TelemetryBrowserPanel {
+impl Default for TelemetryBrowserState {
     fn default() -> Self {
         Self {
             filter: String::new(),
@@ -2195,6 +2204,16 @@ impl Default for TelemetryBrowserPanel {
             // model state by default.
             show_model_variables: true,
         }
+    }
+}
+
+impl lunco_core::SceneResource for TelemetryBrowserState {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            focus_only: self.focus_only,
+            show_model_variables: self.show_model_variables,
+            ..Default::default()
+        };
     }
 }
 
@@ -2219,6 +2238,17 @@ impl Panel for TelemetryBrowserPanel {
         PanelMenuGroup::Lunica
     }
 
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        if ctx
+            .resource_scope::<TelemetryBrowserState, _>(|ctx, state| state.render(ui, ctx))
+            .is_none()
+        {
+            ui.label("Telemetry browser state is unavailable.");
+        }
+    }
+}
+
+impl TelemetryBrowserState {
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         if let Some(view) = ctx.resource::<TelemetryBrowserView>() {
             if self.filter != view.filter {
@@ -2943,17 +2973,17 @@ mod tests {
 
     #[test]
     fn incremental_catalog_async_batches_do_not_restart_for_selection_or_samples() {
+        use lunco_core::AppSceneExt;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, lunco_signal::SignalRegistryPlugin))
-            .init_resource::<TelemetryCatalogBuildState>()
+            .init_scene_resource::<TelemetryCatalogBuildState>()
             .init_resource::<TelemetryFocus>()
             .add_systems(
                 Update,
                 (prepare_telemetry_catalog, poll_telemetry_catalog)
                     .chain()
                     .after(lunco_signal::SignalDescriptorPublish),
-            )
-            .add_systems(lunco_core::SceneTeardown, clear_telemetry_catalog);
+            );
         let owner = app.world_mut().spawn(Name::new("Source")).id();
         let signal = SignalRef::new(owner, "signal_0");
         {
@@ -3147,7 +3177,7 @@ mod tests {
 
     #[test]
     fn telemetry_browser_starts_with_complete_model_state_visible() {
-        assert!(TelemetryBrowserPanel::default().show_model_variables);
+        assert!(TelemetryBrowserState::default().show_model_variables);
         assert!(!TelemetryDisplaySettings::default().show_archived);
     }
 

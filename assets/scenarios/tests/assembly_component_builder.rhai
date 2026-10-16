@@ -49,7 +49,7 @@ fn fail(me, message) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" {
             // The Editor inspection contract carries the document id and
@@ -62,16 +62,16 @@ fn find_document() {
             }
         }
     }
-    -1
+    ()
 }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.phase = 0;
     this.elapsed = 0.0;
     this.wait_generation = -1;
@@ -87,9 +87,9 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "empty component-builder fixture was not discoverable"); }
             return;
         }
@@ -99,6 +99,34 @@ fn on_tick(me, ctx) {
     if !query_ok(before) || before.generation == () {
         fail(this, "empty assembly did not expose a document generation");
         return;
+    }
+
+    if this.phase == 2 {
+        let proposal = this.proposal_request;
+        if proposal.status == "pending" { proposal = command_result(proposal.id); }
+        if proposal == () || proposal.status == "pending" { return; }
+        if proposal.ok != true {
+            fail(this, "component-instance preparation failed: " + proposal.to_string());
+            return;
+        }
+        let review = assembly_edit::review_session(this.doc);
+        if !query_ok(review) || review.proposals.len() != 1
+            || review.proposals[0].diagnostics.len() != 0 {
+            fail(this, "component-instance proposal did not validate cleanly: " + review.to_string());
+            return;
+        }
+        this.commit_request = assembly_edit::commit_proposal(review.proposals[0].id);
+        this.phase = 3;
+    }
+    if this.phase == 3 {
+        let result = this.commit_request;
+        if result.status == "pending" { result = command_result(result.id); }
+        if result == () || result.status == "pending" { return; }
+        if result.ok != true {
+            fail(this, "component-instance commit failed: " + result.to_string());
+            return;
+        }
+        this.phase = 1;
     }
 
     if this.phase == 0 {
@@ -205,6 +233,14 @@ fn on_tick(me, ctx) {
                 this.checks.push(t_true(plan.frame_paths == [BUNDLE + "/Mount", BUNDLE + "/DeployEnd"]
                         && plan.input_ports == ["inputs:deployment"],
                     "component bundle returns exact frame paths and standard input ports"));
+                // The recipe supplies a binding identity; this caller owns
+                // the Material prim bound by the generated component.
+                plan.ops.push(#{ AddPrim: #{ edit_target: "@root@",
+                    parent_path: BUNDLE, name: "Looks", type_name: "Scope",
+                    reference: (), reference_prim_path: "" }});
+                plan.ops.push(#{ AddPrim: #{ edit_target: "@root@",
+                    parent_path: BUNDLE + "/Looks", name: "Panel", type_name: "Material",
+                    reference: (), reference_prim_path: "" }});
                 let proposal = assembly_edit::propose(
                     this.doc, #{ Assembly: () }, "Build generic panel component bundle",
                     plan.ops, before.generation,
@@ -315,7 +351,7 @@ fn on_tick(me, ctx) {
                     && context.actions.contains("transform")
                     && !context.actions.contains("plan_component_attachment")
                     && !context.actions.contains("plan_existing_mount_realignment"),
-                "authoring context exposes exact identity, generation, and available actions"));
+                "authoring context exposes exact identity, generation, and available actions: " + context.error.to_string()));
             this.checks.push(t_true(query_ok(component_context)
                     && component_context.kind == "component_update_context"
                     && component_context.doc_id == this.doc
@@ -326,7 +362,7 @@ fn on_tick(me, ctx) {
                         == "assembly_builder::component_bundle_update_plan"
                     && component_context.operation.topology_preserved
                     && component_context.properties.ok,
-                "component editor exposes one exact, recipe-driven update workflow"));
+                "component editor exposes one exact, recipe-driven update workflow: " + component_context.error.to_string()));
             this.checks.push(t_true(query_ok(frame_catalog)
                     && frame_catalog.kind == "functional_frame_catalog"
                     && frame_catalog.edit_target == "@root@"
@@ -587,19 +623,9 @@ fn on_tick(me, ctx) {
             fail(this, "component-instance proposal was rejected: " + proposal.error);
             return;
         }
-        let review = assembly_edit::review_session(this.doc);
-        if !query_ok(review) || review.proposals.len() != 1
-            || review.proposals[0].diagnostics.len() != 0 {
-            fail(this, "component-instance proposal did not validate cleanly");
-            return;
-        }
-        let committed = assembly_edit::commit_proposal(review.proposals[0].id);
-        if !query_ok(committed) {
-            fail(this, "component-instance proposal could not be committed: " + committed.error);
-            return;
-        }
+        this.proposal_request = proposal;
         this.wait_generation = before.generation;
-        this.phase = 1;
+        this.phase = 2;
         return;
     }
 

@@ -248,12 +248,6 @@ impl DiagnosticVisualStore {
         self.generation
     }
 
-    fn reset_for_teardown(&mut self) {
-        self.leases.clear();
-        self.generation = self.generation.wrapping_add(1);
-        self.last_error = None;
-    }
-
     fn api_value(&self, entities: &ApiEntityRegistry) -> lunco_api_core::ApiValue {
         let mut source_leases: Vec<_> = self.leases.values().collect();
         source_leases.sort_by_key(|lease| lease.id);
@@ -547,9 +541,15 @@ register_commands!(
     on_set_diagnostic_layers,
 );
 
-/// Clear all leases before scene entities are deferred-despawned.
-pub fn reset_diagnostic_visuals(mut store: ResMut<DiagnosticVisualStore>) {
-    store.reset_for_teardown();
+/// Retire scene leases while preserving monotonic lease identities.
+impl lunco_core::SceneResource for DiagnosticVisualStore {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            next_id: self.next_id,
+            generation: self.generation.wrapping_add(1),
+            ..Default::default()
+        };
+    }
 }
 
 /// Revoke explicit leases whose target or mount disappeared.  This runs every
@@ -837,7 +837,7 @@ mod tests {
             "default".into(),
             root,
         );
-        store.reset_for_teardown();
+        lunco_core::SceneResource::clear_scene(&mut store);
         assert!(store.release(id).is_err());
         assert_eq!(store.generation(), 1);
     }

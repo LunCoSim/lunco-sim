@@ -448,11 +448,57 @@ struct FileResult {
     generation: u64,
     result: Result<(), String>,
     warnings: Vec<String>,
+}
+struct PendingViewFile {
+    lease: super::CanvasSourceLease,
     command_id: Option<u64>,
+    task: Task<FileResult>,
 }
 #[derive(Resource, Default)]
 pub struct PendingViewFiles {
-    tasks: std::collections::HashMap<u64, Task<FileResult>>,
+    tasks: std::collections::HashMap<u64, PendingViewFile>,
+}
+
+impl lunco_core::SceneResource for PendingViewFiles {
+    fn clear_scene(&mut self) {
+        let mut outgoing = std::mem::take(self);
+        outgoing
+            .tasks
+            .retain(|_, pending| pending.lease.document.is_some());
+        self.tasks = outgoing.tasks;
+    }
+}
+
+impl PendingViewFiles {
+    fn retire_where(
+        &mut self,
+        results: &mut CommandResults,
+        retired: impl Fn(&super::CanvasSourceLease) -> bool,
+    ) {
+        self.tasks.retain(|_, job| {
+            if !retired(&job.lease) {
+                return true;
+            }
+            if let Some(id) = job.command_id {
+                results.record(
+                    id,
+                    Err("Diagram source retired before file operation publication".into()),
+                );
+            }
+            false
+        });
+    }
+
+    pub(super) fn retire_document(&mut self, document: DocumentId, results: &mut CommandResults) {
+        self.retire_where(results, |lease| lease.document == Some(document));
+    }
+}
+
+fn retire_scene_view_files(
+    mut pending: ResMut<PendingViewFiles>,
+    mut results: ResMut<CommandResults>,
+) {
+    pending.retire_where(&mut results, |lease| lease.document.is_none());
 }
 
 #[on_command(ConnectionViewFile)]
@@ -488,6 +534,9 @@ fn view_file(
             return Err("This view file is already bound to another diagram document".into());
         }
         let state = state_for(&mut views, cmd.view_id)?;
+        let lease = state
+            .source_lease()
+            .ok_or("Diagram file operation has no admitted source")?;
         let host = state
             .view_document
             .as_mut()
@@ -517,49 +566,52 @@ fn view_file(
         let command_id = command.get();
         pending.tasks.insert(
             cmd.view_id,
-            AsyncComputeTaskPool::get().spawn(async move {
-                let mut loaded = None;
-                let mut warnings = Vec::new();
-                let result = (|| -> Result<(), String> {
-                    let file = std::path::Path::new(&path);
-                    if save {
-                        data.validate().map_err(|error| error.to_string())?;
-                        let bytes =
-                            toml::to_string_pretty(&data).map_err(|error| error.to_string())?;
-                        lunco_storage::write_file_sync(file, bytes.as_bytes())
-                            .map_err(|error| error.to_string())?;
-                    } else {
-                        match lunco_storage::read_text_file_sync(file) {
-                            Ok(text) => {
-                                let (imported, issues) = read_views(&text, &data.source);
-                                warnings = issues;
-                                loaded = Some(imported);
-                            }
-                            Err(error) => {
-                                warnings.push(format!(
-                                    "View file unavailable: {error}; using automatic layout"
-                                ));
-                                loaded = Some(
-                                    lunco_doc::diagram_view::DiagramViewDocument::new(
-                                        data.source.clone(),
-                                    )
-                                    .data()
-                                    .clone(),
-                                );
+            PendingViewFile {
+                lease,
+                command_id,
+                task: AsyncComputeTaskPool::get().spawn(async move {
+                    let mut loaded = None;
+                    let mut warnings = Vec::new();
+                    let result = (|| -> Result<(), String> {
+                        let file = std::path::Path::new(&path);
+                        if save {
+                            data.validate().map_err(|error| error.to_string())?;
+                            let bytes =
+                                toml::to_string_pretty(&data).map_err(|error| error.to_string())?;
+                            lunco_storage::write_file_sync(file, bytes.as_bytes())
+                                .map_err(|error| error.to_string())?;
+                        } else {
+                            match lunco_storage::read_text_file_sync(file) {
+                                Ok(text) => {
+                                    let (imported, issues) = read_views(&text, &data.source);
+                                    warnings = issues;
+                                    loaded = Some(imported);
+                                }
+                                Err(error) => {
+                                    warnings.push(format!(
+                                        "View file unavailable: {error}; using automatic layout"
+                                    ));
+                                    loaded = Some(
+                                        lunco_doc::diagram_view::DiagramViewDocument::new(
+                                            data.source.clone(),
+                                        )
+                                        .data()
+                                        .clone(),
+                                    );
+                                }
                             }
                         }
+                        Ok(())
+                    })();
+                    FileResult {
+                        data: loaded,
+                        path,
+                        generation,
+                        result,
+                        warnings,
                     }
-                    Ok(())
-                })();
-                FileResult {
-                    data: loaded,
-                    path,
-                    generation,
-                    result,
-                    warnings,
-                    command_id,
-                }
-            }),
+                }),
+            },
         );
         state.last_error = None;
         if let Some(id) = command.get() {
@@ -586,19 +638,28 @@ pub fn poll_view_files(
     mut views: ResMut<UsdCanvasState>,
     mut results: ResMut<CommandResults>,
 ) {
+    pending.retire_where(&mut results, |lease| {
+        !std::iter::once(&views.scene)
+            .chain(views.sessions.values())
+            .any(|state| state.source_lease() == Some(*lease))
+    });
     let completed: Vec<_> = pending
         .tasks
         .iter_mut()
-        .filter_map(|(id, task)| {
-            future::block_on(future::poll_once(task)).map(|result| (*id, result))
+        .filter_map(|(id, pending)| {
+            future::block_on(future::poll_once(&mut pending.task))
+                .map(|result| (*id, pending.lease, pending.command_id, result))
         })
         .collect();
-    for (id, mut completed) in completed {
+    for (id, lease, command_id, mut completed) in completed {
         pending.tasks.remove(&id);
         let result = (|| -> Result<Ack, String> {
             completed.result?;
             let warnings = &mut completed.warnings;
             let state = state_for(&mut views, id)?;
+            if state.source_lease() != Some(lease) {
+                return Err("Diagram source retired before file operation publication".into());
+            }
             let host = state
                 .view_document
                 .as_mut()
@@ -654,7 +715,7 @@ pub fn poll_view_files(
         } else if let Err(error) = &result {
             warn!("[connection-view] {error}");
         }
-        if let Some(command_id) = completed.command_id {
+        if let Some(command_id) = command_id {
             results.record(command_id, result);
         }
     }
@@ -662,11 +723,14 @@ pub fn poll_view_files(
 
 register_commands!(create_view, move_node, undo_view, view_file);
 pub fn init_view_commands(app: &mut App) {
+    use lunco_core::AppSceneExt;
     super::drop_assets::init(app);
     super::navigation::init(app);
     super::groups::init(app);
     register_all_commands(app);
-    app.init_resource::<PendingViewFiles>();
+    app.init_scene_resource::<PendingViewFiles>()
+        .add_systems(lunco_core::SceneTeardown, retire_scene_view_files)
+        .add_observer(super::retire_closed_diagram_document);
     app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
     app.world_mut()
         .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
@@ -766,5 +830,116 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
         Ok(Some(
             api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "groups":groups,"nodes": nodes, "connections": connections, "selection": { "key": selected_key, "port": state.canvas.selection.port().map(|port| port.port.as_str()), "connection_count": selected_edges.len() }, "editing": state.doc.is_some(), "edit_target": state.edit_target.as_ref().map(|target| format!("{target:?}")), "connection_count": full.edge_count(),"rendered_connection_count":state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
         ))
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::super::{LayoutJobs, UsdCanvasSessionState};
+    use super::*;
+    use lunco_core::{AppSceneExt, CommandOutcome};
+
+    #[test]
+    fn scene_lifecycle_fences_diagram_work_and_preserves_live_previews() {
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut app = App::new();
+        app.init_scene_resource::<UsdCanvasState>()
+            .init_scene_resource::<LayoutJobs>()
+            .init_scene_resource::<PendingViewFiles>()
+            .init_resource::<CommandResults>()
+            .add_systems(lunco_core::SceneTeardown, retire_scene_view_files)
+            .add_systems(Update, poll_view_files)
+            .add_observer(super::super::retire_closed_diagram_document);
+        let root = app.world_mut().spawn_empty().id();
+        let preview_root = app.world_mut().spawn_empty().id();
+        let doc = DocumentId::new(42);
+        let mut scene = UsdCanvasSessionState::default();
+        scene.source_root = Some(root);
+        scene.stage_id = Some(Handle::<lunco_usd_bevy_stage::UsdStageAsset>::default().id());
+        scene.scope_search = "outgoing".into();
+        scene.published_error = Some("outgoing error".into());
+        scene.view_document = Some(lunco_doc::DocumentHost::new(
+            lunco_doc::diagram_view::DiagramViewDocument::new("memory://scene".into()),
+        ));
+        let scene_id = scene.view_document.as_ref().unwrap().document().id().raw();
+        let scene_lease = scene.source_lease().unwrap();
+        let mut preview = UsdCanvasSessionState::default();
+        preview.source_root = Some(preview_root);
+        preview.stage_id = scene.stage_id;
+        preview.doc = Some(doc);
+        preview.scope_search = "retained preview".into();
+        preview.view_document = Some(lunco_doc::DocumentHost::new(
+            lunco_doc::diagram_view::DiagramViewDocument::new("memory://preview".into()),
+        ));
+        let preview_id = preview
+            .view_document
+            .as_ref()
+            .unwrap()
+            .document()
+            .id()
+            .raw();
+        let preview_lease = preview.source_lease().unwrap();
+        {
+            let mut views = app.world_mut().resource_mut::<UsdCanvasState>();
+            views.scene = scene;
+            views.sessions.insert(
+                lunco_usd_viewport_core::UsdPreviewId::for_document(doc),
+                preview,
+            );
+        }
+        for (id, lease, command) in [
+            (scene_id, scene_lease, 101),
+            (preview_id, preview_lease, 102),
+        ] {
+            app.world_mut()
+                .resource_mut::<CommandResults>()
+                .insert(command, CommandOutcome::Pending);
+            app.world_mut()
+                .resource_mut::<PendingViewFiles>()
+                .tasks
+                .insert(
+                    id,
+                    PendingViewFile {
+                        lease,
+                        command_id: Some(command),
+                        task: pool.spawn(future::pending()),
+                    },
+                );
+        }
+        lunco_core::run_scene_teardown(app.world_mut());
+        let views = app.world().resource::<UsdCanvasState>();
+        assert!(views.scene.scope_search.is_empty() && views.scene.published_error.is_none());
+        assert_eq!(
+            views.sessions.values().next().unwrap().scope_search,
+            "retained preview"
+        );
+        assert_eq!(app.world().resource::<PendingViewFiles>().tasks.len(), 1);
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(101),
+            Some(CommandOutcome::Failed(_))
+        ));
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(102),
+            Some(CommandOutcome::Pending)
+        ));
+
+        // Reusing a document and revision cannot authorize work from an old root.
+        let replacement = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<UsdCanvasState>()
+            .sessions
+            .values_mut()
+            .next()
+            .unwrap()
+            .source_root = Some(replacement);
+        app.update();
+        assert!(app.world().resource::<PendingViewFiles>().tasks.is_empty());
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(102),
+            Some(CommandOutcome::Failed(_))
+        ));
+        app.world_mut()
+            .trigger(lunco_doc_bevy::DocumentClosed::local(doc));
+        assert!(app.world().resource::<UsdCanvasState>().sessions.is_empty());
     }
 }

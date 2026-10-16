@@ -360,7 +360,7 @@ pub fn project_run_results_to_ui(
             let entity = *playback
                 .0
                 .entry(doc_id)
-                .or_insert_with(|| commands.spawn_empty().id());
+                .or_insert_with(|| commands.spawn(lunco_core::SceneOwned).id());
             commands.entity(entity).try_insert(source.clone());
             signals_mut.drop_entity(entity);
             for (path, samples) in &result.series {
@@ -433,6 +433,31 @@ pub fn retire_replication_playback(
         &mut commands,
         lunco_workspace::DocumentRuntimeOwner::Replicated(trigger.event().owner.clone()),
     );
+}
+
+/// Release a document's transient playback without deleting experiment history.
+pub fn retire_closed_document_playback(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut commands: Commands,
+) {
+    let document = trigger.doc;
+    commands.queue(move |world: &mut World| retire_document_playback(world, document));
+}
+
+fn retire_document_playback(world: &mut World, document: lunco_doc::DocumentId) {
+    let Some(entity) = world
+        .resource_mut::<lunco_modelica_runner::PlaybackEntities>()
+        .0
+        .remove(&document)
+    else {
+        return;
+    };
+    if let Some(mut signals) = world.get_resource_mut::<SignalRegistry>() {
+        signals.drop_entity(entity);
+    }
+    if let Ok(entity) = world.get_entity_mut(entity) {
+        entity.despawn();
+    }
 }
 
 fn queue_retire_runtime_projection(
@@ -514,15 +539,8 @@ fn queue_retire_runtime_projection(
                 states.forget_scope(&crate::ui::doc_pin::twin_id_for_doc(*document));
             }
         }
-        for (document, entity) in retired {
-            world
-                .resource_mut::<lunco_modelica_runner::PlaybackEntities>()
-                .0
-                .remove(&document);
-            if let Some(mut signals) = world.get_resource_mut::<SignalRegistry>() {
-                signals.drop_entity(entity);
-            }
-            world.despawn(entity);
+        for (document, _) in retired {
+            retire_document_playback(world, document);
         }
     });
 }

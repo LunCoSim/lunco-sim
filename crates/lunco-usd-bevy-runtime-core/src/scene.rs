@@ -810,11 +810,9 @@ pub struct SceneEntities<'w, 's> {
 }
 
 pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
-    // A scene is its entities AND the resources derived from it. Resources are
-    // restored through the registry rather than named here, so a subsystem that
-    // adds scene-derived state does not also have to edit this function — see
-    // `lunco_core::SceneTeardown`.
-    commands.queue(lunco_core::run_scene_teardown);
+    // The shared owner drains domain shutdown, entity-removal observers, and
+    // resource resets before the replacement can publish any state.
+    let mut retired_entities = Vec::new();
 
     let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_physics_owned) = (
         &scene.grid,
@@ -831,7 +829,7 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     if let Ok((_, children)) = q_grid.single() {
         for child in children.iter() {
             if !q_origin.contains(child) {
-                commands.entity(child).try_despawn();
+                retired_entities.push(child);
                 despawned += 1;
             }
         }
@@ -864,24 +862,27 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
             false
         });
         if active_stage_ids.contains(&prim.stage_handle.id()) && !already_covered_by_grid {
-            commands.entity(entity).try_despawn();
+            retired_entities.push(entity);
             stage_prim_despawns += 1;
         }
     }
 
     // Despawn any root-level derived connection wires (which are spawned as root entities)
     for e in q_wires.iter() {
-        commands.entity(e).try_despawn();
+        retired_entities.push(e);
         despawned += 1;
     }
 
     for e in q_physics_owned.iter() {
-        commands.entity(e).try_despawn();
+        retired_entities.push(e);
         despawned += 1;
     }
     info!(
         "[scene] cleanup: {despawned} grid children and {stage_prim_despawns} stage prims queued for despawn"
     );
+    commands.queue(move |world: &mut World| {
+        lunco_core::run_scene_teardown_with_entities(world, retired_entities);
+    });
 }
 
 /// Despawn a single USD prim **subtree** (one runtime prim and its descendants).

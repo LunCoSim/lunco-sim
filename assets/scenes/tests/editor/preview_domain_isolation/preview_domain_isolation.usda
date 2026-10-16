@@ -2,23 +2,51 @@
 (
     defaultPrim = "PreviewDomainIsolation"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-def Xform "PreviewDomainIsolation" (kind = "assembly")
+
+def Xform "PreviewDomainIsolation" (
+    kind = "assembly"
+)
 {
-    def DistantLight "Light" { float intensity = 1 }
-    def Xform "Network" (prepend apiSchemas = ["CollectionAPI:components"])
+    def DistantLight "Light"
+    {
+        float intensity = 1.0
+    }
+    def Xform "Network" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
     {
         uniform token collection:components:expansionRule = "explicitOnly"
         rel collection:components:includes = [</PreviewDomainIsolation/Network/Battery>, </PreviewDomainIsolation/Network/Panel>]
+        float outputs:voltage
         float outputs:voltage.connect = </PreviewDomainIsolation/Network/Battery.outputs:terminal_voltage_v>
-        def Xform "Battery" (prepend references = @lunco://components/power/battery.usda@</Battery>) {}
-        def Xform "Panel" (prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>)
+        def Xform "Battery" (
+            prepend references = @lunco://components/power/battery.usda@</Battery>
+        )
         {
+        }
+        def Xform "Panel" (
+            prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+        )
+        {
+            token connectors:p
             token connectors:p.connect = </PreviewDomainIsolation/Network/Battery.connectors:p>
+            custom double inputs:irradiance = 1000.0
+            double inputs:irradiance.connect = None
+            custom double inputs:sun_visibility = 1.0
+            double inputs:sun_visibility.connect = None
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = None
+            custom double inputs:target_mount_y = 1.0
+            double inputs:target_mount_y.connect = None
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = None
         }
     }
-    def Scope "Scenario" (prepend apiSchemas = ["LunCoProgramAPI"])
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/preview_domain_isolation.rhai@

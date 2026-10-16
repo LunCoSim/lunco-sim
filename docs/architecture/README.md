@@ -98,7 +98,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`58-vessel-envelope-and-routes.md`](58-vessel-envelope-and-routes.md) | Vehicle capability is **derived, not copied** — slip limit is `atan(μ)`, not a constant retyped into six files. HUD derivation and rhai accessors are built; routes and tiers are proposed |
 | [`60-curvature-elevation-and-gravity.md`](60-curvature-elevation-and-gravity.md) | Crop-derived site-to-globe handoff using the Twin's DEM edge samples; radial gravity on curved ground remains design-stage |
 | [`parametric-geometry-and-constraints.md`](parametric-geometry-and-constraints.md) | Typed f64 profile geometry, SysML-sourced constraint policy, standard USD output, and the staged toolkit gaps |
-| [`61-scene-lifecycle-and-teardown.md`](61-scene-lifecycle-and-teardown.md) | **A scene owns more than its entities.** Entities die by structural tag (`CelestialDerived`); resources, caches and handles die in the `SceneTeardown` schedule — a schedule rather than a registry so the reset lives beside the code that writes the state. Remove vs restore, and why gravity is the restore case |
+| [`61-scene-lifecycle-and-teardown.md`](61-scene-lifecycle-and-teardown.md) | **A scene owns more than its entities.** Structural ownership and `SceneOwned` reclaim entities; `init_scene_resource` installs resource cleanup beside its owner. Domain shutdown, entity-removal callbacks, then resource resets share one boundary for replacement and reload. Remove vs restore, and why gravity is the restore case |
 
 ## Cross-cutting
 

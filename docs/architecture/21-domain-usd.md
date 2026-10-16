@@ -218,7 +218,9 @@ Schema availability does not depend on runtime asset I/O or frame polling.
 base, runtime, and view layers plus its admitted dependency recipe. Its source
 is `document_composition`. Native prim validity, composition arcs, and spec
 sites determine existence and edit scope; a derived live projection does not
-decide whether a committed document target exists. The authored base retains its
+decide whether a committed document target exists. A missing prim reports an
+empty `prim_stack` and `under_arc: false`; its ancestor's reference arc does not
+make that nonexistent child a composed target. The authored base retains its
 admitted root identity and receives native Sdf spec copies; session layer inputs
 use the native binary writer. The native session sublayer stack includes the
 session parent before the view and runtime layers; edit-target selection accounts

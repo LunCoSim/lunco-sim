@@ -3,6 +3,89 @@
 const TEST_KIND = "headless";
 import "lunco://scripting/tools/modelica_editor" as modelica_editor;
 
+fn exposure_present(namespace) {
+    query("ReadExposures", #{surface: namespace}).surfaces.contains(namespace)
+}
+
+fn verify_exposure_published(namespace) {
+    report_verdict([
+        t_true(exposure_present(namespace), "outgoing authored surface is retained in the public registry"),
+    ], "Exposure publication", "EXPOSURE_PUBLICATION")
+}
+
+fn verify_exposure_retired(namespace) {
+    report_verdict([
+        t_true(!exposure_present(namespace), "retired surface and its properties are removed from the public registry"),
+        t_true(exposure_present("camera-status"), "explicit application camera surface survives"),
+        t_true(exposure_present("engine-health"), "explicit application health surface survives"),
+        t_true(exposure_present("application-cadence"), "explicit application cadence surface survives"),
+    ], "Exposure retirement", "EXPOSURE_RETIREMENT")
+}
+
+fn scene_policy_hook() {
+    policy_hook("runtime.ui.properties")
+}
+
+fn policy_hook(id) {
+    for hook in list_hooks() {
+        if hook.id == id { return hook; }
+    }
+    throw "hook contract is missing: " + id;
+}
+
+fn runtime_policy_ready() {
+    let result = invoke_hook("camera.default_presentation", [#{}]);
+    result.ok && result.value == "none"
+}
+
+fn verify_runtime_policy_applied() {
+    let unbind = unbind_policy("camera.default_presentation");
+    report_verdict([
+        t_true(!unbind.ok && unbind.status == "rejected", "application caller cannot unbind a Twin-owned policy"),
+        t_true(runtime_policy_ready(), "Twin-owned inline policy is callable"),
+        t_true(policy_hook("camera.default_presentation").policy_file == (), "inline policy owns its Twin layer"),
+    ], "Runtime policy binding", "RUNTIME_POLICY_BINDING")
+}
+
+fn verify_runtime_policy_retired(application_file) {
+    let hook = policy_hook("camera.default_presentation");
+    report_verdict([
+        t_true(hook.installed, "application camera policy survives Twin closure"),
+        t_true(hook.policy_file == application_file, "closed Twin cannot retain or recreate its inline policy"),
+    ], "Runtime policy retirement", "RUNTIME_POLICY_RETIREMENT")
+}
+
+fn seed_scene_policy() {
+    cmd("SetRhaiPolicy", #{
+        name: "RetirementProbe", seam: "runtime.ui.properties", entry: "retirement_probe",
+        source: "fn retirement_probe(facts) { #{ retirement_probe: true } }",
+        deterministic: false,
+    });
+}
+
+fn scene_policy_ready() {
+    let result = invoke_hook("runtime.ui.properties", [#{}]);
+    result.ok && result.value.retirement_probe == true
+}
+
+fn verify_scene_policy_applied() {
+    let replacement = bind_policy("runtime.ui.properties", "wrong_owner", "fn wrong_owner(facts) { #{} }");
+    report_verdict([
+        t_true(!replacement.ok && replacement.status == "rejected" && replacement.installed,
+            "inline application mutation cannot replace a scene-authored policy"),
+        t_true(scene_policy_ready(), "mounted scene policy is callable"),
+        t_true(scene_policy_hook().policy_file == (), "scene policy owns the effective hook"),
+    ], "Scene policy projection", "SCENE_POLICY_PROJECTION")
+}
+
+fn verify_scene_policy_retired(application_file) {
+    let hook = scene_policy_hook();
+    report_verdict([
+        t_true(hook.installed, "application policy remains installed after scene retirement"),
+        t_true(hook.policy_file == application_file, "scene retirement restores the retained application binding"),
+    ], "Scene policy retirement", "SCENE_POLICY_RETIREMENT")
+}
+
 fn document_present(id) {
     let docs = query("ListOpenDocuments");
     if docs == () || docs.open_documents == () {
@@ -81,6 +164,207 @@ fn verify_session_preserved(ids) {
         checks.push(t_true(document_present(id), "rejected replacement preserves its document"));
     }
     report_verdict(checks, "Rejected Twin replacement", "TWIN_SESSION_PRESERVED")
+}
+
+fn application_telemetry_current(keys) {
+    let channels = query("ListTelemetryChannels").channels;
+    for key in keys {
+        let recorded = false;
+        for channel in channels {
+            if channel.key == key && channel.samples.to_float() > 0.0 { recorded = true; }
+        }
+        if !recorded { return false; }
+        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
+        if history.samples.is_empty() { return false; }
+        let clock = clock_snapshot();
+        if history.samples[-1].t > clock.world_sim_s + 2.0 * clock.fixed_dt_s { return false; }
+    }
+    true
+}
+
+fn queue_scene_interactions_and_restart() {
+    let context = #{Map: #{button: #{String: "secondary"}, pointer_intents: #{Array: []}}};
+    let click = cmd("RunRhaiTool", #{tool: "gizmo", args: context});
+    if click.status != "pending" { throw "click invocation must be deferred"; }
+    if command_result(click.id).status != "pending" { throw "native command ID must retain its pending result"; }
+    let requests = [click.id];
+    for invocation in 0..2 {
+        let result = cmd("RunRhaiToolHook", #{
+            tool: "scene_interaction", hook: "on_pointer", args: context,
+        });
+        if result.status != "pending" { throw "tool invocation must be deferred"; }
+        requests.push(result.id);
+    }
+    let application = cmd("RunRhai", #{code: "print(\"application invocation survived reload\");"});
+    if application.status != "pending" { throw "application script must be deferred"; }
+    requests.push(application.id);
+    print(requests);
+    cmd("RestartScene", #{});
+    ()
+}
+
+fn verify_command_identifier_rejection() {
+    let rejected = false;
+    try { command_result(-1); } catch(error) { rejected = true; }
+    report_verdict([t_true(rejected, "command result lookup rejects negative identifiers")],
+        "Command identifier validation", "COMMAND_IDENTIFIER_VALIDATION")
+}
+
+fn interaction_results_ready(ids) {
+    for id in ids { if command_result(id).status == "pending" { return false; } }
+    true
+}
+
+fn verify_scene_interaction_retirement(ids) {
+    if ids.len() != 4 { throw "interaction retirement needs three scene calls and an application call"; }
+    let checks = [];
+    for i in 0..3 {
+        let result = command_result(ids[i]);
+        checks.push(t_true(result.ok == false && result.status != "pending",
+            "scene gesture receives a terminal failure at reload"));
+        checks.push(t_true(result.error != () && result.error.contains("scene"),
+            "scene gesture rejection reports its retired owner"));
+    }
+    let retained = command_result(ids[3]);
+    checks.push(t_true(retained.ok == true && retained.status != "pending",
+        "application script invocation survives reload"));
+    report_verdict(checks, "Queued scene interaction retirement", "SCENE_INTERACTION_RETIREMENT")
+}
+
+fn verify_telemetry_retirement(retired_keys, application_keys) {
+    if retired_keys.is_empty() { throw "telemetry retirement requires sampled outgoing channels"; }
+    let channels = query("ListTelemetryChannels").channels;
+    let checks = [];
+    for key in retired_keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "outgoing channel is absent: " + key));
+        let history = query("QueryTelemetryHistory", #{key: key, limit: 1});
+        checks.push(t_true(history.ok == false, "outgoing history cannot be read: " + key));
+    }
+    for key in application_keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "application history survives: " + key));
+        checks.push(t_true(application_telemetry_current([key]),
+            "application sampling uses the replacement clock: " + key));
+    }
+    let browser = query("InspectTelemetryCatalog", #{signal: "lifecycle_retirement_probe"});
+    checks.push(t_true(browser.descriptors.len() == 0, "browser has no outgoing probe"));
+    report_verdict(checks, "Twin telemetry retirement", "TWIN_TELEMETRY_RETIREMENT")
+}
+
+fn verify_modelica_telemetry_recorded(class_name) {
+    let recorded = false;
+    for channel in query("ListTelemetryChannels").channels {
+        if channel.model_class == class_name && channel.samples.to_float() > 0.0 { recorded = true; }
+    }
+    report_verdict([t_true(recorded, "outgoing solver publishes retained telemetry")],
+        "Twin Modelica telemetry baseline", "TWIN_MODELICA_TELEMETRY_BASELINE")
+}
+
+fn verify_paused_modelica_reload(doc, key, value) {
+    let state = query("SnapshotVariables", #{doc_id: doc});
+    let checks = [t_true(document_present(doc), "reload preserves the editable document"),
+        t_true(state.paused && state.compiled, "reload preserves the paused solver"),
+        t_range(state.variables.x, value - 1e-10, value + 1e-10, "paused solver retains its value")];
+    let present = false;
+    for channel in query("ListTelemetryChannels").channels {
+        if channel.key == key {
+            present = true;
+            checks.push(t_true(channel.samples.to_float() == 1.0,
+                "reload retains one fresh paused sample"));
+            let history = query("QueryTelemetryHistory", #{key: key});
+            checks.push(t_true(history.count.to_float() == 1.0, "outgoing history was discarded"));
+            if history.count.to_float() == 1.0 {
+                checks.push(t_range(history.samples[0].t, state.t - 1e-10, state.t + 1e-10,
+                    "fresh history uses the surviving solver clock"));
+                checks.push(t_range(history.samples[0].v, value - 1e-10, value + 1e-10,
+                    "fresh history uses the surviving solver value"));
+            }
+        }
+    }
+    checks.push(t_true(present, "paused telemetry republishes without a solver tick"));
+    report_verdict(checks, "Paused Modelica telemetry reload", "PAUSED_MODELICA_TELEMETRY_RELOAD")
+}
+
+fn verify_closed_modelica_telemetry(doc, keys, retained_keys) {
+    if keys.is_empty() { throw "document closure requires recorded telemetry"; }
+    let checks = [t_true(!document_present(doc), "closed document is absent")];
+    let channels = query("ListTelemetryChannels").channels;
+    for key in keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "closed document channel is absent: " + key));
+        checks.push(t_true(query("QueryTelemetryHistory", #{key: key}).ok == false,
+            "closed document history is absent: " + key));
+    }
+    for key in retained_keys {
+        let present = false;
+        for channel in channels {
+            if channel.key == key && channel.samples.to_float() > 0.0 { present = true; }
+        }
+        checks.push(t_true(present, "unrelated telemetry remains: " + key));
+    }
+    report_verdict(checks, "Closed Modelica telemetry retirement", "CLOSED_MODELICA_TELEMETRY")
+}
+
+fn verify_experiment_playback_retirement(doc, run, retired_keys, current_keys, document_open) {
+    if retired_keys.is_empty() { throw "playback retirement requires recorded outgoing channels"; }
+    let checks = [t_true(document_present(doc) == document_open, "playback document has the expected lifetime")];
+    let channels = query("ListTelemetryChannels").channels;
+    for key in retired_keys {
+        let present = false;
+        for channel in channels { if channel.key == key { present = true; } }
+        checks.push(t_true(!present, "outgoing playback channel is absent: " + key));
+        checks.push(t_true(query("QueryTelemetryHistory", #{key: key}).ok == false,
+            "outgoing playback history is absent: " + key));
+    }
+    for key in current_keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "new playback publishes through a fresh owner: " + key));
+    }
+    let result = query("GetExperimentResult", #{experiment_id: run, variables: ["playback_probe_value"]});
+    checks.push(t_true(result.series.playback_probe_value.len() == 11,
+        "completed experiment history survives transient playback retirement"));
+    report_verdict(checks, "Experiment playback retirement", "EXPERIMENT_PLAYBACK_RETIREMENT")
+}
+
+fn verify_telemetry_preserved(keys) {
+    if keys.is_empty() { throw "telemetry preservation requires a sampled channel"; }
+    let channels = query("ListTelemetryChannels").channels;
+    let checks = [];
+    for key in keys {
+        let present = false;
+        for channel in channels { if channel.key == key && channel.samples.to_float() > 0.0 { present = true; } }
+        checks.push(t_true(present, "rejected replacement preserves channel " + key));
+    }
+    report_verdict(checks, "Rejected replacement preserves telemetry", "TWIN_TELEMETRY_PRESERVED")
+}
+
+fn verify_hidden_editor_scene_retirement() {
+    let diagram = query("InspectConnectionDiagram");
+    let selected = query("InspectSelection");
+    report_verdict([
+        t_true(!diagram.built, "hidden Connections graph retires on reload"),
+        t_true(diagram.source == (), "outgoing Connections source is absent"),
+        t_true(diagram.view_id == (), "outgoing view document is absent"),
+        t_true(diagram.definitions.is_empty() && diagram.nodes.is_empty(), "outgoing graph data is released"),
+        t_true(selected.selected.is_empty() && selected.paths.is_empty(), "scene selection is cleared"),
+        t_true(selected.stale_count.to_float() == 0.0, "selection retains no retired entity")
+    ], "Hidden editor scene retirement", "HIDDEN_EDITOR_SCENE_RETIREMENT")
+}
+
+fn verify_editor_diagram_reopened(outgoing_view) {
+    let diagram = query("InspectConnectionDiagram");
+    let old_view = false;
+    for definition in diagram.definitions { if definition.name == "RetirementProbe" { old_view = true; } }
+    report_verdict([
+        t_true(diagram.built && diagram.source != (), "reopened Connections publishes the current scene"),
+        t_true(diagram.view_id.to_string() != outgoing_view.to_string(), "reopened Connections has a fresh view document"),
+        t_true(!old_view, "outgoing transient named view is absent")
+    ], "Editor diagram after reload", "EDITOR_DIAGRAM_AFTER_RELOAD")
 }
 
 fn verify_additive_workspace(ids, active_root) {

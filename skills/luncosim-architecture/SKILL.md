@@ -78,7 +78,11 @@ parameters, and read-only world queries. Top-level initialization runs in its
 own `Initialization` phase after the plan commits. Dependency planning may
 resolve identities but cannot access live ports, issue commands, mutate the
 world, or emit events. Invalid or unresolved ids fail that source revision
-with a diagnostic. Unbarriered port access and Modelica event delivery
+with a diagnostic. Shared Rhai value operations preserve unsigned API values
+and compare signed integer literals exactly; never coerce document ids or
+revisions through floats or use negative identity sentinels. At tick-zero
+initialization, `dt()` is the configured fixed timestep.
+Unbarriered port access and Modelica event delivery
 fail visibly. Connected Modelica event edges are sampled only while the
 simulation clock advances, after `SimTickSet` and before Rhai; this gives an
 initially active output its producer tick after scenario readiness. USD
@@ -191,6 +195,77 @@ retired origins fail before rebinding, and origin-free requests keep exact
 transport authority. Background file snapshots resolve logical source names
 and fence publication by scope and mount revision. See
 [`61-scene-lifecycle-and-teardown.md`](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
+
+Register scene-derived state with `AppSceneExt::init_scene_resource::<R>()` and
+implement `SceneResource` at its owner. The default reset drops owned caches and
+tasks; mixed-lifetime stores retain only explicitly application-owned entries
+and monotonic publication counters. Domain shutdown runs first, then scene
+entities and their removal callbacks retire, then registered resources reset. Tag
+scene-owned entities outside the structural scene hierarchy with `SceneOwned`.
+For a scene-derived message queue, compose Bevy's message registration with
+`.init_scene_resource::<Messages<M>>()`; this clears unread messages after those
+callbacks while preserving message counters. Application queues stay unregistered.
+Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
+owners use `run_scene_teardown`. Both share the replacement/reload boundary.
+Native USD resync scopes include descendants: an ancestor or root resync must
+invalidate cached joint/wheel facts before admission can consume them again.
+Support footprints accept zero rest travel for rigid wheel mounts; reject
+negative or non-finite probe distances at the initialization owner.
+Script backends register `ScenarioDriver::retire_removed_model` so interactive
+attachments on retiring entities stop during the removal flush before scene
+resources reset. Independent source-document lifetime does not extend the
+running program's entity lifetime; stable application hosts remain explicit.
+`EngineExposures` removes scene namespaces and their data at that final reset;
+application producers explicitly declare `retain_across_scenes`. Register
+`ExposureRefresh` and authored surface/program caches with the same boundary.
+Surviving change-gated producers wake once when their namespace is absent.
+Projection caches and retained source handles are scene resources too. Reset
+their previous-source signal and request one refresh without relying on an
+asset identity or revision change. USD policy retirement reuses the same
+reconciliation path as projection, including synthesizer registrations.
+The synthesizer consumer follows effective-policy changes and tracks actual
+registrations; do not derive its outgoing names from definitions that another
+lifecycle owner may already have cleared.
+Live inline hook mutation uses the existing policy layers and exact caller
+route; Twin mutation rejects retired/uncommitted generations, and an application
+caller cannot overwrite a Twin or USD-owned effective policy.
+Derived clock entities follow their scene source through linked ECS ownership;
+`TimeDomain.parent` selects a clock and does not establish entity lifetime.
+Visualization history buffers, async tasks and queued canvas actions use
+`lunco-viz::scene_state::scene_data`; its scoped egui store retires after shutdown
+callbacks even when widgets are hidden. Keep only application preferences and
+saved visualization configuration in ordinary egui data.
+Change-gated producers must consume a one-shot refresh after their scene cache
+resets, including when a surviving source is paused. Explicit document closure
+retires the producer's exact owned signal references through `DocumentClosed`;
+ordinary source removal may archive history only while its document remains open.
+Experiment history and active playback have separate lifetimes: preserve completed
+trajectories in the experiment registry, but register playback maps as scene
+resources, tag playback entities `SceneOwned`, and release a closed document's
+playback at its publisher.
+Guided presentation and runtime dropdown state use registered scene resources,
+so their final reset follows shutdown and entity-removal callbacks. Clearing a
+HUD only at transition start cannot prevent terminal callbacks from repopulating
+it. Immediate active-session cleanup at `TwinClosed` checks `was_active`;
+closing an inactive Twin preserves the active session's presentation state.
+Keep scene-derived panel state in registered resources instead of panel fields;
+hidden panels must release rows, drafts and workers without repainting. Cursor
+modes and tool names are scene intent. Queued Rhai tools pin the committed
+scene generation independently of the library's application/Twin scope. Callback
+commands also pin the exact `ToolHookBinding`. A scene transition or retired
+binding rejects the invocation through the shared terminal-result owner.
+Queue admission publishes `CommandOutcome::Pending`; only execution or owner
+retirement may publish the terminal result.
+Parameter drafts pin their preview and document; document closure and preview
+retirement clear them without painting while unrelated scene reload preserves
+open document drafts. Async presentation results must match
+their captured source lease (structural root, stage and document), not merely a
+revision that a new source can reuse. Complete retired pending commands before
+dropping their handles; preserve preview work only through its document lifetime.
+Signal producers default to scene lifetime; only process-owned signals opt into
+`SignalRegistry::retain_across_scenes`. Extend the authored Twin retirement gate
+for observable lifecycle changes, including same-path reload, rejected
+replacement and application-state preservation.
 
 Lifecycle work that changes authoritative scene state participates in
 `lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation
@@ -1215,3 +1290,8 @@ cover mechanisms that the production query/command surface cannot observe.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.
+
+For native removal observers, validate the destination archetype before
+reactivation. Despawn and compound component removal must not re-admit a retiring
+joint. Include Bevy-disabled entities in teardown ownership queries; disabled
+entities retain components and lifecycle hooks.

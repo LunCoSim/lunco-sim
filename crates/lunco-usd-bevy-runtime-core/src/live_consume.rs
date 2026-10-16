@@ -60,9 +60,9 @@ pub(crate) struct PendingStageProjections {
     stages: HashMap<AssetId<UsdStageAsset>, PendingStageProjection>,
 }
 
-/// Lifecycle-maintained lookup for the one live ECS projection of a USD path.
-/// Preview copies can share a stage/path, so each key keeps ordered candidates
-/// and structural queries exclude preview ancestry at read time.
+/// Lifecycle-maintained lookup for every ECS projection of a USD path.
+/// Live simulation reads exclude preview ancestry; visual and structural edits
+/// reconcile every explicit preview lease through the same indexed candidates.
 #[derive(Resource, Default)]
 pub(crate) struct LiveUsdPrimEntities {
     by_stage: HashMap<AssetId<UsdStageAsset>, HashMap<Arc<str>, Vec<Entity>>>,
@@ -388,21 +388,19 @@ pub(crate) fn mark_live_transform(
 // of that bridge: it drains the OpenUSD sink and projects the committed stage
 // changes into ECS.
 
-/// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
-/// if one exists.
-pub(crate) fn find_stage_entity(
-    world: &World,
+/// All ECS instances of one stage/path, in stable entity order.
+pub(crate) fn find_stage_entities<'w>(
+    world: &'w World,
     stage_handle_id: AssetId<UsdStageAsset>,
     path: &str,
-) -> Option<Entity> {
+) -> &'w [Entity] {
     world
         .resource::<LiveUsdPrimEntities>()
         .by_stage
-        .get(&stage_handle_id)?
-        .get(path)?
-        .iter()
-        .copied()
-        .next()
+        .get(&stage_handle_id)
+        .and_then(|paths| paths.get(path))
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 pub(crate) fn find_live_entity(
@@ -410,14 +408,35 @@ pub(crate) fn find_live_entity(
     stage_handle_id: AssetId<UsdStageAsset>,
     path: &str,
 ) -> Option<Entity> {
-    world
-        .resource::<LiveUsdPrimEntities>()
-        .by_stage
-        .get(&stage_handle_id)?
-        .get(path)?
+    find_stage_entities(world, stage_handle_id, path)
         .iter()
         .copied()
         .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
+}
+
+#[derive(Clone, Copy)]
+enum ProjectionScope {
+    Live,
+    Preview(Entity),
+}
+
+fn find_projection_entity(
+    world: &World,
+    stage: AssetId<UsdStageAsset>,
+    path: &str,
+    scope: ProjectionScope,
+    parents: &mut bevy::ecs::query::QueryState<&ChildOf>,
+) -> Option<Entity> {
+    match scope {
+        ProjectionScope::Live => find_live_entity(world, stage, path),
+        ProjectionScope::Preview(root) => {
+            let parents = parents.query(world);
+            find_stage_entities(world, stage, path)
+                .iter()
+                .copied()
+                .find(|entity| lunco_usd_bevy_scene::is_preview_entity(*entity, root, &parents))
+        }
+    }
 }
 
 fn find_program_owner(
@@ -845,13 +864,7 @@ pub(crate) fn apply_transform_edits_live(
             .collect()
     };
     for (path, channels, transform) in transforms {
-        let entities = world
-            .resource::<LiveUsdPrimEntities>()
-            .by_stage
-            .get(&id)
-            .and_then(|paths| paths.get(path.as_str()))
-            .cloned()
-            .unwrap_or_default();
+        let entities = find_stage_entities(world, id, &path).to_vec();
         if entities.is_empty() {
             debug!("[usd] transform edit {path}: no projected entity on this stage");
         }
@@ -1322,11 +1335,38 @@ pub(crate) fn reconcile_structural_live(
         resynced_prim_count = resync_paths.len(),
     )
     .entered();
-    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     if resync_paths.iter().any(|path| path == "/") {
         crate::twin_projection::refresh_scene_visuals(world, id);
         return;
     }
+    let mut roots: Vec<_> = world
+        .query_filtered::<(Entity, &UsdPrimPath), With<lunco_usd_bevy_scene::UsdPreviewOnly>>()
+        .iter(world)
+        .filter(|(_, path)| path.stage_handle.id() == id)
+        .map(|(entity, _)| entity)
+        .collect();
+    roots.sort_unstable_by_key(|entity| entity.to_bits());
+    let mut parents = world.query::<&ChildOf>();
+    reconcile_structural_projection(world, id, resync_paths, ProjectionScope::Live, &mut parents);
+    for root in roots {
+        reconcile_structural_projection(
+            world,
+            id,
+            resync_paths,
+            ProjectionScope::Preview(root),
+            &mut parents,
+        );
+    }
+}
+
+fn reconcile_structural_projection(
+    world: &mut World,
+    id: AssetId<UsdStageAsset>,
+    resync_paths: &[String],
+    scope: ProjectionScope,
+    parents: &mut bevy::ecs::query::QueryState<&ChildOf>,
+) {
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     let mut visited = BTreeSet::new();
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else {
@@ -1344,20 +1384,24 @@ pub(crate) fn reconcile_structural_live(
         let path = sp.as_str();
         // Program source is projected onto the existing owner, while the
         // program prim itself still follows the normal USD structural path.
-        let program_owner = if let Some(owner) = find_program_owner(world, id, path) {
-            Some(owner)
-        } else {
-            sp.parent()
-                .and_then(|parent| find_live_entity(world, id, parent.as_str()))
-                .filter(|_| {
-                    world
-                        .get_non_send::<CanonicalStages>()
-                        .and_then(|stages| stages.get(id))
-                        .is_some_and(|stage| stage.view().has_api_schema(&sp, "LunCoProgramAPI"))
-                })
-        };
-        if let Some(owner) = program_owner {
-            lunco_usd_bevy_authored_runtime::refresh_program_owner(world, id, owner);
+        if matches!(scope, ProjectionScope::Live) {
+            let program_owner = if let Some(owner) = find_program_owner(world, id, path) {
+                Some(owner)
+            } else {
+                sp.parent()
+                    .and_then(|parent| find_live_entity(world, id, parent.as_str()))
+                    .filter(|_| {
+                        world
+                            .get_non_send::<CanonicalStages>()
+                            .and_then(|stages| stages.get(id))
+                            .is_some_and(|stage| {
+                                stage.view().has_api_schema(&sp, "LunCoProgramAPI")
+                            })
+                    })
+            };
+            if let Some(owner) = program_owner {
+                lunco_usd_bevy_authored_runtime::refresh_program_owner(world, id, owner);
+            }
         }
         let exists = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
@@ -1379,7 +1423,7 @@ pub(crate) fn reconcile_structural_live(
                 return;
             }
         };
-        let live = find_live_entity(world, id, path);
+        let live = find_projection_entity(world, id, path, scope, parents);
         match (exists, live) {
             (false, Some(entity)) => {
                 crate::scene::despawn_usd_subtree(world, entity);
@@ -1391,7 +1435,9 @@ pub(crate) fn reconcile_structural_live(
                 let Some(parent_path) = parent_path else {
                     continue;
                 };
-                let Some(parent_entity) = find_live_entity(world, id, parent_path) else {
+                let Some(parent_entity) =
+                    find_projection_entity(world, id, parent_path, scope, parents)
+                else {
                     // The parent is not projected yet. The next structural
                     // reconcile receives the normalized USD change set and
                     // retries once the parent exists.
@@ -1438,7 +1484,9 @@ pub(crate) fn reconcile_structural_live(
             // physics bridge below likewise refreshes only a missing schema
             // projection, never an already admitted vehicle.
             (true, Some(_)) => {
-                reproject_physics_if_needed(world, id, path);
+                if matches!(scope, ProjectionScope::Live) {
+                    reproject_physics_if_needed(world, id, path);
+                }
             }
             _ => {}
         }

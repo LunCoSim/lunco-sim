@@ -5,6 +5,8 @@
 //! from Avian body state and [`PhysicsJointLink`] topology; callers remain
 //! responsible for deciding which control or analysis model consumes it.
 
+use lunco_core::AppSceneExt;
+
 use std::collections::{HashMap, HashSet};
 
 use avian3d::prelude::{ComputedMass, JointDisabled, RigidBody};
@@ -78,7 +80,7 @@ pub struct DynamicJointIslandMassPlugin;
 
 impl Plugin for DynamicJointIslandMassPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DynamicJointIslandMasses>();
+        app.init_scene_resource::<DynamicJointIslandMasses>();
         macro_rules! track {
             ($component:ty) => {
                 app.add_observer(
@@ -702,3 +704,5 @@ mod tests {
         );
     }
 }
+
+impl lunco_core::SceneResource for DynamicJointIslandMasses {}

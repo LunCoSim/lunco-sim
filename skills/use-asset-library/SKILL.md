@@ -68,7 +68,10 @@ consumer declare `gravity_accel` or a direction-target triplet as its own
 output and connect that output back to itself. EnvironmentProbe outputs use
 `<target-id>_mount_x/y/z`; reusable Modelica consumers use the generic
 `target_mount_x/y/z` inputs, and their wires choose which object supplies the
-direction.
+direction. Use `components/comms/antenna.usda` for passive geometry carried by
+its parent. For articulated pointing, reference `components/comms/antenna_tracking.usda`
+and connect the triplet on its `AntennaTrackerController`. The component owns
+its bodies and joints; scenes own target selection.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
 (`crates/lunco-assets-runtime/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,

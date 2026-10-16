@@ -9,6 +9,7 @@ description = "Shared USD simulation projection contracts"
 bevy_ecs = { workspace = true }
 bevy_math = { workspace = true }
 bevy_reflect = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-physics = { path = "../lunco-physics" }
 

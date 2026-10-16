@@ -871,6 +871,50 @@ impl Default for UsdOp {
 impl DocumentOp for UsdOp {}
 
 impl UsdOp {
+    /// External USD layers introduced by this operation, anchored at the
+    /// document's root. Source snapshots use the native dependency visitor;
+    /// ordinary typed arcs use the same resolver identity as composition.
+    pub fn composition_dependencies(&self, root_id: &str) -> Result<Vec<String>, DocumentError> {
+        let assets: Vec<&str> = match self {
+            Self::AddPrim {
+                reference: Some(asset),
+                ..
+            } => vec![asset.as_str()],
+            Self::SetPayload { asset_paths, .. } => {
+                asset_paths.iter().map(String::as_str).collect()
+            }
+            Self::SetReferenceArcs {
+                list_op: UsdReferenceListOp::Delete,
+                ..
+            } => return Ok(Vec::new()),
+            Self::SetReferenceArcs { references, .. } => references
+                .iter()
+                .map(|arc| arc.asset_path.as_str())
+                .collect(),
+            Self::ReplaceSource { text, .. } => {
+                return lunco_usd_compose::child_layer_ids(root_id, text.as_bytes())
+                    .map_err(author_err);
+            }
+            Self::RestorePrim { snapshot_usda, .. } => {
+                return lunco_usd_compose::child_layer_ids(root_id, snapshot_usda.as_bytes())
+                    .map_err(author_err);
+            }
+            _ => return Ok(Vec::new()),
+        };
+        let anchor = openusd::ar::ResolvedPath::new(root_id);
+        assets
+            .into_iter()
+            .filter(|asset| !asset.is_empty())
+            .map(|asset| {
+                lunco_usd_compose::canonicalize_at(asset, Some(&anchor)).map_err(author_err)
+            })
+            .filter_map(|result| match result {
+                Ok(id) if lunco_usd_compose::is_binary_asset(&id) => None,
+                other => Some(other),
+            })
+            .collect()
+    }
+
     /// The authored layer selected by this operation.
     pub fn edit_target(&self) -> &LayerId {
         match self {
@@ -1378,17 +1422,14 @@ impl UsdDocument {
         self.authoring_recipe_revision
     }
 
-    /// Attach a resolver-backed edit context. Revisioned recipes are reused
-    /// while their immutable dependency closure is stable; unrevisioned recipes
-    /// are refreshed from the current document source.
+    /// Attach a resolver-backed edit context. The command owner reuses the
+    /// mounted revision and can extend its closure with newly prepared edit
+    /// dependencies without changing that source revision.
     pub fn set_authoring_recipe(
         &mut self,
         revision: Option<(u64, u64)>,
         recipe: Option<StageRecipe>,
     ) {
-        if revision.is_some() && self.authoring_recipe_revision == revision {
-            return;
-        }
         self.authoring_recipe = recipe.map(std::sync::Arc::new);
         self.authoring_recipe_revision = revision;
     }
@@ -1447,9 +1488,9 @@ impl UsdDocument {
         Ok(prim_in(self.layer(target), &path))
     }
 
-    /// Whether `path` lies below a references or payload arc authored in this
-    /// document. The result only identifies the authored arc; the composed
-    /// target itself is resolved by OpenUSD through the live canonical stage.
+    /// Whether the existing composed prim at `path` participates in a native
+    /// composition arc. Missing prims return false; an ancestor's arc does not
+    /// establish a composed identity for an absent descendant.
     pub fn path_is_under_composed_arc(&self, path: &str) -> Result<bool, DocumentError> {
         let path = parse_prim_path(path)?;
         composed_path_has_arc(&self.open_composed_stage()?, &path)

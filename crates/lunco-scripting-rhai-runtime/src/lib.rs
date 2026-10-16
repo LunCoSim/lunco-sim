@@ -67,7 +67,6 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             PreStartup,
             lunco_scripting_rhai_world::policy::load_application_policies_on_startup,
         )
-        .add_observer(dispatch_workbench_menu_action)
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_loading)
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_changed)
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_scene_asset_lifecycle)
@@ -84,7 +83,12 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         .register_deferred_command::<commands::RunRhaiToolHook>()
         .init_resource::<lunco_scripting::scenario::ScenarioDriver<
             lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
-        >>();
+        >>()
+        .add_observer(
+            lunco_scripting::scenario::ScenarioDriver::<
+                lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+            >::retire_removed_model,
+        );
 
         let sources = app
             .world()
@@ -198,37 +202,15 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         commands::register_all_commands(app);
         commands::register_command_policies(app);
         app.add_observer(wind_down_twin_scenarios);
-        app.add_observer(retire_scene_tool_calls);
+        app.add_observer(retire_scene_world_calls);
     }
-}
-
-#[cfg(feature = "rhai")]
-fn dispatch_workbench_menu_action(
-    trigger: On<lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest>,
-    mut commands: Commands,
-) {
-    let lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest::WorkbenchMenuAction {
-        tool,
-        hook,
-        args,
-        owner_twin_id,
-    } = trigger.event()
-    else {
-        return;
-    };
-    commands.trigger(commands::RunRhaiToolHook {
-        binding: None,
-        tool: tool.clone(),
-        hook: hook.clone(),
-        args: args.clone(),
-        owner_twin_id: *owner_twin_id,
-    });
 }
 
 /// Stop and close scripts owned by the outgoing USD scene before its entities
 /// are reclaimed.
 #[cfg(feature = "rhai")]
 pub fn stop_scene_owned_scripts(world: &mut World) {
+    lunco_scripting_rhai_world::world_bridge::retire_scene_world_scripts(world);
     let targets: Vec<(Entity, Option<u64>)> = {
         let mut query = world
             .query_filtered::<(Entity, Option<&lunco_scripting::doc::ScriptedModel>),
@@ -257,9 +239,9 @@ pub fn stop_scene_owned_scripts(world: &mut World) {
     }
 }
 
-/// Complete outgoing scene tool work before another scene can use its endpoints.
+/// Complete scene-bound queued work before another scene can use its endpoints.
 #[cfg(feature = "rhai")]
-fn retire_scene_tool_calls(_: On<lunco_core::SceneTransitionStarted>, mut commands: Commands) {
+fn retire_scene_world_calls(_: On<lunco_core::SceneTransitionStarted>, mut commands: Commands) {
     commands.queue(lunco_scripting_rhai_world::world_bridge::retire_scene_world_scripts);
 }
 
@@ -368,7 +350,8 @@ mod tests {
                 PendingWorldScript::Code {
                     id: 0,
                     code: String::new(),
-                    authority: None,
+                    execution:
+                        lunco_scripting_rhai_world::world_bridge::WorldScriptExecution::default(),
                     correlation_id: None,
                     workspace: WorldScriptWorkspace::Detached,
                 },

@@ -27,7 +27,7 @@ const JOINT_SEAT_EPS: f64 = 1.0e-3;
 const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
 const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 
-/// Retire Avian joint-graph edges before their ECS entities are removed.
+/// Retire native graph edges and joint components before entity removal.
 ///
 /// Avian's component hooks normally maintain the graph. Scene teardown and
 /// live detach need a stronger transaction, however: a recursive despawn can
@@ -35,7 +35,21 @@ const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 /// that asks the island manager to unlink the same edge twice. Retiring the
 /// edge while all bodies are still present makes subsequent component removal
 /// harmless.
-pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Result<(), String> {
+pub fn retire_native_joints(world: &mut World, entities: &[Entity]) -> Result<(), String> {
+    // Validate native component identities before changing any graph edge.
+    let definitions = entities
+        .iter()
+        .filter_map(|entity| {
+            world
+                .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>(*entity)
+                .map(|identity| {
+                    identity.id().map(|id| (*entity, id)).ok_or_else(|| {
+                        format!("native joint {entity:?} has no registered component identity")
+                    })
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut sleeping_islands = Vec::new();
     let mut graph_state: SystemState<(
         ResMut<PhysicsIslands>,
         ResMut<JointGraph>,
@@ -70,12 +84,16 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Resul
                     continue;
                 };
                 if island.joint_count() > 0 {
-                    let _ = islands.remove_joint(
+                    if let Some(island) = islands.remove_joint(
                         edge.id,
                         &mut body_islands,
                         &contact_graph,
                         &mut joint_graph,
-                    );
+                    ) && island.is_sleeping()
+                        && !sleeping_islands.contains(&island.id())
+                    {
+                        sleeping_islands.push(island.id());
+                    }
                 } else {
                     warn!(
                         "joint graph edge {:?} has no island joint count; treating it as already retired",
@@ -87,6 +105,17 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Resul
         }
     }
     graph_state.apply(world);
+    // Match Avian's joint-removal lifecycle: releasing a constraint must wake
+    // its sleeping island before any surviving endpoint can integrate freely.
+    WakeIslands(sleeping_islands).apply(world);
+    // Remove the definition before its disabled markers. Native removal
+    // observers must never see a retired definition as a surviving joint.
+    for (entity, component_id) in definitions {
+        let mut entity = world.entity_mut(entity);
+        entity.remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>();
+        entity.remove_by_id(component_id);
+        entity.remove::<JointDisabled>();
+    }
     Ok(())
 }
 
@@ -467,15 +496,10 @@ fn synchronize_joint_preparation_batch(
 
 /// Retire a requested joint before removing its native components and entity.
 fn retire_requested_joints(world: &mut World) {
-    let requested: Vec<(Entity, Option<bevy::ecs::component::ComponentId>)> = {
-        let mut query = world.query_filtered::<(
-            Entity,
-            Option<&avian3d::dynamics::solver::joint_graph::JointComponentId>,
-        ), With<lunco_physics::PhysicsJointDetachRequested>>();
-        query
-            .iter(world)
-            .map(|(entity, id)| (entity, id.and_then(|id| id.id())))
-            .collect()
+    let requested: Vec<Entity> = {
+        let mut query =
+            world.query_filtered::<Entity, With<lunco_physics::PhysicsJointDetachRequested>>();
+        query.iter(world).collect()
     };
     if requested.is_empty() {
         return;
@@ -491,22 +515,27 @@ fn retire_requested_joints(world: &mut World) {
         return;
     }
 
-    let entities: Vec<Entity> = requested.iter().map(|(entity, _)| *entity).collect();
-    if let Err(error) = retire_joint_graph_edges(world, &entities) {
+    if let Err(error) = retire_native_joints(world, &requested) {
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(
+                "physics-joint-retirement-invalid",
+                requested.first().copied(),
+                "joint retirement",
+                error.clone(),
+            );
+        world
+            .get_resource_or_insert_with(lunco_physics::PhysicsHolds::default)
+            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
         error!("joint detach blocked: {error}");
         return;
     }
 
-    for (entity, component_id) in requested {
+    for entity in requested {
         let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
             continue;
         };
-        if let Some(component_id) = component_id {
-            entity_mut.remove_by_id(component_id);
-        }
         entity_mut
-            .remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>()
-            .remove::<JointDisabled>()
             .remove::<PendingJoint<RevoluteJoint>>()
             .remove::<PendingJoint<PrismaticJoint>>()
             .remove::<PendingJoint<FixedJoint>>()
@@ -980,6 +1009,75 @@ fn seat_joint_bodies(
         commands
             .entity(body1)
             .try_remove::<AuthoredInitialVelocity>();
+    }
+}
+
+#[cfg(test)]
+mod native_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_joint_retirement_never_readmits_a_retired_constraint() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .add_message::<AssetEvent<Mesh>>();
+        app.add_plugins((MinimalPlugins, PhysicsPlugins::default()));
+        app.finish();
+        app.cleanup();
+        let first = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, RigidBodyDisabled))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((RigidBody::Dynamic, RigidBodyDisabled))
+            .id();
+        for mode in 0..3 {
+            let mut entity = app.world_mut().spawn_empty();
+            match mode {
+                0 => {
+                    entity.insert((RevoluteJoint::new(first, second), JointDisabled));
+                }
+                1 => {
+                    entity.insert((RevoluteJoint::new(first, second), Disabled));
+                }
+                _ => {
+                    entity.insert((RevoluteJoint::new(first, second), JointDisabled, Disabled));
+                }
+            }
+            let joint = entity.id();
+            assert!(app.world().resource::<JointGraph>().get(joint).is_none());
+            app.world_mut().flush();
+            retire_native_joints(app.world_mut(), &[joint]).unwrap();
+            assert!(app.world().get::<RevoluteJoint>(joint).is_none());
+            assert!(app.world().get::<JointDisabled>(joint).is_none());
+            app.world_mut().despawn(joint);
+            app.world_mut().flush();
+            assert!(app.world().resource::<JointGraph>().get(joint).is_none());
+        }
+        let first = app.world_mut().spawn(RigidBody::Dynamic).id();
+        let second = app.world_mut().spawn(RigidBody::Dynamic).id();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ));
+        app.update();
+        app.update();
+        let joint = app
+            .world_mut()
+            .spawn(RevoluteJoint::new(first, second))
+            .id();
+        app.world_mut().flush();
+        assert!(app.world().resource::<JointGraph>().get(joint).is_some());
+        let invalid = app
+            .world_mut()
+            .spawn(avian3d::dynamics::solver::joint_graph::JointComponentId::new())
+            .id();
+        assert!(retire_native_joints(app.world_mut(), &[joint, invalid]).is_err());
+        assert!(app.world().get::<RevoluteJoint>(joint).is_some());
+        assert!(app.world().resource::<JointGraph>().get(joint).is_some());
+        retire_native_joints(app.world_mut(), &[joint]).unwrap();
+        assert!(app.world().get::<RevoluteJoint>(joint).is_none());
+        assert!(app.world().resource::<JointGraph>().get(joint).is_none());
     }
 }
 

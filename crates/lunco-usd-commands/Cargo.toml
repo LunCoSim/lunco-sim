@@ -18,6 +18,7 @@ lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-doc = { path = "../lunco-doc" }

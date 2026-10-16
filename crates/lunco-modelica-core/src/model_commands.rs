@@ -581,14 +581,13 @@ pub(crate) fn commit_session_input(
     let correlation_id = *correlation_id;
     commands.queue(move |world: &mut World| {
         let Some(doc_raw) = world
-            .get_resource::<DocumentRegistry<ModelicaDocument>>()
-            .and_then(|registry| registry.document_of(target))
-            .map(DocumentId::raw)
+            .get::<ModelicaModel>(target)
+            .map(|model| model.document.raw())
         else {
             world.trigger(lunco_core::RuntimeError {
                 name: "modelica-session-input".to_owned(),
                 message: format!(
-                    "SetModelInput correlation {correlation_id} for target {target_gid} has no live Modelica document identity at its admitted tick"
+                    "SetModelInput correlation {correlation_id} for target {target_gid} has no live Modelica model at its admitted tick"
                 ),
             });
             return;

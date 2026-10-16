@@ -2,11 +2,8 @@
 (
     defaultPrim = "BatteryMountsVisual"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# GPU companion for the composed battery mount regression. It reuses the
-# numeric composition and changes only the observer and camera presentation.
 
 def Xform "BatteryMountsVisual" (
     prepend references = @lunco://scenes/tests/battery_mounts.usda@</BatteryMountsTest>
@@ -18,82 +15,158 @@ def Xform "BatteryMountsVisual" (
     )
     {
     }
-
     over "Sun"
     {
         float inputs:intensity = 15000.0
     }
-
-    # The numeric fixture keeps its physical lighting contract. This companion
-    # adds a neutral authored fill so the recessed red case remains visible in
-    # the review image instead of becoming a backlit silhouette.
     def DomeLight "ReviewFill"
     {
         float inputs:intensity = 5000.0
         float inputs:exposure = 0.0
-        color3f inputs:color = (0.55, 0.60, 0.70)
+        color3f inputs:color = (0.550000011920929, 0.6000000238418579, 0.699999988079071)
     }
-
-    over "Rucheyok"
+    def "Rucheyok" (
+        active = false
+    )
     {
-        bool active = false
         bool physics:rigidBodyEnabled = false
-        over "Wheel_FL" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_FR" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_RL" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_RR" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_FL"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_FR"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_RL"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_RR"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
     }
-
-    # This is a static presentation of the authored assemblies. Disable each
-    # rover's independent wheel bodies as well as its chassis body so gravity
-    # cannot move the subjects out of the review camera before capture.
     over "Skid"
     {
         bool physics:rigidBodyEnabled = false
-        over "Suspension_FL" { over "Wheel_FL" { bool physics:rigidBodyEnabled = false } }
-        over "Suspension_FR" { over "Wheel_FR" { bool physics:rigidBodyEnabled = false } }
-        over "Suspension_RL" { over "Wheel_RL" { bool physics:rigidBodyEnabled = false } }
-        over "Suspension_RR" { over "Wheel_RR" { bool physics:rigidBodyEnabled = false } }
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
+        over "Suspension_FR"
+        {
+            over "Wheel_FR"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
+        over "Suspension_RL"
+        {
+            over "Wheel_RL"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
+        over "Suspension_RR"
+        {
+            over "Wheel_RR"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
     }
-
     over "SixWheel"
     {
         bool physics:rigidBodyEnabled = false
-        over "Wheel_L0" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_L1" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_L2" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_R0" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_R1" { bool physics:rigidBodyEnabled = false }
-        over "Wheel_R2" { bool physics:rigidBodyEnabled = false }
+        over "Wheel_L0"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_L1"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_L2"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_R0"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_R1"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
+        over "Wheel_R2"
+        {
+            bool physics:rigidBodyEnabled = false
+        }
     }
-
     over "RockerBogie"
     {
         bool physics:rigidBodyEnabled = false
         over "RockerL"
         {
             bool physics:rigidBodyEnabled = false
-            over "Wheel_FL" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_FL"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
         }
         over "RockerR"
         {
             bool physics:rigidBodyEnabled = false
-            over "Wheel_FR" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_FR"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
         }
         over "BogieL"
         {
             bool physics:rigidBodyEnabled = false
-            over "Wheel_ML" { bool physics:rigidBodyEnabled = false }
-            over "Wheel_RL" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_ML"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+            over "Wheel_RL"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
         }
         over "BogieR"
         {
             bool physics:rigidBodyEnabled = false
-            over "Wheel_MR" { bool physics:rigidBodyEnabled = false }
-            over "Wheel_RR" { bool physics:rigidBodyEnabled = false }
+            over "Wheel_MR"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+            over "Wheel_RR"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
+        over "HingeL"
+        {
+            bool physics:jointEnabled = false
+        }
+        over "HingeR"
+        {
+            bool physics:jointEnabled = false
+        }
+        over "BogieHingeL"
+        {
+            bool physics:jointEnabled = false
+        }
+        over "BogieHingeR"
+        {
+            bool physics:jointEnabled = false
         }
     }
-
     def Camera "VisualCamera" (
         prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
     )
@@ -103,16 +176,15 @@ def Xform "BatteryMountsVisual" (
         float focalLength = 28.0
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Scope "CameraTrack" (
         prepend apiSchemas = ["LunCoCameraTrackAPI"]
     )
     {
+        token lunco:activeCamera
         token lunco:activeCamera.timeSamples = {
-            0: "VisualCamera",
+            0.0: "VisualCamera",
         }
     }
-
     over "Scenario"
     {
         over "Test"

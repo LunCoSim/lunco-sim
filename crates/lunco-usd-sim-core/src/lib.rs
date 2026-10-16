@@ -135,6 +135,8 @@ pub struct PendingDifferential {
 #[derive(Resource, Default)]
 pub struct GroundColliderPending(pub bool);
 
+impl lunco_core::SceneResource for GroundColliderPending {}
+
 /// State needed to display and animate a joint-based wheel.
 ///
 /// The vehicle projector owns the physical wheel, while render and editor

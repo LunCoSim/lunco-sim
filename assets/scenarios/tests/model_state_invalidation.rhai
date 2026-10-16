@@ -10,8 +10,8 @@ const SOURCE = "lunco://models/Oscillator.mo";
 fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [find_path(EDITABLE), find_path(UNTOUCHED)],
-        entity_reads: [], entity_writes: [],
-        query_reads: ["QueryUsdPrim", "ListOpenDocuments"], required_inputs: [],
+        entity_reads: [find_path(EDITABLE), find_path(UNTOUCHED)], entity_writes: [],
+        query_reads: ["QueryUsdPrim", "ListOpenDocuments", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [],
     }
 }
 
@@ -25,7 +25,7 @@ fn close_scalar(actual, expected) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = query("QueryUsdPrim", #{
@@ -36,7 +36,7 @@ fn find_document() {
             if query_ok(root) { return item.doc_id; }
         }
     }
-    -1
+    ()
 }
 
 fn fail(me, message) {
@@ -47,7 +47,7 @@ fn fail(me, message) {
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.editable = -1;
     this.untouched = -1;
     this.elapsed = 0.0;
@@ -58,7 +58,8 @@ fn on_start(me, ctx) {
     this.untouched_peak = 0.0;
     this.wait_generation = -1;
     this.phase = 0;
-    this.saw_reset = false;
+    this.before_revision = ();
+    this.untouched_revision = ();
     this.after_started = false;
     this.done = false;
 }
@@ -71,10 +72,10 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    if this.doc < 0 { this.doc = find_document(); }
+    if this.doc == () { this.doc = find_document(); }
     if this.editable < 0 { this.editable = find_path(EDITABLE); }
     if this.untouched < 0 { this.untouched = find_path(UNTOUCHED); }
-    if this.doc < 0 || this.editable < 0 || this.untouched < 0 { return; }
+    if this.doc == () || this.editable < 0 || this.untouched < 0 { return; }
 
     let signal = get(this.editable, "signal");
     let untouched_signal = get(this.untouched, "signal");
@@ -88,6 +89,8 @@ fn on_tick(me, ctx) {
         if this.phase_elapsed < 2.5 { return; }
 
         let generation = assembly_edit::describe(this.doc).generation;
+        this.before_revision = get(this.editable, "ModelStateRevision.0");
+        this.untouched_revision = get(this.untouched, "ModelStateRevision.0");
         let ack = assembly_edit::batch(this.doc, "Change oscillator instance amplitude", [#{
             SetAttribute: #{
                 edit_target: "@root@",
@@ -107,10 +110,10 @@ fn on_tick(me, ctx) {
     }
 
     if assembly_edit::describe(this.doc).generation <= this.wait_generation { return; }
-    if !this.saw_reset {
-        if signal == () { this.saw_reset = true; }
-        return;
-    }
+    // Preparation holds the fixed clock, so simulation observers need not see
+    // the temporary absence of outputs while the backend recompiles.
+    let revision = get(this.editable, "ModelStateRevision.0");
+    if revision == () || revision == this.before_revision { return; }
     if !this.after_started {
         if signal == () { return; }
         this.after_started = true;
@@ -134,6 +137,9 @@ fn on_tick(me, ctx) {
         attrs: ["inputs:amplitude", "info:sourceAsset"],
     });
     let checks = [];
+    checks.push(t_true(revision != () && revision != this.before_revision
+            && get(this.untouched, "ModelStateRevision.0") == this.untouched_revision,
+        "the authored edit invalidates only the edited model instance"));
     checks.push(t_true(this.before_peak > 0.4 && this.before_peak < 0.6,
         "initial compiled instance uses amplitude 0.5"));
     checks.push(t_true(this.after_peak > 1.4 && this.after_peak < 1.7,

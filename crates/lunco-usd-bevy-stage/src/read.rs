@@ -709,6 +709,8 @@ pub trait UsdRead {
     /// USD semantics). The visual extractor skips mesh/child creation for
     /// inactive prims.
     fn is_active(&self, prim: &SdfPath) -> Result<bool, String>;
+    /// Whether native composition supplies this prim through a composition arc.
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String>;
 
     /// Whether a prim exists at `prim` in the composed scene — the existence
     /// test the incremental structural reconcile uses to tell a spawn (present in
@@ -879,6 +881,8 @@ pub trait UsdReadObject {
     ) -> Result<Option<String>, String>;
     fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
     fn is_active(&self, prim: &SdfPath) -> Result<bool, String>;
+    /// Whether native composition supplies this prim through a composition arc.
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String>;
     fn has_prim(&self, prim: &SdfPath) -> bool;
     fn default_prim(&self) -> Option<String>;
     fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint>;
@@ -1547,6 +1551,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::is_active(self, prim)
     }
 
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String> {
+        UsdRead::has_composition_arc(self, prim)
+    }
+
     fn has_prim(&self, prim: &SdfPath) -> bool {
         UsdRead::has_prim(self, prim)
     }
@@ -2022,6 +2030,14 @@ impl UsdRead for StageView<'_> {
             .map_err(|error| error.to_string())
     }
 
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String> {
+        self.stage()
+            .prim(prim.clone())
+            .map_err(|error| error.to_string())?
+            .has_composition_arc()
+            .map_err(|error| error.to_string())
+    }
+
     fn has_prim(&self, prim: &SdfPath) -> bool {
         self.stage()
             .prim(prim.clone())
@@ -2364,6 +2380,13 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::is_active(*reader, prim),
             Self::Live(reader) => UsdRead::is_active(reader, prim),
+        }
+    }
+
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String> {
+        match self {
+            Self::Prepared(reader) => UsdRead::has_composition_arc(*reader, prim),
+            Self::Live(reader) => UsdRead::has_composition_arc(reader, prim),
         }
     }
 

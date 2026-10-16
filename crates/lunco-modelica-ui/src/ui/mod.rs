@@ -393,11 +393,9 @@ fn clear_modelica_selection_on_twin_closed(
 fn cleanup_removed_simulators(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocuments>>,
-    signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let mut registry = registry;
-    let mut signals = signals;
     let mut viz_registry = viz_registry;
     for entity in removed.read() {
         // Drop the entity→doc link — and ONLY the link. This system is the
@@ -406,11 +404,8 @@ fn cleanup_removed_simulators(
         if let Some(reg) = registry.as_mut() {
             reg.unlink_entity(entity);
         }
-        // Drop every registered signal + plot binding for this entity
-        // so stale plots don't keep reading the last values forever.
-        if let Some(sigs) = signals.as_mut() {
-            sigs.drop_entity(entity);
-        }
+        // The render-free registry owns history lifetime in every host.
+        // Retire only this UI's bindings to the removed simulator.
         if let Some(reg) = viz_registry.as_mut() {
             crate::ui::viz::drop_entity_bindings(reg, entity);
         }
@@ -675,6 +670,7 @@ impl Plugin for ModelicaUiPlugin {
             // plot auto-pick, and SignalRegistry playback.
             .add_systems(Update, core_observers::project_run_results_to_ui)
             .add_observer(core_observers::retire_closed_twin_playback)
+            .add_observer(core_observers::retire_closed_document_playback)
             .add_observer(core_observers::retire_replication_playback)
             .add_systems(
                 Last,

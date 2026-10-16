@@ -296,7 +296,7 @@ pub(crate) fn admit_stage_changes(world: &mut World, incoming: Vec<Changes>) -> 
             current.hold_native_asset_paths(existing);
         }
         if stage.progress_key.is_none()
-            && crate::twin_projection::is_authoritative_scene_stage(world, id)
+            && lunco_usd_bevy_scene::is_authoritative_scene_stage(world, id)
         {
             let Some(operation) = pending.next_operation.checked_add(1) else {
                 report_failure(

@@ -1,4 +1,5 @@
 // TEST-ONLY: preview ownership must not admit runtime Modelica networks.
+// The live electrical baseline uses an explicit normal-incidence solar stimulus.
 const TEST_KIND = "editor";
 const ROOT = "/PreviewDomainIsolation";
 const DORMANT = "/DormantPreviewNetwork";
@@ -7,7 +8,7 @@ const FORK_PREVIEW = 15502;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(ROOT + "/Network")], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "InspectUsdDocument", "InspectUsdViewport"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -16,11 +17,13 @@ fn on_start(me, ctx) {
     this.ids = []; this.checks = []; this.leaked = false; this.rejection_id = ();
 }
 fn ready(preview, doc) {
-    let generation = assembly_edit::describe(doc).generation;
     for p in assembly_edit::viewport().previews {
         if p.preview.to_string() == preview.to_string()
-            && p.doc_id == doc && p.projection_ready
-            && p.projected_generation == generation { return true; }
+            && p.doc_id == doc && p.projection_ready {
+            let document = assembly_edit::describe(doc);
+            return document != () && document.ok != false
+                && p.projected_generation == document.generation;
+        }
     }
     false
 }
@@ -66,7 +69,8 @@ fn on_tick(me, ctx) {
         if this.fork == () { return; }
         let g = assembly_edit::describe(this.fork).generation;
         let ack = assembly_edit::batch(this.fork, "Distinct preview-only network",
-            [#{ MovePrim: #{ edit_target: "@root@", from_path: ROOT, to_path: DORMANT } }], g);
+            [#{ MovePrim: #{ edit_target: "@root@", from_path: ROOT, to_path: DORMANT } },
+             #{ SetDefaultPrim: #{ edit_target: "@root@", default_prim: DORMANT } }], g);
         if ack.ok == false { this.elapsed = 41.0; return; }
         assembly_ui::open_session(FORK_PREVIEW, this.fork, "@root@");
         this.phase = 2;

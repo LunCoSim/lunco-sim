@@ -54,13 +54,4 @@ pub enum ScriptUiRequest {
         twin_id: Option<u64>,
         menus: Vec<ScriptWorkbenchMenu>,
     },
-    /// Dispatch one selected workbench item through the Rhai tool registry.
-    WorkbenchMenuAction {
-        tool: String,
-        hook: String,
-        args: TelemetryValue,
-        /// Active Twin at selection time, if the application menu is acting
-        /// on a mounted Twin. The owner is revalidated when the hook runs.
-        owner_twin_id: Option<u64>,
-    },
 }

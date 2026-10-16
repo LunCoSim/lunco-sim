@@ -201,18 +201,17 @@ fn live_render_translation(entity) {
 }
 
 fn report(me, passed, message) {
+    if me.done { return me; }
     me.done = true;
     me.checks.push(t_true(passed, message));
     report_verdict(me.checks,
         "ROUTE WINDOWED INJECTED WAYPOINT EDITING", "ROUTE_WINDOWED_INJECTED_WAYPOINT_EDITING");
+    me
 }
 
 fn simulation_dependencies(me, ctx) {
     let subject = find_path(ROOT + "/Subject");
-    let reads = [subject];
-    for entity in list_entities() {
-        if entity.name == "Avatar" { reads.push(entity.id); }
-    }
+    let reads = [subject, find_path(ROOT + "/Avatar")];
     #{ modelica_entities: [subject], entity_reads: reads, entity_writes: [],
        query_reads: ["InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "ReadExposures", "QueryEntity"],
        required_inputs: [] }
@@ -250,14 +249,8 @@ fn next_input_frame() {
 }
 
 fn native_avatar_yaw() {
-    let avatar = ();
-    for entity in list_entities() {
-        if entity.name == "Avatar" {
-            if avatar != () { return (); }
-            avatar = entity.id;
-        }
-    }
-    if avatar == () { return (); }
+    let avatar = find_path(ROOT + "/Avatar");
+    if avatar < 0 { return (); }
     let pose = query("QueryEntity", #{ id: avatar });
     if pose == () || pose.ok == false || pose.euler == () { return (); }
     pose.euler[0]
@@ -470,9 +463,9 @@ fn prepare_route_and_add_unpossessed(me) {
     });
     this.checks.push(t_true(wrong_view_owner != () && wrong_view_owner.ok == false,
         "curve-view inspection rejects a mismatched document identity"));
-    if unused.status != "missing" || unused.under_arc != true
-        || unused.composed_exists != false {
-        this.failure = "ResolveUsdTarget did not report an absent referenced child as missing";
+    if unused.status != "missing" || unused.under_arc != false
+        || unused.composed_exists != false || unused.prim_stack.len() != 0 {
+        this.failure = "ResolveUsdTarget did not report the absent child's native missing-prim facts";
         return;
     }
 
@@ -725,17 +718,17 @@ fn check_possession_and_selection(me) {
 }
 
 fn prepare_select_menu_row(me) {
+    this.waiting_for = "the Select menu callback to select P0";
     this.menu_x = this.screen[0] + 58.0;
     this.menu_y = this.screen[1] + 16.0;
     input_pointer_move(this.menu_x, this.menu_y);
 }
 
-fn press_menu_primary(me) {
-    input_pointer_press("primary", this.menu_x, this.menu_y);
-}
-
-fn release_menu_primary(me) {
-    input_pointer_release("primary", this.menu_x, this.menu_y);
+fn click_menu_primary(me) {
+    let result = input_click("primary", this.menu_x, this.menu_y);
+    if result == () || !result.ok {
+        this.failure = "the native menu click was rejected: " + result.to_string();
+    }
 }
 
 fn p0_is_selected(me) { selected_only(this.doc, ROUTE + "/P0") }
@@ -1325,14 +1318,15 @@ fn generic_delete_undo_is_projected(me) {
 }
 
 fn complete_route_curve_view_checks(me) {
-    report(this, true,
+    this = report(this, true,
         "unpossessed edit, possessed context selection, explicit Move, cursor-following preview, placement, ordered insertion, generic delete/undo, and applied ribbon states for zero, one, and multiple points passed");
 }
 
 fn timeout(me) {
     if !this.done {
-        report(this, false,
-            "route interaction timed out waiting for " + this.waiting_for);
+        let message = if this.failure != "" { this.failure }
+            else { "route interaction timed out waiting for " + this.waiting_for };
+        this = report(this, false, message);
     }
 }
 
@@ -1380,9 +1374,8 @@ fn route_interaction_tree() {
         next_input_frame(),
         once(Fn("prepare_select_menu_row")),
         next_input_frame(),
-        once(Fn("press_menu_primary")),
-        next_input_frame(),
-        once(Fn("release_menu_primary")),
+        once(Fn("click_menu_primary")),
+        check(Fn("test_state_is_valid")),
         wait_until(Fn("p0_is_selected")),
         once(Fn("point_selection_preserved_possession")),
         check(Fn("test_state_is_valid")),
@@ -1398,9 +1391,8 @@ fn route_interaction_tree() {
         check(Fn("second_context_is_valid")),
         once(Fn("prepare_move_menu_row")),
         next_input_frame(),
-        once(Fn("press_menu_primary")),
-        next_input_frame(),
-        once(Fn("release_menu_primary")),
+        once(Fn("click_menu_primary")),
+        check(Fn("test_state_is_valid")),
         wait_until(Fn("move_preview_is_armed")),
         once(Fn("prepare_cursor_trace")),
         check(Fn("test_state_is_valid")),
@@ -1430,9 +1422,8 @@ fn route_interaction_tree() {
         check(Fn("third_context_is_valid")),
         once(Fn("prepare_delete_menu_row")),
         next_input_frame(),
-        once(Fn("press_menu_primary")),
-        next_input_frame(),
-        once(Fn("release_menu_primary")),
+        once(Fn("click_menu_primary")),
+        check(Fn("test_state_is_valid")),
         wait_until(Fn("moved_waypoint_is_inactive")),
         check(Fn("test_state_is_valid")),
         once(Fn("record_route_curve_view_edit")),
@@ -1516,6 +1507,10 @@ fn route_interaction_tree() {
     ])
 }
 
+fn on_tick(me, ctx) {
+    if !this.done && this.failure != "" { report(this, false, this.failure); }
+}
+
 fn task(me, ctx) {
     par_race([
         route_interaction_tree(),
@@ -1580,7 +1575,7 @@ fn on_event(me, evt, ctx) {
         let message = if this.failure == "" {
             "the route interaction behavior tree failed while waiting for " + this.waiting_for
         } else { this.failure };
-        report(this, false, message);
+        this = report(this, false, message);
     }
 }
 
@@ -1589,7 +1584,7 @@ fn on_stop(me, ctx) {
         input_pointer_release(this.native_look_button, 500.0, 500.0);
     }
     if !this.done {
-        report(this, false,
+        this = report(this, false,
             "injected route interaction stopped before its behavior tree produced a verdict");
     }
 }

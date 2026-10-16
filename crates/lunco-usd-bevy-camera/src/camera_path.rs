@@ -41,7 +41,10 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{Command, on_command};
-use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
+use lunco_time::{
+    Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode,
+    spawn_derived_domain, spawn_driven_domain,
+};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_geometry::curve::{CurveBasis, eval_curve, eval_curve_tangent};
@@ -126,6 +129,8 @@ pub(super) struct CameraPathScanState {
     selected: HashSet<Entity>,
     initialized: bool,
 }
+
+impl lunco_core::SceneResource for CameraPathScanState {}
 
 impl CameraPathScanState {
     fn enqueue_identity(&mut self, entity: Entity) {
@@ -421,6 +426,37 @@ pub fn camera_path_transport(
         }
     }
     info!("[camera-path] {want}: {:?}", cmd.action);
+}
+
+/// Clock ancestry follows time; ECS ancestry follows the owning path's lifetime.
+fn spawn_path_clock(
+    commands: &mut Commands,
+    owner: Entity,
+    parent: Entity,
+    path: &str,
+    duration: f64,
+    periodic: bool,
+) -> Entity {
+    let gate = spawn_derived_domain(commands, Some(parent), 0.0, 0.0);
+    commands.entity(gate).insert((
+        Name::new(format!("CameraPathGate:{path}")),
+        CameraPathGate { parent },
+        ChildOf(owner),
+    ));
+    let domain = spawn_driven_domain(
+        commands,
+        Some(gate),
+        Playback {
+            start: 0.0,
+            end: duration,
+            looping: periodic,
+            ..default()
+        },
+    );
+    commands
+        .entity(domain)
+        .insert((Name::new(format!("CameraPath:{path}")), ChildOf(gate)));
+    domain
 }
 
 /// Resolve `BasisCurves` prims carrying `lunco:path:camera` into [`CameraPath`]s,
@@ -939,26 +975,14 @@ pub(super) fn resolve_camera_paths(
         // expressible as a user pause. Held here, the user can still pause, scrub
         // and resume a shot that has not started; the two compose instead of
         // fighting.
-        let gate = commands
-            .spawn((
-                Name::new(format!("CameraPathGate:{}", prim.path)),
-                TimeDomain::derived(Some(parent), 0.0, 0.0),
-                CameraPathGate { parent },
-            ))
-            .id();
-
-        let domain = commands
-            .spawn((
-                Name::new(format!("CameraPath:{}", prim.path)),
-                TimeDomain::derived(Some(gate), 0.0, 1.0),
-                Playback {
-                    start: 0.0,
-                    end: duration,
-                    looping: periodic,
-                    ..default()
-                },
-            ))
-            .id();
+        let domain = spawn_path_clock(
+            &mut commands,
+            entity,
+            parent,
+            &prim.path,
+            duration,
+            periodic,
+        );
 
         commands.entity(entity).try_insert(CameraPath {
             camera,
@@ -1404,6 +1428,43 @@ pub fn apply_camera_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_path_clock_lifetime_follows_its_source() {
+        use lunco_core::AppSceneExt;
+        let mut app = App::new();
+        app.init_scene_resource::<CameraPathScanState>();
+        let world = app.world_mut();
+        let parent = world.spawn(TimeDomain::default()).id();
+        let unrelated = world.spawn(TimeDomain::default()).id();
+        for _ in 0..3 {
+            let owner = world.spawn_empty().id();
+            let domain =
+                spawn_path_clock(&mut world.commands(), owner, parent, "/Path", 12.0, false);
+            world.flush();
+            let gate = world.get::<TimeDomain>(domain).unwrap().parent.unwrap();
+            assert!(world.get::<CameraPathGate>(gate).is_some());
+            world
+                .resource_mut::<CameraPathScanState>()
+                .enqueue_identity(owner);
+            world.resource_mut::<CameraPathScanState>().initialized = true;
+            lunco_core::run_scene_teardown_with_entities(world, [owner]);
+            assert!(
+                world.get_entity(gate).is_err(),
+                "the removed path must release its gate"
+            );
+            assert!(
+                world.get_entity(domain).is_err(),
+                "the removed path must release its playhead"
+            );
+            assert!(world.get_entity(parent).is_ok());
+            assert!(world.get_entity(unrelated).is_ok());
+            let scan = world.resource::<CameraPathScanState>();
+            assert!(
+                !scan.initialized && scan.queued_entities.is_empty() && scan.queued_set.is_empty()
+            );
+        }
+    }
 
     fn ring() -> Vec<Vec3> {
         // Four points on a radius-1 circle in the XZ plane.

@@ -152,6 +152,10 @@ fn apply_ops(doc, label, ops) {
         label: label,
         ops: ops,
     });
+    if result != () && result.status == "pending" && result.id != () {
+        result.changed = false;
+        return result;
+    }
     if result == () || result.ok != true {
         return failure(if result == () { "USD edit returned no result" } else { result.error });
     }
@@ -989,7 +993,7 @@ fn insert_route_point(context, before) {
     let result = apply_ops(context.doc_id,
         if before { "Insert route point before" } else { "Insert route point after" },
         marker.ops);
-    if result.ok {
+    if result.ok || result.status == "pending" {
         result.path = marker.path;
     }
     result
@@ -1242,7 +1246,7 @@ fn on_add_here(context) {
     let marker = marker_ops(context.doc_id, route, position, read);
     if marker.ok != true { return failure(marker.error); }
     let result = apply_ops(context.doc_id, "Add route point on ribbon", marker.ops);
-    if result.ok {
+    if result.ok || result.status == "pending" {
         result.path = marker.path;
     }
     result
@@ -1266,7 +1270,7 @@ fn on_click(context) {
     let point = marker_ops(context.doc_id, route, point_values(pointer.point), read);
     if !point.ok { return failure(point.error); }
     let result = apply_ops(context.doc_id, "Append route point", point.ops);
-    if result.ok {
+    if result.ok || result.status == "pending" {
         result.path = point.path;
     }
     result

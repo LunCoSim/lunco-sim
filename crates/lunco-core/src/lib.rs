@@ -82,7 +82,10 @@ pub use scene::{
     SceneTransitionFailed, SceneTransitionId, SceneTransitionIntent, SceneTransitionRequest,
     SceneTransitionStarted,
 };
-pub use scene_lifecycle::{SceneMountState, SceneTeardown, run_scene_teardown};
+pub use scene_lifecycle::{
+    AppSceneExt, SceneMountState, SceneOwned, SceneResource, SceneTeardown, run_scene_teardown,
+    run_scene_teardown_with_entities,
+};
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //

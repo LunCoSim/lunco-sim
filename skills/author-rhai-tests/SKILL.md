@@ -68,6 +68,12 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    keep the observer short and declarative. If a helper needs engine state that
    the public API cannot expose, add one generic Rust capability at its owner,
    then consume it from Rhai.
+   Preserve unsigned document, generation and admission identities. Use `()`
+   for a missing document rather than comparing its `u64` id with a negative
+   sentinel. Compare identity strings exactly; use checked `parse_int` only
+   when a bounded unsigned tick must be compared with signed `sim_tick()`.
+   A helper that changes a state map must return it and the caller must assign
+   it back to `this`; a terminal verdict must stop the observer's later work.
 3. Make positive conformance evidence the default: prove that the required
    component, topology, relationship, datum, or runtime outcome is present and
    correct. Do not write a negative test merely to assert that an obsolete
@@ -82,6 +88,11 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    diagnostic/verdict boundary without crashing or silently substituting a
    default. A historical regression example alone is not sufficient reason
    to add a negative test.
+   Script helpers that receive a state map return the updated map, and callers
+   assign it back to `this`; argument mutation does not update the caller's
+   bound state. Keep the terminal verdict latched in that state so stop hooks
+   cannot emit a contradictory second result. Timeout diagnostics preserve an
+   earlier failure and identify the current awaited operation.
 4. For requirements, read the mounted SysML snapshot and evaluate composed USD
    evidence. Keep the requirement ID/limit in SysML and emit structured check
    evidence (name, measured value, units, criterion, source revision, and
@@ -114,11 +125,20 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    evidence; it is not a behavior or visual verdict. For a live Editor session,
    use `RunRhai`/`run_rhai_test.sh` or an attached `RunScenario` and preserve
    the current process and camera. Do not rebuild Rust for a Rhai-only change.
-   Scene discovery is recursive. Give independent Editor fixtures nested
+   A terminal runtime fault ends stepping immediately. Declare
+   `expect_runtime_fault(kind)` before triggering an intended negative case;
+   unexpected kinds fail with the owner's diagnostic.
+   Scene discovery is recursive and uses the owning Twin's prepared asset-path
+   context, including USD search paths. Require `luncosim test --list` to resolve
+   the complete catalog before a suite pass. Give independent Editor fixtures nested
    one-scene directories so each windowed run mounts its own Twin and preview
    state. The production test wrappers give each process a run-scoped
    `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as
    ephemeral settings and runtime overlays.
+   Discovery resolves source assets through the same owning Twin and prepared
+   asset paths as runtime. A source search path may resolve from the Twin root
+   after a layer miss; `./` paths require the layer-relative source. Do not copy
+   a script beside its scene to satisfy discovery or bypass a failing fixture.
 7. Repeat with deterministic clocks and explicit seeds. Record the clock
    contract, timestep/substeps, source revision, and finite-state result. A
    repeatability check compares the same sampled evidence, not merely a zero

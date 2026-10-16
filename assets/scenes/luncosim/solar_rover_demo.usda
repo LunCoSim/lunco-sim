@@ -65,7 +65,7 @@ def Xform "SolarRoverTest" (
         float inputs:shadow:distance = 3000.0
     }
     def Camera "WideTrack" (
-        prepend apiSchemas = "LunCoCameraAPI"
+        prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
         double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
@@ -75,7 +75,7 @@ def Xform "SolarRoverTest" (
         float2 clippingRange = (0.10000000149011612, 200000.0)
     }
     def Scope "CameraTrack" (
-        prepend apiSchemas = "LunCoCameraTrackAPI"
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
     )
     {
         token lunco:activeCamera
@@ -89,7 +89,7 @@ def Xform "SolarRoverTest" (
         variants = { string "power" = "battery" }
     )
     {
-        double3 xformOp:translate = (0.0, 0.5, 0.0)
+        double3 xformOp:translate = (0.0, 1.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel collection:components:includes
         prepend rel collection:components:includes = </SolarRoverTest/SolarRover/YawHead/SolarPanel>
@@ -168,7 +168,7 @@ def Xform "SolarRoverTest" (
         {
         }
         def Xform "SunTrackerController" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -180,40 +180,34 @@ def Xform "SolarRoverTest" (
             custom double inputs:target_mount_z
             double inputs:target_mount_z.connect = </SolarRoverTest/SolarRover/TrackingEnvironment.outputs:sun_mount_z>
         }
-        over "Comms"
+        over "Comms" (
+            references = @lunco://components/comms/antenna_tracking.usda@</CommsAntenna>
+        )
         {
-            double inputs:target_mount_x
-            double inputs:target_mount_x.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_x>
-            double inputs:target_mount_y
-            double inputs:target_mount_y.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_y>
-            double inputs:target_mount_z
-            double inputs:target_mount_z.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_z>
-            over "AntennaTrackerController" (
-                active = true
-            )
+            over "AntennaTrackerController"
+            {
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </SolarRoverTest/SolarRover/Comms/Environment.outputs:dss_goldstone_mount_z>
+            }
+            over "YawJoint"
             {
             }
-            over "YawJoint" (
-                active = true
-            )
-            {
-            }
-            over "ElevationJoint" (
-                active = true
-            )
+            over "ElevationJoint"
             {
             }
             over "YawHead"
             {
-                bool physics:rigidBodyEnabled = true
                 over "DishGimbal"
                 {
-                    bool physics:rigidBodyEnabled = true
                 }
             }
         }
         def Camera "RoverCam" (
-            prepend apiSchemas = "LunCoCameraAPI"
+            prepend apiSchemas = ["LunCoCameraAPI"]
         )
         {
             uniform token lunco:cameraPose = "mounted"
@@ -224,7 +218,7 @@ def Xform "SolarRoverTest" (
             float2 clippingRange = (0.10000000149011612, 200000.0)
         }
         def Camera "SideCam" (
-            prepend apiSchemas = "LunCoCameraAPI"
+            prepend apiSchemas = ["LunCoCameraAPI"]
         )
         {
             uniform token lunco:cameraPose = "mounted"
@@ -238,7 +232,7 @@ def Xform "SolarRoverTest" (
     def Scope "Route"
     {
         def Scope "Program" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -284,7 +278,7 @@ def Xform "SolarRoverTest" (
     {
         custom string lunco:scenario = "solar-rover-ops"
         def Scope "Mission" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"

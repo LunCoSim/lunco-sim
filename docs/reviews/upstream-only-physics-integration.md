@@ -543,3 +543,96 @@ image `target/bounded-griffin-view.png` retains lander, rover, ramp and terrain.
 Its approximately 65 FPS and 1.3–1.6 ms native physics timings do not meet the
 performance target. Full UI/simulation ownership separation, collision-kernel
 qualification and external FMU interoperability remain open.
+
+## Integration with current scene lifetimes
+
+The integration retains main's scene-resource registration, source leases,
+callback retirement, editor state, and native graph teardown boundaries. Joint
+solver order/scope and mobility hold/order state use `init_scene_resource`.
+No dependency source trees or path patches are admitted by the merge.
+
+The pinned gizmo frontend privately reads window cursor state. Main's injected
+gesture gate requires its pointer-reader correction, currently present only in
+a vendored dependency patch. The public frontend options have no input override;
+writing window state asks Bevy Winit to warp the OS cursor. That application
+experiment is rejected, and its passing narrow input test is not qualification.
+The production `assembly_property_editor` gate failed to commit a drag.
+`target/proposed-gizmo-native-pointer.patch` records the one-file dependency
+change requiring explicit approval before application or publication. The Git
+pin remains unchanged, and the integration is not ready for main fast-forward.
+
+`lunco-usd-avian-joints::retire_native_joints` owns graph and component retirement
+for both detach and scene teardown. It validates all component identities before
+writing, releases graph/island edges through public native APIs, applies island
+wake, removes native definitions and then their disabled markers. The owning
+lifecycle seam tests active and disabled constraints plus rejection without
+partial writes. Arbitrary compound removal of raw third-party components is
+outside the application's retirement API; no native observer implementation is
+copied or patched.
+
+Two separate pre-integration Tracy captures passed native export and file-framing
+checks: `target/bounded-presentation-tracy.tracy` and
+`target/bounded-ccd-detail-tracy.tracy`. The detailed settled window attributes
+most CCD time to triangle/cylinder casts and their contact queries; BVH upkeep
+is much smaller. Nested zone totals are not additive. Other runtime workloads
+and profiling overhead prevent treating these timings as FPS acceptance.
+`target/bounded-ccd-continuous-baseline.log` passes 12 production contact checks.
+
+Main's authored-value reader correctly returns absence for an unauthored drive
+attribute. Ordinary joint lowering supplies positive infinity for omitted force
+and torque caps, matching gear lowering and the standard USD drive default.
+The integrated gate exposed the previous finite `Scalar::MAX` value; the
+infinity assertion and all numerical tolerances remain unchanged.
+
+The integrated normal build loads Griffin through ramp deployment and rover
+egress, and the Summer/SolarPanel test completes three scene restarts plus
+three Twin replacements (`target/integrated-solar-panel-reloads.json`). Native
+canvas completion confirms every fresh SolarPanel projection; the inspected
+`target/integrated-solar-panel-twin-2.png` shows its nonempty diagram. The last
+screenshot request was still queued at exit and is not visual evidence.
+
+A normal View session on API 4386 advances 480 physics steps in 8.014207 wall
+seconds (0.998227x). Pause holds the physical step at 2830 while the engine
+publishes 818 more frame revisions; resume advances again. Its raw frame medians
+are 15.853 ms running and 9.769 ms paused. These are diagnostic windows with
+changing mission/camera state, not an isolated A/B speedup or target acceptance.
+The ready state is clear and the inspected View image retains rover, ramp and
+terrain. Receipts are `target/upstream-main-final-runtime.json`, its summary,
+and `.png`. API Exit releases the owned listener. Query dispatch remains at its
+existing default: the exploratory batch windows crossed different physical
+mission phases and GPU clock states, so they cannot establish a dispatch gain.
+
+The corrected integrated artifact passes the production force-drive (18),
+coupled gear (5), uncoupled control (5), and continuous-contact (12) gates,
+all exit 0 (`target/upstream-main-integration-physics-results.json`). The
+joint-retirement lifecycle seam passes active/disabled removal and a missing
+identity rejection without partial graph writes. Its setup finishes the native
+plugins and initializes their mesh event resources before active stepping;
+incomplete fixture attempts are not qualification. The editor gesture gate is
+still blocked on the separately proposed dependency correction. Main has not
+been fast-forwarded, and the merge remains pending that decision.
+
+The unchanged replay-capture harness records matching physics, Modelica and
+articulated checkpoints in two independent serial runs and two independent
+24-worker runs. The captured state also matches exactly across those compute
+widths. A further production replay against this task-local candidate passes
+all 24 authored assertions in each profile, including the altered-row negative
+check (`target/upstream-main-current-replay-verification-wrapper.log`). The
+maintained historical reference remains untouched and does not match the new
+numerical result (first difference: an articulated position at tick 11). This
+establishes current-version repeatability, not historical trajectory acceptance.
+The comparison summary is `target/upstream-main-current-replay-summary.json`.
+
+Capability review also finds the maintained `transform-gizmo-egui` frontend and
+public generic `Gizmo` math API in the pinned repository. Those support an
+application-owned frontend alternative, but require replacing rendering and
+gesture capture together. They are not an input override for the current Bevy
+frontend. No dependency patch or alternate frontend has been applied.
+
+Clock/coupling qualification remains open beyond pause/resume and current replay.
+The worker target still accumulates Bevy's rounded fixed `Duration`, while the
+mission mapping and default communication interval use `SECS_PER_TICK`.
+Communication scheduling needs one shared integer master-tick lattice before
+claiming long-duration clock identity. Direct-feedthrough/algebraic coupling and
+external FMU 3 interoperability are also unqualified; the current checked native
+participant facade is not evidence for those contracts.

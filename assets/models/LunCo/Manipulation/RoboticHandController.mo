@@ -4,8 +4,8 @@ model RoboticHandController "Three-finger hand command shaping and joint targets
   // Rhai writes the two semantic command ports. The controller owns the
   // continuous-time response and the symmetric finger allocation; it does not
   // know anything about USD paths or rigid-body implementation details.
-  input Real open_command "Normalized open request, 0..1";
-  input Real grasp_command "Normalized grasp request, 0..1";
+  input Real open_command = 1.0 "Normalized open request, 0..1; open at startup";
+  input Real grasp_command = 0.0 "Normalized grasp request, 0..1; released at startup";
 
   parameter Real tau = 0.25 "Command response time (s)";
   parameter Real left_close_angle = 0.9 "Left finger closing angle (rad)";

@@ -92,6 +92,8 @@
 //! `physics-body-escaped`; the logger and workbench Recent Events consume this
 //! one observation without log parsing or UI-specific dependencies.
 
+use lunco_core::AppSceneExt;
+
 use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
@@ -653,11 +655,8 @@ fn physics_step_admitted(physics_time: Res<Time<Physics>>) -> bool {
 /// escape by a different body that happens to inherit the id, which is the same
 /// unattributable-silence this module exists to remove.
 ///
-/// This prunes on death rather than clearing on scene teardown. `lunco-physics`
-/// deliberately depends on no `lunco-*` crate (see [`report_escaped_bodies`]) so
-/// it cannot observe `ClearScene` — but it does not need to: despawning is what
-/// teardown *does*, so the death signal covers scene reload, single-body despawn
-/// and id reuse alike, with no coupling. Change-driven — empty in steady state.
+/// Individual body removal prunes the live-scene report set immediately;
+/// registered scene teardown also clears reports and the derived world bounds.
 fn forget_dead_bodies(
     mut dead: RemovedComponents<RigidBody>,
     mut reported: ResMut<ReportedEscapes>,
@@ -675,13 +674,13 @@ pub struct EscapeDiagnosticPlugin;
 
 impl Plugin for EscapeDiagnosticPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldBounds>()
-            .init_resource::<ReportedEscapes>()
+        app.init_scene_resource::<WorldBounds>()
+            .init_scene_resource::<ReportedEscapes>()
             // The diagnostic raises the safety hold at the owning physics
             // boundary. Keep the plugin self-contained for headless apps and
             // focused integration tests that install it without the broader
             // PhysicsGatePlugin.
-            .init_resource::<crate::PhysicsHolds>()
+            .init_scene_resource::<crate::PhysicsHolds>()
             // In `Writeback`, after the solver has moved bodies this tick, so a
             // body that left the world is reported on the tick it left rather
             // than one tick later. Bounds are refreshed first so newly-paged
@@ -982,7 +981,7 @@ mod tests {
             min: Vector::splat(-100.0),
             max: Vector::splat(100.0),
         });
-        app.init_resource::<ReportedEscapes>();
+        app.init_scene_resource::<ReportedEscapes>();
         app.insert_resource(PhysicsHolds::default());
         app.insert_resource(lunco_core::RuntimeFaults::default());
         app.insert_resource(lunco_time::WorldTime {
@@ -1048,7 +1047,7 @@ mod tests {
     #[test]
     fn a_despawned_body_is_forgotten() {
         let mut app = App::new();
-        app.init_resource::<ReportedEscapes>();
+        app.init_scene_resource::<ReportedEscapes>();
         app.add_systems(Update, forget_dead_bodies);
 
         let e = app.world_mut().spawn(RigidBody::Dynamic).id();
@@ -1072,3 +1071,7 @@ mod tests {
         );
     }
 }
+
+impl lunco_core::SceneResource for WorldBounds {}
+
+impl lunco_core::SceneResource for ReportedEscapes {}

@@ -232,3 +232,10 @@ uses verdict channel `TERRAIN_DOCUMENT_AUTHORING`. It covers native internal
 references, reserved child names, grouped terrain edits, and terminal rejection
 without document mutation. The editor driver reads composed `defaultPrim` through
 `InspectUsdDocument`, so the same driver supports text and binary fixtures.
+
+For articulated antenna pointing, reference `components/comms/antenna_tracking.usda`
+and wire the selected probe's direction triplet directly to
+`AntennaTrackerController.inputs:target_mount_x/y/z`. The passive `antenna.usda`
+contains no articulated mechanism and needs no station.
+See `docs/architecture/23-domain-environment.md` for source identity
+and initialization ownership.

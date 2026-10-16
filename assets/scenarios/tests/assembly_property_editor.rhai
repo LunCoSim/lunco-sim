@@ -1,3 +1,4 @@
+// @timing presentation
 // TEST-ONLY. Exercises the Editor gizmo and viewport with typed mouse input,
 // then verifies the schema-driven property catalog and typed dry patch plan
 // through the normal inspection, proposal, review, journal, and query boundary.
@@ -45,17 +46,15 @@ fn gizmo_pose_is_fixture_baseline(pose) {
 }
 
 fn property_patch_is_current(doc) {
-    let values = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: PANEL,
-        attrs: ["size", "physics:collisionEnabled", "inputs:surface_area", "variant:configuration"],
-        children: false,
-    });
-    query_ok(values) && values.attrs != ()
-        && close_enough(values.attrs.size, 2.0)
-        && values.attrs["physics:collisionEnabled"] == false
-        && close_enough(values.attrs["inputs:surface_area"], 3.5)
-        && values.attrs["variant:configuration"] == "wide"
+    let catalog = assembly_builder::editable_property_catalog(
+        doc, PANEL, "@root@",
+        ["size", "physics:collisionEnabled", "inputs:surface_area", "variant:configuration"],
+    );
+    query_ok(catalog)
+        && close_enough(property(catalog, "size").value, 2.0)
+        && property(catalog, "physics:collisionEnabled").value == false
+        && close_enough(property(catalog, "inputs:surface_area").value, 3.5)
+        && property(catalog, "variant:configuration").value == "wide"
 }
 
 fn property(catalog, name) {
@@ -98,6 +97,7 @@ fn fail(me, message) {
         me.done = true;
         report_verdict([message], "ASSEMBLY PROPERTY EDITOR", "ASSEMBLY_PROPERTY_EDITOR");
     }
+    me
 }
 
 fn find_document() {
@@ -115,7 +115,7 @@ fn find_document() {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "InspectUsdViewport", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -145,19 +145,19 @@ fn on_start(me, ctx) {
 
 fn on_tick(me, ctx) {
     if this.done { return; }
-    this.elapsed += dt();
+    this.elapsed += execution_context().delta_seconds;
     this.interaction_frames += 1;
     if this.doc == () {
         this.doc = find_document();
         if this.doc == () {
-            if this.elapsed > 8.0 { fail(this, "property-editor fixture was not discoverable"); }
+            if this.elapsed > 8.0 { this = fail(this, "property-editor fixture was not discoverable"); }
             return;
         }
     }
 
     let current = assembly_edit::describe(this.doc);
     if !query_ok(current) || current.generation == () {
-        fail(this, "property-editor fixture did not expose a document generation");
+        this = fail(this, "property-editor fixture did not expose a document generation");
         return;
     }
 
@@ -177,7 +177,7 @@ fn on_tick(me, ctx) {
                     this.doc, "@runtime@", PANEL, (), current.generation,
                 );
                 if !query_ok(cleared) {
-                    fail(this, "runtime kind marker could not be cleared: " + cleared.error);
+                    this = fail(this, "runtime kind marker could not be cleared: " + cleared.error);
                     return;
                 }
                 this.wait_generation = current.generation;
@@ -209,7 +209,7 @@ fn on_tick(me, ctx) {
         if preview == () {
             let opened = assembly_ui::open_session(PREVIEW_ID, this.doc, "@root@");
             if !query_ok(opened) {
-                fail(this, "could not open the fixture in the Editor preview");
+                this = fail(this, "could not open the fixture in the Editor preview");
                 return;
             }
             this.preview = PREVIEW_ID;
@@ -229,13 +229,13 @@ fn on_tick(me, ctx) {
         if preview == () || preview.projection_ready != true || view == ()
             || view.image_rect == () || view.scale_factor == () {
             if this.interaction_frames > 720 {
-                fail(this, "Editor preview did not publish a ready view and measured image bounds");
+                this = fail(this, "Editor preview did not publish a ready view and measured image bounds");
             }
             return;
         }
         let selected = assembly_ui::select_prim(this.preview, PANEL, false, false);
         if !query_ok(selected) {
-            fail(this, "could not select the fixture prim in the Editor preview");
+            this = fail(this, "could not select the fixture prim in the Editor preview");
             return;
         }
         this.phase = 102;
@@ -257,7 +257,7 @@ fn on_tick(me, ctx) {
         if view == () || view.image_rect == () || view.scale_factor == ()
             || !query_ok(values) || values.attrs == () {
             if this.interaction_frames > 720 {
-                fail(this, "selected preview prim or viewport bounds were not queryable");
+                this = fail(this, "selected preview prim or viewport bounds were not queryable");
             }
             return;
         }
@@ -295,7 +295,7 @@ fn on_tick(me, ctx) {
                 return;
             }
 
-            fail(this, "preview camera moved before the Rhai blank-space pan phase");
+            this = fail(this, "preview camera moved before the Rhai blank-space pan phase: target=" + view.target.to_string() + ", pose=" + values.attrs.to_string());
             return;
         }
         input_pointer_move(this.gizmo_start[0], this.gizmo_start[1]);
@@ -340,7 +340,7 @@ fn on_tick(me, ctx) {
                 let actual = if query_ok(values) && values.attrs != () {
                     values.attrs.to_string()
                 } else { "unavailable" };
-                fail(this, "gizmo drag did not commit a USD generation: initial="
+                this = fail(this, "gizmo drag did not commit a USD generation: initial="
                     + this.gizmo_initial_generation.to_string()
                     + ", latest=" + latest.generation.to_string()
                     + ", translation=" + actual
@@ -360,7 +360,7 @@ fn on_tick(me, ctx) {
         let view = focused_view(preview);
         if !query_ok(values) || values.attrs == () || view == () {
             if this.interaction_frames > 480 {
-                fail(this, "gizmo commit did not become visible through USD and viewport queries");
+                this = fail(this, "gizmo commit did not become visible through USD and viewport queries");
             }
             return;
         }
@@ -371,7 +371,7 @@ fn on_tick(me, ctx) {
         );
         this.gizmo_camera_stable = vector_close(view.target, this.gizmo_camera_before);
         if !this.gizmo_drag_changed || !this.gizmo_camera_stable {
-            fail(this, "gizmo drag failed: transform_changed="
+            this = fail(this, "gizmo drag failed: transform_changed="
                 + this.gizmo_drag_changed.to_string()
                 + ", preview_camera_stable=" + this.gizmo_camera_stable.to_string()
                 + ", pose=" + this.gizmo_after_pose.to_string()
@@ -418,7 +418,7 @@ fn on_tick(me, ctx) {
             children: false,
         });
         if view == () || !query_ok(values) || values.attrs == () {
-            fail(this, "blank-area pan result was not queryable");
+            this = fail(this, "blank-area pan result was not queryable");
             return;
         }
         this.blank_pan_changed = !vector_close(view.target, this.gizmo_camera_before);
@@ -426,7 +426,7 @@ fn on_tick(me, ctx) {
             this.gizmo_after_pose, values.attrs,
         );
         if !this.blank_pan_changed || !this.blank_pan_kept_transform {
-            fail(this, "blank-area drag failed: camera_panned="
+            this = fail(this, "blank-area drag failed: camera_panned="
                 + this.blank_pan_changed.to_string()
                 + ", document_transform_stable=" + this.blank_pan_kept_transform.to_string()
                 + ", camera_before=" + this.gizmo_camera_before.to_string()
@@ -449,14 +449,14 @@ fn on_tick(me, ctx) {
             return;
         }
         if before_kind != "component" {
-            fail(this, "fixture panel did not expose its authored component kind");
+            this = fail(this, "fixture panel did not expose its authored component kind");
             return;
         }
         let authored = assembly_edit::prim_kind(
             this.doc, "@runtime@", PANEL, TEMP_KIND, current.generation,
         );
         if !query_ok(authored) {
-            fail(this, "runtime kind override was rejected: " + authored.error);
+            this = fail(this, "runtime kind override was rejected: " + authored.error);
             return;
         }
         this.wait_generation = current.generation;
@@ -466,12 +466,12 @@ fn on_tick(me, ctx) {
 
     if this.phase == 2 {
         if current.generation <= this.wait_generation {
-            if this.elapsed > 10.0 { fail(this, "runtime kind override did not reach its committed generation"); }
+            if this.elapsed > 10.0 { this = fail(this, "runtime kind override did not reach its committed generation"); }
             return;
         }
         let overridden = composed_kind(assembly_edit::inspect(this.doc, PANEL));
         if overridden != TEMP_KIND {
-            fail(this, "runtime kind override was not visible through composed USD");
+            this = fail(this, "runtime kind override was not visible through composed USD");
             return;
         }
         this.kind_override_seen = true;
@@ -481,12 +481,12 @@ fn on_tick(me, ctx) {
 
     if this.phase == 3 {
         if current.generation <= this.wait_generation {
-            if this.elapsed > 10.0 { fail(this, "cleared runtime kind did not reach its committed generation"); }
+            if this.elapsed > 10.0 { this = fail(this, "cleared runtime kind did not reach its committed generation"); }
             return;
         }
         let restored = composed_kind(assembly_edit::inspect(this.doc, PANEL));
         if restored != "component" {
-            fail(this, "clearing runtime kind did not reveal the authored component kind");
+            this = fail(this, "clearing runtime kind did not reveal the authored component kind");
             return;
         }
         this.kind_restore_seen = true;
@@ -495,7 +495,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 1 {
         if !this.patch_already_current && current.generation <= this.wait_generation {
-            if this.elapsed > 10.0 { fail(this, "property patch did not reach its committed generation"); }
+            if this.elapsed > 10.0 { this = fail(this, "property patch did not reach its committed generation"); }
             return;
         }
         if composed_kind(assembly_edit::inspect(this.doc, PANEL)) == TEMP_KIND {
@@ -503,7 +503,7 @@ fn on_tick(me, ctx) {
                 this.doc, "@runtime@", PANEL, (), current.generation,
             );
             if !query_ok(cleared) {
-                fail(this, "runtime kind marker could not be cleared: " + cleared.error);
+                this = fail(this, "runtime kind marker could not be cleared: " + cleared.error);
                 return;
             }
             this.wait_generation = current.generation;
@@ -517,7 +517,7 @@ fn on_tick(me, ctx) {
             children: false,
         });
         if !query_ok(values) {
-            if this.elapsed > 10.0 { fail(this, "patched property values were not queryable"); }
+            if this.elapsed > 10.0 { this = fail(this, "patched property values were not queryable"); }
             return;
         }
         let same = assembly_builder::editable_property_patch_plan(
@@ -579,7 +579,7 @@ fn on_tick(me, ctx) {
     );
     if !query_ok(catalog) || !query_ok(automatic) || custom.ok
         || property(automatic, "variant:configuration") == () {
-        fail(this, "schema-driven property catalog did not validate requested fields");
+        this = fail(this, "schema-driven property catalog did not validate requested fields");
         return;
     }
     let translate = property(catalog, "xformOp:translate");
@@ -590,7 +590,7 @@ fn on_tick(me, ctx) {
     let input = property(catalog, "inputs:surface_area");
     if translate == () || size == () || kind == () || order == ()
         || variant == () || input == () {
-        fail(this, "schema-driven catalog omitted a requested standard field");
+        this = fail(this, "schema-driven catalog omitted a requested standard field");
         return;
     }
     let collision = property(catalog, "physics:collisionEnabled");
@@ -613,7 +613,7 @@ fn on_tick(me, ctx) {
         || collision.value != true
         || !close_enough(input.value, 17.0)
         || variant.value != "base" {
-        fail(this, "fixture defaults did not match the authored standard USD values");
+        this = fail(this, "fixture defaults did not match the authored standard USD values");
         return;
     }
     let patch = assembly_builder::editable_property_patch_plan(
@@ -627,20 +627,20 @@ fn on_tick(me, ctx) {
         ], current.generation,
     );
     if !query_ok(patch) {
-        fail(this, "schema-driven patch returned an error");
+        this = fail(this, "schema-driven patch returned an error");
         return;
     }
     if patch.no_op {
-        fail(this, "schema-driven patch unexpectedly became a no-op");
+        this = fail(this, "schema-driven patch unexpectedly became a no-op");
         return;
     }
     if patch.ops.len() != 5 {
-        fail(this, "schema-driven patch emitted an unexpected operation count");
+        this = fail(this, "schema-driven patch emitted an unexpected operation count");
         return;
     }
     if patch.changed != ["xformOp:translate", "size", "physics:collisionEnabled",
         "inputs:surface_area", "variant:configuration"] {
-        fail(this, "schema-driven patch changed the wrong field names");
+        this = fail(this, "schema-driven patch changed the wrong field names");
         return;
     }
     let proposal = assembly_edit::propose(
@@ -648,18 +648,18 @@ fn on_tick(me, ctx) {
         patch.ops, current.generation,
     );
     if !query_ok(proposal) {
-        fail(this, "schema-driven property proposal was rejected: " + proposal.error);
+        this = fail(this, "schema-driven property proposal was rejected: " + proposal.error);
         return;
     }
     let review = assembly_edit::review_session(this.doc);
     if !query_ok(review) || review.proposals.len() != 1
         || review.proposals[0].diagnostics.len() != 0 {
-        fail(this, "schema-driven property proposal did not validate cleanly");
+        this = fail(this, "schema-driven property proposal did not validate cleanly");
         return;
     }
     let committed = assembly_edit::commit_proposal(review.proposals[0].id);
     if !query_ok(committed) {
-        fail(this, "schema-driven property proposal could not be committed: " + committed.error);
+        this = fail(this, "schema-driven property proposal could not be committed: " + committed.error);
         return;
     }
     this.wait_generation = current.generation;

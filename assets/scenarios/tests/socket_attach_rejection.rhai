@@ -1,119 +1,65 @@
-// Production/headless negative acceptance test for AttachComponent's socket
-// contract. The scene authors occupied, plug-kind, and joint mismatches; this
-// scenario submits all three through the same public command used by UI/API/Rhai.
+// Production negative coverage for the typed socket attachment contract.
+const ROOT = "/SocketAttachRejection";
+const HOST = ROOT + "/Chassis";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument"], required_inputs: [] }
 }
-
 fn on_start(me, ctx) {
-    this.elapsed = 0.0;
-    this.doc = ();
-    this.sent_occupied = false;
-    this.sent_incompatible = false;
-    this.sent_wrong_joint = false;
-    this.done = false;
+    this.doc = (); this.request = (); this.index = 0;
+    this.elapsed = 0.0; this.done = false; this.checks = [];
+    this.cases = [
+        #{socket: "occupied", name: "SecondProbe", joint: "constraint_second_probe", diagnostic: "already occupied"},
+        #{socket: "incompatible", name: "IncompatibleProbe", joint: "constraint_incompatible_probe", diagnostic: "socket accepts"},
+        #{socket: "wrong_joint", name: "WrongJointProbe", joint: "constraint_wrong_joint_probe", diagnostic: "requires joint"},
+    ];
 }
-
-fn fail(message) {
-    if !this.done {
-        this.done = true;
-        report_verdict([message], "SOCKET ATTACH REJECTION", "SOCKET_ATTACH_REJECTION");
-    }
+fn fail(me, message) {
+    me.done = true;
+    report_verdict([message], "SOCKET ATTACH REJECTION", "SOCKET_ATTACH_REJECTION");
 }
-
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-
+    if this.elapsed > 10.0 { fail(this, "socket rejection did not reach its terminal result"); return; }
     if this.doc == () {
-        let docs = query("ListOpenDocuments");
-        if docs == () { return; }
-        for item in docs.open_documents {
+        for item in query("ListOpenDocuments").open_documents {
             if item.kind == "usd" {
-                this.doc = item.doc_id;
-                break;
+                let root = query("QueryUsdPrim", #{doc_id: item.doc_id, path: ROOT});
+                if root != () && root.ok != false { this.doc = item.doc_id; }
             }
         }
-        if this.doc == () {
-            if this.elapsed > 8.0 { fail("no open USD document was discoverable"); }
-            return;
-        }
+        if this.doc == () { return; }
+        this.generation = query("InspectUsdDocument", #{doc_id: this.doc}).generation;
     }
-
-    if !this.sent_occupied {
-        let result = cmd("AttachComponent", #{
-            doc_id: this.doc,
-            spec: #{
-                edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Interfaces/occupied",
-                host_path: "/SocketAttachRejection/Chassis",
-                name: "SecondProbe",
-                joint_name: "constraint_second_probe",
-                asset: "lunco://components/mounting/demo_probe.usda",
-                placement: [0.0, 0.0, 0.0],
-                rotate_deg: [0.0, 0.0, 0.0],
-                joint: "Fixed",
-            },
-        });
-        if result.ok { fail("occupied socket accepted a second component"); return; }
-        this.sent_occupied = true;
+    if this.index == this.cases.len() {
+        this.done = true;
+        report_verdict(this.checks, "SOCKET ATTACH REJECTION", "SOCKET_ATTACH_REJECTION");
         return;
     }
-
-    if !this.sent_incompatible {
-        let result = cmd("AttachComponent", #{
-            doc_id: this.doc,
-            spec: #{
-                edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Interfaces/incompatible",
-                host_path: "/SocketAttachRejection/Chassis",
-                name: "IncompatibleProbe",
-                joint_name: "constraint_incompatible_probe",
-                asset: "lunco://components/mounting/demo_probe.usda",
-                placement: [0.0, 0.0, 0.0],
-                rotate_deg: [0.0, 0.0, 0.0],
-                joint: "Fixed",
-            },
-        });
-        if result.ok { fail("incompatible socket accepted a mismatched plug"); return; }
-        this.sent_incompatible = true;
+    let test = this.cases[this.index];
+    if this.request == () {
+        this.request = cmd("AttachComponent", #{doc_id: this.doc, spec: #{
+            edit_target: "@runtime@", socket_path: HOST + "/Interfaces/" + test.socket,
+            host_path: HOST, name: test.name, joint_name: test.joint,
+            asset: "lunco://components/mounting/demo_probe.usda",
+            placement: [0.0, 0.0, 0.0], rotate_deg: [0.0, 0.0, 0.0], joint: "Fixed",
+        }});
         return;
     }
-
-    if !this.sent_wrong_joint {
-        let result = cmd("AttachComponent", #{
-            doc_id: this.doc,
-            spec: #{
-                edit_target: "@runtime@",
-                socket_path: "/SocketAttachRejection/Chassis/Interfaces/wrong_joint",
-                host_path: "/SocketAttachRejection/Chassis",
-                name: "WrongJointProbe",
-                joint_name: "constraint_wrong_joint_probe",
-                asset: "lunco://components/mounting/demo_probe.usda",
-                placement: [0.0, 0.0, 0.0],
-                rotate_deg: [0.0, 0.0, 0.0],
-                joint: "Fixed",
-            },
-        });
-        if result.ok { fail("socket accepted an incompatible joint"); return; }
-        this.sent_wrong_joint = true;
-        return;
-    }
-
-    // The command path is synchronous through the bridge, but projection is an
-    // event-driven boundary. Give the composed stage a few ticks to publish a
-    // child before making the negative assertion.
-    if this.elapsed < 3.0 { return; }
-    let second = find("/SocketAttachRejection/Chassis/SecondProbe");
-    this.done = true;
-    report_verdict([
-        t_true(second < 0,
-               "occupied socket accepted a second child: " + second),
-        t_true(find("/SocketAttachRejection/Chassis/IncompatibleProbe") < 0,
-               "incompatible socket accepted a mismatched plug"),
-        t_true(find("/SocketAttachRejection/Chassis/WrongJointProbe") < 0,
-               "socket accepted an incompatible joint"),
-    ], "SOCKET ATTACH REJECTION", "SOCKET_ATTACH_REJECTION");
+    let result = this.request;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return; }
+    let rejected = result.ok == false && result.status == "rejected"
+        && result.error != () && result.error.contains(test.diagnostic);
+    if !rejected { fail(this, test.socket + " did not return its owning diagnostic: " + result.to_string()); return; }
+    let absent = query("QueryUsdPrim", #{doc_id: this.doc, path: HOST + "/" + test.name});
+    this.checks.push(t_true(rejected, test.socket + " returns a terminal socket-contract rejection"));
+    this.checks.push(t_true(query("InspectUsdDocument", #{doc_id: this.doc}).generation == this.generation,
+        test.socket + " preserves the document generation"));
+    this.checks.push(t_true(absent != () && absent.ok == false && find_path(HOST + "/" + test.name) < 0,
+        test.socket + " cannot create an authored or projected component"));
+    this.index += 1;
+    this.request = ();
 }

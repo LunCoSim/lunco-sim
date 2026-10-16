@@ -8,6 +8,7 @@
 
 use bevy::asset::{AssetLoadFailedEvent, AssetServer};
 use bevy::prelude::*;
+use lunco_core::{AppSceneExt, SceneResource};
 
 use lunco_usd_bevy_core::program::{
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
@@ -80,29 +81,7 @@ impl Plugin for LunCoSimRuntimePlugin {
             ]));
         }
 
-        app.add_systems(
-            Update,
-            project_usd_policies
-                .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet)
-                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets)
-                .run_if(
-                    bevy::ecs::schedule::common_conditions::resource_changed::<
-                        lunco_usd_bevy_scene::UsdStageRevision,
-                    >
-                        .or_else(
-                            bevy::ecs::schedule::common_conditions::resource_changed::<
-                                lunco_scripting_rhai_world::source_asset::RhaiSourceAssetRevision,
-                            >,
-                        )
-                        .or_else(
-                            bevy::ecs::schedule::common_conditions::on_message::<
-                                AssetLoadFailedEvent<
-                                    lunco_scripting_rhai_world::source_asset::RhaiSource,
-                                >,
-                            >,
-                        ),
-                ),
-        );
+        install_usd_policy_projection(app);
 
         #[cfg(feature = "networking")]
         app.add_systems(
@@ -114,6 +93,33 @@ impl Plugin for LunCoSimRuntimePlugin {
             ),
         );
     }
+}
+
+fn install_usd_policy_projection(app: &mut App) {
+    app.init_scene_resource::<UsdPolicyProjectionState>()
+        .init_resource::<PolicySynthesizerRegistrations>()
+        .add_systems(
+            lunco_core::SceneTeardown,
+            (retire_usd_policies, sync_policy_synthesizers)
+                .chain()
+                .after(lunco_scripting_rhai_runtime::stop_scene_owned_scripts),
+        )
+        .add_systems(
+            Update,
+            project_usd_policies
+                .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet)
+                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets)
+                .run_if(usd_policy_projection_due),
+        )
+        .add_systems(
+            Update,
+            sync_policy_synthesizers
+                .after(project_usd_policies)
+                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets)
+                .run_if(
+                    resource_changed::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>,
+                ),
+        );
 }
 
 fn install_build_identity(app: &mut App) {
@@ -535,6 +541,53 @@ struct CachedAuthoredPolicies {
     policy_prim_paths: std::sync::Arc<std::collections::HashSet<String>>,
 }
 
+#[derive(Resource)]
+struct UsdPolicyProjectionState {
+    pending: std::collections::HashMap<
+        bevy::asset::AssetPath<'static>,
+        Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+    >,
+    authored_cache: std::collections::HashMap<AssetId<UsdStageAsset>, CachedAuthoredPolicies>,
+    last: Option<std::collections::HashSet<(AssetId<UsdStageAsset>, Option<(usize, u64)>)>>,
+    needs_refresh: bool,
+}
+
+impl Default for UsdPolicyProjectionState {
+    fn default() -> Self {
+        Self {
+            pending: Default::default(),
+            authored_cache: Default::default(),
+            last: None,
+            needs_refresh: true,
+        }
+    }
+}
+
+impl SceneResource for UsdPolicyProjectionState {}
+
+fn usd_policy_projection_due(
+    state: Res<UsdPolicyProjectionState>,
+    stages: Res<lunco_usd_bevy_scene::UsdStageRevision>,
+    sources: Res<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetRevision>,
+    mut failures: MessageReader<
+        AssetLoadFailedEvent<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+    >,
+) -> bool {
+    let failed = failures.read().count() != 0;
+    state.needs_refresh || stages.is_changed() || sources.is_changed() || failed
+}
+
+fn retire_usd_policies(
+    mut registry: ResMut<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+) {
+    lunco_scripting_rhai_world::policy::project_policies(
+        Vec::new(),
+        &mut registry,
+        journal.as_deref(),
+    );
+}
+
 enum PolicySource {
     Ready(String),
     Loading,
@@ -601,28 +654,16 @@ fn project_usd_policies(
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>,
-    mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
     twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     sources: Option<Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>>,
-    mut pending: Local<
-        std::collections::HashMap<
-            bevy::asset::AssetPath<'static>,
-            Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
-        >,
-    >,
+    mut state: ResMut<UsdPolicyProjectionState>,
     source_revision: Res<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetRevision>,
     mut scene_changes: Option<MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>>,
     mut source_failures: MessageReader<
         AssetLoadFailedEvent<lunco_scripting_rhai_world::source_asset::RhaiSource>,
-    >,
-    mut authored_cache: Local<
-        std::collections::HashMap<AssetId<UsdStageAsset>, CachedAuthoredPolicies>,
-    >,
-    mut last: Local<
-        Option<std::collections::HashSet<(AssetId<UsdStageAsset>, Option<(usize, u64)>)>>,
     >,
 ) {
     if roots.iter().any(|prim| {
@@ -632,14 +673,21 @@ fn project_usd_policies(
     }) {
         return;
     }
+    let UsdPolicyProjectionState {
+        pending,
+        authored_cache,
+        last,
+        needs_refresh,
+    } = &mut *state;
     let failed_policy_source = source_failures.read().fold(false, |failed, event| {
         failed || pending.values().any(|handle| handle.id() == event.id)
     });
     let stage_changed = stage_revision.is_changed();
     let source_changed = source_revision.is_changed();
-    if !stage_changed && !source_changed && !failed_policy_source {
+    if !stage_changed && !source_changed && !failed_policy_source && !*needs_refresh {
         return;
     }
+    *needs_refresh = false;
     let (root_ids, signal) = {
         let _span = bevy::log::info_span!("usd_policy_root_generation_scan").entered();
         let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
@@ -845,7 +893,7 @@ fn project_usd_policies(
                     }),
                     &mut live,
                     sources.as_deref(),
-                    &mut pending,
+                    pending,
                 ) {
                     PolicySource::Ready(text) => text,
                     PolicySource::Loading => continue,
@@ -863,33 +911,39 @@ fn project_usd_policies(
         }
     }
     pending.retain(|path, _| live.contains(path));
-    let previous_synthesizers: std::collections::HashSet<String> = registry
+    let _span = bevy::log::info_span!("usd_policy_compile_and_install").entered();
+    lunco_scripting_rhai_world::policy::project_policies(
+        desired,
+        &mut registry,
+        journal.as_deref(),
+    );
+}
+
+/// Bookkeeping for the bridge's actual engine registrations. This survives
+/// scene reset so retirement still knows names removed earlier by Twin closure.
+#[derive(Resource, Default)]
+struct PolicySynthesizerRegistrations(std::collections::BTreeSet<String>);
+
+fn sync_policy_synthesizers(
+    registry: Res<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>,
+    mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
+    mut registered: ResMut<PolicySynthesizerRegistrations>,
+) {
+    let active_synthesizers: std::collections::BTreeSet<String> = registry
         .policies
         .iter()
         .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
         .collect();
-    {
-        let _span = bevy::log::info_span!("usd_policy_compile_and_install").entered();
-        lunco_scripting_rhai_world::policy::project_policies(
-            desired,
-            &mut registry,
-            journal.as_deref(),
-        );
-    }
-    let active_synthesizers: std::collections::HashSet<String> = registry
-        .policies
-        .iter()
-        .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
-        .collect();
-    for name in previous_synthesizers.difference(&active_synthesizers) {
+    for name in registered.0.difference(&active_synthesizers) {
         if name == DEFAULT_DOMAIN_SYNTHESIZER || name == ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER {
             continue;
         }
         lunco_usd_sim_domain::synthesis::unregister_hook_synthesizer(&mut synthesizers, name);
     }
-    for name in active_synthesizers {
-        lunco_usd_sim_domain::synthesis::register_hook_synthesizer(&mut synthesizers, name);
+    for name in active_synthesizers.difference(&registered.0) {
+        lunco_usd_sim_domain::synthesis::register_hook_synthesizer(&mut synthesizers, name.clone());
     }
+    registered.0 = active_synthesizers;
 }
 
 /// Author or hot-replace a Rhai policy as a `LunCoPolicy` USD prim.
@@ -912,7 +966,6 @@ fn on_set_rhai_policy(
     trigger: On<SetRhaiPolicy>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     use lunco_usd_core::commands::ApplyUsdOp;
@@ -927,9 +980,7 @@ fn on_set_rhai_policy(
         );
         return;
     };
-    let Some(doc) =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root.stage_handle.id())
-    else {
+    let Some(doc) = lunco_usd_bevy_twin::scene_document_for(&backed, root.stage_handle.id()) else {
         warn!(
             "[policy] the mounted scene is not Twin document-backed; open it through a Twin to author a policy"
         );
@@ -1168,8 +1219,73 @@ mod tests {
     #[derive(Resource, Default)]
     struct PolicyProjectionRuns(u32);
 
-    fn count_policy_projection(mut runs: ResMut<PolicyProjectionRuns>) {
+    fn count_policy_projection(
+        mut runs: ResMut<PolicyProjectionRuns>,
+        mut state: ResMut<UsdPolicyProjectionState>,
+    ) {
         runs.0 += 1;
+        state.needs_refresh = false;
+    }
+
+    #[test]
+    fn scene_lifecycle_releases_policy_sources_and_prepared_facts() {
+        let mut app = App::new();
+        app.init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>()
+            .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>();
+        install_usd_policy_projection(&mut app);
+        for _ in 0..3 {
+            let plan = std::sync::Arc::new(lunco_usd_bevy_stage::UsdStageProjectionPlan::default());
+            let lease = std::sync::Arc::downgrade(&plan);
+            let mut state = app.world_mut().resource_mut::<UsdPolicyProjectionState>();
+            state.pending.insert(
+                AssetPath::parse("source.rhai").into_owned(),
+                Handle::default(),
+            );
+            state.authored_cache.insert(
+                AssetId::default(),
+                CachedAuthoredPolicies {
+                    projection_plan: plan,
+                    generation: 0,
+                    policies: Default::default(),
+                    policy_prim_paths: Default::default(),
+                },
+            );
+            state.last = Some(Default::default());
+            state.needs_refresh = false;
+            app.world_mut()
+                .resource_mut::<PolicySynthesizerRegistrations>()
+                .0
+                .insert("retired_probe".into());
+            lunco_usd_sim_domain::synthesis::register_hook_synthesizer(
+                &mut app
+                    .world_mut()
+                    .resource_mut::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>(),
+                "retired_probe",
+            );
+            lunco_core::run_scene_teardown(app.world_mut());
+            let state = app.world().resource::<UsdPolicyProjectionState>();
+            assert!(state.pending.is_empty());
+            assert!(state.authored_cache.is_empty());
+            assert!(state.last.is_none());
+            assert!(state.needs_refresh);
+            assert!(
+                lease.upgrade().is_none(),
+                "retired policy facts must release their plan"
+            );
+            assert!(
+                app.world()
+                    .resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
+                    .get(DEFAULT_DOMAIN_SYNTHESIZER)
+                    .is_some()
+            );
+            assert!(
+                app.world()
+                    .resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
+                    .get("retired_probe")
+                    .is_none(),
+                "registrations retire even after their policy definitions are gone"
+            );
+        }
     }
 
     #[test]
@@ -1323,30 +1439,19 @@ mod tests {
     }
 
     #[test]
-    fn policy_projection_wakes_on_owner_revisions_and_policy_source_failure() {
+    fn scene_lifecycle_policy_projection_wakes_on_reset_owner_revisions_and_source_failure() {
         use lunco_scripting_rhai_world::source_asset::{RhaiSource, RhaiSourceAssetRevision};
         use lunco_usd_bevy_scene::UsdStageRevision;
 
         let mut app = App::new();
         app.init_resource::<UsdStageRevision>()
             .init_resource::<RhaiSourceAssetRevision>()
+            .init_scene_resource::<UsdPolicyProjectionState>()
             .init_resource::<PolicyProjectionRuns>()
             .add_message::<AssetLoadFailedEvent<RhaiSource>>()
             .add_systems(
                 Update,
-                count_policy_projection.run_if(
-                    bevy::ecs::schedule::common_conditions::resource_changed::<UsdStageRevision>
-                        .or_else(
-                            bevy::ecs::schedule::common_conditions::resource_changed::<
-                                RhaiSourceAssetRevision,
-                            >,
-                        )
-                        .or_else(
-                            bevy::ecs::schedule::common_conditions::on_message::<
-                                AssetLoadFailedEvent<RhaiSource>,
-                            >,
-                        ),
-                ),
+                count_policy_projection.run_if(usd_policy_projection_due),
             );
 
         app.update();
@@ -1354,6 +1459,19 @@ mod tests {
         let settled = app.world().resource::<PolicyProjectionRuns>().0;
         app.update();
         assert_eq!(app.world().resource::<PolicyProjectionRuns>().0, settled);
+
+        lunco_core::run_scene_teardown(app.world_mut());
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 1
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 1
+        );
+        let settled = app.world().resource::<PolicyProjectionRuns>().0;
 
         app.world_mut().resource_mut::<UsdStageRevision>().bump();
         app.update();

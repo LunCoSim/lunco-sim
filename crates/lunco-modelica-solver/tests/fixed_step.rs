@@ -79,6 +79,7 @@ fn fixed_communication_points_preserve_internal_steps_and_reject_invalid_targets
     for origin in [0.0, 2.75] {
         let mut settings = options();
         settings.t_start = origin;
+        settings.t_end = origin + 1.0;
         let mut interval = FixedStepSession::new(&compiled.dae, settings.clone()).unwrap();
         let mut single = FixedStepSession::new(&compiled.dae, settings).unwrap();
         interval.advance_to(origin + 0.06).unwrap();

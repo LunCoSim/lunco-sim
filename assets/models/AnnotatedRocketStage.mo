@@ -252,7 +252,7 @@ package AnnotatedRocketStage
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
     FluidPort_b port_b "Outlet (consumer side)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
-    Modelica.Blocks.Interfaces.RealInput availability(min = 0, max = 1) = 1.0
+    Modelica.Blocks.Interfaces.RealInput availability(min = 0, max = 1, start = 1.0)
       "Upstream availability [0..1]"
       annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
   equation

@@ -94,6 +94,8 @@ pub struct VizFitRequests {
     pending: HashSet<VizId>,
 }
 
+impl lunco_core::SceneResource for VizFitRequests {}
+
 impl VizFitRequests {
     pub fn request(&mut self, id: VizId) {
         self.pending.insert(id);

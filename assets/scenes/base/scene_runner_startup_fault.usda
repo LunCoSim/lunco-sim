@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaRuntimeContracts"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "ModelicaRuntimeContracts"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+    def Scope "FeedbackA" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/InitialFeedback.mo@
+        uniform bool lunco:program:realtimeSafe = false
+        custom double inputs:feedback = 0.0
+        double inputs:feedback.connect = </ModelicaRuntimeContracts/FeedbackB.outputs:sample>
+        custom double inputs:clockFeedback = 0.0
+        custom double inputs:gain = 1.0
+        custom double inputs:bias = 0.0
+        custom double outputs:sample = 0.0
+        custom double outputs:solverTime = 0.0
+        custom double outputs:clockSeen = 0.0
+    }
+    def Scope "FeedbackB" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/InitialFeedback.mo@
+        uniform bool lunco:program:realtimeSafe = false
+        custom double inputs:feedback = 0.0
+        double inputs:feedback.connect = </ModelicaRuntimeContracts/FeedbackA.outputs:sample>
+        custom double inputs:clockFeedback = 0.0
+        custom double inputs:gain = 1.0
+        custom double inputs:bias = 1.0
+        custom double outputs:sample = 0.0
+        custom double outputs:solverTime = 0.0
+        custom double outputs:clockSeen = 0.0
+    }
+}

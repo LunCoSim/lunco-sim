@@ -99,6 +99,17 @@ launched by `scripts/api/test_usd_source_isolation.py` with an exact scene,
 source and composed selection path in an owned production session. Successful
 and rejected sources preserve the
 active Twin and physics topology, and physics continues while a preview opens.
+Scene clear and reload also retire `StatusBus` history, progress and handles
+through its owner-installed scene resource registration. Check the recent-status
+popup after clearing a compiling scene; old completion text must not remain.
+One document may have several preview leases over the same stage. Structural
+edits and subtree refreshes must update each lease through the shared USD
+projector. Readiness requires the exact stage's consumed document generation
+and completed visual work under that preview root; framing must also stay in
+that hierarchy. The `usd_material_edit_projection` production gate verifies
+creation and removal through projected bounds in two same-document leases.
+Wait for that readiness before composed preview inspection; allocated stage
+handles may still be preparing their dependency recipe.
 Use the composed USD reader's runtime-provider schema contract to display exact
 authored interface references before runtime projection. Runtime owners validate
 availability and types; the diagram does not admit connections to simulation.
@@ -300,7 +311,12 @@ fix that width before laying out wrapped rows, and let short lists shrink
 vertically instead of reserving an empty scroll region. Completion state uses
 the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
-system.
+system. Menu contributions bind endpoints under a provider-owned ECS root;
+replace the root and widget scope together. Provider bindings survive scene
+reset, while each selection acquires a scene-bound invocation child. Retire
+that child on every admission failure or completion, and retire the provider
+root on replacement or its Twin's close. See `runtime-ui` for the full callback
+lifecycle and production gate.
 
 The workbench scopes only its private mutable layout out of the `World` while
 painting. The authoritative `WorkbenchMenuRegistry` remains installed and is
@@ -326,6 +342,20 @@ Document-private viewport mounts retire at `DocumentClosed`, or when their
 final preview lease ends with no workspace projection owner. Mount-set changes
 prune their catalog entries before replacement scans; closing a preview must
 not unregister a shared workspace authority.
+Guided HUDs and runtime dropdown state register their scene lifetime at
+initialization, including final cleanup after shutdown/removal callbacks.
+Keep objectives visibility as an application preference. Immediate cleanup of
+active-session controls on `TwinClosed` checks `was_active`; an inactive Twin
+closure must preserve those controls.
+Inspector parameter drafts pin their document and preview identity. Document
+closure and preview removal retire them without painting; an unrelated scene
+reload preserves drafts for surviving document previews. Live readouts use
+the shared scene-resource lifetime, and shared shader-schema entries expire
+with their assets. Queued gestures and menus pin the committed scene generation.
+Callback commands also carry their exact `ToolHookBinding`; retired or replaced
+bindings reject before execution. Registration scope remains application/Twin
+owned, independently of an invocation's scene and callback leases. See the
+[invocation ownership contract](../../docs/architecture/rhai-integration.md#how-to-load--run-a-scenario).
 
 For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by

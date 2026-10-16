@@ -6,7 +6,7 @@ const HOST = "/ComponentDetachTest/Chassis";
 const SOCKET = HOST + "/Interfaces/side_mount";
 const COMPONENT = HOST + "/PayloadA";
 const JOINT = HOST + "/constraint_47";
-const STATE_ATTR = "lunco:test:component_detach_phase";
+const STATE_ATTR = "userProperties:componentDetachPhase";
 
 fn fail(me, message) {
     if !me.done {
@@ -27,6 +27,7 @@ fn on_start(me, ctx) {
     // `this` fields that would issue duplicate commands after re-projection.
     this.phase = "discover";
     this.doc = ();
+    this.attach_request = ();
     this.done = false;
 }
 
@@ -82,9 +83,43 @@ fn on_tick(me, ctx) {
         }
     }
 
+    if this.phase == "await_attach" {
+        let result = this.attach_request;
+        if result.status == "pending" { result = command_result(result.id); }
+        if result == () || result.status == "pending" { return; }
+        if result.ok != true {
+            fail(this, "AttachComponent preparation failed: " + result.to_string());
+            return;
+        }
+        if !save_phase(this.doc, "attach_done") {
+            fail(this, "could not persist attach-completed test phase");
+            return;
+        }
+        this.phase = "check_attached";
+        this.elapsed = 0.0;
+        return;
+    }
+
     if this.phase == "discover" || this.phase == "wait_reload" {
         let saved = saved_phase(this.doc);
         if saved == "" {
+            if !save_phase(this.doc, "attaching") {
+                fail(this, "could not persist the attach intent before preparation");
+            }
+            this.phase = "wait_reload";
+            return;
+        }
+        if saved == "attaching" {
+            let authored = query("QueryUsdPrim", #{doc_id: this.doc, path: COMPONENT});
+            if query_ok(authored) {
+                if !save_phase(this.doc, "attach_done") {
+                    fail(this, "could not record the completed authored attachment");
+                    return;
+                }
+                this.phase = "check_attached";
+                this.elapsed = 0.0;
+                return;
+            }
             let result = assembly_edit::attach_component(this.doc, #{
                 edit_target: "@runtime@",
                 socket_path: SOCKET,
@@ -100,12 +135,8 @@ fn on_tick(me, ctx) {
                 fail(this, "AttachComponent was rejected: " + result.error);
                 return;
             }
-            if !save_phase(this.doc, "attach_done") {
-                fail(this, "could not persist attach-completed test phase");
-                return;
-            }
-            this.phase = "check_attached";
-            this.elapsed = 0.0;
+            this.attach_request = result;
+            this.phase = "await_attach";
             return;
         }
         if saved == "attach_done" {

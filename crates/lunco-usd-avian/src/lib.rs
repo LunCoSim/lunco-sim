@@ -44,7 +44,6 @@
 use avian3d::dynamics::solver::{islands::PhysicsIslands, joint_graph::JointGraph};
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
-use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::schedule::common_conditions::any_with_component;
 #[cfg(test)]
@@ -191,8 +190,13 @@ pub struct UsdAvianPlugin;
 /// reload, which can unlink a joint twice.
 fn prepare_scene_physics_teardown(world: &mut World) {
     let scene_entities: EntityHashSet = {
-        let mut query =
-            world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
+        let mut query = world.query_filtered::<Entity, (
+            Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>,
+            Or<(
+                With<bevy::ecs::entity_disabling::Disabled>,
+                Without<bevy::ecs::entity_disabling::Disabled>,
+            )>,
+        )>();
         query.iter(world).collect()
     };
     if let Err(error) = prepare_physics_teardown(world, &scene_entities) {
@@ -337,6 +341,28 @@ pub fn subtree_requires_stage_projection_reset(
         .map(|entity| entity.id())
         .collect();
 
+    // A guide or disabled shape can acquire physical participation through an
+    // edit before it has a native body or collider. Its composed schemas still
+    // belong to this owner and require the same graph-safe projection boundary.
+    if world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .is_some_and(|stage| {
+            let reader = stage.view();
+            affected.iter().any(|entity| {
+                world
+                    .get::<UsdPrimPath>(*entity)
+                    .and_then(|path| SdfPath::new(&path.path).ok())
+                    .is_some_and(|path| {
+                        reader.has_api_schema(&path, "PhysicsRigidBodyAPI")
+                            || reader.has_api_schema(&path, "PhysicsCollisionAPI")
+                    })
+            })
+        })
+    {
+        return true;
+    }
+
     if affected.iter().any(|entity| {
         world.get::<RigidBody>(*entity).is_some()
             || world.get::<Collider>(*entity).is_some()
@@ -400,20 +426,27 @@ fn prepare_physics_teardown(
         .map(|edge| edge.entity)
         .collect();
 
-    let joints: Vec<(Entity, ComponentId)> = {
-        let mut query = world.query_filtered::<(
-            Entity,
-            &avian3d::dynamics::solver::joint_graph::JointComponentId,
-        ), With<avian3d::dynamics::solver::joint_graph::JointComponentId>>(
-        );
+    let joints: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, (
+            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            Or<(
+                With<bevy::ecs::entity_disabling::Disabled>,
+                Without<bevy::ecs::entity_disabling::Disabled>,
+            )>,
+        )>();
         query
             .iter(world)
-            .filter(|(entity, _)| scene_entities.contains(entity) || graph_joints.contains(entity))
-            .filter_map(|(entity, joint)| joint.id().map(|id| (entity, id)))
+            .filter(|entity| scene_entities.contains(entity) || graph_joints.contains(entity))
             .collect()
     };
     let colliders: Vec<Entity> = {
-        let mut query = world.query_filtered::<Entity, With<Collider>>();
+        let mut query = world.query_filtered::<Entity, (
+            With<Collider>,
+            Or<(
+                With<bevy::ecs::entity_disabling::Disabled>,
+                Without<bevy::ecs::entity_disabling::Disabled>,
+            )>,
+        )>();
         query
             .iter(world)
             .filter(|entity| scene_entities.contains(entity))
@@ -423,18 +456,7 @@ fn prepare_physics_teardown(
     // Retire constraints before contacts and bodies. The public graph API lets
     // us tolerate an edge whose island was already emptied by an earlier body
     // teardown without asking Avian's observer to unlink it a second time.
-    lunco_usd_avian_joints::retire_joint_graph_edges(world, &graph_joints)?;
-
-    // Remove the joint component and any marker before despawn. The component
-    // removal observer now sees no graph edge, and removing JointComponentId
-    // first prevents a JointDisabled removal observer from re-adding anything.
-    for (entity, component_id) in joints {
-        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-            entity_mut.remove_by_id(component_id);
-            entity_mut.remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>();
-            entity_mut.remove::<JointDisabled>();
-        }
-    }
+    lunco_usd_avian_joints::retire_native_joints(world, &joints)?;
 
     // Removing ColliderMarker is Avian's supported contact-graph removal path;
     // removing only Collider leaves its required marker alive until too late.
@@ -1878,7 +1900,7 @@ fn build_usd_physics_joints(
                     enabled: d.is_active(),
                     target_position: d.target_position.unwrap_or(0.0),
                     target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_force: d.max_force.unwrap_or(avian3d::math::Scalar::MAX),
+                    max_force: d.max_force.unwrap_or(f64::INFINITY),
                     motor_model: resolved_drive_model.expect("resolved USD prismatic drive motor"),
                 });
                 lunco_usd_avian_joints::attach_prismatic_joint(
@@ -1903,7 +1925,7 @@ fn build_usd_physics_joints(
                     enabled: d.is_active(),
                     target_position: d.target_position.unwrap_or(0.0),
                     target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_torque: d.max_force.unwrap_or(avian3d::math::Scalar::MAX),
+                    max_torque: d.max_force.unwrap_or(f64::INFINITY),
                     motor_model: resolved_drive_model.expect("resolved USD revolute drive motor"),
                 });
                 lunco_usd_avian_joints::attach_revolute_joint(

@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 import tomllib
+from contextlib import ExitStack
 from pathlib import Path
 
 from runtime import BINARY, ProductionSession, ROOT, get_json, wait_for_ready
@@ -58,6 +59,7 @@ def wait_for(session: ProductionSession, predicate, detail: str):
 
 
 def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTwin", file_uri=False) -> list[int]:
+    telemetry = seed_telemetry(session) if previous_ids else None
     path = root
     if command == "OpenFile":
         manifest = tomllib.loads((root / "twin.toml").read_text(encoding="utf-8"))
@@ -72,7 +74,86 @@ def open_twin(session: ProductionSession, root, previous_ids=(), command="OpenTw
         return not any("preparing asynchronously" in error for error in analysis.get("errors", []))
     wait_for(session, source_terminal, "replacement SysML source preparation")
     verdict("verify_twin_source_scope", retired_authority)
+    if telemetry:
+        telemetry_retirement_verdict(session, telemetry)
     return ids
+
+
+def seed_exposure(session: ProductionSession) -> str:
+    doc = next(doc for doc in documents(session) if doc["kind"] == "usd"
+               and doc["runtime_context"]["kind"] == "local_twin")
+    retired = "lifecycle-retirement-exposure-probe"
+    namespace = retired + "-renamed"
+    # Use the registered schema field through the owning document API. Keep
+    # this probe in the unsaved journal; authored fixtures remain untouched.
+    for surface in (retired, namespace):
+        execute(session, "ApplyUsdOp", doc_id=doc["doc_id"], op={"SetAttribute": {
+            "edit_target": "@root@", "path": "/World", "name": "lunco:ui:surfaceId",
+            "type_name": "string", "value": surface,
+        }})
+        code = SOURCE.read_text(encoding="utf-8") + "\nprint(exposure_present(" + json.dumps(surface) + "));"
+        wait_for(session, lambda: execute(session, "RunRhai", code=code)["stdout"].strip() == "true",
+                 "authored exposure publication")
+        verdict("verify_exposure_published", surface)
+    verdict("verify_exposure_retired", retired)
+    return namespace
+
+
+def seed_telemetry(session: ProductionSession) -> tuple[list[str], list[str]]:
+    prim = live_prim(session, "/World", topology=True)
+    if not prim or not prim.get("spawned"):
+        raise RuntimeError("telemetry probe needs the current mounted /World")
+    # The plain Xform has session-local identity; the topology owner supplies
+    # its exact native Entity. Solver channels separately exercise API owners.
+    execute(session, "ControlTelemetry", channel="lifecycle_retirement_probe",
+            entity=prim["topology"]["binding"]["entity"], reflect="Transform.translation.x",
+            unit="m", rate_hz=60.0)
+    execute(session, "SetTimeTransport", playing=True)
+    def sampled():
+        channels = execute(session, "ListTelemetryChannels")["channels"]
+        return channels if any(channel["name"] == "lifecycle_retirement_probe"
+                               and channel["samples"] > 0 for channel in channels) else None
+    channels = wait_for(session, sampled, "outgoing telemetry samples")
+    return ([channel["key"] for channel in channels if not channel["name"].startswith("engine.")],
+            [channel["key"] for channel in channels if channel["name"].startswith("engine.")])
+
+
+def paused_modelica_probe(session: ProductionSession, name: str) -> tuple[int, str]:
+    doc = execute(session, "CreateScratchModelicaDocument", name=name,
+                  source=f"model {name} Real x(start=37, fixed=true); equation der(x)=0; end {name};")["doc_id"]
+    wait_for(session, lambda: execute(session, "CompileStatus", doc_id=doc).get("ast_parsed"),
+             "paused probe parse")
+    execute(session, "CompileModel", doc_id=doc, **{"class": name, "resume_after_compile": True})
+    def recorded():
+        return [channel for channel in execute(session, "ListTelemetryChannels")["channels"]
+                if channel.get("model_class") == name and channel["samples"] > 0]
+    channels = wait_for(session, recorded, "paused probe samples")
+    execute(session, "PauseActiveModel", doc_id=doc)
+    wait_for(session, lambda: execute(session, "CompileStatus", doc_id=doc).get("paused"),
+             "paused probe solver")
+    return doc, channels[0]["key"]
+
+
+def telemetry_retirement_verdict(session: ProductionSession, telemetry: tuple[list[str], list[str]]) -> None:
+    # Projection readiness can precede the first fixed sample and its delivery.
+    # Rhai owns both the publication prerequisite and the final clock assertion.
+    code = SOURCE.read_text(encoding="utf-8") + "\nprint(application_telemetry_current(" + json.dumps(telemetry[1]) + "));"
+    wait_for(session, lambda: execute(session, "RunRhai", code=code)["stdout"].strip() == "true",
+             "replacement application telemetry publication")
+    verdict("verify_telemetry_retirement", *telemetry)
+
+
+def experiment_playback_probe(session: ProductionSession, doc: int, name: str, cleanup: ExitStack) -> tuple[str, list[str]]:
+    run = execute(session, "RunExperiment", doc_id=doc,
+                  **{"class": name, "t_end": 0.1, "n_intervals": 10})["experiment_id"]
+    # Remove only this run's generated artifact, after the owned app exits.
+    cleanup.callback((TWIN_B / "results" / f"{run}.json").unlink, missing_ok=True)
+    wait_for(session, lambda: execute(session, "RunStatus", experiment_id=run).get("state") == "done",
+             "experiment playback completion")
+    keys = wait_for(session, lambda: [channel["key"] for channel in execute(session, "ListTelemetryChannels")["channels"]
+                                     if channel["name"] == "playback_probe_value" and channel["samples"] > 0],
+                    "experiment playback publication")
+    return run, keys
 
 
 def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int]:
@@ -90,20 +171,18 @@ def wait_for_twin(session: ProductionSession, root, previous_ids=()) -> list[int
         ready = get_json(session.port, "/api/ready")["data"]
         if ready.get("faulted"):
             raise RuntimeError(f"replacement faulted: {ready.get('fault')}")
+        if not ready.get("ready") or ready.get("world_hold"):
+            return False
         scenes = [doc for doc in documents(session) if doc["kind"] == "usd"
                   and doc["runtime_context"]["kind"] == "local_twin"]
-        for scene in scenes:
-            inspection = execute(session, "InspectUsdDocument", doc_id=scene["doc_id"])
-            default = inspection["metadata"]["defaultPrim"]["composed"]
-            if not default["present"]:
-                continue
-            prim = live_prim(session, "/" + default["value"].lstrip("/"))
-            if prim and prim.get("spawned") and prim.get("doc_id") == scene["doc_id"]:
-                return True
-        return False
+        # Scene admission is owned by the primary live binding. Editor-preview
+        # stages may still prepare independently after world readiness.
+        prim = live_prim(session, "/World")
+        return (prim and prim.get("spawned")
+                and prim.get("doc_id") in {scene["doc_id"] for scene in scenes})
     wait_for(session, projected, f"replacement scene projection for {root.name}")
     wait_for_ready(session.port)
-    return [doc["doc_id"] for doc in documents(session)]
+    return [doc["doc_id"] for doc in documents(session) if doc["kind"] == "usd"]
 
 
 def verdict(function: str, *args) -> None:
@@ -119,7 +198,7 @@ def verdict(function: str, *args) -> None:
 
 
 def main() -> None:
-    with ProductionSession(PORT, windowed=True, log_path=ROOT / "target/twin-session-retirement.log") as session:
+    with ExitStack() as cleanup, ProductionSession(PORT, windowed=True, log_path=ROOT / "target/twin-session-retirement.log") as session:
         process_root = Path("/proc") / str(session.process.pid)
         if process_root.is_dir():
             if (process_root / "cwd").resolve() != ROOT.resolve() or (process_root / "exe").resolve() != BINARY.resolve():
@@ -127,6 +206,15 @@ def main() -> None:
         print(f"Owned production session: PID={session.process.pid}, port={PORT}, checkout={ROOT}", flush=True)
         try:
             ids_a = open_twin(session, TWIN_A)
+            runtime_policy_file = execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8")
+                + '\nprint(policy_hook("camera.default_presentation").policy_file);')["stdout"].strip()
+            owner = next(doc["runtime_context"]["twin"] for doc in documents(session)
+                         if doc["kind"] == "usd" and doc["runtime_context"]["kind"] == "local_twin")
+            execute(session, "RunScenarioAsset", source_asset="lunco://scenarios/tests/twin_runtime_policy_binding.rhai",
+                    owner_twin_id=owner)
+            wait_for(session, lambda: execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8")
+                + "\nprint(runtime_policy_ready());")["stdout"].strip() == "true", "Twin inline policy binding")
+            verdict("verify_runtime_policy_applied")
             execute(session, "ActivatePerspective", id="editor")
             scene = next(doc for doc in documents(session) if doc["kind"] == "usd")
             execute(session, "OpenFile", path=scene["origin"]["path"])
@@ -135,16 +223,39 @@ def main() -> None:
             execute(session, "OpenUsdPreview", preview=9002, doc_id=scene_doc, edit_target="@root@")
             wait_for(session, lambda: execute(session, "InspectUsdViewport")["preview_count"] >= 2,
                      "both Twin A editor previews")
-            execute(session, "CreateScratchModelicaDocument", name="TwinRetirementScratch",
-                    source="model TwinRetirementScratch Real x; equation x = 1; end TwinRetirementScratch;")
+            scratch = execute(session, "CreateScratchModelicaDocument", name="TwinRetirementScratch",
+                    source="model TwinRetirementScratch Real x(start=37, fixed=true); equation der(x)=0; end TwinRetirementScratch;")
             wait_for(session, lambda: any(doc["kind"] == "modelica" for doc in documents(session)), "Modelica scratch")
+            wait_for(session, lambda: execute(session, "CompileStatus", doc_id=scratch["doc_id"]).get("ast_parsed"),
+                     "Modelica scratch parse")
+            execute(session, "CompileModel", doc_id=scratch["doc_id"],
+                    **{"class": "TwinRetirementScratch", "resume_after_compile": True})
+            wait_for(session, lambda: any(channel.get("model_class") == "TwinRetirementScratch"
+                                         and channel["samples"] > 0
+                                         for channel in execute(session, "ListTelemetryChannels")["channels"]),
+                     "outgoing Modelica telemetry")
+            verdict("verify_modelica_telemetry_recorded", "TwinRetirementScratch")
             execute(session, "NewDocument", kind="sysml")
             wait_for(session, lambda: any(doc["kind"] == "sysml" for doc in documents(session)), "dirty SysML draft")
             sysml_ids = [doc["doc_id"] for doc in documents(session) if doc["kind"] == "sysml"]
             modelica_ids = [doc["doc_id"] for doc in documents(session) if doc["kind"] == "modelica"]
             ids_a = [doc["doc_id"] for doc in documents(session)]
             paths_a = catalog_paths(session)
+            seed_telemetry(session)
+            execute(session, "FocusPanel", id="telemetry_browser")
+            execute(session, "SetTelemetryBrowserView", filter="lifecycle_retirement_probe",
+                    signal="lifecycle_retirement_probe")
+            wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
+                     and not view["worker_active"] and not view["pending_channels"], "outgoing telemetry browser")
+            session.capture_screenshot(ROOT / "target/twin-telemetry-before-replacement.png")
+            surface = seed_exposure(session)
             ids_b = open_twin(session, TWIN_B, ids_a)
+            verdict("verify_exposure_retired", surface)
+            verdict("verify_runtime_policy_retired", runtime_policy_file)
+            execute(session, "FocusPanel", id="telemetry_browser")
+            wait_for(session, lambda: (view := execute(session, "InspectTelemetryCatalog"))["initial_scans"] > 0
+                     and not view["worker_active"] and not view["pending_channels"], "replacement telemetry browser")
+            session.capture_screenshot(ROOT / "target/twin-telemetry-after-replacement.png")
             verdict("verify_catalog_retirement", paths_a)
             verdict("verify_editor_retirement", ids_a, ids_b)
             verdict("verify_sysml_retirement", sysml_ids)
@@ -153,15 +264,19 @@ def main() -> None:
 
             # Same-path reopening is a fresh session, even when no scene path changes.
             paths_b = catalog_paths(session)
+            surface = seed_exposure(session)
             ids_reload = open_twin(session, TWIN_B, ids_b)
+            verdict("verify_exposure_retired", surface)
             verdict("verify_catalog_retirement", paths_b)
             verdict("verify_editor_retirement", ids_b, ids_reload)
             verdict("verify_twin_browser_retirement", ids_b, ids_reload, str(TWIN_B))
 
             # Invalid candidates must leave the admitted session untouched.
+            preserved_telemetry, _ = seed_telemetry(session)
             session.post({"type": "ExecuteCommand", "command": "OpenTwin",
                           "params": {"path": str(ROOT / "target/no-such-twin-retirement-negative")}})
             verdict("verify_session_preserved", ids_reload)
+            verdict("verify_telemetry_preserved", preserved_telemetry)
 
             # Repeated replacement cannot accumulate source documents or previews.
             paths_reload = catalog_paths(session)
@@ -178,8 +293,12 @@ def main() -> None:
             verdict("verify_twin_browser_retirement", ids_return, ids_final, str(TWIN_B))
             # Native folder picker and native/file-URI scene-file opening are
             # separate production entry points into workspace replacement.
+            # The replacement fixture is nested under A. OpenFile within an
+            # admitted root is document-only, so external file routes start in B.
             for root, command, file_uri in [(TWIN_A, "OpenFolder", False),
-                                           (TWIN_B, "OpenFile", False),
+                                           (TWIN_B, "OpenTwin", False),
+                                           (TWIN_A, "OpenFile", False),
+                                           (TWIN_B, "OpenFolder", False),
                                            (TWIN_A, "OpenFile", True),
                                            (TWIN_B, "OpenFolder", False)]:
                 outgoing = [doc["doc_id"] for doc in documents(session)]
@@ -228,22 +347,95 @@ def main() -> None:
             # the workspace root or reviving the previous Twin's documents.
             print("Scene routes: LoadScene and RestartScene", flush=True)
             scene_path = "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda"
+            telemetry = seed_telemetry(session)
+            surface = seed_exposure(session)
             execute(session, "LoadScene", path=scene_path)
             def scenario_projected():
                 data = live_prim(session, "/World", topology=True)
                 return data if data and data.get("spawned") and data.get("doc_id") not in ids_final else False
             wait_for(session, scenario_projected, "scenario scene projection")
             wait_for_ready(session.port)
+            telemetry_retirement_verdict(session, telemetry)
+            verdict("verify_exposure_retired", surface)
+            before_interaction_restart = scenario_projected()["topology"]["binding"]["entity"]
+            code = SOURCE.read_text(encoding="utf-8") + "\nqueue_scene_interactions_and_restart();"
+            interaction_ids = json.loads(execute(session, "RunRhai", code=code)["stdout"].strip())
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"]
+                     != before_interaction_restart, "queued interaction scene restart")
+            wait_for_ready(session.port)
+            ready_code = (SOURCE.read_text(encoding="utf-8")
+                          + "\nprint(interaction_results_ready(" + json.dumps(interaction_ids) + "));")
+            wait_for(session, lambda: execute(session, "RunRhai", code=ready_code)["stdout"].strip() == "true",
+                     "queued interaction terminal results")
+            verdict("verify_scene_interaction_retirement", interaction_ids)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
             before_restart = scenario_projected()
+            telemetry = seed_telemetry(session)
             execute(session, "RestartScene")
             wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"]
                      != before_restart["topology"]["binding"]["entity"],
                      "restarted scene projection")
             wait_for_ready(session.port)
+            telemetry_retirement_verdict(session, telemetry)
             verdict("verify_twin_browser_retirement", current if os.environ.get("LUNCOSIM_TEST_RECENT_MENU") == "1" else outgoing,
                     [doc["doc_id"] for doc in documents(session)], str(TWIN_B))
+            # Independent editor solvers survive scene reload. A paused source
+            # must republish current state after history retirement without a tick.
+            paused_doc, paused_key = paused_modelica_probe(session, "TwinPausedReloadProbe")
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "paused-source scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_paused_modelica_reload", paused_doc, paused_key, 37.0)
+            survivor_doc, survivor_key = paused_modelica_probe(session, "TwinPausedReloadSurvivor")
+            application_keys = [channel["key"] for channel in execute(session, "ListTelemetryChannels")["channels"]
+                                if channel["name"].startswith("engine.")]
+            execute(session, "CloseDocument", doc_id=paused_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != paused_doc for doc in documents(session)),
+                     "paused probe document closure")
+            verdict("verify_closed_modelica_telemetry", paused_doc, [paused_key], [survivor_key, *application_keys])
+            execute(session, "CloseDocument", doc_id=survivor_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != survivor_doc for doc in documents(session)),
+                     "surviving probe document closure")
+            verdict("verify_closed_modelica_telemetry", survivor_doc, [survivor_key], application_keys)
+            playback_name = "TwinPlaybackReloadProbe"
+            playback_doc = execute(session, "CreateScratchModelicaDocument", name=playback_name,
+                source=f"model {playback_name} Real playback_probe_value(start=37, fixed=true); equation der(playback_probe_value)=0; end {playback_name};")["doc_id"]
+            wait_for(session, lambda: execute(session, "CompileStatus", doc_id=playback_doc).get("ast_parsed"),
+                     "experiment playback parse")
+            playback_run, playback_keys = experiment_playback_probe(session, playback_doc, playback_name, cleanup)
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "experiment playback scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, playback_keys, [], True)
+            playback_run, fresh_playback_keys = experiment_playback_probe(session, playback_doc, playback_name, cleanup)
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, playback_keys, fresh_playback_keys, True)
+            execute(session, "CloseDocument", doc_id=playback_doc)
+            wait_for(session, lambda: all(doc["doc_id"] != playback_doc for doc in documents(session)),
+                     "experiment playback document closure")
+            verdict("verify_experiment_playback_retirement", playback_doc, playback_run, fresh_playback_keys, [], False)
+            execute(session, "FocusPanel", id="usd_connection_canvas")
+            def outgoing_diagram():
+                view = execute(session, "InspectConnectionDiagram")
+                return view if view.get("built") and view.get("view_id") else None
+            diagram = wait_for(session, outgoing_diagram, "outgoing Connections graph")
+            execute(session, "CreateConnectionView", view_id=diagram["view_id"], name="RetirementProbe", scope=diagram["scope"])
+            session.capture_screenshot(ROOT / "target/editor-connections-before-reload.png")
+            execute(session, "ActivatePerspective", id="sandbox_view")
+            old_entity = scenario_projected()["topology"]["binding"]["entity"]
+            execute(session, "RestartScene")
+            wait_for(session, lambda: (scene := scenario_projected()) and scene["topology"]["binding"]["entity"] != old_entity,
+                     "hidden editor scene restart")
+            wait_for_ready(session.port)
+            verdict("verify_hidden_editor_scene_retirement")
+            execute(session, "FocusPanel", id="usd_connection_canvas")
+            wait_for(session, outgoing_diagram, "reopened Connections graph")
+            verdict("verify_editor_diagram_reopened", diagram["view_id"])
+            session.capture_screenshot(ROOT / "target/editor-connections-after-reload.png")
             retained = [doc["doc_id"] for doc in documents(session)]
             for root, command in [(TWIN_A, "AddTwin"), (FIXTURE / "replacement", "AddFolderToWorkspace")]:
                 print(f"Additive route: {command}, path={root}", flush=True)
@@ -257,6 +449,15 @@ def main() -> None:
             verdict("verify_editor_retirement", retained, ids_final)
             verdict("verify_twin_browser_retirement", retained, ids_final, str(TWIN_B))
             verdict("verify_catalog_retirement", paths)
+            application_policy = execute(session, "RunRhai",
+                code=SOURCE.read_text(encoding="utf-8") + "\nprint(scene_policy_hook().policy_file);")["stdout"].strip()
+            if not application_policy or application_policy == "()":
+                raise RuntimeError("scene policy probe requires the application binding")
+            execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8") + "\nseed_scene_policy();")
+            wait_for(session, lambda: execute(session, "RunRhai",
+                code=SOURCE.read_text(encoding="utf-8") + "\nprint(scene_policy_ready());")["stdout"].strip() == "true",
+                "scene policy projection")
+            verdict("verify_scene_policy_applied")
             screenshot = os.environ.get("LUNCOSIM_TEST_SCREENSHOT")
             if screenshot:
                 execute(session, "ActivatePerspective", id="editor")
@@ -267,6 +468,8 @@ def main() -> None:
                 execute(session, "CloseDocument", doc_id=doc["doc_id"])
             wait_for(session, lambda: not documents(session), "test document cleanup before Exit")
         verdict("verify_editor_retirement", ids_final, [])
+        verdict("verify_scene_policy_retired", application_policy)
+        verdict("verify_command_identifier_rejection")
         print(f"PASS: Twin switching, same-Twin reopening, rejected replacement; owned PID={session.process.pid}, port={PORT}")
     print("API Exit completed; owned process and port released")
 

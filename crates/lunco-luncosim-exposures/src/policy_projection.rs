@@ -56,8 +56,9 @@ struct SourceStamp {
     scene: Option<Entity>,
 }
 
-/// At most one admitted job and one coalesced input per surface. Source changes
-/// invalidate results without waiting for a running policy to finish.
+/// One current job and one coalesced input per surface. Source changes drop
+/// the publication receiver without waiting for retired workers to finish;
+/// shared admission bounds outstanding worker execution.
 #[derive(Resource)]
 pub(super) struct RuntimeExposurePreparation {
     epoch: u64,
@@ -81,6 +82,17 @@ impl Default for RuntimeExposurePreparation {
             flight: None,
             refresh_camera: false,
         }
+    }
+}
+impl SceneResource for RuntimeExposurePreparation {
+    fn clear_scene(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.flight = None;
+        self.source = None;
+        self.pending.clear();
+        self.identities.clear();
+        self.failed.clear();
+        self.refresh_camera = true;
     }
 }
 impl RuntimeExposurePreparation {
@@ -115,15 +127,12 @@ impl RuntimeExposurePreparation {
         exposures.remove_surface(namespace);
     }
     pub(super) fn invalidate(&mut self, admission: &mut AsyncWorkAdmission) {
-        self.epoch = self.epoch.wrapping_add(1);
         if let Some(flight) = &self.flight {
             admission.cancel_queued(flight.key);
         }
-        self.pending.clear();
-        self.identities.clear();
-        self.failed.clear();
-        self.refresh_camera = true;
+        self.clear_scene();
     }
+
     fn fail(
         &mut self,
         namespace: &str,
@@ -421,7 +430,8 @@ pub(super) fn on_twin_closed(
         return;
     }
     owner.invalidate(&mut admission);
-    clear_scene_exposures_impl(&mut exposures, &mut refresh);
+    exposures.clear_scene();
+    refresh.clear_scene();
 }
 
 #[cfg(test)]
@@ -480,13 +490,16 @@ mod tests {
         let sender = flight(&mut owner, InputIdentity::Camera(1));
         owner.invalidate(&mut AsyncWorkAdmission::default());
         assert!(
-            owner.flight.is_some(),
-            "running work retains the single admission slot until retirement"
+            owner.flight.is_none(),
+            "retirement must release the old result receiver immediately"
         );
         owner.queue(input(InputIdentity::Camera(2)), &mut registry);
-        sender
-            .send(Ok(vec![ready(InputIdentity::Camera(1), "retired")]))
-            .unwrap();
+        assert!(
+            sender
+                .send(Ok(vec![ready(InputIdentity::Camera(1), "retired")]))
+                .is_err(),
+            "late workers cannot retain a publication destination"
+        );
         owner.collect(&mut registry);
         assert!(owner.flight.is_none());
         assert_eq!(registry.surfaces["view"].state, ExposureState::Pending);

@@ -1,6 +1,8 @@
 //! Continuous contact constraints share the native substep joint solve.
 
 use crate::joint::rotation_displacement;
+use lunco_core::AppSceneExt;
+
 use crate::{
     PhysicsHolds,
     joint_solver::{
@@ -88,8 +90,8 @@ where
     fn build(&self, app: &mut App) {
         app.init_resource::<ContinuousCollisionSettings>()
             .register_type::<ContinuousCollisionSettings>()
-            .init_resource::<ContinuousCollisionDiagnostics>()
-            .init_resource::<ContinuousContacts>()
+            .init_scene_resource::<ContinuousCollisionDiagnostics>()
+            .init_scene_resource::<ContinuousContacts>()
             .add_systems(
                 PhysicsSchedule,
                 prepare_pairs::<H>
@@ -1107,6 +1109,23 @@ fn initial_native_contact(
         details::contact_support_map_support_map_with_params,
         gjk::{GJKResult, VoronoiSimplex},
     };
+    let missing_geometry = |result: &str| {
+        format!(
+            "native continuous initial contact did not return contact geometry for its enclosing prediction: result={result}, prediction={prediction:?}, axis={axis:?}, types={:?}/{:?}, pose1={:?}, pose2={:?}, triangle1={:?}, triangle2={:?}, ball1={:?}, ball2={:?}, cylinder1={:?}, cylinder2={:?}, cuboid1={:?}, cuboid2={:?}",
+            s1.shape_type(),
+            s2.shape_type(),
+            m1.start,
+            m2.start,
+            s1.as_triangle(),
+            s2.as_triangle(),
+            s1.as_ball(),
+            s2.as_ball(),
+            s1.as_cylinder(),
+            s2.as_cylinder(),
+            s1.as_cuboid(),
+            s2.as_cuboid(),
+        )
+    };
     // Balls have a specialized native kernel. All other convex triangle pairs
     // use this same support-map kernel in the native default dispatcher.
     let contact = if (s1.as_triangle().is_some() || s2.as_triangle().is_some())
@@ -1155,20 +1174,12 @@ fn initial_native_contact(
                 contact.transform_by_mut(&m1.start, &m2.start);
                 contact
             }
-            result => {
-                return Err(format!(
-                    "native continuous initial contact did not return contact geometry for its enclosing prediction: shape1={:?}; shape2={:?}; relative={relative:?}; prediction={prediction:?}; initial_direction={direction:?}; result={result:?}",
-                    s1.as_typed_shape(),
-                    s2.as_typed_shape()
-                ));
-            }
+            result => return Err(missing_geometry(&format!("{result:?}"))),
         }
     } else {
         avian3d::parry::query::contact(&m1.start, s1, &m2.start, s2, prediction)
             .map_err(|error| format!("unsupported continuous initial contact: {error:?}"))?
-            .ok_or_else(|| format!(
-                "native continuous initial contact did not return contact geometry for its enclosing prediction: shape1={:?}; shape2={:?}; relative={:?}; prediction={prediction:?}",
-                s1.as_typed_shape(), s2.as_typed_shape(), m1.start.inv_mul(&m2.start)))?
+            .ok_or_else(|| missing_geometry("native dispatcher returned no contact"))?
     };
     validate_native_contact(&contact)?;
     Ok(contact)
@@ -2617,6 +2628,149 @@ mod tests {
     }
 
     #[test]
+    fn continuous_scene_teardown_releases_collider_geometry_and_keeps_settings() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            PhysicsPlugins::default(),
+            ContinuousCollisionPlugin::<()>::default(),
+        ));
+        let collider = Collider::sphere(1.0);
+        let geometry = std::sync::Arc::downgrade(&collider.shape().0);
+        app.world_mut()
+            .resource_mut::<ContinuousContacts>()
+            .shapes
+            .push(Shape {
+                entity: Entity::from_bits(1),
+                part_index: 0,
+                body: Entity::from_bits(2),
+                collider,
+                position: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+                center: DVec3::ZERO,
+            });
+        app.world_mut()
+            .resource_mut::<ContinuousCollisionDiagnostics>()
+            .sweep_queries = 7;
+        app.world_mut()
+            .resource_mut::<ContinuousCollisionSettings>()
+            .max_iterations = 333;
+        assert!(geometry.upgrade().is_some());
+        lunco_core::run_scene_teardown(app.world_mut());
+        assert!(geometry.upgrade().is_none());
+        assert!(
+            app.world()
+                .resource::<ContinuousContacts>()
+                .shapes
+                .is_empty()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ContinuousCollisionDiagnostics>()
+                .sweep_queries,
+            0
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ContinuousCollisionSettings>()
+                .max_iterations,
+            333
+        );
+    }
+
+    #[test]
+    fn continuous_large_triangle_cylinder_edge_retains_geometry() {
+        use avian3d::parry::shape::{Cylinder, Triangle};
+        let triangle = Triangle::new(
+            DVec3::new(-250.0, 0.0, -250.0),
+            DVec3::new(250.0, 0.0, 250.0),
+            DVec3::new(250.0, 0.0, -250.0),
+        );
+        let cylinder = Cylinder::new(0.15, 0.4);
+        let fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
+        let moving = NonlinearRigidMotion::constant_position(Pose::from_parts(
+            DVec3::new(26.275517120869555, 0.3989396412921885, 26.459245381148524),
+            DQuat::from_xyzw(
+                0.10039221371651696,
+                0.1742794765226331,
+                0.6997061011501934,
+                -0.6855358526530525,
+            ),
+        ));
+        let axis = DVec3::new(
+            -0.09186413013952333,
+            0.3989396412921885,
+            0.09186413013944517,
+        );
+        let contact = initial_native_contact(
+            &fixed,
+            &triangle,
+            &moving,
+            &cylinder,
+            496.8394434529555,
+            axis,
+            &mut avian3d::parry::query::epa::EPA::new(),
+        )
+        .unwrap();
+        validate_native_contact(&contact).unwrap();
+        assert!(
+            contact.dist > 0.0001 && contact.dist < 0.01,
+            "the finite triangle edge is separated: {contact:?}"
+        );
+        assert!(contact.point1.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn degenerate_native_triangle_retains_boundary_geometry() {
+        use avian3d::parry::{
+            query::PointQueryWithLocation,
+            shape::{Triangle, TrianglePointLocation},
+        };
+        let triangle = Triangle::new(-DVec3::X, DVec3::X, DVec3::X * 2.0);
+        for solid in [false, true] {
+            let (projection, location) =
+                triangle.project_local_point_and_get_location(DVec3::Y, solid);
+            assert_eq!(projection.point, DVec3::ZERO);
+            assert!(!projection.is_inside);
+            assert!(matches!(location, TrianglePointLocation::OnEdge(0, _)));
+        }
+    }
+
+    #[test]
+    fn continuous_large_cuboid_cylinder_contact_retains_geometry() {
+        use avian3d::parry::shape::{Cuboid, Cylinder};
+        let cylinder = Cylinder::new(0.15, 0.4);
+        let ground = Cuboid::new(DVec3::new(250.0, 0.5, 250.0));
+        let wheel = NonlinearRigidMotion::constant_position(Pose::from_parts(
+            DVec3::new(-9.896414017119408, 0.4000003863307968, 50.09619959068687),
+            DQuat::from_xyzw(
+                0.690498039592694,
+                0.6902207244403379,
+                -0.15237657279535471,
+                0.1535876124767312,
+            ),
+        ));
+        let fixed = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
+            0.0, -0.5, 0.0,
+        )));
+        let contact = initial_native_contact(
+            &wheel,
+            &cylinder,
+            &fixed,
+            &ground,
+            405.0532286425992,
+            DVec3::new(9.896414017119408, -0.9000003863307968, -50.09619959068687),
+            &mut avian3d::parry::query::epa::EPA::new(),
+        )
+        .unwrap();
+        validate_native_contact(&contact).unwrap();
+        assert!(
+            contact.dist.abs() < 0.001,
+            "near ground contact: {contact:?}"
+        );
+    }
+
+    #[test]
     fn continuous_initial_query_rejects_missing_native_geometry() {
         use avian3d::parry::shape::{Cylinder, Triangle};
         let triangle = Triangle::new(DVec3::ZERO, DVec3::X, DVec3::Z);
@@ -3735,3 +3889,7 @@ mod tests {
         }
     }
 }
+
+impl lunco_core::SceneResource for ContinuousContacts {}
+
+impl lunco_core::SceneResource for ContinuousCollisionDiagnostics {}

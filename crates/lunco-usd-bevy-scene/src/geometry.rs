@@ -708,10 +708,26 @@ def Xform "World"
         let b = local_transform_at(&yup, &tower, 0.0).unwrap().unwrap();
         assert!(a.translation.abs_diff_eq(b.translation, 1e-5));
 
-        assert_eq!(
-            read_shape_dims(&zup, &tower, "Cylinder"),
-            read_shape_dims(&yup, &tower, "Cylinder"),
-        );
+        let Some(ShapeDims::Cylinder {
+            radius: ar,
+            height: ah,
+            axis: aa,
+        }) = read_shape_dims(&zup, &tower, "Cylinder")
+        else {
+            panic!("expected Z-up cylinder");
+        };
+        let Some(ShapeDims::Cylinder {
+            radius: br,
+            height: bh,
+            axis: ba,
+        }) = read_shape_dims(&yup, &tower, "Cylinder")
+        else {
+            panic!("expected canonical cylinder");
+        };
+        assert_eq!((ar, ah), (br, bh));
+        let a_axis = stage_convention(&zup).unwrap().orient(usd_axis_to_quat(aa)) * Vec3::Y;
+        let b_axis = stage_convention(&yup).unwrap().orient(usd_axis_to_quat(ba)) * Vec3::Y;
+        assert!(a_axis.abs_diff_eq(b_axis, 1e-5));
     }
 
     /// A canonical stage is bit-for-bit unaffected — every asset we ship takes

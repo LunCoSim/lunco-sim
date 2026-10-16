@@ -13,7 +13,7 @@ fn query_ok(record) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind != "usd" { continue; }
         let root = query("QueryUsdPrim", #{
@@ -21,7 +21,7 @@ fn find_document() {
         });
         if query_ok(root) { return item.doc_id; }
     }
-    -1
+    ()
 }
 
 fn has_port(graph, id) {
@@ -48,21 +48,21 @@ fn fail(me, message) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
-    this.doc = -1;
+    this.doc = ();
     this.done = false;
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 10.0 { fail(this, "model-authoring fixture was not discoverable"); }
             return;
         }

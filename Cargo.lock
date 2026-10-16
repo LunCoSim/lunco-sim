@@ -8010,6 +8010,7 @@ name = "lunco-interaction-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
 ]
 
 [[package]]
@@ -8129,6 +8130,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-camera-core",
+ "lunco-core",
  "lunco-cosim-core",
  "lunco-environment",
  "lunco-physics",
@@ -8857,6 +8859,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
+ "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
  "lunco-doc",
@@ -8899,15 +8902,11 @@ dependencies = [
 name = "lunco-modelica-solver"
 version = "0.1.0"
 dependencies = [
- "indexmap",
- "log",
  "lunco-experiments",
  "rumoca-compile",
- "rumoca-eval-solve",
  "rumoca-ir-solve",
  "rumoca-sim",
  "rumoca-solver",
- "web-time",
 ]
 
 [[package]]
@@ -8940,6 +8939,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-modelica-runtime",
  "lunco-signal",
  "lunco-telemetry",
@@ -9821,6 +9822,7 @@ name = "lunco-status-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-doc-bevy",
  "lunco-telemetry-core",
  "lunco-workspace",
@@ -10596,6 +10598,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc",
@@ -10809,6 +10812,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_math",
  "bevy_reflect",
+ "lunco-core",
  "lunco-mobility",
  "lunco-physics",
 ]
@@ -11103,6 +11107,7 @@ name = "lunco-viz"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_egui",
  "egui",
  "egui_plot",
  "lunco-api",

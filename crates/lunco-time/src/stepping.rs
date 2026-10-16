@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 
 /// Manual admission demand. This is a count of fixed cycles, not another clock.
 /// Scene preparation and participant barriers remain mandatory for every cycle.
@@ -12,6 +12,8 @@ pub struct SimulationStepControl {
     remaining: u32,
     pub(crate) active_cycle: bool,
 }
+
+impl SceneResource for SimulationStepControl {}
 
 impl SimulationStepControl {
     /// Whether automatic simulation advancement is held by explicit control.
@@ -89,14 +91,42 @@ fn on_step_simulation(
     Ok(Ack::new(OpId::new()))
 }
 
-fn retire_scene_control(mut control: ResMut<SimulationStepControl>) {
-    *control = SimulationStepControl::default();
-}
-
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<SimulationStepControl>()
-        .add_systems(lunco_core::SceneTeardown, retire_scene_control);
+    app.init_scene_resource::<SimulationStepControl>();
     register_all_commands(app);
 }
 
 register_commands!(on_step_simulation);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_lifecycle_retires_manual_demand_after_removal_callbacks() {
+        #[derive(Component)]
+        struct TerminalRequester;
+        let mut app = App::new();
+        install(&mut app);
+        app.add_observer(|_: On<Remove, TerminalRequester>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                let mut control = world.resource_mut::<SimulationStepControl>();
+                control.request(Some(true), Some(7), true).unwrap();
+                control.active_cycle = true;
+            });
+        });
+        for _ in 0..3 {
+            app.world_mut()
+                .resource_mut::<SimulationStepControl>()
+                .request(Some(true), Some(4), true)
+                .unwrap();
+            app.world_mut()
+                .spawn((lunco_core::SceneOwned, TerminalRequester));
+            lunco_core::run_scene_teardown(app.world_mut());
+            let control = app.world().resource::<SimulationStepControl>();
+            assert!(!control.is_held());
+            assert!(!control.is_cycle_active());
+            assert_eq!(control.remaining(), 0);
+        }
+    }
+}

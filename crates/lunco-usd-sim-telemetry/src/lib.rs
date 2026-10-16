@@ -12,7 +12,7 @@ use avian3d::prelude::{
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::GlobalEntityId;
+use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use lunco_core_runtime::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
@@ -32,12 +32,13 @@ pub struct PhysicsTelemetryPlugin;
 
 impl Plugin for PhysicsTelemetryPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PhysicsTelemetryState>().add_systems(
-            FixedPostUpdate,
-            retain_physics_telemetry
-                .after(PhysicsSystems::StepSimulation)
-                .after(lunco_mobility::WheelRaycastResultsSet),
-        );
+        app.init_scene_resource::<PhysicsTelemetryState>()
+            .add_systems(
+                FixedPostUpdate,
+                retain_physics_telemetry
+                    .after(PhysicsSystems::StepSimulation)
+                    .after(lunco_mobility::WheelRaycastResultsSet),
+            );
     }
 }
 
@@ -53,6 +54,8 @@ pub struct PhysicsTelemetryState {
     metadata: HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
     metadata_group_paths: HashMap<Entity, String>,
 }
+
+impl SceneResource for PhysicsTelemetryState {}
 
 #[derive(Clone, Copy)]
 struct PreviousKinematics {

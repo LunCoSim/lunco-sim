@@ -56,7 +56,7 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneOwned, SceneResource, on_command, register_commands};
 use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_signal::TelemetryDeadband;
@@ -252,7 +252,11 @@ fn on_control_telemetry(
                         .try_insert(param);
                 }
                 None => {
-                    commands.spawn((Name::new(format!("telemetry:{}", param.name)), param));
+                    commands.spawn((
+                        Name::new(format!("telemetry:{}", param.name)),
+                        SceneOwned,
+                        param,
+                    ));
                 }
             }
             return;
@@ -357,6 +361,7 @@ pub struct EngineHealthChannel;
 fn spawn_engine_health_channels(
     diags: Option<Res<bevy::diagnostic::DiagnosticsStore>>,
     existing: Query<(), With<EngineHealthChannel>>,
+    mut signals: ResMut<lunco_signal::SignalRegistry>,
     mut commands: Commands,
 ) {
     let Some(diags) = diags else { return };
@@ -370,6 +375,7 @@ fn spawn_engine_health_channels(
         if !diags.iter().any(|d| d.path().as_str() == path) {
             continue;
         }
+        signals.retain_across_scenes(lunco_signal::SignalRef::new(Entity::PLACEHOLDER, name));
         commands.spawn((
             Name::new(name),
             EngineHealthChannel,
@@ -487,6 +493,15 @@ struct SamplingPlan {
     dirty: bool,
 }
 
+impl SceneResource for SamplingPlan {
+    fn clear_scene(&mut self) {
+        *self = Self {
+            dirty: true,
+            ..Default::default()
+        };
+    }
+}
+
 /// Tick-stamped samples waiting for non-authoritative retention and subscribers.
 /// Production is fixed-step; delivery runs in its own bounded application cycle.
 #[derive(Resource, Default)]
@@ -495,6 +510,8 @@ struct SampleDeliveryQueue {
     dropped_total: u64,
     overloaded: bool,
 }
+
+impl SceneResource for SampleDeliveryQueue {}
 
 fn discard_pending_samples_on_scene_transition(
     trigger: On<lunco_core::SceneTransitionStarted>,
@@ -765,11 +782,18 @@ impl Plugin for LunCoTelemetryPlugin {
         // Initialised beside the registry (and for the same reason): the resource is
         // render-free intent, written by whichever app owns selection and read by
         // whatever displays channels. Empty here in a headless run — nothing selects.
-        app.init_resource::<lunco_signal::TelemetryFocus>();
+        app.init_scene_resource::<lunco_signal::TelemetryFocus>();
         app.add_observer(retain_sample);
         app.add_observer(drop_signal_of_removed_channel);
-        app.add_observer(lunco_signal::drop_signals_of_removed_source);
         app.add_observer(discard_pending_samples_on_scene_transition);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            |mut clocks: Query<&mut ChannelClock>| {
+                for mut clock in &mut clocks {
+                    *clock = ChannelClock::default();
+                }
+            },
+        );
         register_all_commands(app);
         // Engine health (FPS, frame time) as real telemetry channels — see
         // `spawn_engine_health_channels`.
@@ -780,12 +804,13 @@ impl Plugin for LunCoTelemetryPlugin {
         // ground-system UI) needs all three. See `api.rs`.
         api::build(app);
         // The plan starts dirty so the first sampler pass builds it.
+        app.init_scene_resource::<SamplingPlan>();
         app.insert_resource(SamplingPlan {
             channels: Vec::new(),
             dirty: true,
             ..Default::default()
         })
-        .init_resource::<SampleDeliveryQueue>();
+        .init_scene_resource::<SampleDeliveryQueue>();
         app.add_systems(
             // FIXED step — see the module docs. Not `Update`: telemetry would then be
             // paced by the frame rate (different sample counts on a fast vs slow

@@ -11,7 +11,7 @@
 //
 // The scene starts with a deliberately small but real battery and panel. While
 // the route program drives, motor load exceeds solar generation and SOC falls.
-// Once Rhai stops the route through its authored action intent, the still-lit
+// Once Rhai stops the selected route through its program action, the still-lit
 // panel charges the same battery back up. No script writes SOC, panel power, a
 // Sun vector, or a motor demand.
 
@@ -47,7 +47,8 @@ fn simulation_dependencies(me, ctx) {
             find_path("/SolarRoverTest/SolarRover/SunTrackerController"),
             find_path("/SolarRoverTest/SolarRover/Comms/AntennaTrackerController"),
         ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: vessel_descendants(find_path("/SolarRoverTest/SolarRover")),
+        entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 
@@ -106,6 +107,8 @@ fn on_start(me, ctx) {
     this.incidence_before = ();
     this.incidence_after_step = ();
     this.yaw_before = ();
+    this.yaw_peak_delta = 0.0;
+    this.target_yaw_after_step = ();
     this.yaw_after_step = ();
     this.hinge_after_step = ();
     this.position_before_drive = ();
@@ -194,6 +197,10 @@ fn on_tick(me, ctx) {
         }
         let current_yaw = get(this.tracker, "yaw");
         let current_incidence = island_value(this.elec, SOLAR_INCIDENCE);
+        if current_yaw != () && this.yaw_before != () {
+            let delta = (current_yaw - this.yaw_before).abs();
+            if delta > this.yaw_peak_delta { this.yaw_peak_delta = delta; }
+        }
         if current_yaw != () && current_incidence != () &&
            (current_yaw - this.yaw_before).abs() > YAW_DELTA_MIN &&
            current_incidence > 0.0 {
@@ -220,12 +227,22 @@ fn on_tick(me, ctx) {
         this.power_after_step = island_value(this.elec, SOLAR_POWER);
         this.incidence_after_step = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_after_step = get(this.tracker, "yaw");
+        let target_x = get(this.tracker, "target_mount_x");
+        let target_z = get(this.tracker, "target_mount_z");
+        if target_x != () && target_z != () {
+            this.target_yaw_after_step = atan(-target_x, -target_z);
+        }
         this.hinge_after_step = get(this.hinge, "angle");
         this.soc_before_drive = island_value(this.elec, BATTERY_SOC);
         this.position_before_drive = world_pos(this.rover);
         this.route = find_path("/SolarRoverTest/Route");
         if this.route < 0 {
             finish_failure(this, "scene-level route was not composed");
+            return;
+        }
+        let selected = program_editor::select("/SolarRoverTest/Route/Program");
+        if selected == () || selected.ok != true {
+            finish_failure(this, "the route program could not be selected");
             return;
         }
         emit("route_start", 1);
@@ -249,7 +266,9 @@ fn on_tick(me, ctx) {
             this.peak_battery_discharge_power = discharge;
         }
         let charge = get(this.elec, "battery_charge_power");
-        if motor != () && motor > MOTOR_LOAD_MIN_W {
+        let solar = island_value(this.elec, SOLAR_POWER);
+        if motor != () && solar != () && motor > MOTOR_LOAD_MIN_W
+            && motor > solar + POWER_TOL_W {
             this.loaded_drive_samples += 1;
             if charge != () {
                 this.drive_charge_observed_samples += 1;
@@ -272,9 +291,9 @@ fn on_tick(me, ctx) {
         if phase_t < DRIVE_S { return; }
         this.soc_after_drive = island_value(this.elec, BATTERY_SOC);
         this.position_after_drive = world_pos(this.rover);
-        let stopped = intent_pulse(this.rover, "action");
-        if stopped == () || stopped.ok != true {
-            finish_failure(this, "route action intent could not stop the authored program");
+        let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
+        if !stopped {
+            finish_failure(this, "the selected route could not receive its program stop action");
             return;
         }
         this.phase = "charge";
@@ -351,9 +370,13 @@ fn verdict(s) {
     f.push(t_present(s.position_before_drive, "rover position before route"));
     f.push(t_present(s.position_after_drive, "rover position after route"));
 
-    if s.yaw_before != () && s.yaw_after_step != () {
-        f.push(t_true((s.yaw_after_step - s.yaw_before).abs() > YAW_DELTA_MIN,
-            "SunTracker yaw did not respond to the CelestialTime-driven Sun target"));
+    f.push(t_true(s.yaw_peak_delta > YAW_DELTA_MIN,
+        "SunTracker yaw did not respond during the CelestialTime-driven target step"));
+    f.push(t_present(s.target_yaw_after_step, "canonical mount-vector yaw after tracking"));
+    if s.target_yaw_after_step != () && s.yaw_after_step != () {
+        let error = s.yaw_after_step - s.target_yaw_after_step;
+        f.push(t_true(atan(sin(error), cos(error)).abs() < HINGE_TOL,
+            "settled SunTracker yaw does not follow its current canonical mount target"));
     }
     if s.hinge_after_step != () && s.yaw_after_step != () {
         f.push(t_true((s.hinge_after_step - s.yaw_after_step).abs() < HINGE_TOL,

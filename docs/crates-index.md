@@ -155,8 +155,8 @@ crates. Project declarations are generated from the schema source by
 | **`lunco-scene-selection`** | Render-free scene-lifetime selection state and the shared selection-to-telemetry-focus projection. It is independent from scene mutation commands so exposure and other headless consumers do not inherit the command layer's dependency closure. |
 | **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. Native catalog preflight receives the discovered source's admitted Twin root for composition dependencies. It retires closed-mount entries and scan generations at `TwinClosed`, and prunes retired document-private mounts before the next catalog scan. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose, `QueryUsdPrim` for one composed USD prim, and `QueryUsdPrims` for deterministic multi-prim reads from one composed-stage snapshot. Native Sdf values serialize directly into the typed API ABI, preserving precision and empty arrays. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
-| **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
-| **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
+| **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, stage-scoped authorable-prim resolution from the shared composed reader, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
+| **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, source-focused `ValidateSysml`, selectable typed-fact `AnalyzeSysml`, `luncosim test --list`, live `RunLint`, USD/SysML lint-fact aggregation, and Twin namespace inspection. Scene-test discovery uses scoped Twin roots and the shared prepared USD asset reads. It owns bounded one-shot runtime file-query and Twin `RunLint` preparation, exact source/owner publication fences, and composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
 | **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), WGSL-reflected param schema, typed `ShaderTexture`/`PreparedShaderImage` asset-worker preparation, CDLOD vertex attribute, and slot-backed live shader inputs through `lunco-port-core`. Carries typed float-texture patches to the renderer. Names no material type. |
 
 ---
@@ -194,7 +194,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-perf-ui`** | Reusable performance capability: persisted HUD settings, typed toggle command, Bevy frame diagnostics, and live `PerfStats`. Physics adapters publish optional step timing into this package; the concrete shell only renders the values. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. Dock layout state and perspective materialization are supplied by `lunco-workbench-layout`; headless adapters use the core/layout contracts without linking this shell. |
 | **`lunco-workbench-help-ui`** | Optional rendered Help/About perspective presentation: help registry, perspective help menu item, and version/source display. It consumes workbench contracts without putting egui rendering into `lunco-workbench-core. |
-| **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
+| **`lunco-workbench-guided-ui`** | Optional application-level adapter for scene-scoped guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. Its registered scene resource resets after shutdown and entity-removal callbacks; objectives visibility is an application preference. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
 | **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
 | **`lunco-workbench-runtime-ui`** | Reusable HUI/Flair runtime-authored surface mechanism: manifest loading, retained surface lifecycle, placement, styling, input regions, capture readiness, pointer-location-based collection scrolling, and generic semantic action transport. Hosts supply exposures, gates, Twin state, and recorder mode; application-specific actions stay outside this crate. |
@@ -206,13 +206,13 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
 | **`lunco-viz-core`** | Render-free visualization identity substrate: the shared `VizId` used by visualization registries, plot state, and headless consumers. It has no Bevy or rendering dependency. |
-| **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
+| **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, scene-scoped widget buffers/tasks/actions, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-gizmo-ui`** | Focused rendered transform-gizmo capability: render-space proxies, live/preview pose transactions, camera binding, kinematic-drive lifecycle, and an independent shared scene-interaction admission hold. It owns the external `transform-gizmo-bevy` dependency independently of the editor panels. |
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, selection and preview adapters, document-scoped opt-in pointer-move hooks, physics diagnostics, bounded background construction of transient USD curve views, and `InspectUsdCurveView` status for current curve-view results. It composes the focused transform-gizmo package. |
-| **`lunco-luncosim-edit-inspector-core`** | Renderer-independent Inspector readout snapshot and change gate. It owns the bounded ECS queries for sun, camera, ambient, and joint facts; the rendered Inspector consumes this package without moving those scans into egui paint. |
-| **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
+| **`lunco-luncosim-edit-inspector-core`** | Renderer-independent, scene-scoped Inspector readout snapshot and change gate. It owns the bounded ECS queries for sun, camera, ambient, and joint facts; the rendered Inspector consumes this package without moving those scans into egui paint. |
+| **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. Parameter drafts follow their explicit document and preview lifetimes, independently of panel paint. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
@@ -254,9 +254,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-scripting-bridge-spatial`** | Domain adapter for active-frame pose, rotation, navigation, geolocation, and entity enumeration. It owns the BigSpace, celestial, Avian, and steering dependencies needed by those projections. |
 | **`lunco-scripting-bridge-time`** | Domain adapter for deterministic simulation-clock reads and the clock-domain snapshot. It owns the physics and time-domain dependencies needed by those projections. |
 | **`lunco-scripting-bridge-usd`** | Domain adapter for composed USD document generations and prim-path identity lookups, including document-scoped lookup for paths that may repeat across mounted stages. It owns the USD document/scene dependencies needed by those projections. |
-| **`lunco-scripting`** | Language/runtime-neutral scripting host: document ownership, backend-neutral scenario lifecycle and one task interpreter for simulation/presentation cadences, scheduling, hot reload, teardown, lifecycle/document commands, and optional Python one-shot execution. Window audience detection is an opt-in application feature. The Rhai world runtime is isolated in `lunco-scripting-rhai-runtime`; this crate does not own product-level Rhai policy, tools, or timelines. |
+| **`lunco-scripting`** | Language/runtime-neutral scripting host: document ownership, backend-neutral scenario lifecycle and one task interpreter for simulation/presentation cadences, scheduling, hot reload, attachment-removal retirement before final scene reset, lifecycle/document commands, and optional Python one-shot execution. Window audience detection is an opt-in application feature. The Rhai world runtime is isolated in `lunco-scripting-rhai-runtime`; this crate does not own product-level Rhai policy, tools, or timelines. |
 | **`lunco-scripting-rhai-runtime`** | Production Rhai application boundary: command registration, tool/timeline persistence, `.rhai` asset dependency loading, and composition of the language-neutral host with `lunco-scripting-rhai-world`. It keeps application-facing integration separate from the high-churn world/policy closure. |
-| **`lunco-scripting-rhai-world`** | Reusable Rhai world/runtime substrate: reflected world bridge, `RhaiScenarioRuntime` with per-entity committed source content closures and atomic native-source/AST closure publication, authored application/Twin policy activation, policy status projection, and optional Twin-scoped native hook providers. It is usable by Rhai catalog/diagnostic consumers without pulling the application command/tool/timeline composition package. |
+| **`lunco-scripting-rhai-world`** | Reusable Rhai world/runtime substrate: reflected world bridge, `RhaiScenarioRuntime` with per-entity committed source content closures and atomic native-source/AST closure publication, authored and inline application/Twin policy activation through one layered owner, policy status projection, and optional Twin-scoped native hook providers. It is usable by Rhai catalog/diagnostic consumers without pulling the application command/tool/timeline composition package. |
 | **`lunco-scripting-rhai-core`** | Reusable Rhai backend substrate: asset-scoped module resolution, native vector/quaternion functions, task-tree lowering, typed UI request values, persisted-name validation, and the Rhai-to-`HookValue`/reflected-write boundary. It does not own JSON, the scenario host, or product-level policy. |
 | **`lunco-scripting-rhai`** | Rhai authoring/query surface: catalog discovery, script diagnostics, and dataset queries. It is a production package installed by Rhai hosts, but is separate from the language-neutral scripting lifecycle so editor/query changes do not rebuild that core. |
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + layered registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast), standard/core/application/Twin scope resolution, and discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
@@ -278,13 +278,13 @@ Primary entry points and simulation assembly targets.
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
 | **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-runtime`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
-| **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
+| **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: scene-registered environment opinions and projection snapshots, status, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
-| **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
+| **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, terminal-fault termination of stepping, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics and bounded physical render easing through native endpoint states, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, exact-owner asynchronous experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
-| **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
+| **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection and retirement with scene-registered source caches, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
@@ -313,7 +313,12 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 **`lunco-core`**
 The stable ECS contract layer. It defines identity/provenance, shared markers,
 typed scene-lifecycle contracts, structured runtime faults/diagnostics, Bevy
-`RuntimeCycleSet` ordering labels, and generic state utilities. Owner-neutral
+`RuntimeCycleSet` ordering labels, and generic state utilities. Its
+`AppSceneExt::init_scene_resource` installs `SceneResource` cleanup at
+initialization, including explicitly registered Bevy `Messages<M>` queues;
+`run_scene_teardown_with_entities` drains domain shutdown,
+reclaims scene hierarchies and `SceneOwned` entities, flushes removal callbacks,
+then resets registered state. State-only owners use `run_scene_teardown`. Owner-neutral
 cycle and invocation values are defined in `lunco-runtime-context`. Pure mutation envelopes are owned by
 `lunco-command-contracts`; runtime command reflection remains available through
 the existing typed command API. It has no pacing, reconciliation, exposure
@@ -333,7 +338,9 @@ packages from acquiring USD's Truck/NURBS dependency solely for extrusion.
 **`lunco-exposure-core`**
 The dependency-light typed exposure store. `EngineExposures` and its value
 types are reusable by UI, API, scripting, telemetry, and recovery consumers.
-Atomic complete-surface replacement and pending/ready/failed state belong to
+`EngineExposures` and `ExposureRefresh` implement `SceneResource`: namespaces
+expire by default, only explicit `retain_across_scenes` declarations survive,
+and reset re-arms publication. Atomic complete-surface replacement and pending/ready/failed state belong to
 this registry. The domain projection remains in `lunco-luncosim-exposures`.
 
 **`lunco-port-core`**
@@ -368,7 +375,7 @@ headless consumers that only need core primitives do not compile this policy
 layer.
 
 **`lunco-time`**
-The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), `CelestialTime` (the single affine child sample with a 100,000× rate ceiling), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. Celestial state and its model inputs share that sample while physics keeps its ordinary cadence. It also owns shared transport projection, paced/manual fixed-cycle admission with retained overstep, and native update-source handoffs. **All time-scale/JD nuance lives here; consumers delegate.**
+The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), `CelestialTime` (the single affine child sample with a 100,000× rate ceiling), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. Celestial state and its model inputs share that sample while physics keeps its ordinary cadence. It also owns shared transport projection, paced/manual fixed-cycle admission with retained overstep, scene-registered manual demand and holds, and native update-source handoffs. **All time-scale/JD nuance lives here; consumers delegate.**
 
 **`lunco-doc`**
 Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in undo/redo logic. Defines the `DocumentHost` container and the atomic `DocumentOp` pattern for state mutation and inversion.
@@ -559,6 +566,8 @@ simulation, and vessel control; the generic engine substrate remains in
 `lunco-core`.
 
 **`lunco-interaction-core`**
+Scene-derived cursor-mode flags and armed script-tool names implement
+`SceneResource`; their owning hosts initialize them with scene cleanup.
 Small cross-runtime cursor-interaction contract package. The editor publishes
 `DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
 consume those contracts to stand down during a transform drag. Its
@@ -719,6 +728,10 @@ admission, Twin-backed stage loading, and live document projection belong to
 `lunco-usd-bevy-runtime-core`, so document-only hosts can use this package
 without the complete visual/simulation bundle. Public query-provider
 registration belongs to `lunco-usd-queries`.
+The command owner prepares new composition dependencies through bounded core
+work admission before its original atomic journal commit. Its registered scene
+resource retires pending callbacks, receipts, holds and weak result destinations;
+only its monotonic operation identities have application lifetime.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
@@ -733,7 +746,10 @@ through the production scene gates in
 with the assembly editor proposal gate.
 
 **`lunco-usd-bevy-runtime-core`**
-Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
+Headless-safe scene runtime boundary. Structural deltas reconcile the running
+projection and all preview roots through one indexed projector; subtree refresh
+updates every stage/path instance. These are engine ownership invariants, not
+changeable selection policy. Installs scene admission, Twin-backed
 stage loading, live document-to-stage projection, coalesced stage-change
 path/generation publication, authored control/program projection, scene
 commands, and the stage terminal-outcome contract. Default Twin admission
@@ -818,7 +834,7 @@ leases so cached asset reloads consume current native inputs. The index holds
 weak readers; the document projection lease owns publication and retirement.
 Render-free Twin/document projection state shared by headless runtime,
 authoring, terrain, validation, and UI adapters. It owns the
-`DocBackedTwinScenes` lease map, the `twin://` stage-to-document resolver,
+`DocBackedTwinScenes` lease map, the exact stage-asset/document lease resolver,
 `UsdDocumentUserOwned`, `LiveRebuildExempt`, and the event-driven
 `TwinProjectionWake` signal. It depends on the stage-asset identity and asset
 path contracts, but it does not load or compose USD stages and does not depend
@@ -873,7 +889,7 @@ or document navigation.
 **`lunco-usd-viewport-runtime`**
 Render runtime for document-backed USD preview sessions. It owns preview
 lifecycle, offscreen images and egui texture registration, render cameras and
-lights, projection readiness, render budgets, preview commands, measurements,
+lights, exact-stage consumed-generation readiness, render budgets, preview commands, measurements,
 and pointer-event handling. Presentation query providers live in
 `lunco-usd-viewport-ui`; the runtime does not register API queries or
 workbench panels.
@@ -886,6 +902,8 @@ Render-free camera adapter built on `lunco-usd-bevy-stage` and
 handles rover-mounted and cinematic camera poses, and owns camera selection plus
 the single-authority viewport reconciler. It contains no visual projection and
 does not own BasisCurves geometry math.
+Camera-path gate and playback entities are linked descendants of their source
+curve, so source retirement reclaims them while shared clocks survive.
 
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-stage`,
@@ -1022,7 +1040,8 @@ projection-preparation boundary), `UsdSimProcessed`, the coalesced
 and the `lunco-physics` stable identity contract), and
 `GroundColliderPending`, keeping shared contracts out of either large
 implementation crate and allowing scene runners to avoid the full vehicle
-projector.
+projector. The ground readiness flag implements the shared scene-resource
+lifetime contract at this owner.
 
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
@@ -1122,6 +1141,10 @@ Application-bound API transports. Owns the native Axum HTTP listener, asset endp
 
 **`lunco-telemetry`**
 Reflection-based data extraction engine. Automatically samples and standardizes internal physics and software values for broadcast to external monitoring systems or Mission Control bridges (YAMCS/XTCE).
+Sampler plans and delivery queues use registered scene lifetimes; API-created
+channel entities are scene-owned. The shared `lunco-signal` registry retires
+scene histories and metadata at teardown, preserving only explicit application
+signals such as engine health.
 
 **`lunco-telemetry-core`**
 Shared typed telemetry contracts and the generic event projection/logging boundary used by
@@ -1276,6 +1299,8 @@ Renderer-independent status and lifecycle substrate. It owns the shared
 mirroring. The concrete workbench status bar and `lunco-ui` busy widgets are
 consumers; headless hosts can publish and inspect the same status without
 linking the shell.
+The owner registers `StatusBus` as a scene resource; clear, reload and active
+Twin closure retire visible history and work handles while retaining counters.
 
 **`lunco-ui`**
 Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.
@@ -1294,6 +1319,9 @@ authored click-tool dispatch is UI-owned because it consumes pointer events and
 the UI tool library.
 
 **`lunco-luncosim-edit-ui`**
+Transient editor panel snapshots, row indexes, drafts, menus and worker handles
+use registered scene resources. Connections retains isolated preview graphs
+through document lifetime and fences async results by exact source lease.
 Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and USD preview interaction, physics diagnostic visualization, and
 the bounded async preparation/commit path for transient curve views and terrain-local annotation sources.
@@ -1306,10 +1334,12 @@ consumers. It depends on
 either UI package.
 Scene context menus consume `lunco-scripting-bridge-core` callback leases and
 transfer selected invocation ownership to the shared scripting queue.
+Document-scoped pointer-move subscriptions retain surface leases from the same
+owner; context replacement and teardown revoke queued samples by lease identity.
 
 **`lunco-luncosim-edit-gizmo-ui`**
-Focused transform-gizmo capability. It owns the `transform-gizmo-bevy`
-frontend, render-space proxy lifecycle, camera binding, and live/preview pose
+Focused transform-gizmo capability. It owns the unmodified Git-pinned
+`transform-gizmo-bevy` frontend, render-space proxy lifecycle, camera binding, and live/preview pose
 transaction conversion into the existing scene/USD command owners. It has no
 panel registration or scene-selection policy, so changes to editor panels do
 not recompile the gizmo adapter.
@@ -1367,6 +1397,8 @@ same package directly.
 Owns Modelica `CloseDocument` in every host: linked execution entities and the
 document registry are retired together, including during workspace replacement.
 The UI owns only tab, canvas, and unfinished editor-preparation cleanup.
+Live `SetModelInput` admission and fixed-tick commit both read the target's
+`ModelicaModel` identity; USD participants do not require editor registry links.
 
 Modelica document/runtime host. It consumes the headless `ModelicaDocument`
 contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
@@ -1398,6 +1430,8 @@ launch, and the wasm `lunica_worker` transport. It composes the generic
 `lunco-worker-transport::WorkerPool` and installs the worker callbacks consumed
 by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
+It registers the lifecycle-notice queue with scene teardown so unread notices
+cannot repopulate cleared presentation state.
 
 **`lunco-modelica-worker`**
 Stateful Modelica worker engine. It owns live solver construction and stepping,
@@ -1406,6 +1440,8 @@ artifacts, and the Bevy response/clock bridge. Keeping this package separate
 from the host transport lets worker changes and browser transport changes
 rebuild as independent production packages while both native and wasm paths
 use the same dispatch implementation.
+Deferred compile requests validate source and participant retirement before
+publishing worker failures or diagnostics; cancelled work cannot fault a successor.
 
 **`lunco-modelica-runner`**
 Modelica experiment backend. It owns `ModelicaRunner`, source snapshots,
@@ -1418,6 +1454,9 @@ own annotation bounds; the runner retains no class-name source/default map.
 Native batch and live compilation share the worker's admitted roots and bounded
 artifact cache. `TwinClosed` cancels owned runs and unloads its source roots;
 retained source attribution follows bounded experiment history.
+The registered `PlaybackEntities` scene resource indexes transient, `SceneOwned`
+UI playback entities. Scene reload and document closure retire playback without
+deleting completed experiment trajectories.
 Fallible annotation readers and the shared `sim_target::validate_run_bounds`
 guard reject invalid or over-limit output grids before registration and solver
 allocation on both platforms.
@@ -1429,6 +1468,11 @@ uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
 Modelica scalar metadata from the admitted FMI inventory and authored provenance
 from the generated USD layout. The execution host installs its plugin after
 worker responses; compiler/document hosts do not compile this projection.
+Participant removal retires its producer cache; scene teardown resets the
+registered session resource and shared histories independently of UI presence.
+Reset requests one refresh for surviving paused sources. Typed document-to-signal
+attribution lets `DocumentClosed` retire that document's live and archived
+telemetry without clearing unrelated producers.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source
@@ -1439,6 +1483,9 @@ Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
 
 **`lunco-modelica-solver`**
 Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session; the execution host supplies checked FMI components and owns worker lifecycle. This keeps solver-specific numerical dependencies and low-level integration tests out of the compiler host's source boundary.
+Both session types use Rumoca's Model Exchange host for initialization, input
+transactions and observations. The fixed-step adapter supplies only its RK4
+numerical plugin through the host's derivative capability.
 It consumes the pure experiment solver registry with host features disabled,
 so a standalone solver build has no Bevy dependency.
 
@@ -1452,7 +1499,7 @@ Language/runtime-neutral scripting host. It owns document lifecycle, backend-neu
 Production Rhai application boundary. It owns Rhai command registration, tool/timeline persistence, and the `.rhai` asset/import graph, and composes the language-neutral scripting host with `lunco-scripting-rhai-world`. File requests and USD source paths hold shared simulation admission through root/import loading; exact operation keys retire on replacement, removal, or teardown, then the compilation owner carries admission through startup. Invalid authored source loading faults and holds its operation. Keeping this application closure separate means command/tool/timeline edits do not rebuild the reflected world/policy runtime.
 
 **`lunco-scripting-rhai-world`**
-Reusable Rhai world/runtime substrate. It owns the reflected world bridge, `RhaiScenarioRuntime` and its per-entity committed source content closures, authored application/Twin policy activation, policy status projection, and optional Twin-scoped native hook providers. Catalog and diagnostics consumers depend on this package directly instead of the application command/tool/timeline composition.
+Reusable Rhai world/runtime substrate. It owns the reflected world bridge, `RhaiScenarioRuntime` and its per-entity committed source content closures, authored and inline application/Twin policy activation through one layered owner, policy status projection, and optional Twin-scoped native hook providers. Catalog and diagnostics consumers depend on this package directly instead of the application command/tool/timeline composition.
 
 **`lunco-scripting-rhai-core`**
 Reusable Rhai backend substrate: module resolution, native math, task-tree
@@ -1526,13 +1573,13 @@ services remain in `lunco-luncosim-services` and Rhai integration remains in
 `lunco-luncosim-runtime`.
 
 **`lunco-luncosim-runtime`**
-Production application integration above the generic simulation substrate. It installs the Rhai runtime, projects USD-authored policies, applies active-Twin globe streaming overrides on Workspace changes, registers `SetRhaiPolicy`, consumes scripting/tool/timeline journal entries, and owns the public headless builders and launcher. Keeping this boundary above core prevents application policy changes from invalidating the generic simulation composition.
+Production application integration above the generic simulation substrate. It installs the Rhai runtime, projects and retires USD-authored policies with registered source-cache lifetimes, applies active-Twin globe streaming overrides on Workspace changes, registers `SetRhaiPolicy`, consumes scripting/tool/timeline journal entries, and owns the public headless builders and launcher. Keeping this boundary above core prevents application policy changes from invalidating the generic simulation composition.
 
 **`lunco-luncosim-ui`**
 Windowed LunCoSim application and presentation boundary: Bevy window/render and input-focus plugin composition, CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, and native desktop integration. Platform icon rasterization and live window-icon installation are isolated behind the packaging-only `package-icons` feature; `scripts/build_native.sh` enables it for packaged `luncosim` builds. Optional offscreen, networking, and updater edges are feature-scoped; native Velopack update handling is behind the opt-in `updates` feature, which the package script enables for installed desktop builds. The headless application core and ordinary UI builds do not compile the icon graphics toolchain or updater closure.
 
 **`lunco-luncosim-presentation`**
-Application-edge presentation composition. It owns the status/environment,
+Application-edge presentation composition. It registers environment opinions and projection snapshots at the scene boundary and owns the status/environment,
 terrain-horizon, USD camera/light, capture, and scene-presentation bridges that
 are needed by the windowed application but are not part of the reusable UI
 shell's feature closure. The UI crate installs this package directly at the
@@ -1550,7 +1597,8 @@ authoritative ECS/domain state and authored telemetry to
 `lunco_exposure_core::EngineExposures`; HTML, egui, API, telemetry, and remote
 clients consume that registry. It captures immutable facts and caller context,
 prepares pure policy views through bounded async admission, and atomically
-publishes only current source/identity results. It owns no UI, renderer, or
+publishes only current source/identity results. It registers the exposure store, refresh state, authored surface/program
+caches and trace state with the scene lifecycle. It owns no UI, renderer, or
 tutorial policy.
 
 **`lunco-luncosim-server`**

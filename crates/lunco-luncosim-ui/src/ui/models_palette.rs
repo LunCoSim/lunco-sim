@@ -497,7 +497,6 @@ pub(crate) fn on_scene_click_attach(
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_prim: Query<&UsdPrimPath>,
-    asset_server: Res<AssetServer>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
 ) {
@@ -523,9 +522,7 @@ pub(crate) fn on_scene_click_attach(
         *state = AttachState::Idle;
         return;
     };
-    let Some(doc) =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, prim.stage_handle.id())
-    else {
+    let Some(doc) = lunco_usd_bevy_twin::scene_document_for(&backed, prim.stage_handle.id()) else {
         bevy::log::warn!(
             "[AttachProgram] `{}` is not backed by an editable Twin document",
             prim.path

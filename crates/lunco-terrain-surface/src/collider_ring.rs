@@ -2481,7 +2481,7 @@ pub(crate) fn validate_initial_physics_poses(
                 if !contact.probe_origin.is_finite()
                     || !contact.probe_direction.is_finite()
                     || !contact.probe_length.is_finite()
-                    || contact.probe_length <= 0.0
+                    || contact.probe_length < 0.0
                 {
                     invalid_support_contact = true;
                     findings.push(lunco_core::RuntimeDiagnostic {
@@ -2489,7 +2489,7 @@ pub(crate) fn validate_initial_physics_poses(
                         severity: lunco_core::DiagnosticSeverity::Error,
                         producer: "physics-initialization".to_string(),
                         subject: subject_label.to_string(),
-                        message: "initial support footprint contains a non-finite or non-positive probe; authored pose remains held".to_string(),
+                        message: "initial support footprint contains a non-finite or negative probe distance; authored pose remains held".to_string(),
                     });
                     break;
                 }

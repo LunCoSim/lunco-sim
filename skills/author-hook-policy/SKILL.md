@@ -102,7 +102,12 @@ The source path is resolved by the asset/storage layer. Do not read policy
 files through `std::fs` in a runtime/domain crate.
 
 Inline `bind_policy(id, entry, source)` is useful for a local non-deterministic
-experiment. It must not claim a deterministic contract. Use `unbind_policy`
+experiment. It mutates the caller's existing application or Twin layer through
+the policy owner. A Twin caller needs its exact active identity and committed
+scene generation; retired callbacks are rejected. Application calls cannot
+overwrite Twin-owned policies, and USD-authored policies require editing their
+USD owner. Twin closure restores the retained application implementation.
+It must not claim a deterministic contract. Use `unbind_policy`
 to remove exactly that implementation; reloading the authored manifest is the
 explicit operation that installs the authored policy again.
 

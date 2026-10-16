@@ -1,12 +1,13 @@
 // Production Twin replacement regression. Start with no active Workspace Twin,
 // attach with Application scope and Retain reload policy, and supply root_a,
-// root_b plus entry_scene (an existing authored entry in both fixture Twins).
+// root_b plus entry_scene and marker_a/marker_b. The Command host signals
+// modelica-retirement-scene-ready after each exact fixture marker is projected.
 // The owned host config must set experiments.max_parallel = 1.
 import "lunco://scripting/tools/modelica_editor" as editor;
 
 fn simulation_dependencies(me, params) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ReadActiveTwinContract", "ListOpenDocuments", "CompileStatus", "RunStatus", "GetExperimentResult"], required_inputs: [] }
+       query_reads: ["ReadActiveTwinContract", "ListOpenDocuments", "CompileStatus", "ListCompileCandidates", "RunStatus", "GetExperimentResult"], required_inputs: [] }
 }
 fn ack(a) {
     if a != () && a.status == "pending" && a.id != () { return command_result(a.id); }
@@ -31,26 +32,41 @@ fn result_is(id, expected) {
 fn finish(me, failures) {
     if me.done { return me; }
     me.done = true;
-    for doc in me.docs { editor::close_scratch(doc); }
+    for doc in query("ListOpenDocuments", #{}).open_documents {
+        if me.docs.contains(doc.doc_id) { editor::close_scratch(doc.doc_id); }
+    }
     report_verdict(failures, "MODELICA TWIN RUNTIME RETIREMENT", "MODELICA_TWIN_RUNTIME_RETIREMENT");
     me
 }
 fn on_start(me, params) {
-    this.done = false; this.ticks = 0; this.phase = "application";
-    this.docs = []; this.run_a = (); this.run_queued = (); this.run_app = (); this.run_b = ();
+    this.done = false; this.ticks = 0; this.phase = "application"; this.reported_phase = "";
+    this.docs = []; this.run_a = (); this.run_queued = (); this.run_b = ();
     this.root_a = params.root_a; this.root_b = params.root_b; this.entry = params.entry_scene;
-    if this.root_a == () || this.root_b == () || this.entry == () || this.root_a == this.root_b {
-        this = finish(this, ["two distinct existing Twin roots and authored entry_scene are required"]); return;
+    this.marker_a = params.marker_a; this.marker_b = params.marker_b;
+    this.ready_a = false; this.ready_b = false;
+    subscribe("modelica-retirement-scene-ready");
+    if this.root_a == () || this.root_b == () || this.entry == () || this.root_a == this.root_b || this.marker_a == () || this.marker_b == () {
+        this = finish(this, ["distinct Twin roots, entry_scene and exact authored scene markers are required"]); return;
     }
     let twin = query("ReadActiveTwinContract", #{});
     if twin == () || twin.open != false { this = finish(this, ["gate requires initial Application document scope"]); return; }
-    let created = editor::new_scratch("model ApplicationProbe Real x(start=7, fixed=true); equation der(x)=0; end ApplicationProbe;", "Application lifetime negative");
+    let created = editor::new_scratch("model ApplicationProbe Real x(start=7, fixed=true); equation der(x)=0; end ApplicationProbe;", "Application document retirement");
     if created.ok != true { this = finish(this, [created.to_string()]); return; }
     this.app = created.doc_id; this.docs.push(this.app);
+}
+fn on_event(me, evt, ctx) {
+    if evt.name == "modelica-retirement-scene-ready" {
+        if evt.value == this.marker_a { this.ready_a = true; }
+        if evt.value == this.marker_b { this.ready_b = true; }
+    }
 }
 fn on_tick(me, params) {
     if this.done { return; }
     this.ticks += 1;
+    if this.reported_phase != this.phase {
+        print("MODELICA_TWIN_RUNTIME_RETIREMENT phase=" + this.phase);
+        this.reported_phase = this.phase;
+    }
     if this.ticks > 12000 { this = finish(this, ["Twin runtime retirement timed out at " + this.phase]); return; }
     if this.phase == "application" {
         if !ready(this.app, "ApplicationProbe") { return; }
@@ -63,7 +79,7 @@ fn on_tick(me, params) {
     }
     if this.phase == "owner_a" {
         let twin = query("ReadActiveTwinContract", #{});
-        if twin.name != "Runtime owner A" { return; }
+        if twin.name != "Runtime owner A" || !this.ready_a { return; }
         let a = editor::new_scratch("model OwnerProbe Real x(start=1, fixed=true); Real z[16](each start=1, each fixed=true); equation der(x)=0; for i in 1:16 loop der(z[i])=-i*z[i]; end for; end OwnerProbe;", "Outgoing owned worker");
         let library = editor::new_scratch("package OutgoingOnly model Part Real y; equation y=42; end Part; end OutgoingOnly;", "Outgoing sibling overlay");
         if a.ok != true || library.ok != true { this = finish(this, ["outgoing documents rejected"]); return; }
@@ -91,8 +107,11 @@ fn on_tick(me, params) {
     if this.phase == "admission" {
         let a = ack(this.a_ack); let q = ack(this.q_ack); let app = ack(this.app_ack);
         if a == () || q == () || app == () || a.status == "pending" || q.status == "pending" || app.status == "pending" { return; }
-        if a.ok != true || q.ok != true || app.ok != true { this = finish(this, ["owned run admission rejected: " + [a,q,app].to_string()]); return; }
-        this.run_a = a.data.experiment_id; this.run_queued = q.data.experiment_id; this.run_app = app.data.experiment_id;
+        this.closed_app_rejected = app.ok == false && app.status == "rejected" && app.error != ();
+        if a.ok != true || q.ok != true || !this.closed_app_rejected {
+            this = finish(this, ["expected two owned runs and rejection of the retired Application document: " + [a,q,app].to_string()]); return;
+        }
+        this.run_a = a.data.experiment_id; this.run_queued = q.data.experiment_id;
         this.phase = "running";
     }
     if this.phase == "running" {
@@ -105,7 +124,7 @@ fn on_tick(me, params) {
         this.phase = "owner_b"; return;
     }
     if this.phase == "owner_b" {
-        let twin = query("ReadActiveTwinContract", #{}); if twin.name != "Runtime owner B" { return; }
+        let twin = query("ReadActiveTwinContract", #{}); if twin.name != "Runtime owner B" || !this.ready_b { return; }
         let b = editor::new_scratch("model OwnerProbe Real x(start=3, fixed=true); equation der(x)=0; end OwnerProbe;", "Replacement same-name source");
         let bad = editor::new_scratch("model ForeignOverlayProbe OutgoingOnly.Part foreign; end ForeignOverlayProbe;", "Foreign overlay negative");
         if b.ok != true || bad.ok != true { this = finish(this, ["replacement documents rejected"]); return; }
@@ -124,18 +143,19 @@ fn on_tick(me, params) {
         this.run_b = r.data.experiment_id; this.phase = "verify"; return;
     }
     if this.phase != "verify" { return; }
-    let b = state(this.run_b); let app = state(this.run_app);
-    if b == "failed" || b == "cancelled" || app == "failed" || app == "cancelled" { this = finish(this, ["successor or Application negative run failed"]); return; }
-    if b != "done" || app != "done" { return; }
+    let b = state(this.run_b);
+    if b == "failed" || b == "cancelled" { this = finish(this, ["successor run failed"]); return; }
+    if b != "done" { return; }
     let bad = query("CompileStatus", #{doc_id: this.bad}); if bad.error_message == () { return; }
-    let old = query("CompileStatus", #{doc_id: this.a}); let preserved = query("CompileStatus", #{doc_id: this.app});
+    let old = query("ListCompileCandidates", #{doc_id: this.a});
+    let closed_app = query("ListCompileCandidates", #{doc_id: this.app});
     this = finish(this, [
         t_true(state(this.run_a) == "cancelled", "executing outgoing native batch terminates as cancelled"),
         t_true(state(this.run_queued) == "cancelled", "queued outgoing native batch is withdrawn"),
         t_true(result_is(this.run_b, 3.0), "replacement successor completes from exact same-name source after slot release"),
-        t_true(result_is(this.run_app, 7.0), "Application-owned queued work survives Twin replacement"),
-        t_true(old.is_compiled == false && old.is_compiling == false && old.running == false, "outgoing live participant and late compile cannot revive"),
-        t_true(preserved.is_compiled == true, "Application editor participation survives Twin retirement"),
+        t_true(this.closed_app_rejected, "a retired Application document cannot submit cached native work"),
+        t_true(old.ok == false && old.status == "not_found", "outgoing document and late compile cannot revive"),
+        t_true(closed_app.ok == false && closed_app.status == "not_found", "loose Application editor document retires on Twin replacement"),
         t_true(bad.is_compiled == false && bad.error_message != (), "retained outgoing sibling cannot satisfy replacement imports")
     ]);
 }

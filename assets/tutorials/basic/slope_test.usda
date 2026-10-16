@@ -2,41 +2,29 @@
 (
     defaultPrim = "SlopeTest"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# ── Scene: Slope Test (lesson B3 — Slopes & Tip-Over) ────────────────────────
-# A flat approach and one broad ~18° grade rising to the east, with a marker at
-# the top. The AWFUL rover (Overloaded Hauler, high centre of mass) is pre-placed
-# at the base: climbing straight up the fall-line works; steering across the grade
-# rolls it — which is the whole lesson. Slope angle is tunable via the Ramp's
-# rotateXYZ; ~18° sits on the edge for this rover.
 def Xform "SlopeTest" (
     kind = "assembly"
-    doc = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
+    documentation = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-
-    # This lesson is a standalone local lunar stage. Author the gravity that
-    # loads the rover's tyres and makes the slope/tip-over experiment physical.
+    uniform bool lunco:spawnable = false
     def PhysicsScene "PhysicsScene"
     {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
+        vector3f physics:gravityDirection = (0.0, -1.0, 0.0)
+        float physics:gravityMagnitude = 1.6200000047683716
     }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
-    # bound with the purpose-specific `material:binding:physics`, which is
-    # how UsdPhysics (and Omniverse) actually spell a surface.
     def Scope "PhysicsMaterials"
     {
         def Material "Friction_0_95" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
         )
         {
-            float physics:dynamicFriction = 0.95
-            float physics:staticFriction = 0.95
+            float physics:dynamicFriction = 0.949999988079071
+            float physics:staticFriction = 0.949999988079071
         }
         def Material "Friction_1_0" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
@@ -46,27 +34,18 @@ def Xform "SlopeTest" (
             float physics:staticFriction = 1.0
         }
     }
-    uniform bool lunco:spawnable = false
-
-    # The shared antenna stays parked because this lesson selects no ground
-    # station.
-
-    # Flat approach plot, ±60 m.
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (120.0, 1.0, 120.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
+        color3f[] primvars:displayColor = [(0.3400000035762787, 0.3199999928474426, 0.3100000023841858)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SlopeTest/PhysicsMaterials/Friction_1_0>
     }
-
-    # Broad ~18° grade rising to +X (tilt about Z raises the +X edge). 40 m wide in
-    # Z so there is room to (mistakenly) steer across the fall-line.
     def Cube "Ramp" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
@@ -76,12 +55,10 @@ def Xform "SlopeTest" (
         double3 xformOp:rotateXYZ = (0.0, 0.0, 18.0)
         double3 xformOp:scale = (34.0, 0.6, 40.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.36000001430511475, 0.33000001311302185)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SlopeTest/PhysicsMaterials/Friction_0_95>
     }
-
-    # The awful rover at the base of the grade, nose pointing uphill (+X).
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/variants/rover_awful.usda@</RoverAwful>
     )
@@ -90,42 +67,39 @@ def Xform "SlopeTest" (
         double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
-
-    # Marker at the top of the grade — the climb goal. Its origin is the
-    # ground anchor; the shared marker asset lifts the visible sensor dome.
     def Xform "Marker" (
         prepend references = @lunco://markers/route_point.usda@</RoutePoint>
     )
     {
         double3 xformOp:translate = (23.0, 8.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Trigger"
+        {
+            token lunco:triggerZone = "waypoint"
+        }
     }
-
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )
     {
         double3 xformOp:rotateXYZ = (-16.0, 60.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-
-        # Standard `UsdLuxShadowAPI`.
         float inputs:shadow:distance = 600.0
         float lunco:shadow:firstCascadeFarBound = 20.0
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
+        double3 xformOp:translate = (-30.0, 16.0, -34.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
-        double3 xformOp:translate = (-30.0, 16.0, -34.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }

@@ -35,6 +35,7 @@
 //! that same doc-first mount. Files inside the active Twin remain document-only;
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
+use lunco_usd_bevy_scene::is_authoritative_scene_stage;
 use lunco_usd_document::document::UsdDocument;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -525,21 +526,6 @@ fn classify_reference_asset_state(
     } else {
         ReferenceAssetState::Loading
     }
-}
-
-pub(crate) fn is_authoritative_scene_stage(
-    world: &World,
-    scene_id: AssetId<UsdStageAsset>,
-) -> bool {
-    let Some(root) = world
-        .get_resource::<lunco_core::SceneMountState>()
-        .and_then(lunco_core::SceneMountState::active_root)
-    else {
-        return false;
-    };
-    world
-        .get::<UsdPrimPath>(root)
-        .is_some_and(|path| path.stage_handle.id() == scene_id)
 }
 
 fn evaluate_reference_composition_policy(
@@ -2886,8 +2872,7 @@ pub(crate) fn admit_pending_primary_document_projection(world: &mut World) {
     };
     let Some(doc) = world
         .get_resource::<DocBackedTwinScenes>()
-        .zip(world.get_resource::<AssetServer>())
-        .and_then(|(backed, asset_server)| scene_document_for(backed, asset_server, stage_id))
+        .and_then(|backed| scene_document_for(backed, stage_id))
     else {
         return;
     };
@@ -3135,8 +3120,7 @@ fn document_projection_source(
 ) -> Result<Arc<openusd::sdf::Data>, String> {
     let document = world
         .get_resource::<DocBackedTwinScenes>()
-        .zip(world.get_resource::<AssetServer>())
-        .and_then(|(backed, assets)| scene_document_for(backed, assets, scene_id))
+        .and_then(|backed| scene_document_for(backed, scene_id))
         .and_then(|doc| {
             world
                 .get_resource::<DocumentRegistry<UsdDocument>>()?
@@ -3977,9 +3961,9 @@ pub(crate) fn refresh_prim_subtree(
         return;
     }
 
-    let entity = crate::live_consume::find_stage_entity(world, scene_id, path);
-    if let Some(e) = entity {
-        reinstantiate_entity(world, e);
+    let entities = crate::live_consume::find_stage_entities(world, scene_id, path).to_vec();
+    for entity in entities {
+        reinstantiate_entity(world, entity);
     }
 }
 

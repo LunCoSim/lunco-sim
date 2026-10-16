@@ -1466,7 +1466,7 @@ fn build_world_engine_base(
     engine.on_print(route_world_rhai_print);
 
     lunco_hooks_rhai::register_json(&mut engine);
-    lunco_hooks_rhai::register_string_functions(&mut engine);
+    lunco_hooks_rhai::register_value_functions(&mut engine);
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
 
@@ -1520,9 +1520,17 @@ fn build_world_engine_base(
     // command_result(id) -> #{ id, ok, status, data, error }. A deferred
     // command is not successful merely because it was accepted; scripts can
     // check this shared result surface on a later pass.
-    engine.register_fn("command_result", |id: u64| -> Dynamic {
-        bridge_core::command_result(&RhaiBuilder, id)
-    });
+    engine.register_fn(
+        "command_result",
+        |id: Dynamic| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            let value = dynamic_to_hook_value(&id).map_err(value_boundary_error)?;
+            let id = <u64 as serde::Deserialize>::deserialize(
+                lunco_api_core::ApiValueDeserializer::new(value),
+            )
+            .map_err(|error| value_boundary_error(format!("command_result: {error}")))?;
+            Ok(bridge_core::command_result(&RhaiBuilder, id))
+        },
+    );
 
     // open_context_menu(screen_position, items) is a typed script-to-UI bridge.
     // The payload is lowered directly to TelemetryValue and delivered as an
@@ -1651,7 +1659,7 @@ fn build_world_engine_base(
                 return Dynamic::UNIT;
             };
             let Some(command) =
-                spatial_bridge::navigation_command(id as u64, target, speed, radius as f32)
+                spatial_bridge::navigation_command(id as u64, target, speed, radius)
             else {
                 return Dynamic::UNIT;
             };
@@ -1704,8 +1712,8 @@ fn build_world_engine_base(
     });
 
     // bind_policy(id, entry, src) -> #{ok, status, id, error} — install a Rhai
-    // implementation into any installable hook seam. The source is supplied by
-    // authored Rhai, while the Rust owner supplies only the reflected contract.
+    // implementation through the caller's application/Twin policy layer. The
+    // policy owner validates its route, seam ownership and reflected contract.
     // Replacing or removing a hook is a policy mutation and uses the same
     // Operator-floor gate as other global script settings. A failed replacement
     // removes the previous implementation, so an invalid policy cannot keep
@@ -1733,70 +1741,30 @@ fn build_world_engine_base(
                     Some("policy mutation denied by script authority"),
                 );
             }
-            let Some(contract) = lunco_hooks::descriptor(id.as_str()) else {
-                let error = format!(
-                    "hook '{}' has no owner declaration; declare it with declare_hook! first",
-                    id
-                );
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            };
-            if !contract.installable {
-                let error = format!("hook '{}' is not installable at runtime", id);
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            }
-            if contract.deterministic {
-                let error = format!(
-                    "hook '{}' requires a deterministic authored policy manifest entry",
-                    id
-                );
-                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
-                return hook_operation_result(
-                    id.as_str(),
-                    false,
-                    "rejected",
-                    lunco_hooks::get(id.as_str()).is_some(),
-                    Dynamic::UNIT,
-                    Some(error.as_str()),
-                );
-            }
-            match lunco_hooks_rhai::register_rhai_hook(
-                id.as_str(),
-                entry.as_str(),
-                src.as_str(),
-                false,
-            ) {
-                Ok(_) => {
-                    // An inline binding is no longer the file-backed policy
-                    // selected by the application/Twin manifest.
-                    lunco_hooks::unbind_policy(id.as_str());
+            let outcome = bridge_core::with_world(|world| {
+                crate::policy::bind_runtime_policy(
+                    world,
+                    crate::policy::PolicyDef {
+                        seam: id.to_string(),
+                        entry: entry.to_string(),
+                        source: src.to_string(),
+                        deterministic: false,
+                    },
+                )
+            })
+            .unwrap_or_else(|| Err("runtime policy mutation requires a live World".into()));
+            match outcome {
+                Ok(()) => {
                     bevy::log::info!("[rhai] bind_policy: '{id}' → {entry}()");
                     hook_operation_result(id.as_str(), true, "installed", true, Dynamic::UNIT, None)
                 }
                 Err(e) => {
-                    lunco_hooks::unregister(id.as_str());
-                    lunco_hooks::unbind_policy(id.as_str());
-                    bevy::log::warn!("[rhai] bind_policy '{id}' failed to compile: {e}");
+                    bevy::log::warn!("[rhai] bind_policy '{id}' rejected: {e}");
                     hook_operation_result(
                         id.as_str(),
                         false,
                         "rejected",
-                        false,
+                        lunco_hooks::get(id.as_str()).is_some(),
                         Dynamic::UNIT,
                         Some(e.as_str()),
                     )
@@ -1806,7 +1774,7 @@ fn build_world_engine_base(
     );
 
     // unbind_policy(id) -> #{ok, status, id, error} — remove exactly the
-    // installed implementation. It never fabricates or restores another
+    // calling layer's implementation. It never fabricates or restores another
     // implementation; a subsequent policy reload is the explicit way to apply
     // the authored application/Twin manifest again.
     engine.register_fn("unbind_policy", |id: ImmutableString| -> Dynamic {
@@ -1830,9 +1798,23 @@ fn build_world_engine_base(
                 Some("policy mutation denied by script authority"),
             );
         }
-        let existed = lunco_hooks::get(id.as_str()).is_some();
-        lunco_hooks::unregister(id.as_str());
-        lunco_hooks::unbind_policy(id.as_str());
+        let outcome = bridge_core::with_world(|world| {
+            crate::policy::unbind_runtime_policy(world, id.as_str())
+        })
+        .unwrap_or_else(|| Err("runtime policy mutation requires a live World".into()));
+        let existed = match outcome {
+            Ok(existed) => existed,
+            Err(error) => {
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "rejected",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some(&error),
+                );
+            }
+        };
         let status = if existed { "removed" } else { "missing" };
         let error = (!existed).then_some("hook implementation is not installed");
         bevy::log::info!("[rhai] unbind_policy: '{id}' (was installed: {existed})");
@@ -5160,8 +5142,8 @@ impl Default for WorldScriptExecutionLimits {
 /// pre-simulation UI pass. A tool request keeps its [`TelemetryValue`] payload
 /// typed until the Rhai backend constructs its native `Dynamic`.
 /// `correlation_id` is present only for a transport request waiting for the
-/// completed response. `authority` is the submitting session whose `cmd()`
-/// calls are gated — `None` for a local/host launch (§3.4).
+/// completed response. `execution` retains the caller context and capability
+/// restrictions for the entire deferred invocation.
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
     queue: Vec<PendingWorldScript>,
@@ -5246,9 +5228,9 @@ impl PendingWorldScripts {
     }
 }
 
-/// Workspace admitted by a queued live-world snippet. Its execution stays in
-/// the application REPL scope; the snapshot prevents deferred code from acting
-/// on a replacement Twin or on a Twin opened after an empty workspace.
+/// Workspace admitted by a queued live-world snippet. The snapshot prevents
+/// deferred code from acting on a replacement Twin or on a Twin opened after
+/// an empty workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldScriptWorkspace {
     /// A host without workspace lifecycle ownership.
@@ -5258,10 +5240,11 @@ pub enum WorldScriptWorkspace {
 }
 
 impl WorldScriptWorkspace {
-    pub fn capture(workspace: Option<&lunco_workspace::WorkspaceResource>) -> Result<Self, String> {
-        if let Some(twin) = script_flow_twin(None)? {
-            validate_active_script_twin(lunco_workspace::TwinId::new(twin), workspace)?;
-        }
+    pub fn capture(
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+        execution: WorldScriptExecution,
+    ) -> Result<Self, String> {
+        execution.validate_workspace(workspace)?;
         let admitted = match workspace {
             Some(workspace) => Self::Mounted(workspace.active_twin),
             None => Self::Detached,
@@ -5312,7 +5295,7 @@ impl WorldToolOwner {
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<Self, String> {
         let scope = lunco_tools::resolve_hook(tool, hook)?;
-        let mut owner = Self::from_scope(scope, script_flow_twin(requested_twin)?, workspace)?;
+        let mut owner = Self::from_scope(scope, requested_twin, workspace)?;
         owner.scene_generation = scene.and_then(|scene| scene.completed_generation());
         owner.validate_scene(scene)?;
         Ok(owner)
@@ -5390,11 +5373,7 @@ impl WorldToolOwner {
     /// Release a selected one-shot endpoint on every terminal queue path.
     pub fn retire_invocation(&self, world: &mut World) {
         if let Some((entity, binding)) = &self.callback {
-            if binding.retention == bridge_core::ToolHookBindingRetention::Invocation
-                && world.get::<bridge_core::ToolHookBinding>(*entity) == Some(binding)
-            {
-                world.despawn(*entity);
-            }
+            binding.retire_invocation(*entity, world);
         }
     }
 
@@ -5434,8 +5413,11 @@ impl WorldToolOwner {
     }
 }
 
-fn script_flow_twin(requested: Option<u64>) -> Result<Option<u64>, String> {
-    let caller = match bridge_core::execution_context().route {
+fn execution_flow_twin(
+    context: lunco_core::RuntimeExecutionContext,
+    requested: Option<u64>,
+) -> Result<Option<u64>, String> {
+    let caller = match context.route {
         Some(route) if route.scope == lunco_core::RuntimeScope::Twin => Some(
             route
                 .owner_id
@@ -5471,13 +5453,115 @@ fn validate_active_script_twin(
     Ok(())
 }
 
+/// Logical caller retained across deferred evaluation. Queue placement changes
+/// scheduling, never the caller's phase, route, clock, actor or capabilities.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WorldScriptExecution {
+    context: Option<lunco_core::RuntimeExecutionContext>,
+    actor: u64,
+    client_local: bool,
+    authority: Option<lunco_command_contracts::SessionId>,
+}
+
+impl WorldScriptExecution {
+    pub fn capture() -> Self {
+        let context = bridge_core::execution_context();
+        Self {
+            context: context.route.map(|_| context),
+            actor: bridge_core::current_self(),
+            client_local: bridge_core::script_is_client_local(),
+            authority: bridge_core::script_authority(),
+        }
+    }
+
+    /// Command origin survives reflected dispatch even when no originating
+    /// Rhai stack is live at admission. External work starts a host-owned cycle.
+    pub fn for_command(
+        origin: Option<lunco_core::CommandOrigin>,
+        submitter: Option<lunco_command_contracts::SessionId>,
+    ) -> Self {
+        match origin {
+            Some(lunco_core::CommandOrigin::Rhai {
+                context,
+                actor,
+                authority,
+                client_local,
+            }) => Self {
+                context: Some(context),
+                actor: actor.map_or(0, |actor| actor.get()),
+                authority,
+                client_local,
+            },
+            _ => Self {
+                authority: submitter,
+                ..Self::default()
+            },
+        }
+    }
+
+    pub fn twin_owner(self, requested: Option<u64>) -> Result<Option<u64>, String> {
+        self.context.map_or(Ok(requested), |context| {
+            execution_flow_twin(context, requested)
+        })
+    }
+
+    pub fn validate_workspace(
+        self,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> Result<(), String> {
+        if let Some(twin) = self.twin_owner(None)? {
+            validate_active_script_twin(lunco_workspace::TwinId::new(twin), workspace)?;
+        }
+        Ok(())
+    }
+
+    fn scene_route(self) -> Option<lunco_core::RuntimeRoute> {
+        self.context
+            .and_then(|context| context.route)
+            .filter(|route| route.scope == lunco_core::RuntimeScope::Twin)
+    }
+
+    pub fn validate_scene(
+        self,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
+    ) -> Result<(), String> {
+        if let Some(route) = self.scene_route() {
+            lunco_core::scene::validate_interaction_scene(
+                (route.generation != 0).then_some(route.generation),
+                scene,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn with_host_authority(authority: Option<lunco_command_contracts::SessionId>) -> Self {
+        let mut execution = Self::capture();
+        if execution.context.is_none() {
+            execution.authority = authority;
+        }
+        execution
+    }
+
+    fn enter(
+        self,
+        world: &mut World,
+        fallback: lunco_core::RuntimeExecutionContext,
+    ) -> (bridge_core::WorldScope, bridge_core::ScriptEntityScope) {
+        let scope = bridge_core::WorldScope::enter(world, self.context.unwrap_or(fallback));
+        bridge_core::set_script_authority(self.authority);
+        bridge_core::set_script_client_local(self.client_local);
+        let actor = bridge_core::ScriptEntityScope::enter(self.actor);
+        (scope, actor)
+    }
+}
+
 /// A queued world-bound script operation. Tool arguments remain native to the
 /// shared telemetry value model until the Rhai adapter constructs its Dynamic.
 pub enum PendingWorldScript {
     Code {
         id: u64,
         code: String,
-        authority: Option<lunco_command_contracts::SessionId>,
+        execution: WorldScriptExecution,
         correlation_id: Option<u64>,
         workspace: WorldScriptWorkspace,
     },
@@ -5486,7 +5570,7 @@ pub enum PendingWorldScript {
         tool: String,
         hook: String,
         args: TelemetryValue,
-        authority: Option<lunco_command_contracts::SessionId>,
+        execution: WorldScriptExecution,
         correlation_id: Option<u64>,
         owner: WorldToolOwner,
     },
@@ -5528,12 +5612,16 @@ pub fn retire_twin_world_scripts(world: &mut World, twin: lunco_workspace::TwinI
     finish_retired_world_scripts(world, retired, format!("Twin {} closed", twin.raw()));
 }
 
-/// Retire scene-bound tool work at the transition boundary, even while the
-/// interpreter is preparing and cannot drain its interaction queue.
+/// Retire tool work and nested Twin-route snippets at the scene boundary,
+/// even while interpreter preparation prevents either queue from draining.
 pub fn retire_scene_world_scripts(world: &mut World) {
-    let retired = world
-        .resource_mut::<PendingWorldScripts>()
-        .take_matching(|request| matches!(request, PendingWorldScript::Tool { .. }));
+    let retired =
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .take_matching(|request| match request {
+                PendingWorldScript::Tool { .. } => true,
+                PendingWorldScript::Code { execution, .. } => execution.scene_route().is_some(),
+            });
     finish_retired_world_scripts(world, retired, "scene transition started".into());
 }
 
@@ -5683,8 +5771,12 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
         let ownership = match &request {
             PendingWorldScript::Code {
                 workspace: admitted,
+                execution,
                 ..
-            } => admitted.validate(workspace),
+            } => admitted.validate(workspace).and_then(|_| {
+                execution
+                    .validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())
+            }),
             PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, world),
         };
         if let Err(error) = ownership {
@@ -5713,12 +5805,12 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
             PendingWorldScript::Code {
                 id,
                 code,
-                authority,
                 correlation_id,
                 workspace: _,
+                execution,
             } => {
                 let outcome = match &engine {
-                    Ok(engine) => eval_with_engine(world, engine, &code, authority),
+                    Ok(engine) => eval_with_engine(world, engine, &code, execution),
                     Err(error) => Err(error.clone()),
                 };
                 (id, correlation_id, outcome)
@@ -5728,9 +5820,9 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 tool,
                 hook,
                 args,
-                authority,
                 correlation_id,
                 owner,
+                execution,
             } => {
                 let outcome = match &engine {
                     Ok(engine) => {
@@ -5747,7 +5839,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                             &tool,
                             &hook,
                             &args,
-                            authority,
+                            execution,
                             if ui {
                                 lunco_core::RuntimeCycle::Ui
                             } else {
@@ -5800,7 +5892,12 @@ pub fn eval_with_world_as(
 ) -> Result<String, String> {
     let engine = world_script_engine(world)?
         .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
-    eval_with_engine(world, &engine, code, authority)
+    eval_with_engine(
+        world,
+        &engine,
+        code,
+        WorldScriptExecution::with_host_authority(authority),
+    )
 }
 
 /// Evaluate against the prepared bounded engine without rebuilding its
@@ -5809,7 +5906,7 @@ fn eval_with_engine(
     world: &mut World,
     engine: &Engine,
     code: &str,
-    authority: Option<lunco_command_contracts::SessionId>,
+    execution: WorldScriptExecution,
 ) -> Result<String, String> {
     use std::sync::{Arc, Mutex};
 
@@ -5821,9 +5918,7 @@ fn eval_with_engine(
         lunco_core::RuntimeCycle::Repl,
         lunco_core::RuntimePhase::Evaluation,
     );
-    let _scope = bridge_core::WorldScope::enter(world, context);
-    // `enter` reset the authority to None; bind the submitter for this eval.
-    bridge_core::set_script_authority(authority);
+    let (_scope, _actor) = execution.enter(world, context);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
 
     let mut captured = out
@@ -5850,10 +5945,11 @@ pub fn eval_tool_with_world_as(
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
+    let execution = WorldScriptExecution::with_host_authority(authority);
     let owner = WorldToolOwner::capture(
         tool,
         hook,
-        None,
+        execution.twin_owner(None)?,
         world.get_resource::<lunco_workspace::WorkspaceResource>(),
         world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
     )?;
@@ -5865,7 +5961,7 @@ pub fn eval_tool_with_world_as(
         tool,
         hook,
         args,
-        authority,
+        execution,
         lunco_core::RuntimeCycle::Repl,
         &owner,
     )
@@ -5878,12 +5974,13 @@ fn eval_tool_with_engine(
     tool: &str,
     hook: &str,
     args: &TelemetryValue,
-    authority: Option<lunco_command_contracts::SessionId>,
+    execution: WorldScriptExecution,
     cycle: lunco_core::RuntimeCycle,
     owner: &WorldToolOwner,
 ) -> Result<String, String> {
     lunco_tools::resolve_hook(tool, hook)?;
     owner.validate(tool, world)?;
+    execution.validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
 
     use std::sync::{Arc, Mutex};
     let out = Arc::new(Mutex::new(String::new()));
@@ -5892,10 +5989,13 @@ fn eval_tool_with_engine(
     let mut context =
         application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
     if let Some(twin) = owner.twin {
-        context.route = Some(lunco_core::RuntimeRoute::twin_owned(cycle, 0, twin.raw()));
+        context.route = Some(lunco_core::RuntimeRoute::twin_owned(
+            cycle,
+            owner.scene_generation.unwrap_or(0),
+            twin.raw(),
+        ));
     }
-    let _scope = bridge_core::WorldScope::enter(world, context);
-    bridge_core::set_script_authority(authority);
+    let (_scope, _actor) = execution.enter(world, context);
     let mut scope = rhai::Scope::new();
     scope.push_dynamic(
         "__scene_tool_context",
@@ -6308,6 +6408,82 @@ mod tests {
     }
 
     #[test]
+    fn deferred_execution_preserves_logical_context_and_capabilities() {
+        use super::{World, WorldScriptExecution, bridge_core};
+        let mut world = World::new();
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin_owned(
+                lunco_core::RuntimeCycle::Lifecycle,
+                4,
+                7,
+            )),
+            phase: lunco_core::RuntimePhase::Stop,
+            clock: lunco_core::RuntimeClock::None,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: Some(23),
+            producer: None,
+        };
+        let execution = {
+            let _scope = bridge_core::WorldScope::enter(&mut world, context);
+            let _actor = bridge_core::ScriptEntityScope::enter(91);
+            bridge_core::set_script_client_local(true);
+            bridge_core::set_script_authority(Some(lunco_command_contracts::SessionId(8)));
+            assert_eq!(
+                WorldScriptExecution::capture().authority,
+                Some(lunco_command_contracts::SessionId(8))
+            );
+            let captured = WorldScriptExecution::capture();
+            (
+                captured,
+                lunco_core::CommandOrigin::Rhai {
+                    context,
+                    actor: Some(lunco_core::GlobalEntityId::from_raw(91)),
+                    authority: captured.authority,
+                    client_local: captured.client_local,
+                },
+            )
+        };
+        let (captured, origin) = execution;
+        let execution = WorldScriptExecution::for_command(Some(origin), None);
+        assert_eq!(execution, captured);
+        assert_eq!(execution.twin_owner(None).unwrap(), Some(7));
+        assert!(execution.twin_owner(Some(8)).is_err());
+        assert!(
+            execution.validate_scene(None).is_err(),
+            "nested scene work cannot acquire a replacement scene"
+        );
+        let fallback = super::application_execution_context(
+            &world,
+            lunco_core::RuntimeCycle::Ui,
+            lunco_core::RuntimePhase::Evaluation,
+        );
+        {
+            let (_scope, _actor) = execution.enter(&mut world, fallback);
+            assert_eq!(bridge_core::execution_context(), context);
+            assert_eq!(bridge_core::current_self(), 91);
+            assert!(bridge_core::script_is_client_local());
+            assert_eq!(
+                bridge_core::script_authority(),
+                Some(lunco_command_contracts::SessionId(8))
+            );
+            {
+                let _nested = bridge_core::WorldScope::enter(&mut world, fallback);
+                assert_eq!(bridge_core::current_self(), 0);
+            }
+            assert_eq!(bridge_core::execution_context(), context);
+            assert_eq!(bridge_core::current_self(), 91);
+            assert!(bridge_core::script_is_client_local());
+        }
+        assert_eq!(
+            bridge_core::execution_context(),
+            lunco_core::RuntimeExecutionContext::unclassified()
+        );
+        assert_eq!(bridge_core::current_self(), 0);
+        assert!(!bridge_core::script_is_client_local());
+    }
+
+    #[test]
     fn one_shot_queue_waits_for_authored_runtime_preparation() {
         let mut world = bevy::prelude::World::new();
         world.insert_resource(super::RhaiRuntimeStatus::default());
@@ -6315,7 +6491,7 @@ mod tests {
             queue: vec![super::PendingWorldScript::Code {
                 id: 0,
                 code: "1 + 1".to_owned(),
-                authority: None,
+                execution: super::WorldScriptExecution::default(),
                 correlation_id: None,
                 workspace: super::WorldScriptWorkspace::Detached,
             }],
@@ -6341,7 +6517,7 @@ mod tests {
                 PendingWorldScript::Code {
                     id,
                     code: format!("print({id});"),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: None,
                     workspace: super::WorldScriptWorkspace::Detached,
                 },
@@ -6399,7 +6575,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_callback_rejects_replaced_and_despawned_binding_entities() {
+    fn deferred_callback_binding_fences_provider_selection_and_replacement() {
         use super::{World, WorldToolOwner, bridge_core};
 
         let mut world = World::new();
@@ -6408,7 +6584,7 @@ mod tests {
             tool: "probe".into(),
             hook: "apply".into(),
             owner_twin_id: None,
-            scene_generation: None,
+            lifetime: bridge_core::ToolHookBindingLifetime::Scene(None),
             tool_scope: lunco_tools::ToolScope::Application,
         };
         let entity = world.spawn(binding.clone()).id();
@@ -6436,12 +6612,76 @@ mod tests {
         world.entity_mut(entity).insert(binding.clone());
         assert!(owner.validate_callback(&world).is_ok());
         world.despawn(entity);
-        world.spawn(binding);
+        world.spawn(binding.clone());
+
+        let provider = bridge_core::ToolHookBinding {
+            lifetime: bridge_core::ToolHookBindingLifetime::Provider,
+            ..binding.clone()
+        };
+        let root = world.spawn(provider.clone()).id();
+        let selected = provider.select_for_scene(None, None).unwrap();
+        let mut scene = lunco_core::SceneTransitionCoordinator::default();
+        let generation = scene.start(lunco_core::SceneTransition::Clear);
+        assert!(scene.complete(generation));
+        assert!(
+            provider.validate_scene(Some(&scene)).is_ok(),
+            "installation survives scene replacement"
+        );
+        assert!(
+            selected.validate_scene(Some(&scene)).is_err(),
+            "old selection cannot acquire a new scene"
+        );
+        assert!(
+            provider
+                .select_for_scene(None, scene.completed_generation())
+                .unwrap()
+                .validate_scene(Some(&scene))
+                .is_ok(),
+            "fresh selection captures the new scene without reinstalling the provider"
+        );
+        let child = world
+            .spawn((selected.clone(), bevy::prelude::ChildOf(root)))
+            .id();
+        owner
+            .bind_callback(child, &selected, "probe", "apply", None)
+            .unwrap();
+        provider.retire_invocation(root, &mut world);
+        assert!(
+            owner.validate_callback(&world).is_ok(),
+            "provider retains its installed endpoint"
+        );
+        owner.retire_invocation(&mut world);
+        assert!(world.get_entity(child).is_err());
+        assert!(
+            world.get_entity(root).is_ok(),
+            "selection completion leaves the provider reusable"
+        );
+        let child = world
+            .spawn((selected.clone(), bevy::prelude::ChildOf(root)))
+            .id();
+        owner
+            .bind_callback(child, &selected, "probe", "apply", None)
+            .unwrap();
+        world.despawn(root);
+        assert!(
+            world.get_entity(child).is_err(),
+            "provider replacement revokes selected children before admission"
+        );
+        assert!(owner.validate_callback(&world).is_err());
+        owner.retire_invocation(&mut world);
+        let twin_provider = bridge_core::ToolHookBinding {
+            owner_twin_id: Some(7),
+            ..provider
+        };
+        assert!(twin_provider.select_for_scene(Some(8), None).is_err());
+        assert!(twin_provider.select_for_scene(None, None).is_err());
+        assert!(twin_provider.select_for_scene(Some(7), Some(3)).is_ok());
+
         assert!(owner.validate_callback(&world).is_err());
     }
 
     #[test]
-    fn scene_retirement_completes_invocations_without_interpreter_readiness() {
+    fn deferred_scene_retirement_completes_invocations_without_interpreter_readiness() {
         use super::{World, WorldToolOwner, bridge_core};
         let mut world = World::new();
         world.init_resource::<PendingWorldScripts>();
@@ -6452,7 +6692,7 @@ mod tests {
             tool: "probe".into(),
             hook: "apply".into(),
             owner_twin_id: None,
-            scene_generation: None,
+            lifetime: bridge_core::ToolHookBindingLifetime::Scene(None),
             tool_scope: lunco_tools::ToolScope::Application,
         };
         let entity = world.spawn(binding.clone()).id();
@@ -6470,7 +6710,7 @@ mod tests {
                     tool: "probe".into(),
                     hook: "apply".into(),
                     args: TelemetryValue::Bool(true),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: None,
                     owner,
                 },
@@ -6483,9 +6723,37 @@ mod tests {
                 PendingWorldScript::Code {
                     id: 42,
                     code: "diagnostic".into(),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: None,
                     workspace: super::WorldScriptWorkspace::Detached,
+                },
+                limits,
+            )
+            .unwrap();
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .enqueue(
+                PendingWorldScript::Code {
+                    id: 43,
+                    code: "scene-bound child".into(),
+                    correlation_id: None,
+                    workspace: super::WorldScriptWorkspace::Detached,
+                    execution: super::WorldScriptExecution::for_command(
+                        Some(lunco_core::CommandOrigin::Rhai {
+                            context: lunco_core::RuntimeExecutionContext {
+                                route: Some(lunco_core::RuntimeRoute::twin_owned(
+                                    lunco_core::RuntimeCycle::Ui,
+                                    0,
+                                    7,
+                                )),
+                                ..lunco_core::RuntimeExecutionContext::unclassified()
+                            },
+                            actor: None,
+                            authority: None,
+                            client_local: false,
+                        }),
+                        None,
+                    ),
                 },
                 limits,
             )
@@ -6501,6 +6769,10 @@ mod tests {
         );
         assert!(matches!(
             world.resource::<lunco_core::CommandResults>().get(41),
+            Some(lunco_core::CommandOutcome::Rejected(_))
+        ));
+        assert!(matches!(
+            world.resource::<lunco_core::CommandResults>().get(43),
             Some(lunco_core::CommandOutcome::Rejected(_))
         ));
         duplicate.retire_invocation(&mut world);
@@ -6575,7 +6847,7 @@ mod tests {
                 PendingWorldScript::Code {
                     id: 1,
                     code: String::new(),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: Some(11),
                     workspace: super::WorldScriptWorkspace::Mounted(Some(first)),
                 },
@@ -6589,7 +6861,7 @@ mod tests {
                     tool: "probe".into(),
                     hook: "on_click".into(),
                     args: TelemetryValue::String(String::new()),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: Some(12),
                     owner: twin,
                 },
@@ -6603,7 +6875,7 @@ mod tests {
                     tool: "application_probe".into(),
                     hook: "on_click".into(),
                     args: TelemetryValue::String(String::new()),
-                    authority: None,
+                    execution: super::WorldScriptExecution::default(),
                     correlation_id: Some(13),
                     owner: application,
                 },
@@ -6647,11 +6919,13 @@ mod tests {
         let second_root = tempfile::tempdir().expect("second generic owner fixture");
         let mut workspace = lunco_workspace::WorkspaceResource::new();
         let empty =
-            WorldScriptWorkspace::capture(Some(&workspace)).expect("empty workspace admission");
+            WorldScriptWorkspace::capture(Some(&workspace), super::WorldScriptExecution::default())
+                .expect("empty workspace admission");
         let first = queue_owner_twin(&mut workspace, first_root.path());
         assert!(empty.validate(Some(&workspace)).is_err());
         let admitted =
-            WorldScriptWorkspace::capture(Some(&workspace)).expect("active workspace admission");
+            WorldScriptWorkspace::capture(Some(&workspace), super::WorldScriptExecution::default())
+                .expect("active workspace admission");
         assert!(admitted.validate(Some(&workspace)).is_ok());
         assert!(admitted.validate(None).is_err());
         workspace.close_twin(first);
@@ -6679,15 +6953,26 @@ mod tests {
         };
         let _scope = lunco_scripting_bridge_core::ExecutionContextScope::enter(context);
         assert_eq!(
-            super::script_flow_twin(None).expect("caller owner is preserved"),
+            super::WorldScriptExecution::capture()
+                .twin_owner(None)
+                .expect("caller owner is preserved"),
             Some(caller)
         );
         assert_eq!(
-            super::script_flow_twin(Some(caller)).expect("matching flow owner"),
+            super::WorldScriptExecution::capture()
+                .twin_owner(Some(caller))
+                .expect("matching flow owner"),
             Some(caller)
         );
-        assert!(super::script_flow_twin(Some(caller + 1)).is_err());
-        assert!(super::WorldScriptWorkspace::capture(None).is_err());
+        assert!(
+            super::WorldScriptExecution::capture()
+                .twin_owner(Some(caller + 1))
+                .is_err()
+        );
+        assert!(
+            super::WorldScriptWorkspace::capture(None, super::WorldScriptExecution::capture())
+                .is_err()
+        );
     }
 
     #[test]

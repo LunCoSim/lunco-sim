@@ -305,6 +305,8 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // active request id — records the typed outcome in `CommandResults`.
     // `Result<Ack, String>` records handler failure; `Result<Ack, Reject>`
     // records a command rejection.
+    // Deferred handlers return `Result<CommandOutcome, String>` with `Pending`
+    // at admission; their owner records the terminal outcome on completion.
     // Void handlers (the common, fire-and-forget case) keep the lean
     // passthrough wrapper with no extra params or resource access.
     let returns_result = !matches!(func.sig.output, syn::ReturnType::Default);

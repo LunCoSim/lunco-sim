@@ -1,151 +1,121 @@
-//! Deterministic fixed-step Modelica integration for client prediction.
+//! Fixed-step RK4 integration on Rumoca's shared Model Exchange host.
 //!
-//! Rumoca's public `SimulationSession` is an adaptive session. Supplying it a
-//! nominal `dt` does not turn it into a fixed-step solver: it still chooses
-//! internal steps from error estimates and event boundaries. Prediction needs a
-//! stronger contract, so this module owns the integration loop explicitly.
-//!
-//! The backend is intentionally qualified. It accepts continuous, event-free,
-//! external-table-free models and evaluates them with classical RK4 at exactly
-//! four derivative stages per fixed step. Event/discrete models are rejected at
-//! construction because silently sampling them would be a semantic error, not a
-//! solver improvement.
+//! The host owns initialization, input transactions, component evaluation and
+//! observations. The numerical plugin owns four RK stages at the exact fixed
+//! cadence. Continuous extensions use those retained stages without evaluating
+//! the component outside the host-issued derivative capability.
 
-use indexmap::IndexMap;
 use rumoca_compile::compile::Dae;
-use rumoca_eval_solve::projection_policy::{
-    ALGEBRAIC_REFRESH_MAX_ITERS, ALGEBRAIC_REFRESH_TOLERANCE,
-};
-use rumoca_ir_solve::SolveModel;
+use rumoca_ir_solve::fmi::FmiComponent;
 use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
-use rumoca_solver::SolveRuntime;
+use rumoca_solver::fmi_me::{
+    MeAdvanceRequest, MeContinuousPoint, MeDerivativeHandle, MeInstanceConfig, MeIntegrationError,
+    MeIntegratorBackend, MeModelSource, MeStepCandidate, accepted_interval_contains,
+    admit_execution_backend,
+    driver::{advance_live_session, live_session_options},
+    integrator::canonical_coordinate,
+    session::{MeRetainedComponent, MeSimulationSession},
+};
 
-/// A fixed-step RK4 session over a continuous, event-free Rumoca solve model.
+/// A continuous, event-free session whose component lifecycle has one owner.
 pub struct FixedStepSession {
-    runtime: SolveRuntime,
-    state: Vec<f64>,
-    params: Vec<f64>,
+    session: MeSimulationSession<'static, 'static>,
+    input_names: Vec<String>,
     time_origin: f64,
     step_index: u64,
     fixed_dt: f64,
 }
 
+fn solver_error(error: impl std::fmt::Display) -> SimulationDiagnosticError {
+    SimulationDiagnosticError::Solver(error.to_string())
+}
+
 impl FixedStepSession {
-    /// Lower and prepare a DAE for the fixed-step backend.
     pub fn new(dae: &Dae, options: SimOptions) -> Result<Self, SimulationDiagnosticError> {
-        let lower_started = web_time::Instant::now();
         let component = rumoca_sim::prepare_fmi_component(dae, &options)?;
-        let lower_elapsed = lower_started.elapsed();
-        Self::from_continuous_model(
-            component.runtime_view().model(),
-            options,
-            Some(lower_elapsed),
-        )
+        Self::from_fmi_component(&component, options)
     }
 
-    /// Prepare a qualified fixed-step session from a checked FMI runtime view.
-    /// The worker retains the checked component across resets and equivalent
-    /// instances. `SolveRuntime` copies its executable representation into this
-    /// session; the owner then validates the continuous fixed-step subset.
-    pub(crate) fn from_continuous_model(
-        model: &SolveModel,
+    pub(crate) fn from_fmi_component(
+        component: &FmiComponent,
         options: SimOptions,
-        lower_elapsed: Option<web_time::Duration>,
     ) -> Result<Self, SimulationDiagnosticError> {
-        let fixed_dt = options.dt.ok_or_else(|| {
-            SimulationDiagnosticError::Solver(
-                "fixed-rk4 requires an explicit positive SimOptions::dt".into(),
-            )
-        })?;
+        let fixed_dt = options
+            .dt
+            .ok_or_else(|| solver_error("fixed-rk4 requires a fixed dt"))?;
         if !fixed_dt.is_finite() || fixed_dt <= 0.0 {
-            return Err(SimulationDiagnosticError::Solver(
-                "fixed-rk4 requires a finite positive SimOptions::dt".into(),
+            return Err(solver_error("fixed-rk4 requires a finite positive dt"));
+        }
+        reject_unsupported_constructs(component.runtime_view().model())?;
+        let config = MeInstanceConfig::new(
+            "luncosim-fixed-rk4",
+            options.rtol,
+            options.t_start,
+            options.t_end,
+        )
+        .map_err(solver_error)?;
+        let execution =
+            admit_execution_backend(options.execution_policy, None).map_err(solver_error)?;
+        let retained =
+            MeRetainedComponent::instantiate(MeModelSource::new(component), &config, execution)
+                .map_err(solver_error)?;
+        let host_options = live_session_options(
+            &component.root_location(),
+            options.t_start,
+            options.rtol,
+            options.atol,
+            options.t_end - options.t_start,
+            options.max_wall_seconds,
+        )
+        .map_err(solver_error)?;
+        let host = retained.into_lease(host_options).map_err(solver_error)?;
+        if host.is_terminated() {
+            return Err(solver_error(
+                "fixed-rk4 component terminated during initialization",
             ));
         }
-        if !options.t_start.is_finite() {
-            return Err(SimulationDiagnosticError::Solver(
-                "fixed-rk4 requires a finite start time".into(),
-            ));
-        }
-
-        reject_unsupported_constructs(model)?;
-        let runtime_started = web_time::Instant::now();
-        let runtime = SolveRuntime::new(model)?;
-        let runtime_elapsed = runtime_started.elapsed();
-        let state_count = model.state_scalar_count();
-        if model.initial_y.len() < state_count {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "fixed-rk4 initial solver vector has {} values, but the model requires {} state values",
-                model.initial_y.len(),
-                state_count,
-            )));
-        }
-        log::info!(
-            "[fixed-rk4] prepared solve runtime: lower={} runtime={runtime_elapsed:?} \
-             states={} solver_slots={} algebraic_slots={}",
-            lower_elapsed
-                .map(|elapsed| format!("{elapsed:?}"))
-                .unwrap_or_else(|| "cached".to_string()),
-            state_count,
-            model.solver_scalar_count(),
-            model.solver_scalar_count().saturating_sub(state_count),
-        );
-        let initial_state = model.initial_y[..state_count].to_vec();
-
+        host.numerical_setup(Some(fixed_dt)).map_err(solver_error)?;
+        let plugin: Option<Box<dyn MeIntegratorBackend>> = if host.state_count() == 0 {
+            None
+        } else {
+            Some(Box::new(FixedRk4 {
+                origin: canonical_coordinate(options.t_start),
+                index: 0,
+                dt: fixed_dt,
+                derivatives: None,
+                history: None,
+            }))
+        };
+        let session = host.into_session(plugin).map_err(solver_error)?;
+        let input_names = session.input_names();
         Ok(Self {
-            runtime,
-            state: initial_state,
-            params: model.parameters.clone(),
-            time_origin: options.t_start,
+            session,
+            input_names,
+            time_origin: canonical_coordinate(options.t_start),
             step_index: 0,
             fixed_dt,
         })
     }
 
-    /// Validate the complete input vector before committing any parameter.
-    /// Repeated names apply in source order, matching the adaptive FMI host.
     pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
-        let mut writes = Vec::with_capacity(inputs.len());
-        for &(name, value) in inputs {
-            if !value.is_finite() {
-                return Err(SimulationDiagnosticError::Solver(format!(
-                    "input '{name}' must be finite, got {value}"
-                )));
-            }
-            let index = self
-                .runtime
-                .model
-                .problem
-                .solve_layout
-                .input_parameter_index(name)
-                .ok_or_else(|| {
-                    SimulationDiagnosticError::Solver(format!("unknown input '{name}'"))
-                })?;
-            if index >= self.params.len() {
-                return Err(SimulationDiagnosticError::Solver(format!(
-                    "input '{name}' maps to parameter slot {index}, outside the {}-slot parameter vector",
-                    self.params.len(),
-                )));
-            }
-            writes.push((index, value));
-        }
-        for (index, value) in writes {
-            self.params[index] = value;
-        }
-        Ok(())
+        self.session.set_inputs(inputs).map_err(solver_error)
     }
 
-    /// Advance by exactly one configured fixed step. A different step size is
-    /// rejected rather than rounded or subdivided, preserving the prediction
-    /// contract at the call boundary.
     pub fn step(&mut self, dt: f64) -> Result<(), SimulationDiagnosticError> {
         if dt.to_bits() != self.fixed_dt.to_bits() {
-            return Err(SimulationDiagnosticError::Solver(format!(
+            return Err(solver_error(format!(
                 "fixed-rk4 received dt={dt:?}, but its configured step is {:?}",
-                self.fixed_dt,
+                self.fixed_dt
             )));
         }
-        self.rk4_step()
+        let index = self
+            .step_index
+            .checked_add(1)
+            .ok_or_else(|| solver_error("fixed-rk4 step index overflowed"))?;
+        let target = self.time_origin + index as f64 * self.fixed_dt;
+        advance_live_session(&mut self.session, target).map_err(solver_error)?;
+        self.step_index = index;
+        Ok(())
     }
 
     /// Reach a communication point on the configured fixed-step lattice.
@@ -177,80 +147,155 @@ impl FixedStepSession {
     }
 
     pub fn time(&self) -> f64 {
-        self.time_origin + self.step_index as f64 * self.fixed_dt
+        self.session.time()
     }
-
     pub fn state(&self) -> Result<SessionState, SimulationDiagnosticError> {
         Ok(SessionState {
             time: self.time(),
-            values: self.visible_values()?,
+            values: self.session.visible_values().map_err(solver_error)?,
         })
     }
-
     pub fn input_names(&self) -> &[String] {
-        self.runtime.model.problem.solve_layout.input_scalar_names()
+        &self.input_names
     }
+}
 
-    fn rk4_step(&mut self) -> Result<(), SimulationDiagnosticError> {
-        let h = self.fixed_dt;
-        let t = self.time();
-        let y0 = self.state.clone();
-        let k1 = self.derivatives(t, &y0)?;
-        let y2 = stage_state(&y0, &k1, h * 0.5);
-        let k2 = self.derivatives(t + h * 0.5, &y2)?;
-        let y3 = stage_state(&y0, &k2, h * 0.5);
-        let k3 = self.derivatives(t + h * 0.5, &y3)?;
-        let y4 = stage_state(&y0, &k3, h);
-        let k4 = self.derivatives(t + h, &y4)?;
-        for (state, (((a, b), c), d)) in self
-            .state
-            .iter_mut()
-            .zip(k1.iter().zip(&k2).zip(&k3).zip(&k4))
-        {
-            *state += (h / 6.0) * (*a + 2.0 * *b + 2.0 * *c + *d);
-            if !state.is_finite() {
-                return Err(SimulationDiagnosticError::Solver(
-                    "fixed-rk4 produced a non-finite state".into(),
-                ));
-            }
+struct Rk4History {
+    start: f64,
+    end: f64,
+    initial: Vec<f64>,
+    final_state: Vec<f64>,
+    stages: [Vec<f64>; 4],
+}
+
+struct FixedRk4 {
+    origin: f64,
+    index: u64,
+    dt: f64,
+    derivatives: Option<MeDerivativeHandle>,
+    history: Option<Rk4History>,
+}
+
+fn integration_error(reason: impl Into<String>) -> MeIntegrationError {
+    MeIntegrationError::Contract {
+        reason: reason.into(),
+    }
+}
+
+impl FixedRk4 {
+    fn validate_coordinate(&self, point: &MeContinuousPoint) -> Result<(), MeIntegrationError> {
+        let expected = self.origin + self.index as f64 * self.dt;
+        if point.time().to_bits() != expected.to_bits() {
+            return Err(integration_error(format!(
+                "fixed-rk4 requires grid coordinate {expected}, received {}",
+                point.time()
+            )));
         }
-        self.step_index = self.step_index.checked_add(1).ok_or_else(|| {
-            SimulationDiagnosticError::Solver("fixed-rk4 step index overflowed".into())
-        })?;
+        Ok(())
+    }
+}
+
+impl MeIntegratorBackend for FixedRk4 {
+    fn initialize(
+        &mut self,
+        point: &MeContinuousPoint,
+        derivatives: MeDerivativeHandle,
+    ) -> Result<(), MeIntegrationError> {
+        self.validate_coordinate(point)?;
+        self.derivatives = Some(derivatives);
+        self.history = None;
         Ok(())
     }
 
-    fn derivatives(&self, time: f64, state: &[f64]) -> Result<Vec<f64>, SimulationDiagnosticError> {
-        self.runtime
-            .eval_state_derivatives(
-                time,
-                state,
-                &self.params,
-                ALGEBRAIC_REFRESH_TOLERANCE,
-                ALGEBRAIC_REFRESH_MAX_ITERS,
-            )
-            .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))
+    fn advance(
+        &mut self,
+        request: &MeAdvanceRequest,
+    ) -> Result<MeStepCandidate, MeIntegrationError> {
+        let point = request.current();
+        self.validate_coordinate(point)?;
+        let next = self
+            .index
+            .checked_add(1)
+            .ok_or_else(|| integration_error("fixed-rk4 step index overflowed"))?;
+        let end = self.origin + next as f64 * self.dt;
+        let handle = self
+            .derivatives
+            .as_ref()
+            .ok_or_else(|| integration_error("fixed-rk4 has no admitted derivative capability"))?;
+        let eval = |time, state: &[f64]| {
+            handle
+                .derivatives(time, state)
+                .map_err(|_| MeIntegrationError::DerivativeRefused)
+        };
+        let t = point.time();
+        let h = self.dt;
+        let y = point.states();
+        let k1 = eval(t, y)?;
+        let k2 = eval(t + h * 0.5, &stage_state(y, &k1, h * 0.5))?;
+        let k3 = eval(t + h * 0.5, &stage_state(y, &k2, h * 0.5))?;
+        let k4 = eval(end, &stage_state(y, &k3, h))?;
+        let values: Vec<_> = y
+            .iter()
+            .enumerate()
+            .map(|(i, value)| value + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
+            .collect();
+        self.history = Some(Rk4History {
+            start: t,
+            end,
+            initial: y.to_vec(),
+            final_state: values.clone(),
+            stages: [k1, k2, k3, k4],
+        });
+        self.index = next;
+        // Classical RK4's cubic continuous extension has local order three.
+        Ok(MeStepCandidate::new(end, values, 3))
     }
 
-    fn visible_values(&self) -> Result<IndexMap<String, f64>, SimulationDiagnosticError> {
-        let solver_y = self
-            .runtime
-            .full_solver_y(
-                self.time(),
-                &self.state,
-                &self.params,
-                ALGEBRAIC_REFRESH_TOLERANCE,
-                ALGEBRAIC_REFRESH_MAX_ITERS,
-            )
-            .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))?;
-        self.runtime
-            .visible_values_for_names(
-                &solver_y,
-                &self.params,
-                self.time(),
-                &self.runtime.model.visible_names,
-            )
-            .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))
+    fn sample(&self, time: f64, states: &mut [f64]) -> Result<(), MeIntegrationError> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| integration_error("fixed-rk4 has no accepted interval to sample"))?;
+        if states.len() != history.initial.len()
+            || !accepted_interval_contains(history.start, history.end, time)
+        {
+            return Err(integration_error(
+                "fixed-rk4 sample is outside its accepted interval or state width",
+            ));
+        }
+        if time.to_bits() == history.end.to_bits() {
+            states.copy_from_slice(&history.final_state);
+            return Ok(());
+        }
+        if time.to_bits() == history.start.to_bits() {
+            states.copy_from_slice(&history.initial);
+            return Ok(());
+        }
+        let theta = (time - history.start) / self.dt;
+        let square = theta * theta;
+        let cube = square * theta;
+        let weights = [
+            theta - 1.5 * square + (2.0 / 3.0) * cube,
+            square - (2.0 / 3.0) * cube,
+            square - (2.0 / 3.0) * cube,
+            -0.5 * square + (2.0 / 3.0) * cube,
+        ];
+        for (i, state) in states.iter_mut().enumerate() {
+            let delta: f64 = history
+                .stages
+                .iter()
+                .zip(weights)
+                .map(|(stage, weight)| stage[i] * weight)
+                .sum();
+            *state = history.initial[i] + self.dt * delta;
+        }
+        Ok(())
+    }
+
+    fn truncate_reset(&mut self, point: &MeContinuousPoint) -> Result<(), MeIntegrationError> {
+        self.validate_coordinate(point)?;
+        self.history = None;
+        Ok(())
     }
 }
 
@@ -258,7 +303,7 @@ fn stage_state(state: &[f64], derivative: &[f64], scale: f64) -> Vec<f64> {
     state
         .iter()
         .zip(derivative)
-        .map(|(value, derivative)| *value + scale * *derivative)
+        .map(|(value, derivative)| value + scale * derivative)
         .collect()
 }
 

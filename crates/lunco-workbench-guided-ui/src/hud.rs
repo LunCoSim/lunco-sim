@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_scripting_bridge_core::ToolHookBinding;
 use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use std::collections::BTreeMap;
@@ -82,6 +82,8 @@ impl HudCard {
 pub(crate) struct GuidedHuds {
     cards: BTreeMap<HudOwner, HudCard>,
 }
+
+impl SceneResource for GuidedHuds {}
 
 impl GuidedHuds {
     fn card_mut(&mut self, hud: &str, twin: Option<lunco_workspace::TwinId>) -> &mut HudCard {
@@ -171,7 +173,7 @@ fn clear_current_script_card(
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<GuidedHuds>()
+    app.init_scene_resource::<GuidedHuds>()
         .init_resource::<GuidedHudVisibility>()
         .add_observer(clear_twin_cards)
         .add_observer(clear_scene_cards)
@@ -334,7 +336,7 @@ fn on_set_guided_hud_actions(
             return Err(error);
         }
         Some(
-            ToolHookBinding::new(
+            ToolHookBinding::for_scene(
                 cmd.tool.clone(),
                 cmd.hook.clone(),
                 twin.map(|id| id.raw()),
@@ -350,7 +352,11 @@ fn on_set_guided_hud_actions(
         }
         card.actions = binding.map(|binding| BoundActions {
             binding: commands
-                .spawn((binding, lunco_core::Provenance::Local))
+                .spawn((
+                    binding,
+                    lunco_core::SceneOwned,
+                    lunco_core::Provenance::Local,
+                ))
                 .id(),
             items: cmd.actions.clone(),
         });
@@ -564,6 +570,57 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_lifecycle_retires_cards_and_bindings_after_terminal_callbacks() {
+        #[derive(Component)]
+        struct TerminalPublisher;
+        let mut app = App::new();
+        install(&mut app);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            |mut hud: ResMut<GuidedHuds>, mut commands: Commands| {
+                let binding = commands.spawn(lunco_core::SceneOwned).id();
+                let card = hud.card_mut("shutdown", None);
+                card.hint = "outgoing hint".into();
+                card.actions = Some(BoundActions {
+                    binding,
+                    items: Vec::new(),
+                });
+            },
+        )
+        .add_observer(|_: On<Remove, TerminalPublisher>, mut commands: Commands| {
+            commands.queue(|world: &mut World| {
+                world
+                    .resource_mut::<GuidedHuds>()
+                    .card_mut("removal", None)
+                    .objectives = "outgoing objective".into();
+            });
+        });
+        let preference = Some(PerspectiveId("application_preference"));
+        app.world_mut()
+            .resource_mut::<GuidedHudVisibility>()
+            .visible_in_perspective = preference;
+        for _ in 0..3 {
+            app.world_mut()
+                .spawn((lunco_core::SceneOwned, TerminalPublisher));
+            lunco_core::run_scene_teardown(app.world_mut());
+            assert!(app.world().resource::<GuidedHuds>().cards.is_empty());
+            assert_eq!(
+                app.world_mut()
+                    .query_filtered::<Entity, With<lunco_core::SceneOwned>>()
+                    .iter(app.world())
+                    .count(),
+                0
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<GuidedHudVisibility>()
+                    .visible_in_perspective,
+                preference
+            );
+        }
+    }
 
     #[test]
     fn owner_retirement_despawns_exact_callback_leases() {

@@ -553,9 +553,11 @@ document's `DocumentHost`.
 verbs for an Assembly document. Forking returns the new `DocumentId`; closing
 removes it from the registry; discarding an untitled document closes it and
 discarding a writable file document reads the file through storage off-thread,
-then resets the resident document and its undo history. A file identity or
-document revision change during the read is rejected rather than applied to a
-different document.
+then resets the resident document and its undo history. Discard and dependency
+preparation share one exact document lease: generation, all layer revisions,
+origin, runtime owner, stage identity and resolver revision. A changed lease
+rejects the read before publication. Document close, scene teardown and
+`DocumentSaved` cancel the pending discard and reject its command receipt.
 
 `ApplyUsdOp` and `ApplyUsdOps` accept an optional `parent_gen`. When supplied,
 the registry rejects a stale request before authoring or journaling. Successful
@@ -563,6 +565,39 @@ acks identify the document id, target layer, affected paths, new generation,
 canonical journal cursor, and change-set id for compound edits; the API response
 is sent after the document mutation has committed. Callers that do not have a
 causal predecessor pass `null`; they do not use a second edit path.
+
+New composition dependencies are prepared by `lunco-usd-commands` through the
+shared bounded `AsyncWorkAdmission`. `UsdOp::composition_dependencies` supplies
+typed arc identities; source and history snapshots use the native USD dependency
+visitor. `lunco-usd-compose` and `lunco-assets-core` retain ownership of traversal,
+limits, identities and byte reads. Preparation does not split a compound edit:
+the original operation sequence validates and commits once through the journal.
+Preparation retains native missing-dependency diagnostics. The existing
+`usd.scene_composition` policy at the projection owner decides whether an
+incomplete referenced closure can enter the scene; the command worker does not
+replace that policy with an unconditional rejection.
+The same admission serves single, compound, transient and proposal commands and
+component and program attachment, detachment and dome lighting. Unmounted file
+documents acquire their dependency closure on the same worker, including existing
+arcs; command dispatch does not synchronously fetch them. One in-flight edit owns
+each document generation. Every compound command reports terminal validation
+failure through the shared result path before mutation; a warning is not an ack.
+
+A pending command has not succeeded. Rhai consumers retain its ticket and read
+`command_result(id)` before reporting a change or issuing dependent edits. The
+route editor preserves the requested point path on its pending result without
+claiming that point is committed. Authoritative scene-document preparation holds its typed
+`UsdDocumentAuthoring` progress key until commit or terminal rejection; the worker
+does not choose simulation steps. Preview and inactive document preparations do
+not hold the simulation clock. Before publication the owner checks document
+generation, layer revisions, origin, pinned runtime owner, exact stage identity
+and resolver revision.
+Closing a document cancels its work. Scene teardown cancels work from its live
+mounts, including additive imports; independent previews retain their document
+lifetime. `TwinClosed` retires work admitted by that exact Twin, including its
+unmounted documents. Cancellation rejects pending commands, releases progress
+holds and drops callbacks and result slots. Worker results
+have only weak publication destinations. Operation identities survive teardown.
 
 `InspectUsdDocument` is the read-only agent/human inspection query. It requires
 an explicit `doc_id` and can accept a USD `path`; it reports the document's
@@ -712,6 +747,11 @@ owner. Live simulation entities continue to use `MoveEntity`, which owns
 BigSpace/physics seating; a preview entity is never sent through that live
 identity path.
 
+Live scene persistence resolves `UsdPrimPath.stage_handle` through
+`scene_document_for(&backed, stage_id)` and reads authorability from that
+composed reader. See [scene ownership](61-scene-lifecycle-and-teardown.md) for
+its lease and retirement contract.
+
 The standard transform gizmo uses the same unparented proxy frontend for both
 owners. At drag start, a focused preview target is identified by its exact
 preview root, stage handle, document, edit target, generation, and `UsdPrimPath`;
@@ -733,6 +773,8 @@ physical pixels. That rectangle is converted once into the gizmo frontend's
 logical `viewport_rect`, sizes the render target, and maps preview image clicks
 through the same camera. The maintained gizmo picking backend consumes it
 before testing handles, keeping rendered and interactive coordinates identical.
+Picking and transform evaluation both read Bevy primary mouse `PointerLocation`,
+including injected input. The native window cursor is not a separate input source.
 The singleton and separate preview-tab renderers both record
 `SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves the
 global live-scene egui guard while allowing part selection and handle drags

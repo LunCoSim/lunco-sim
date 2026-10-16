@@ -54,6 +54,7 @@ pub struct UsdPrimProjectionPlan {
     binary_asset_uri: Option<String>,
     documentation: Option<String>,
     active: bool,
+    has_composition_arc: bool,
     purpose: openusd_schemas::geom::Purpose,
     effective_visibility: openusd_schemas::geom::PurposeVisibility,
     bound_materials: HashMap<MaterialPurpose, String>,
@@ -159,6 +160,22 @@ impl UsdStageProjectionPlan {
                 }
             })
             .map_err(|error| anyhow!("native stage traversal failed: {error}"))?;
+        // Explicit queries retain inactive identity and metadata. Keep the
+        // projection region identical to native default traversal, including
+        // its payload and abstract-prim boundaries.
+        let mut all_paths = Vec::new();
+        stage
+            .traverse(openusd::usd::PrimPredicate::ALL, |path| {
+                if !seen.contains(path) {
+                    all_paths.push(path.clone());
+                }
+            })
+            .map_err(|error| anyhow!("native stage traversal failed: {error}"))?;
+        for path in all_paths {
+            if !reader.is_active(&path).map_err(|error| anyhow!(error))? {
+                paths.push(path);
+            }
+        }
         let mut data = UsdStageProjectionData {
             default_prim: reader.default_prim(),
             time_codes_per_second: reader.time_codes_per_second(),
@@ -343,6 +360,9 @@ impl UsdStageProjectionPlan {
                 binary_asset_uri: reader.binary_asset_uri(&path),
                 documentation: reader.documentation(&path),
                 active,
+                has_composition_arc: reader
+                    .has_composition_arc(&path)
+                    .map_err(|error| anyhow!(error))?,
                 transform_might_be_time_varying: reader
                     .transform_might_be_time_varying(&path)
                     .map_err(|error| anyhow!(error))?,
@@ -381,6 +401,9 @@ impl UsdStageProjectionPlan {
             bevy::log::warn!(target: "usd-bevy", %diagnostic, "USD composition diagnostic");
         }
         for (index, prim) in data.prims.iter().enumerate() {
+            if !prim.active {
+                continue;
+            }
             if let Some(type_name) = &prim.type_name {
                 data.type_indices
                     .entry(type_name.clone())
@@ -488,6 +511,7 @@ impl UsdStageProjectionPlan {
         attr_prefix: &str,
     ) -> Vec<UsdReadPrimFacts> {
         prims
+            .filter(|prim| prim.active)
             .filter_map(|prim| {
                 let matches_type = prim
                     .type_name
@@ -635,6 +659,7 @@ impl UsdRead for UsdStageProjectionPlan {
         self.data
             .prims
             .iter()
+            .filter(|prim| prim.active)
             .filter_map(|prim| SdfPath::new(&prim.path).ok())
             .collect()
     }
@@ -784,6 +809,10 @@ impl UsdRead for UsdStageProjectionPlan {
         Ok(self.prim(prim).is_some_and(|prim| prim.active))
     }
 
+    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String> {
+        Ok(self.prim(prim).is_some_and(|prim| prim.has_composition_arc))
+    }
+
     fn has_prim(&self, prim: &SdfPath) -> bool {
         self.prim(prim).is_some()
     }
@@ -820,6 +849,45 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_composition_arc_facts_survive_prepared_admission() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+(metersPerUnit = 1)
+def Xform "Source" { def Cube "Child" {} }
+def Xform "Instance" (prepend references = </Source>) {}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let prepared = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        for path in [
+            "/Source",
+            "/Source/Child",
+            "/Instance",
+            "/Instance/Child",
+            "/Missing",
+        ] {
+            let path = SdfPath::new(path).unwrap();
+            assert_eq!(
+                prepared.has_composition_arc(&path).unwrap(),
+                live.has_composition_arc(&path).unwrap(),
+                "{path}"
+            );
+        }
+        assert!(
+            !prepared
+                .has_composition_arc(&SdfPath::new("/Source").unwrap())
+                .unwrap()
+        );
+        assert!(
+            prepared
+                .has_composition_arc(&SdfPath::new("/Instance/Child").unwrap())
+                .unwrap()
+        );
+    }
 
     #[test]
     fn native_surface_terminals_survive_prepared_admission() {
@@ -914,6 +982,38 @@ def Xform "Parent" {
         let missing = SdfPath::new("/Missing").unwrap();
         assert!(live.resets_xform_stack(&missing).is_err());
         assert!(plan.resets_xform_stack(&missing).is_err());
+    }
+
+    #[test]
+    fn inactive_identity_is_queryable_but_never_projected() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+def Xform "Active" {}
+def Xform "Inactive" (active = false) {}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        let inactive = SdfPath::new("/Inactive").unwrap();
+        assert!(plan.has_prim(&inactive));
+        assert!(!plan.is_active(&inactive).unwrap());
+        assert_eq!(plan.type_name(&inactive).as_deref(), Some("Xform"));
+        assert!(!plan.prim_paths().contains(&inactive));
+        assert!(
+            plan.prims_of_type("Xform")
+                .all(|prim| prim.path != "/Inactive")
+        );
+        assert!(
+            plan.prim_schema_facts_matching(&["Xform"], &[], "")
+                .iter()
+                .all(|prim| prim.path != inactive)
+        );
+        assert!(
+            plan.child_indices("/")
+                .iter()
+                .all(|index| plan.data.prims[*index].path != "/Inactive")
+        );
     }
 
     #[test]

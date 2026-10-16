@@ -101,7 +101,8 @@ fn on_tick(me, params) {
                 "SetPorts capture did not retain the exact ordered port write"),
             t_true(port_payload["correlation_id"].to_string() == this.port_correlation_id.to_string(),
                 "SetPorts capture correlation differs from its command acknowledgement"),
-            t_true(sim_tick() >= expected["effective_tick"] && sim_tick() >= expected_port["effective_tick"],
+            t_true(sim_tick() >= parse_int(expected["effective_tick"].to_string())
+                && sim_tick() >= parse_int(expected_port["effective_tick"].to_string()),
                 "the assertions ran before both admitted fixed ticks"),
             t_true(live_port_value == this.port_value,
                 "the later generic port write did not remain applied at its admitted fixed tick"),

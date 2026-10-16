@@ -12,6 +12,8 @@
 //! retains pacing demand and the user's transport state independently of native
 //! physics admission.
 
+use lunco_core::AppSceneExt;
+
 use avian3d::prelude::{
     AngularVelocity, ContactGraph, CustomPositionIntegration, LinearVelocity, Position, RigidBody,
     Rotation, Sensor,
@@ -912,13 +914,12 @@ fn verify_completed_physics_clock(
 
 /// Clear all scene-owned physics admission state before the outgoing entities
 /// are reclaimed. The replacement scene rebuilds its readiness/hold decisions
-/// from its own authored and runtime state. A hold must not cross that boundary.
+/// from its own authored and runtime state. The time owner separately retires
+/// shared deliberate-step demand.
 fn reset_scene_physics_state(
-    mut holds: ResMut<PhysicsHolds>,
     mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
     mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
-    *holds = PhysicsHolds::default();
     if let Some(progress) = progress.as_deref_mut() {
         progress.release(lunco_core_runtime::SimulationProgressKey::physics_integration());
     }
@@ -1027,7 +1028,8 @@ pub struct PhysicsGatePlugin;
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
-        app.register_type::<PhysicsInitializationPolicy>()
+        app.register_type::<avian3d::prelude::SleepThreshold>()
+            .register_type::<PhysicsInitializationPolicy>()
             .register_type::<PhysicsObjectPaused>()
             .register_type::<PhysicsOrderKey>()
             .register_type::<PhysicsInitializationPending>()
@@ -1057,10 +1059,10 @@ impl Plugin for PhysicsGatePlugin {
             // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsComputeProfile>()
-            .init_resource::<PhysicsHolds>()
-            .init_resource::<lunco_core::RuntimeFaults>()
-            .init_resource::<joint_solver::JointSolverOrder>()
+            .init_scene_resource::<PhysicsHolds>()
+            .init_scene_resource::<joint_solver::JointSolverOrder>()
             .init_resource::<PhysicsInitializationExternalValidator>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<lunco_core::RuntimeDiagnostics>()
             .add_systems(
                 Update,
@@ -1387,7 +1389,7 @@ mod tests {
     fn fixed_admission_refreshes_a_barrier_released_after_preupdate() {
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
-        app.init_resource::<PhysicsHolds>()
+        app.init_scene_resource::<PhysicsHolds>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<Time<Physics>>()
             .init_resource::<Time<Virtual>>()
@@ -1516,20 +1518,30 @@ mod tests {
     }
 
     #[test]
-    fn scene_teardown_retires_native_physics_admission() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(PhysicsHolds::default());
-        world.insert_resource(Time::<Physics>::default());
-        world
+    fn scene_teardown_clears_physics_holds_and_integration_admission() {
+        let mut app = App::new();
+        app.init_scene_resource::<PhysicsHolds>()
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .init_resource::<Time<Physics>>()
+            .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state);
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(
+                lunco_core_runtime::SimulationProgressKey::physics_integration(),
+                "native integration",
+            );
+        app.world_mut()
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::READINESS, true);
-        world.resource_mut::<Time<Physics>>().pause();
-
-        world.run_system_once(reset_scene_physics_state).unwrap();
-
+        app.world_mut().resource_mut::<Time<Physics>>().pause();
+        lunco_core::run_scene_teardown(app.world_mut());
+        let world = app.world();
         assert!(!world.resource::<PhysicsHolds>().is_held());
+        assert!(
+            !world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
     }
@@ -1661,3 +1673,5 @@ mod native_mass_ownership_tests {
         );
     }
 }
+
+impl lunco_core::SceneResource for PhysicsHolds {}

@@ -209,7 +209,9 @@ fn toolbar_signal_catalog(
     let revision = registry.catalog_revision();
     let cache_id = egui::Id::new("line_plot_toolbar_signal_catalog");
     type CachedCatalog = std::sync::Arc<ToolbarSignalCatalog>;
-    if let Some(cached) = ctx.data(|data| data.get_temp::<CachedCatalog>(cache_id)) {
+    if let Some(cached) =
+        crate::scene_state::scene_data(ctx, |data| data.get_temp::<CachedCatalog>(cache_id))
+    {
         if cached.registry_address == registry_address && cached.revision == revision {
             return cached;
         }
@@ -232,7 +234,7 @@ fn toolbar_signal_catalog(
         revision,
         signals,
     });
-    ctx.data_mut(|data| data.insert_temp(cache_id, catalog.clone()));
+    crate::scene_state::scene_data(ctx, |data| data.insert_temp(cache_id, catalog.clone()));
     catalog
 }
 
@@ -310,7 +312,7 @@ pub fn cached_scalar_history_points(
     let key = hist_fingerprint(history);
     let cache_id = egui::Id::new(("line_plot_scalar_history", source));
     type SharedCache = std::sync::Arc<std::sync::Mutex<ScalarHistoryPointsCache>>;
-    let cache: SharedCache = ctx.data_mut(|data| {
+    let cache: SharedCache = crate::scene_state::scene_data(ctx, |data| {
         if let Some(existing) = data.get_temp::<SharedCache>(cache_id) {
             existing
         } else {
@@ -414,7 +416,7 @@ fn cached_plot_series_points(
     pixel_width: f32,
 ) -> Option<PlotSeriesPoints> {
     type SharedCache = std::sync::Arc<std::sync::Mutex<PlotSeriesCache>>;
-    let cache: SharedCache = ctx.data_mut(|data| {
+    let cache: SharedCache = crate::scene_state::scene_data(ctx, |data| {
         if let Some(existing) = data.get_temp::<SharedCache>(cache_id) {
             existing
         } else {

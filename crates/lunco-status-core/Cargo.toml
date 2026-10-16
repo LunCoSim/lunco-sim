@@ -6,6 +6,7 @@ license.workspace = true
 description = "Renderer-independent lifecycle, progress, and telemetry status infrastructure for LunCoSim"
 
 [dependencies]
+lunco-core = { path = "../lunco-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

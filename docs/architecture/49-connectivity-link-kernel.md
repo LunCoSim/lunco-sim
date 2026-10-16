@@ -48,7 +48,9 @@ rover↔base, and rover↔relay edges, while `query("WifiLinks")` reports the
 short-range rover radio graph.
 
 The physical USD topology follows the same boundary. `components/comms/antenna.usda`
-is the passive steerable dish and owns the directional feed phase centre;
+is passive geometry and owns the directional feed phase centre.
+`components/comms/antenna_tracking.usda` references it and owns the articulated
+bodies, hinges and pointing controller;
 `components/comms/radio.usda` is an optional active link-budget device composed
 over that directional endpoint. `components/comms/wifi_radio.usda` is a separate
 chassis-mounted device. It owns its own `LunCoWifiAPI` endpoint and generic link

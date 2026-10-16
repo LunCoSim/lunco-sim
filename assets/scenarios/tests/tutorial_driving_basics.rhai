@@ -11,6 +11,12 @@ fn verdict(pass, reason) {
     }
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/DrivingBasics/Rover")],
+       entity_reads: [find_path("/DrivingBasics/Flag")],
+       entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.possess_count = 0;
     this.port_writes = 0;

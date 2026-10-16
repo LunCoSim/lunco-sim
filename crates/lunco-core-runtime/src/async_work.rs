@@ -57,6 +57,8 @@ pub enum AsyncWorkKind {
     SysmlAnalysis,
     /// Prepare a USD source, recipe, or immutable projection plan revision.
     UsdPreparation,
+    /// Resolve dependencies introduced by an atomic USD document command.
+    UsdDocumentAuthoring,
     /// Prepare presentation-only derived work.
     VisualizationPreparation,
     /// Encode an immutable session-input capture for durable export.

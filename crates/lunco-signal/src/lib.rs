@@ -21,7 +21,7 @@
 //! `docs/architecture/telemetry-subsystem.md`.
 
 use bevy::prelude::*;
-use lunco_core::GlobalEntityId;
+use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -495,9 +495,52 @@ pub struct SignalRegistry {
     /// incremental descriptor readers consume `SignalDescriptorsChanged`.
     catalog_revision: u64,
     descriptor_changes: std::collections::HashSet<SignalRef>,
+    /// Explicit process-lifetime channels. All other histories belong to the scene.
+    application_signals: std::collections::HashSet<SignalRef>,
+}
+
+impl SceneResource for SignalRegistry {
+    fn clear_scene(&mut self) {
+        // Start with an empty store so future scene fields reset by construction.
+        // Move only explicitly application-owned records into the replacement.
+        let mut outgoing = std::mem::take(self);
+        self.default_capacity = outgoing.default_capacity;
+        self.catalog_revision = outgoing.catalog_revision.wrapping_add(1);
+        self.application_signals = std::mem::take(&mut outgoing.application_signals);
+        self.descriptor_changes = std::mem::take(&mut outgoing.descriptor_changes);
+        self.descriptor_changes
+            .extend(outgoing.types.keys().cloned());
+        self.descriptor_changes
+            .extend(outgoing.meta.keys().cloned());
+        self.descriptor_changes
+            .extend(outgoing.global_owners.keys().cloned());
+        for signal in &self.application_signals {
+            if let Some(history) = outgoing.scalar_history.remove(signal) {
+                self.scalar_history.insert(signal.clone(), history);
+            }
+            if let Some(kind) = outgoing.types.remove(signal) {
+                self.types.insert(signal.clone(), kind);
+            }
+            if let Some(meta) = outgoing.meta.remove(signal) {
+                self.meta.insert(signal.clone(), meta);
+            }
+            if let Some(owner) = outgoing.global_owners.remove(signal) {
+                self.global_owners.insert(signal.clone(), owner);
+            }
+            if outgoing.inactive.remove(signal) {
+                self.inactive.insert(signal.clone());
+            }
+        }
+    }
 }
 
 impl SignalRegistry {
+    /// Give a process-owned signal an explicit lifetime beyond scene replacement.
+    /// Scene producers need no registration: their history expires at teardown.
+    pub fn retain_across_scenes(&mut self, signal: SignalRef) {
+        self.application_signals.insert(signal);
+    }
+
     pub fn with_default_capacity(capacity: usize) -> Self {
         Self {
             default_capacity: capacity,
@@ -777,6 +820,7 @@ impl SignalRegistry {
         self.meta.retain(|r, _| r.entity != entity);
         self.global_owners.retain(|r, _| r.entity != entity);
         self.inactive.retain(|r| r.entity != entity);
+        self.application_signals.retain(|r| r.entity != entity);
         if changed {
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
@@ -792,6 +836,7 @@ impl SignalRegistry {
         self.meta.remove(sig);
         self.global_owners.remove(sig);
         self.inactive.remove(sig);
+        self.application_signals.remove(sig);
         if changed {
             self.descriptor_changes.insert(sig.clone());
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
@@ -824,8 +869,9 @@ pub struct SignalRegistryPlugin;
 
 impl Plugin for SignalRegistryPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SignalRegistry>()
+        app.init_scene_resource::<SignalRegistry>()
             .add_message::<SignalDescriptorsChanged>()
+            .add_observer(drop_signals_of_removed_source)
             .add_systems(
                 Update,
                 publish_descriptor_changes.in_set(SignalDescriptorPublish),
@@ -871,6 +917,8 @@ pub struct TelemetryFocus {
     pub roots: Vec<Entity>,
 }
 
+impl SceneResource for TelemetryFocus {}
+
 impl TelemetryFocus {
     /// True while nothing is selected — "show everything".
     pub fn is_empty(&self) -> bool {
@@ -896,10 +944,8 @@ impl TelemetryFocus {
 pub struct SignalSource;
 
 /// Observer: a [`SignalSource`] entity despawned (or lost the marker) — drop every
-/// signal it owned inactive.  Telemetry is mission record, not a live-widget
-/// cache: a despawned model must remain graphable and exportable.
-/// Registered once by `LunCoTelemetryPlugin`, which owns the registry resource in
-/// both headless and GUI builds.
+/// signal it owned inactive. History remains graphable within the current scene;
+/// scene teardown retires it. Registered by `SignalRegistryPlugin` in every host.
 pub fn drop_signals_of_removed_source(
     trigger: On<Remove, SignalSource>,
     mut signals: ResMut<SignalRegistry>,
@@ -910,6 +956,56 @@ pub fn drop_signals_of_removed_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_lifecycle_retires_live_and_archived_signals_with_removal_notifications() {
+        let mut app = App::new();
+        app.add_plugins(SignalRegistryPlugin);
+        let application = SignalRef::new(Entity::PLACEHOLDER, "application_health");
+        let live = SignalRef::new(app.world_mut().spawn_empty().id(), "live");
+        {
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            registry.retain_across_scenes(application.clone());
+            registry.push_scalar(application.clone(), 0.0, 60.0);
+        }
+        for cycle in 1..=3 {
+            let archived = SignalRef::new(app.world_mut().spawn(SignalSource).id(), "archived");
+            let metadata_only = SignalRef::new(live.entity, "pending_metadata");
+            {
+                let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+                for signal in [&live, &archived] {
+                    registry.push_scalar(signal.clone(), 0.0, cycle as f64);
+                    registry.associate_global_owner(signal, GlobalEntityId::from_raw(cycle));
+                }
+                registry.update_meta(metadata_only.clone(), SignalMeta::default());
+                registry.associate_global_owner(&metadata_only, GlobalEntityId::from_raw(cycle));
+                assert_eq!(registry.scalar_history(&live).unwrap().len(), 1);
+            }
+            app.world_mut().despawn(archived.entity);
+            assert!(
+                !app.world()
+                    .resource::<SignalRegistry>()
+                    .is_active(&archived)
+            );
+            let revision = app.world().resource::<SignalRegistry>().catalog_revision();
+            app.world_mut()
+                .resource_mut::<SignalRegistry>()
+                .descriptor_changes
+                .clear();
+            lunco_core::run_scene_teardown(app.world_mut());
+            let registry = app.world().resource::<SignalRegistry>();
+            assert_eq!(registry.scalar_count(), 1);
+            assert_eq!(registry.scalar_history(&application).unwrap().len(), 1);
+            assert!(registry.catalog_revision() > revision);
+            for signal in [&live, &archived, &metadata_only] {
+                assert!(registry.scalar_history(signal).is_none());
+                assert!(registry.signal_type(signal).is_none());
+                assert!(registry.global_owner(signal).is_none());
+                assert!(registry.meta(signal).is_none());
+                assert!(registry.descriptor_changes.contains(signal));
+            }
+        }
+    }
 
     #[test]
     fn incremental_catalog_notifications_coalesce_and_fan_out() {

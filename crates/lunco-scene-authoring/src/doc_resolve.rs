@@ -6,7 +6,6 @@
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
-use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -200,95 +199,48 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Resolve the editable USD document backing `entity`'s stage — the same
-/// asset↔document match `apply_usd_path_attribute_change` needs, factored out so a
-/// caller authoring a *sequence* of ops (the mount snap) resolves the doc once and
-/// dispatches every op to it.
-///
-/// The stage-to-document binding is authoritative in
-/// [`lunco_usd_bevy_twin::DocBackedTwinScenes`]. File-origin matching is
-/// retained for ordinary file-backed projections that are not Twin-mounted.
-/// There is no active-viewport fallback: an entity without an explicit document
-/// binding is not editable.
+/// Resolve the document holding the entity's exact projected stage lease.
 pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
     let prim = world.get::<UsdPrimPath>(entity)?;
-    let asset_server = world.get_resource::<AssetServer>()?;
-    let registry = world.get_resource::<DocumentRegistry<UsdDocument>>()?;
     resolve_doc_for_stage(
         prim.stage_handle.id(),
-        asset_server,
         world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>(),
-        registry,
+        world.get_resource::<DocumentRegistry<UsdDocument>>()?,
     )
 }
 
-/// Resolve the document that owns a projected USD stage. Twin identity is
-/// matched through its existing stage/document map; ordinary file-backed
-/// documents use the canonical asset path. The active editor document is not
-/// part of scene ownership.
+/// Resolve only through the existing document projection owner.
 pub fn resolve_doc_for_stage(
     stage_id: AssetId<UsdStageAsset>,
-    asset_server: &AssetServer,
     backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
     registry: &DocumentRegistry<UsdDocument>,
 ) -> Option<lunco_doc::DocumentId> {
-    let asset_path = asset_server.get_path(stage_id)?;
-    let path_str = asset_path.path().to_string_lossy().to_string();
-
-    if let Some((name, rel)) = lunco_assets_core::split_twin_rel(&path_str) {
-        if let Some(doc) = backed.and_then(|backed| backed.doc_for(name, rel)) {
-            return Some(doc);
-        }
-    }
-
-    registry.ids().find(|id| {
-        registry
-            .host(*id)
-            .is_some_and(|h| match h.document().origin() {
-                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
-                _ => false,
-            })
-    })
+    lunco_usd_bevy_twin::scene_document_for(backed?, stage_id).filter(|doc| registry.contains(*doc))
 }
 
-/// Resolve the active USD document and the entity's authorable prim path for a
-/// journaled authoring operation.
-///
-/// A composed child below a reference or payload is not present in either
-/// document layer, but it is still editable through a stronger local opinion.
-/// The live entity already came from the composed stage, while the document
-/// owns the arc that makes that path addressable. Keep that standard USD case
-/// on the same generic authoring path as directly authored prims.
+/// Resolve a live prim against its owning document and canonical composition.
+/// Transient view-only prims have no persistent authored destination.
 pub fn authorable_prim(
     entity: Entity,
     q_prim: &Query<&UsdPrimPath>,
     usd_registry: &DocumentRegistry<UsdDocument>,
-    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Option<&Assets<UsdStageAsset>>,
 ) -> Option<(lunco_doc::DocumentId, String)> {
-    let doc = workspace?.0.active_document?;
-    authorable_prim_in_document(entity, q_prim, usd_registry, doc)
-}
-
-/// Resolve an entity's authorable prim in an explicitly resolved owning
-/// document. Scene mutation observers use this after resolving the document
-/// from the entity's composed USD stage, so an unrelated active document with
-/// the same prim path cannot receive the edit.
-pub fn authorable_prim_in_document(
-    entity: Entity,
-    q_prim: &Query<&UsdPrimPath>,
-    usd_registry: &DocumentRegistry<UsdDocument>,
-    doc: lunco_doc::DocumentId,
-) -> Option<(lunco_doc::DocumentId, String)> {
-    let host = usd_registry.host(doc)?;
     let prim = q_prim.get(entity).ok()?;
+    let doc = resolve_doc_for_stage(prim.stage_handle.id(), backed, usd_registry)?;
+    let host = usd_registry.host(doc)?;
     let prim_sdf = SdfPath::new(&prim.path).ok()?;
+    let stage_id = prim.stage_handle.id();
+    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
+    if !reader.has_prim(&prim_sdf) || !reader.is_active(&prim_sdf).ok()? {
+        return None;
+    }
     let owned = host.document().data().spec(&prim_sdf).is_some()
         || host.document().runtime_data().spec(&prim_sdf).is_some();
-    let under_composed_arc = host
-        .document()
-        .path_is_under_composed_arc(&prim.path)
-        .ok()?;
-    (owned || under_composed_arc).then(|| (doc, prim.path.clone()))
+    let composed = reader.has_composition_arc(&prim_sdf).ok()?;
+    (owned || composed).then(|| (doc, prim.path.clone()))
 }
 
 /// The generic persistent-delete target for a document-backed prim.
@@ -311,16 +263,20 @@ pub fn delete_target(
     q_prim: &Query<&UsdPrimPath>,
     usd_registry: &DocumentRegistry<UsdDocument>,
     doc: lunco_doc::DocumentId,
+    stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Option<&Assets<UsdStageAsset>>,
 ) -> Option<(lunco_doc::DocumentId, String, DeleteTarget)> {
     let host = usd_registry.host(doc)?;
     let prim = q_prim.get(entity).ok()?;
     let prim_sdf = SdfPath::new(&prim.path).ok()?;
     let root_authored = host.document().data().spec(&prim_sdf).is_some();
     let runtime_authored = host.document().runtime_data().spec(&prim_sdf).is_some();
-    let under_composed_arc = host
-        .document()
-        .path_is_under_composed_arc(&prim.path)
-        .ok()?;
+    let stage_id = prim.stage_handle.id();
+    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
+    if !reader.has_prim(&prim_sdf) {
+        return None;
+    }
+    let under_composed_arc = reader.has_composition_arc(&prim_sdf).ok()?;
 
     let target = if runtime_authored && !root_authored && !under_composed_arc {
         DeleteTarget::RemoveRuntime

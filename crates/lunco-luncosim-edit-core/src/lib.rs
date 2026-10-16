@@ -38,15 +38,16 @@ pub struct SceneEditPlugin;
 
 impl Plugin for SceneEditPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SpawnState>()
+        use lunco_core::AppSceneExt;
+        app.init_scene_resource::<SpawnState>()
             .init_resource::<catalog::SpawnCatalog>()
-            .init_resource::<spawn::FootprintCache>()
+            .init_scene_resource::<spawn::FootprintCache>()
             .init_resource::<spawn::SpawnDiagnostics>()
             .init_resource::<spawn::SpawnProducerIdentity>()
-            .insert_resource(lunco_interaction_core::DragModeActive { active: false })
-            .init_resource::<lunco_interaction_core::SpawnToolActive>()
-            .init_resource::<lunco_interaction_core::TerrainToolActive>()
-            .init_resource::<terrain_tools::TerrainToolState>();
+            .init_scene_resource::<lunco_interaction_core::DragModeActive>()
+            .init_scene_resource::<lunco_interaction_core::SpawnToolActive>()
+            .init_scene_resource::<lunco_interaction_core::TerrainToolActive>()
+            .init_scene_resource::<terrain_tools::TerrainToolState>();
 
         app.add_plugins(commands::SpawnCommandPlugin);
         app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
@@ -108,3 +109,5 @@ pub enum SpawnState {
         entry_id: String,
     },
 }
+
+impl lunco_core::SceneResource for SpawnState {}

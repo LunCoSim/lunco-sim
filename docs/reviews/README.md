@@ -17,9 +17,6 @@ lesson, which belongs in the architecture doc for that subsystem.
 - [`open-model-authoring-ux-gaps.md`](open-model-authoring-ux-gaps.md) —
   current generic UX and runtime-evidence backlog derived from vehicle modeling
   and live simulation; it does not propose vehicle-specific core APIs.
-- [`open-usd-preview-readiness-handover.md`](open-usd-preview-readiness-handover.md) —
-  Asset Editor 05 implementation handoff, runtime evidence, and the pending
-  official Trello Review mutation.
 - [`open-200fps-performance-handover.md`](open-200fps-performance-handover.md) —
   the Apollo High-quality frame loop is below the stable 200 FPS target; the
   handover records the Tracy evidence and owner-first optimization plan.

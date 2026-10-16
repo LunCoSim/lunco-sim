@@ -129,9 +129,12 @@ they do not prepare descriptors or replace the domain tree. Live sample values a
 `SignalRegistry` when visible rows paint.
 
 “Preparing telemetry channels” appears only before the first rows are available. Existing rows
-remain available throughout descriptor updates. `SceneTeardown` cancels workers, clears the
+remain available throughout descriptor updates. Scene retirement cancels workers, clears the
 index and dependency maps, and advances the presentation key so panel caches cannot display
-an outgoing scene. `InspectTelemetryCatalog` exposes read-only queue state, indexed/displayed
+an outgoing scene. Selected sources, preview points and derived row buffers
+live in the registered `TelemetryBrowserState` resource, so teardown releases
+them immediately even while the panel is hidden. Display preferences
+retain their application lifetime. `InspectTelemetryCatalog` exposes read-only queue state, indexed/displayed
 counts, preparation counters, and capture/worker/commit timings. Its optional `signal` parameter
 returns matching descriptors with explicit entity identities, including multiple owners of the
 same path. `scripts/api/test_telemetry_catalog.py` drives an owned production session and uses
@@ -147,20 +150,52 @@ synchronously when Builder plots update.
 
 ### Archived history is not automatically stale
 
-An archived row means that its publisher was removed during this process (for example, a
-scene replacement); it does not mean that its samples are orphaned or safe to delete. The
+An archived row means that its publisher was removed within the current scene;
+its samples remain available until that scene ends. The
 `SignalRegistry` is an in-memory, bounded mission-history store: it is not persisted across
 application restarts, and each row retains its `(entity, path)` identity, metadata, and
 sample-capacity boundary. A valid archived history therefore remains queryable for review
 after its live publisher is gone, while the normal browser hides it by default.
 
-Treat an archived row as stale only when the owning lifecycle supplies an explicit reason to
-discard that signal (such as an authoritative channel removal or a documented run-retention
-policy). Absence of the current ECS publisher, an old session-local entity number, or a
-missing optional display label is not sufficient evidence. Cleanup must call the registry's
-owner-scoped `remove_signal`/`drop_entity` path; there is no name-only or age-only bulk purge.
-When no such owner policy exists, inventory the row and preserve it rather than deleting a
-valid mission trace.
+Scene replacement, clear, restart and active Twin closure retire every scene-owned
+history, type, metadata entry and captured wire owner. `SignalRegistryPlugin`
+registers this lifetime through `AppSceneExt::init_scene_resource`; producers
+default to scene ownership without individual cleanup handlers. Explicit
+`retain_across_scenes` registration preserves application channels such as FPS
+and frame time. Registry removal notifications update all readers, including
+hidden browser indexes, without resetting the catalog revision.
+Channel deadlines, port-resolution caches and deadband references reset even
+on surviving application declarations, so a replacement clock cannot inherit
+an outgoing scene's future sampling deadline. Source removal
+inside the same scene marks history inactive; it does not by itself end the
+scene's mission record. The production Twin retirement gate checks catalog and
+history removal on switching, reopening, scene loading and restart, and checks
+preservation after a rejected replacement.
+Its application-channel clock checks wait for post-selection sample delivery;
+scene projection readiness does not require a fixed sample to have landed yet.
+
+Modelica telemetry retains each channel's typed document owner separately from
+its live producer cache. `DocumentClosed` removes exactly that document's signal
+references, including archived sources, while unrelated channels remain. This
+also covers Twin document closure without a global scene transition. Ordinary
+source removal within an open document retains the scene's archived record.
+Scene-cache retirement sets a one-shot refresh request: surviving paused editor
+solvers republish their current sample and metadata without stepping or resuming.
+The refresh request is consumed once, so idle presentation does not poll solvers.
+
+Experiment playback is a separate producer: its entity map is a registered scene
+resource and its entities carry `SceneOwned`. Scene reload drops the transient
+playback; document closure drops that document's playback signals and entity.
+Completed experiment trajectories remain queryable from experiment history.
+
+Derived visualization histories and async plot builds live in the viz owner's
+scoped `scene_data` store, together with canvas signal/value snapshots, interests,
+queued input writes and plot-drop requests. Final scene-resource retirement
+drops this store in every egui context and clears telemetry drag payloads and
+native plot interaction memory, even when the corresponding widget is hidden.
+Restarted clocks therefore start with fresh plot bounds. Add future scene-derived
+widget state through that store so it inherits cleanup; layout preferences and
+saved plot configurations retain their application lifetime.
 
 The telemetry browser, plot controls, legends, and exports all label channels through
 `lunco_viz::signal::display_channel_label`, which uses the same identifier humanizer and

@@ -485,11 +485,10 @@ fn joint_frame_report(doc, joints) {
     let frames = [];
     let errors = [];
     for spec in joints {
-        let record = query_prim(doc, spec.path, [
-            "physics:axis", "physics:localPos0", "physics:localPos1",
-            "physics:localRot0", "physics:localRot1",
-            "physics:lowerLimit", "physics:upperLimit"
-        ], ["physics:body0", "physics:body1"], false);
+        // Enumerating the prim's authored attributes distinguishes explicit
+        // anchor opinions from the schema's composed default values.
+        let record = query_prim(doc, spec.path, (),
+            ["physics:body0", "physics:body1"], false);
         let body0 = relationship_targets(record, "physics:body0");
         let body1 = relationship_targets(record, "physics:body1");
         let entry = #{

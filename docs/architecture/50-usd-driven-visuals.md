@@ -104,6 +104,16 @@ catches up; operations still pending at the stage boundary remain a
 projection-not-current error. Derived geometry requests use the canonical stage
 because their bounds and source-layer facts need its native USD reads.
 
+With no `attrs` selection, the query enumerates authored value opinions;
+explicitly requested fields may read the native schema default. Authoring
+checks that require explicit joint frames use the authored enumeration. Half
+scalars, vectors, quaternions, arrays, and dictionary values cross the typed
+query ABI as exact numeric f64 values, rather than their serde u16 bit storage.
+Quaternion order remains USD `[w, x, y, z]`. Physics readers that ask for an
+authored scalar check value-opinion presence before reading a composed default.
+The lint `meters_per_unit_authored` fact reads session/root metadata opinions,
+while runtime units continue to use the composed schema default.
+
 The complete ordered route remains visible while the route program separately
 owns enablement and progression. Waypoint labels remain a separate generic
 screen-space overlay. They wrap to a bounded width and stay inside the
@@ -497,3 +507,9 @@ profiles set `editor_camera_bloom_enabled: false` so geometry stays crisp.
 The camera binder applies this policy on creation and Graphics changes, including
 when the active scene authors environment bloom. Scene cameras retain their
 authored bloom and ordinary graphics profile.
+
+Prepared scene snapshots retain inactive prim identity for explicit queries.
+Their child traversal, schema indexes and projection facts expose only active
+prims. Physics refresh decisions also inspect current composed rigid-body and
+collision schemas when a previously inert shape becomes physical; existing
+Avian components alone do not prove the complete participation contract.

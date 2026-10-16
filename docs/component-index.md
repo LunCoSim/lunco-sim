@@ -73,6 +73,7 @@ assets/components/
 │   └── visual_review_camera.usda
 ├── comms/
 │   ├── antenna.usda
+│   ├── antenna_tracking.usda
 │   ├── ground_station.usda
 │   ├── link_beam.usda
 │   ├── radio.usda

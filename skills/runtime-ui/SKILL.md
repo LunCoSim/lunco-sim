@@ -116,6 +116,17 @@ and remote consumers. Do not add `domain_to_view`, `vessel_exposure`, or a
 widget-specific Rust registry. Resolve source state in the engine producer;
 keep markup unaware of ECS/domain types.
 
+Initialize `EngineExposures` and scene-derived producer caches through
+`AppSceneExt::init_scene_resource`. Surfaces default to scene lifetime,
+including hidden properties and subject identities. Application-owned producers
+must explicitly call `retain_across_scenes(namespace)`; never retain a namespace
+that can contain Twin-owned values. Change-gated producers that survive a scene
+must republish once when their namespace is absent after reset. Remove an
+authored namespace with `remove_surface` when its source is deleted or renamed.
+The production Twin retirement gate seeds an unsaved authored surface through
+`ApplyUsdOp` and uses Rhai `ReadExposures` verdicts across replacement and
+same-path reopening.
+
 Engine health follows the same generic path. Read the typed
 `EngineHealthSnapshot`/`PhysicsHealthSnapshot` publication and expose named
 properties through the ordinary `engine-health` namespace; do not add a HUD
@@ -336,7 +347,20 @@ binding to the queue, which releases it on execution or rejection. HUD rows
 use `Surface` retention. Scene transitions retire queued tools even while the
 interpreter is preparing. Never leave a selected popup endpoint unowned.
 Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
-production popup input, dismissal, reset, and Twin-replacement gate.
+production popup/menu input, replacement, dismissal, reset, and Twin-replacement
+gate. Installed workbench menus bind provider-lifetime endpoints beneath a fresh
+installation root and the current input Twin/scene; disable input during scene
+transition. Selection creates a scene-bound invocation child. This keeps
+application menus reusable after scene reset while replacement revokes both
+held input and selected work. Every terminal admission/queue path releases the
+exact invocation lease, including overload with an omitted request owner.
+
+Nested deferred calls retain their typed caller context and capabilities through
+`CommandOrigin::Rhai`/`WorldScriptExecution`. Never rebuild a stopping caller as
+UI/REPL evaluation. The gate stops `guided_hud_teardown.rhai`, then inspects the
+completed authored verdict from both deferred queues. The wrapper uses
+temporary application-source fixtures for the native asset watcher and removes
+them after its owned runtime exits.
 
 Run `assets/scripting/tests/test_guided_hud.rhai` with
 `scripts/api/run_rhai_test.sh PORT FILE` in an owned windowed production session.

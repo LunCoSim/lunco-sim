@@ -84,7 +84,7 @@ pub fn cached_telemetry_sparkline_stats(
     id: Id,
     signal: &SignalRef,
 ) -> Option<TelemetrySparklineStats> {
-    ctx.data(|data| {
+    crate::scene_state::scene_data(ctx, |data| {
         data.get_temp::<Arc<CachedSparkline>>(id.with("history"))
             .filter(|cached| cached.signal == *signal)
             .and_then(|cached| cached.stats)
@@ -139,7 +139,7 @@ pub fn render_telemetry_sparkline(
     let fingerprint = history_fingerprint(history);
     let width = rect.width().round().max(1.0) as u32;
     let cache_id = options.id.with("history");
-    let cached = ui.ctx().data(|data| {
+    let cached = crate::scene_state::scene_data(ui.ctx(), |data| {
         data.get_temp::<Arc<CachedSparkline>>(cache_id)
             .filter(|cached| {
                 cached.signal == *signal
@@ -160,8 +160,7 @@ pub fn render_telemetry_sparkline(
             points,
             stats: telemetry_history_stats(history),
         });
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(cache_id, cached.clone()));
+        crate::scene_state::scene_data(ui.ctx(), |data| data.insert_temp(cache_id, cached.clone()));
         cached
     });
 

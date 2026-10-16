@@ -32,6 +32,27 @@ replacement clears that set before deferred despawns; projection systems use
 the set to reject late work from the outgoing root. Additive preview mounts
 remain explicit and do not become the active running scene.
 
+Camera-path gate and playback clocks are linked descendants of their source
+curve. Retiring the source reclaims both, including on stage re-projection;
+their affine clock-parent references do not establish lifetime ownership.
+The camera-path discovery cache uses the registered scene-resource boundary too.
+
+Joint topology follows the native USD resync scope: resyncing a source or any
+ancestor, including the stage root, invalidates its cached joints and wheel
+facts. Document undo and source replacement must not retain removed constraints
+as admission requirements.
+The topology index, preparation task store, pending simulation projection work
+and ground readiness flag register through `init_scene_resource` at their
+owners. Shutdown cancels queued topology jobs and releases their progress keys;
+the final reset drops all cached rows and completion handles, preserves only
+the monotonic worker operation counter, and rearms source discovery.
+`lunco-usd-avian-joints::retire_native_joints` owns both graph and component
+retirement for scene teardown and live detach. It validates every native
+component identity before changing an edge, wakes released islands through
+Avian's public command, then removes each definition before its disabled marker.
+Native removal observers cannot readmit a retired constraint. Surviving endpoints
+resume integration when a sleeping constrained assembly is detached.
+
 ## One transition boundary
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
@@ -98,6 +119,34 @@ generation, so its final `on_stop` still routes to the outgoing Twin after the
 workspace has switched. Pending asset and compiler work is canceled or fenced
 at that same owner boundary.
 
+USD-authored policies retire through the projector's existing reconciliation
+path during domain shutdown, after projected scripts stop. This restores the
+retained application/Twin hooks and reconciles policy-owned synthesizers before
+another scene can execute them. The projector's source handles, prepared facts
+and previous-source signal are one registered scene resource. Reset requests
+one projection pass even when a surviving source has the same asset identity.
+Environment projection likewise registers its authored opinions and source
+snapshots, releasing retained plans and invalidating its previous-source signal
+at the final reset.
+The synthesizer bridge reconciles whenever the effective policy registry
+changes. Its application-lived bookkeeping records actual registrations, so
+it can remove outgoing names even if Twin closure already removed their policy
+definitions; it retains no source text, compiled hook or scene plan.
+
+Live inline bindings use the policy registry's existing application/Twin layers,
+selected by the caller's typed route. Twin mutation requires the exact active
+Twin and committed scene generation; retired shutdown callbacks cannot recreate
+a binding. Application callers cannot mutate a Twin-owned or USD-authored
+effective policy. Twin closure restores retained application implementations.
+
+The backend registers `ScenarioDriver::retire_removed_model` for attachment
+removal. Interactive/API programs attached to retiring hierarchy entities stop
+during the removal flush, before registered scene resources reset, even though
+their source documents remain independently open. Stable application hosts keep
+their explicit application lifetime. Attachment removal reuses the driver's
+idempotent stop operation; it cannot defer an outgoing `on_stop` into the next
+scene's driver tick.
+
 `TwinClosed` closes every document whose stored runtime owner is that
 `LocalTwin`: the workspace owner dispatches `CloseDocument` to the domain owners,
 then removes the metadata. Workspace replacement drains these handlers before
@@ -139,9 +188,14 @@ documents: tabs and queued filesystem opens under the closed Twin root are
 retired, including files opened directly by path without an explicit Twin origin.
 
 Core and application scripts keep their own owner scope and stable generation
-across Twin scene transitions. Scene teardown clears the old guided presentation
-but only closes programs explicitly marked as scene-owned; Twin teardown only
-closes programs explicitly marked with that Twin ID. A shared source or a
+across Twin scene transitions. Guided presentation clears at transition start
+and registers `GuidedOverlay` as a scene resource, so its final reset also drains
+writes from shutdown and entity-removal callbacks. Runtime dropdown state uses
+the same final reset; only active `TwinClosed` clears it immediately. Objectives
+visibility remains an application preference. Scene teardown closes source
+documents explicitly marked as scene-owned, and removal of any retiring host
+stops its execution. Twin teardown closes programs explicitly marked with that
+Twin ID. A shared source or a
 currently active Twin does not make an unmarked application script Twin-owned.
 The application Tutorials menu captures the active Twin at selection time and
 starts that tutorial instance under that Twin's lifecycle owner; this does not
@@ -164,9 +218,117 @@ the scene-time gate closed.
 ## Everything else — the `SceneTeardown` schedule
 
 Resources, caches, worker-side handles, and subsystem-derived entity trees are
-not covered by the USD prim sweep. They are retired by the dependency-light
-`lunco_core::SceneTeardown` schedule, run before the outgoing prims are
-despawned and before replacement projection starts.
+not covered by the USD prim sweep. The dependency-light core lifecycle boundary
+runs domain `SceneTeardown` shutdown before outgoing prims are despawned, then
+resets registered resources after removal callbacks and before replacement
+projection starts.
+
+Initialize scene-derived resources with `AppSceneExt::init_scene_resource::<R>()`,
+and implement `SceneResource` at the owning type. Initialization installs cleanup
+once for that type; a new scene resource does not need an entry in a central
+cleanup list. The default `clear_scene` replaces the value with `Default`,
+dropping collections, source handles and pending tasks. Mixed-lifetime stores
+override it to preserve only explicitly application-owned state and monotonic
+publication counters. Settings, shared source caches and application registries
+keep their application lifetime.
+
+Scene-derived message queues use the same registration:
+`app.add_message::<M>().init_scene_resource::<Messages<M>>()`.
+Their reset clears unread payloads after shutdown and entity-removal callbacks,
+while preserving Bevy's message counters so surviving readers consume new
+messages correctly. Unregistered application queues retain their normal lifetime.
+The Modelica execution owner registers `Messages<ModelicaNotice>` this way;
+queued lifecycle notices cannot repopulate cleared status after teardown.
+
+`run_scene_teardown_with_entities` first drains domain `SceneTeardown` systems
+and their deferred shutdown work, then reclaims the supplied scene hierarchy
+and `SceneOwned` entities, flushes removal callbacks, then runs registered
+resource resets. `run_scene_teardown` uses the same boundary without a supplied
+hierarchy. This ordering prevents terminal callbacks from repopulating an
+already-cleared store. Tag scene-owned entities outside the USD hierarchy with
+`SceneOwned`; their linked children are reclaimed too. All scene transition
+routes must use this owner boundary, including same-path restart and active
+Twin closure. Closing an inactive Twin or rejecting a replacement does not run
+this global scene cleanup.
+
+Telemetry histories and metadata default to scene lifetime, including archived
+publishers and metadata published before the first sample. Only signals
+explicitly registered with `SignalRegistry::retain_across_scenes` survive;
+engine FPS and frame time use that application lifetime. The registry publishes
+normal descriptor removals and keeps its catalog revision monotonic. Modelica
+telemetry sessions, physics kinematic cursors, sampler plans, queued delivery,
+focus, browser workers/indexes and transient browser requests use the same
+resource registration. API-created channel entities carry `SceneOwned`.
+
+`StatusBus` registers as a scene resource at its owner. Clear and reload retire
+visible history, progress, outcomes and handles through that boundary. Windowed
+and offscreen hosts both install the owning `StatusBusPlugin`; closing
+the active Twin invokes the same reset. Publication counters remain monotonic,
+and late handle completion cannot replace successor status.
+
+Runtime exposures follow the same lifetime contract. `EngineExposures` removes
+scene namespaces, subjects and properties, including hidden surfaces, at the
+registered resource reset boundary. Only namespaces explicitly declared with
+`EngineExposures::retain_across_scenes` survive; health, application cadence and
+camera status use that lifetime. Authored topology/program caches and seminar
+trace state are registered scene resources too. `ExposureRefresh` resets all
+invalidation domains and requests an immediate first publication. Independent
+change-gated producers also wake once when their namespace is absent; dataset
+consent uses that condition so surviving application downloads republish while
+retired Twin scope data remains removed. Editing away an authored surface
+withdraws its namespace through `EngineExposures::remove_surface`.
+
+Independent editor Modelica documents may survive scene reload. The telemetry
+owner requests one projection pass when its scene cache resets, so paused
+sources republish current state without advancing their solvers. Its typed
+document-to-signal attribution outlives live producer removal within the scene;
+`DocumentClosed` retires those exact references, including archived history,
+without clearing channels owned by another document or producer.
+
+Completed experiment trajectories remain in the experiment registry, while
+their active playback is scene-owned. The runner registers `PlaybackEntities`
+as a scene resource and the UI publisher tags each playback entity `SceneOwned`.
+Reload drops both the map and entities; a later completed run publishes through
+a fresh entity. `DocumentClosed`, `TwinClosed`, and replication retirement use
+the same publisher-owned playback release path without deleting run history.
+
+Visualization widgets that only receive an egui context store scene-derived
+data through `lunco-viz::scene_state::scene_data`, a single scoped egui
+`IdTypeMap`. This includes history snapshots, async plot tasks, canvas interest
+and value snapshots, pending input writes and plot-drop requests. The viz owner
+tracks Bevy egui context insertion, replacement and removal, including contexts already present
+at plugin installation. Its registered scene resource removes the entire store
+after callbacks and entity retirement, including removed contexts. Hidden
+widgets therefore release buffers and queued actions without another paint;
+new entries in that store inherit its lifetime. Telemetry drag payloads and
+native plot interaction memory retire at the same boundary, so outgoing zoom
+bounds cannot hide a restarted clock. Layout preferences and visualization
+configurations keep their application lifetime.
+
+Editor cursor modes, armed tool names, context menus, sub-selection and
+cinematic targets use the same registered scene lifetime. A replacement disarms
+them before another scene can interpret the same tool or asset name. Brush
+dimensions remain explicit application preferences. Entity-tree snapshots,
+pending tree builds, port snapshots, row indexes and edit drafts are resources
+rather than fields on application-owned panel objects; hidden panels therefore
+release outgoing data without painting. Tree publication revisions remain
+monotonic across reset and are independent of worker submission revisions.
+The live Inspector snapshot is a registered scene resource. Parameter drafts
+belong to an explicit preview and document, survive unrelated scene reloads,
+and retire immediately at `DocumentClosed` or when the preview owner removes
+or replaces that session. Draft retirement runs independently of panel paint.
+Shared Inspector shader schemas follow their asset lifetime: shader removal
+or modification evicts the cached entry independently of panel visibility.
+
+Connections separates the live scene graph from isolated document-preview
+graphs. Scene retirement drops the live graph and its async layout/file jobs;
+preview state survives only under its document lifetime. Every async result
+pins the structural root, stage and optional preview document in a typed source
+lease. A matching document/layout revision is insufficient when that lease has
+retired. Document closure releases its preview graph and workers. Retiring a
+pending view-file operation publishes its terminal command failure before
+dropping the handle. File I/O already executing may finish at its captured
+file destination, but cannot publish into a replacement graph.
 
 Live document edits use a separate, stage-scoped boundary; they do not invoke
 the application-wide `SceneTeardown`. Before a full-stage re-projection, the
@@ -332,12 +494,13 @@ scene therefore stops safely, but cannot become a process-wide load lock; there
 is no restart-process fallback or mutation-rejection shim in the scene commands.
 
 The safety sequence is intentionally one-way within a scene: a terminal fault
-pauses the physics clock with a zero delta, while the virtual clock remains
-available for diagnostics and lifecycle commands. The invalid scene is not
-repaired or resumed. `SceneTeardown` clears the fault and its safety hold, and
-the physics owner separately resets scene-owned holds, deliberate-step debt, and
-the physics clock before the replacement is admitted. This is recovery of the
-session boundary, not recovery of invalid runtime state. The contract is covered
+pauses native physics with a zero delta and holds shared simulation admission.
+Interaction and presentation remain available for diagnostics and lifecycle
+commands. The invalid scene is not repaired or resumed. `SceneTeardown` clears the fault and its safety hold, and
+the physics owner separately resets scene-owned holds and the physics clock.
+The time owner registers `SimulationStepControl` as scene state, so final
+reset retires shared deliberate-step demand and manual holds after terminal
+callbacks and before replacement admission. This is recovery of the session boundary, not recovery of invalid runtime state. The contract is covered
 by `lunco-physics::terminal_runtime_fault_pauses_physics_until_cleared` and
 `lunco-usd-sim::fault_then_scene_reload_can_admit_a_replacement_runtime`.
 
@@ -347,11 +510,12 @@ by stable `GlobalEntityId` values, so `lunco-avatar` clears claims for outgoing
 replacement scene can therefore reuse deterministic ids without inheriting a
 prior lesson's driver, while non-scene ids remain untouched.
 
-The same boundary clears the fixed `SimTick`, rollback marker, prediction input
-logs, host jitter buffers, applied-input acknowledgements, render-leading drive
+The same boundary clears rollback markers, prediction input logs, host jitter buffers, applied-input acknowledgements, render-leading drive
 values, simulated intents, and control-path registry. Physics clears its holds
-and queued deliberate-step debt and restores a zero-delta physics clock. These
-are scene-owned control surfaces, not session identity; leaving any of them
+and restores a zero-delta physics clock; the time owner retires shared step
+demand. `SimTick`, `Time<Fixed>` and admitted fixed-time balance remain continuous;
+the time owner reanchors the replacement mission epoch at the current tick.
+These are scene-owned control surfaces, not session identity; leaving any of them
 behind would allow a replacement entity or reused global id to receive an old
 command or remain silently held.
 
@@ -364,13 +528,14 @@ It is a **schedule**, not a registry, and that choice is the design:
   would put every subsystem's cleanup in one file that no subsystem author
   edits, and the state that gets forgotten is always the one whose owner never
   looked there.
-- `SceneTeardown` grep-lists everything a reload restores.
+- `SceneResource` identifies registered state; `SceneTeardown` identifies custom
+  domain shutdown, restoration and cross-resource work.
 
 ```rust
-app.add_systems(
-    lunco_core::SceneTeardown,
-    |mut commands: Commands| commands.remove_resource::<MySceneCache>(),
-);
+use lunco_core::AppSceneExt;
+
+impl lunco_core::SceneResource for MySceneCache {}
+app.init_scene_resource::<MySceneCache>();
 ```
 
 `add_systems` creates the schedule on first use, so no crate has to initialise
@@ -401,12 +566,116 @@ app registers its own start-up value as the baseline:
 case. Carried into the next scene it would make a fresh `PhysicsScene` look like
 a conflicting duplicate of a prim that no longer exists.
 
-## Adding scene-derived state
+## Verification
 
-If you add a resource, cache or external handle that a scene load writes, you
-have added a leak until you register its reset. There is no automatic
-detection — the schedule is the review surface, and an unregistered resource is
-visible as an absence from it.
+USD stage changes reconcile the running projection and every explicit preview
+root through one structural projector. Indexed stage/path candidates are scoped
+to the consuming preview hierarchy; subtree refresh updates all instances.
+Framing also requires that preview's own hierarchy. Preview readiness requires
+both the document's consumed projection cursor for the exact stage and completed
+visual work under that root. Document and cursor changes wake the readiness
+producer even when no mesh or transform changed.
+Consumers wait for this readiness before composed preview inspection, then
+compare the document generation. An allocated asset handle does not establish
+that its dependency recipe has finished preparation.
+
+The generic viewport seams use one shared explicit quality-profile fixture and
+wait for exact document generations. The production
+`usd_material_edit_projection` Rhai gate creates and removes geometry in two
+same-document preview leases and checks projected mesh bounds through framing;
+removed geometry must disappear from both views without replacing their stage.
+`preview_domain_isolation` uses a closed electrical fixture with explicit solar
+inputs. It verifies that preview copies and rejected connections cannot admit a
+solver or replace the live network. Its root-rename plan includes `SetDefaultPrim`
+in the same compound edit so the preview's projection target remains valid.
+
+During stepped execution, the production scene runner stops at a terminal
+`RuntimeFaults` boundary.
+Its existing expected-fault registry distinguishes authored negative fixtures
+from unexpected failures; it does not pump frozen simulation ticks while a
+terminal fault is active. Same-process recovery still needs an owned API
+session or the generic lifecycle seam.
+
+Generic `scene_lifecycle` tests at the core, scripting, exposure, guided UI and
+runtime UI owners cover repeated reset, removal/shutdown callbacks, independent documents,
+pending preparation and preserved application state. These are engine ownership
+invariants; authored Rhai retains control over script behavior. The production
+`scripts/api/test_twin_session_retirement.py` driver exercises Twin replacement
+and full reload through the public API with verdicts in
+`assets/scenarios/tests/twin_session_retirement.rhai`. Its exposure probe authors
+an unsaved registered surface field with `ApplyUsdOp`, proves publication,
+renames the namespace and proves withdrawal, then verifies removal across Twin
+replacement, same-path reopening and `LoadScene` while application namespaces
+survive.
+
+Deferred Modelica compile admission validates its pinned source owner and
+participant before consulting worker failures or publishing diagnostics.
+Retirement cancels the request; it cannot raise a fault after scene teardown.
+Current requests still report actual compiler and worker failures.
+`scripts/api/test_twin_loading_replacement.py` covers early replacement and
+clear, late physics/compile admission, and recovery after a terminal Modelica
+initialization fault. It verifies immediate and delayed empty-state readiness,
+physics retirement, and a freshly projected successor after each clear.
+
+`scripts/api/test_modelica_lifecycle.py` runs the parameterized native-worker
+retirement and source-duplication gates in sequential isolated sessions. The
+native-worker gate's Command host verifies exact scene projection before
+signaling its retained Application orchestrator. Authored Rhai proves cancellation of running and queued
+outgoing jobs, source retirement, same-name successor isolation, and rejection
+of imports from the closed owner.
+
+USD document Save and Save-As publish `DocumentSaved` from the command owner
+after the durable write and saved-baseline update. `lunco-usd-commands` alone
+mirrors save/change/close events into workspace metadata in every host; the UI
+owns browser presentation. This keeps dirty indicators and document retirement
+consistent across native API, headless scene tests, and workbench consumers.
+
+Native removal observers must inspect Bevy's destination archetype before
+reactivating a disabled constraint. A removal during despawn has no destination;
+a compound removal may also remove the joint or its identity. Avian's joint
+admission observer therefore requires a surviving enabled native joint and
+identity in the destination archetype. This applies to preview closure and
+cancelled admission as well as full scene retirement. Teardown queries include
+Bevy-disabled entities, which still own native components and removal hooks.
+
+The physics owner registers scene-derived continuous contacts and diagnostics,
+constraint order and position scope, dynamic island masses, escape bounds and
+reports and holds. The time owner retires shared step demand. Final teardown
+drops retained collider geometry and re-arms topology discovery even if no replacement physics tick occurs.
+Physics integration settings retain their explicit application lifetime.
+
+Live authoring resolves its document from the entity's exact projected stage
+lease in `DocBackedTwinScenes`. The shared composed reader supplies prim validity and
+composition-arc ownership for move, rotation, complete pose, property, connection
+and deletion persistence. A retired stage cannot acquire another document by
+reusing its name, and editor focus does not select a scene mutation destination.
+
+`lunco-usd-commands` registers pending document-dependency preparations as a
+scene resource. Its teardown observer first cancels admission keys, rejects
+outstanding command receipts and releases `UsdDocumentAuthoring` holds; resource
+reset then drops continuations and result slots. Workers hold weak publication
+slots and cannot retain completed recipes after their request retires. Document
+close applies the same boundary to the addressed document. Independent document
+work explicitly survives unrelated scene teardown, retaining its completion
+channel; closing its owning Twin retires it immediately. Source leases capture
+scene generation only for stages in registered scene mounts. Before commit, the
+owner validates its exact document and stage lease, including resolver revision.
+Pending discards use that same lease and scene-resource boundary. Closing their
+document or saving it rejects and drops the pending source read; a stale discard
+cannot reset newer opinions or history.
+The render-free scene owner supplies `is_authoritative_scene_stage` to both
+projection and document preparation. It reads the exact active mount and stage
+identity, so preview/import work cannot hold the simulation, and an old root
+loses authority before its deferred despawn even when a new root reuses its path.
+
+Async exposure preparation and guided HUD cards register scene resources at their
+owning packages. Exposure invalidation cancels queued admission and drops its
+result receiver immediately; running workers cannot publish into a retired
+scene. HUD cards, pointer subscriptions and context-menu roots tag their detached
+callback entities `SceneOwned`, so final teardown also retires endpoints created
+by terminal callbacks. Camera exposure retention remains an explicit producer
+contract.
+
 
 ## See also
 

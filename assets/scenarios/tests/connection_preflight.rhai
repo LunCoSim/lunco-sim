@@ -85,7 +85,7 @@ fn on_tick(me, ctx) {
             }
             return;
         }
-        if rejected.status != "failed" || rejected.error == ()
+        if rejected.status != "rejected" || rejected.error == ()
             || !rejected.error.contains("missing prim") {
             fail_fast("invalid connection command did not fail loudly: " + rejected.error,
                 "CONNECTION PREFLIGHT", "CONNECTION_PREFLIGHT");

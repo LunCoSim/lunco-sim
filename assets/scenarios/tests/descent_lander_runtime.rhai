@@ -154,10 +154,11 @@ fn on_event(me, evt, ctx) {
         print("[descent-runtime] touchdown xy_error=" + horizontal_error +
               " min_pad_clearance=" + minimum_pad_clearance +
               " all_legs_contact=" + all_legs_contact);
-        if touchdown_ok {
-            emit("LANDER_TOUCHDOWN", "PASS");
-        } else {
-            emit("LANDER_TOUCHDOWN", "FAIL");
+        emit("LANDER_TOUCHDOWN", #{ qualified: touchdown_ok,
+            horizontal_error: horizontal_error, minimum_pad_clearance: minimum_pad_clearance });
+        if !touchdown_ok {
+            this.done = true;
+            verdict(false, "touchdown did not satisfy contact, target and pad-clearance checks");
         }
     } else if evt.name == "rover_deployed" {
         this.deployed = true;

@@ -398,7 +398,7 @@ pub fn render_multi_series_plot(
 ) -> Option<f64> {
     type SharedPlotCache = Arc<Mutex<MultiSeriesPlotCache>>;
     let cache_id = options.id.with("multi_series_plot_points");
-    let cache: SharedPlotCache = ui.ctx().data_mut(|data| {
+    let cache: SharedPlotCache = crate::scene_state::scene_data(ui.ctx(), |data| {
         if let Some(existing) = data.get_temp::<SharedPlotCache>(cache_id) {
             existing
         } else {

@@ -104,11 +104,15 @@ class ProductionSession:
         extra_args: Iterable[str] = (),
         log_path: Path | None = None,
         windowed: bool = False,
+        subcommand: str | None = None,
+        require_readiness: bool = True,
     ) -> None:
         self.port = port
         self.extra_args = list(extra_args)
         self.log_path = log_path or Path(f"/tmp/luncosim-api-{port}.log")
         self.windowed = windowed
+        self.subcommand = subcommand
+        self.require_readiness = require_readiness
         self._log = None
         self.process: subprocess.Popen[bytes] | None = None
 
@@ -123,6 +127,8 @@ class ProductionSession:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log = self.log_path.open("wb")
         args = [str(BINARY)]
+        if self.subcommand is not None:
+            args.append(self.subcommand)
         if not self.windowed:
             args.append("--no-ui")
         args.extend(["--api", str(self.port), *self.extra_args])
@@ -135,7 +141,8 @@ class ProductionSession:
             start_new_session=True,
         )
         try:
-            wait_for_ready(self.port)
+            if self.require_readiness:
+                wait_for_ready(self.port)
         except Exception as error:
             self._force_reap()
             if self._log is not None:

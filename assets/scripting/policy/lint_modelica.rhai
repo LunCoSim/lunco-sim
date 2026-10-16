@@ -1,13 +1,9 @@
 // ── Modelica lint policy — the rules, in rhai ───────────────────────────────
 //
-// Hook `lint.modelica`, entry `lint_modelica(facts)`. Registered at startup from
-// this file (the authored application policy manifest) and REPLACEABLE AT
-// RUNTIME:
-//
-//     bind_policy("lint.modelica", "lint_modelica", my_source)
-//     unbind_policy("lint.modelica")               // remove the active rules
-//
-// so a rule can be written, tried and tightened with no rebuild.
+// Hook `lint.modelica`, entry `lint_modelica(facts)`. The authored
+// application/Twin policy manifest installs this deterministic contract.
+// Edit its authored source and reload that policy layer to change the rules.
+// Inline non-deterministic bindings cannot replace it.
 //
 // ── WHAT A RULE MAY SEE ─────────────────────────────────────────────────────
 //

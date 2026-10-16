@@ -50,7 +50,9 @@ step requests while held or paused add exact fixed-cycle demand to the same
 runner and accumulator; they never bypass preparation, native admission,
 participant barriers or runtime faults. The runner consumes demand before the
 cycle begins, marks that complete cycle active, and restores transport projection
-afterward. Release retires pending demand, terminal faults cancel it, and scene
+afterward. `SimulationStepControl` registers its scene lifetime at initialization;
+its final reset follows shutdown and entity-removal callbacks. Release retires
+pending demand, terminal faults cancel it, and scene
 teardown resets the control. A cycle callback may release the hold safely.
 Native `PhysicsHolds` project their own `PhysicsIntegration` progress key;
 editor dragging owns a distinct `SceneInteraction` key. Both gate complete
@@ -162,13 +164,6 @@ physics states and never predicts beyond `SimTick`. On pause or a simulation
 barrier it presents the upper endpoint, `n`, then remains fixed. The sample's
 simulation seconds, MET, and Julian date all come from the same `MissionClock`
 mapping as `WorldTime`.
-
-Avian's transform-easing dependency applies the same `[0, 1]` bound to linear,
-spherical, and Hermite interpolation. Retained whole fixed cycles can make
-`Time<Fixed>::overstep_fraction()` exceed one; they remain queued demand and
-must not extrapolate a rendered transform beyond its captured endpoints. The
-vendored dependency owns this bound without changing the simulation clock or
-normalizing invalid authored rotations.
 
 Ordinary USD time-sampled transforms, visibility, and material channels use
 this physical presentation sample. Avian and other causal simulation state

@@ -2,62 +2,43 @@
 (
     defaultPrim = "SandboxScene"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Minimal scene to isolate Avian joint behaviour end-to-end.
-# Three prims:
-#   - Ground (static collider)
-#   - CubeA (kinematic, externally controlled — gizmo / `MoveEntity`)
-#   - CubeB (dynamic)
-#   - Hinge (`PhysicsFixedJoint` connecting A and B at the midpoint)
-#
-# With a working FixedJoint they settle to the ground together as a
-# rigid pair; if the joint is broken they fall independently. Drag
-# CubeA via the gizmo (or call the `MoveEntity` API) and CubeB
-# follows rigidly.
-#
-# Loaded by `target/debug/luncosim test --scene scenes/tests/joint.usda`.
-
-# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
+    documentation = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
-
-    # Avatar so the API observer has someone to focus from.
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        double3 xformOp:translate = (0.0, 6.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
-        double3 xformOp:translate = (0.0, 6.0, 12.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Cube "CubeA" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
@@ -65,30 +46,21 @@ def Xform "SandboxScene" (
         double size = 1.0
         double3 xformOp:translate = (-2.0, 5.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.2, 0.2)]
+        color3f[] primvars:displayColor = [(1.0, 0.20000000298023224, 0.20000000298023224)]
         float physics:mass = 1.0
-        # A is Kinematic from setup — doesn't fall under gravity. With
-        # the joint working, B (Dynamic) hangs at A's level.
         bool physics:kinematicEnabled = true
     }
-
     def Cube "CubeB" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (2.0, 5.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.6000000238418579, 1.0)]
         float physics:mass = 1.0
+        bool physics:collisionEnabled = true
     }
-
-    # THE WITNESS. A cube exactly like CubeB, at the same height, with NO joint
-    # holding it. If physics is running it lands on the ground within a second or
-    # two; if it is still at y=5 at the end of the run, nothing was simulating and
-    # "CubeB did not fall" would have meant nothing either.
-    #
-    # Without it the whole test passes on a frozen world.
     def Cube "FreeCube" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -96,24 +68,20 @@ def Xform "SandboxScene" (
         double size = 1.0
         double3 xformOp:translate = (6.0, 5.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.9, 0.5, 0.2)]
+        color3f[] primvars:displayColor = [(0.8999999761581421, 0.5, 0.20000000298023224)]
         float physics:mass = 1.0
         bool physics:collisionEnabled = true
     }
-
     def PhysicsFixedJoint "Hinge"
     {
         rel physics:body0 = </SandboxScene/CubeA>
         rel physics:body1 = </SandboxScene/CubeB>
-        # Anchors meet at world (0, 5, 0) — midpoint between the cubes.
-        point3f physics:localPos0 = (2.0, 0, 0)
-        point3f physics:localPos1 = (-2.0, 0, 0)
+        point3f physics:localPos0 = (2.0, 0.0, 0.0)
+        point3f physics:localPos1 = (-2.0, 0.0, 0.0)
     }
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "joint"
-
         def Scope "Test" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

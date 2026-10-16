@@ -37,7 +37,7 @@ model RoverAckermannDrivetrain
 
   RoverAutopilotGuidance guidance(
     turn_in_place=0.0,
-    enabled=guidance_gate,
+    enabled=authority.guidance_gate,
     target_x=autopilot_target_x,
     target_z=autopilot_target_z,
     position_x=autopilot_position_x,
@@ -47,10 +47,8 @@ model RoverAckermannDrivetrain
     speed=autopilot_speed,
     radius=autopilot_radius,
     turn_only=autopilot_turn_only);
-  Real piloted_gate "Clamped possession signal";
-  Real program_gate "Clamped authored-program authority";
-  Real guidance_gate "Authored-program waypoint-guidance authority";
-  Real manual_gate "Local manual authority outside an authored program";
+  RoverCommandAuthority authority(
+    piloted=piloted, program_active=program_active, autopilot_enable=autopilot_enable);
   Real selected_throttle;
   Real selected_steer;
 
@@ -67,12 +65,10 @@ model RoverAckermannDrivetrain
   output Real guidance_steer "Modelica waypoint steer command";
   output Real guidance_heading_error "Modelica waypoint heading error (rad)";
 equation
-  piloted_gate = max(0.0, min(1.0, piloted));
-  program_gate = max(0.0, min(1.0, program_active));
-  guidance_gate = program_gate * max(0.0, min(1.0, autopilot_enable));
-  manual_gate = piloted_gate * (1.0 - program_gate);
-  selected_throttle = manual_gate * throttle + guidance_gate * guidance.throttle_cmd;
-  selected_steer = manual_gate * steer + guidance_gate * guidance.steer_cmd;
+  selected_throttle = authority.direct_gate * throttle
+    + authority.guidance_gate * guidance.throttle_cmd;
+  selected_steer = authority.direct_gate * steer
+    + authority.guidance_gate * guidance.steer_cmd;
 
   // First-order lag toward the clamped throttle; heading is geometry, not
   // torque, so it bypasses the motor lag entirely.

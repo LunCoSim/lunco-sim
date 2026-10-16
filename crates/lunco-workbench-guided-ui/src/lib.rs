@@ -30,7 +30,7 @@ pub use hud::{
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
@@ -71,10 +71,12 @@ pub struct GuidedOverlay {
     pub recovery: Option<GuidedRecovery>,
 }
 
+impl SceneResource for GuidedOverlay {}
+
 impl GuidedOverlay {
     /// Clear every presentation field and its owner identity together.
     pub fn clear(&mut self) {
-        *self = Self::default();
+        self.clear_scene();
     }
 }
 
@@ -1219,7 +1221,7 @@ pub struct GuidedOverlayPlugin;
 
 impl Plugin for GuidedOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GuidedOverlay>()
+        app.init_scene_resource::<GuidedOverlay>()
             .add_observer(clear_twin_overlay_on_close)
             .add_observer(clear_overlay_on_scene_transition);
         hud::install(app);

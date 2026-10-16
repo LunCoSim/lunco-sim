@@ -58,10 +58,15 @@ fn verify_usd_path(id, filename) {
     let record = document_record(id);
     let document = query("InspectUsdDocument", #{doc_id: record.doc_id, path: "/World/LiteralProbe"});
     let target = query("ResolveUsdTarget", #{doc_id: record.doc_id, path: "/World/LiteralProbe", edit_target: "@root@"});
+    let size = ();
+    for attribute in document.prim.attributes {
+        if attribute.name == "size" { size = parse_float(attribute.value); }
+    }
     print("USD path probe target: " + target);
     report_verdict([
         t_true(normalized_path(record.origin.path).ends_with("/" + filename), "USD document retained its literal filename"),
         t_true(document.prim.exists && document.prim.type == "Cube", "saved USD prim was read back"),
+        t_true(size == 3.0, "typed edit is visible through the authoritative document composition"),
         t_true(target.status == "resolved" && target.source == "document_composition", "literal USD filename resolves through the native document composition"),
         t_true(literal_model_ready(), "literal Modelica source compiled and published its authored equation result"),
     ], "Portable USD and Modelica runtime", "PATH_USD_MODELICA")

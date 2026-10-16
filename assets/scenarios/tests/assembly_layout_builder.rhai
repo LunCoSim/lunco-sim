@@ -22,7 +22,7 @@ fn fail(me, message) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = assembly_edit::inspect(item.doc_id, ROOT);
@@ -31,7 +31,7 @@ fn find_document() {
             }
         }
     }
-    -1
+    ()
 }
 
 fn close_enough(actual, expected, epsilon) {
@@ -40,11 +40,11 @@ fn close_enough(actual, expected, epsilon) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
@@ -53,9 +53,9 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "assembly layout fixture document was not discoverable"); }
             return;
         }
@@ -95,8 +95,8 @@ fn on_tick(me, ctx) {
         } else { () };
         this.done = true;
         report_verdict([
-            t_true(this.place_ops == 1, "place_plan emits one typed local transform"),
-            t_true(this.alignment_ops == 1, "edge alignment emits one typed local transform"),
+            t_true(this.place_ops == 2, "place_plan emits the typed placement and its transform order"),
+            t_true(this.alignment_ops == 2, "edge alignment emits the typed placement and its transform order"),
             t_true(this.frame_alignment_ops == 2
                 && close_enough(this.frame_alignment_translation[0], 0.0, 0.001)
                 && close_enough(this.frame_alignment_translation[1], 0.0, 0.001)

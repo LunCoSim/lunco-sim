@@ -265,8 +265,9 @@ pub fn on_detach_joint(
 pub fn persist_detach_to_runtime_layer(
     trigger: On<DetachJoint>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    asset_server: Res<AssetServer>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
@@ -277,14 +278,18 @@ pub fn persist_detach_to_runtime_layer(
     let Ok(prim) = q_prim.get(cmd.target) else {
         return;
     };
-    let Some(doc) = document_for_prim(&prim, &usd_registry, &asset_server, backed.as_deref())
-    else {
+    let Some(doc) = document_for_prim(&prim, &usd_registry, backed.as_deref()) else {
         warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach has no owning USD document");
         return;
     };
-    let Some((doc, path, target)) =
-        lunco_scene_authoring::doc_resolve::delete_target(cmd.target, &q_prim, &usd_registry, doc)
-    else {
+    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
+        cmd.target,
+        &q_prim,
+        &usd_registry,
+        doc,
+        canonical.as_deref(),
+        usd_assets.as_deref(),
+    ) else {
         warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach target is not authorable in its owning USD document");
         return;
     };
@@ -380,7 +385,6 @@ fn runtime_spawn_ops(
 #[derive(SystemParam)]
 struct SpawnCommandAdmission<'w, 's> {
     catalog: Res<'w, SpawnCatalog>,
-    asset_server: Res<'w, AssetServer>,
     active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
     q_scene_root: Query<'w, 's, (Entity, &'static UsdPrimPath), With<UsdSceneRoot>>,
     q_parents: Query<'w, 's, &'static ChildOf>,
@@ -495,7 +499,6 @@ pub fn on_spawn_entity_command(
     // author into and therefore use the direct ECS + NetSpawn path below.
     if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
         &admission.backed,
-        &admission.asset_server,
         scene_root_prim.stage_handle.id(),
     ) {
         let SpawnSource::UsdFile(asset_path) = &entry.source;
@@ -703,9 +706,7 @@ fn commit_runtime_spawn(
         );
         return;
     }
-    if lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root_prim.stage_handle.id())
-        .is_some()
-    {
+    if lunco_usd_bevy_twin::scene_document_for(&backed, root_prim.stage_handle.id()).is_some() {
         reject(
             &mut commands,
             "runtime spawn target became document-backed before its fixed-tick commit".to_owned(),
@@ -1467,7 +1468,9 @@ pub fn persist_transform_to_runtime_layer(
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -1483,7 +1486,9 @@ pub fn persist_transform_to_runtime_layer(
         target,
         &q_prim,
         &usd_registry,
-        workspace.as_deref(),
+        backed.as_deref(),
+        canonical.as_deref(),
+        usd_assets.as_deref(),
     ) else {
         return;
     };
@@ -1566,7 +1571,8 @@ pub fn persist_move_to_runtime_layer(
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    asset_server: Res<AssetServer>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -1578,19 +1584,13 @@ pub fn persist_move_to_runtime_layer(
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    let Some(prim) = q_prim.get(target).ok() else {
-        return;
-    };
-    let Some(doc) =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, prim.stage_handle.id())
-    else {
-        return;
-    };
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim_in_document(
+    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
         target,
         &q_prim,
         &usd_registry,
-        doc,
+        Some(&backed),
+        canonical.as_deref(),
+        usd_assets.as_deref(),
     ) else {
         return;
     };
@@ -1652,7 +1652,9 @@ pub fn persist_rotation_to_runtime_layer(
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -1668,7 +1670,9 @@ pub fn persist_rotation_to_runtime_layer(
         target,
         &q_prim,
         &usd_registry,
-        workspace.as_deref(),
+        backed.as_deref(),
+        canonical.as_deref(),
+        usd_assets.as_deref(),
     ) else {
         return;
     };
@@ -1783,12 +1787,10 @@ fn is_mount_component(
 fn document_for_prim(
     prim: &UsdPrimPath,
     registry: &DocumentRegistry<UsdDocument>,
-    asset_server: &AssetServer,
     backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
 ) -> Option<lunco_doc::DocumentId> {
     lunco_scene_authoring::doc_resolve::resolve_doc_for_stage(
         prim.stage_handle.id(),
-        asset_server,
         backed,
         registry,
     )
@@ -1804,8 +1806,9 @@ pub fn on_delete_entity(
     trigger: On<DeleteEntity>,
     selected: Option<ResMut<SelectedEntities>>,
     usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
-    asset_server: Option<Res<AssetServer>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     q_joint_state: Query<
         (),
@@ -1840,10 +1843,7 @@ pub fn on_delete_entity(
     if let Ok(prim) = q_prim.get(cmd.target) {
         let owner = usd_registry
             .as_deref()
-            .zip(asset_server.as_deref())
-            .and_then(|(registry, asset_server)| {
-                document_for_prim(prim, registry, asset_server, backed.as_deref())
-            });
+            .and_then(|registry| document_for_prim(prim, registry, backed.as_deref()));
         if cmd.intent.is_persistent() {
             let Some((registry, (doc, _, _))) =
                 usd_registry
@@ -1851,7 +1851,12 @@ pub fn on_delete_entity(
                     .zip(owner)
                     .and_then(|(registry, doc)| {
                         lunco_scene_authoring::doc_resolve::delete_target(
-                            cmd.target, &q_prim, registry, doc,
+                            cmd.target,
+                            &q_prim,
+                            registry,
+                            doc,
+                            canonical.as_deref(),
+                            usd_assets.as_deref(),
                         )
                         .map(|target| (registry, target))
                     })
@@ -1899,8 +1904,9 @@ pub fn on_delete_entity(
 pub fn persist_delete_to_runtime_layer(
     trigger: On<DeleteEntity>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    asset_server: Res<AssetServer>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     q_joint_state: Query<
         (),
@@ -1928,14 +1934,18 @@ pub fn persist_delete_to_runtime_layer(
     let Ok(prim) = q_prim.get(cmd.target) else {
         return;
     };
-    let Some(doc) = document_for_prim(&prim, &usd_registry, &asset_server, backed.as_deref())
-    else {
+    let Some(doc) = document_for_prim(&prim, &usd_registry, backed.as_deref()) else {
         warn!(target = ?cmd.target, path = %prim.path, "persistent delete has no owning USD document");
         return;
     };
-    let Some((doc, path, target)) =
-        lunco_scene_authoring::doc_resolve::delete_target(cmd.target, &q_prim, &usd_registry, doc)
-    else {
+    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
+        cmd.target,
+        &q_prim,
+        &usd_registry,
+        doc,
+        canonical.as_deref(),
+        usd_assets.as_deref(),
+    ) else {
         warn!(target = ?cmd.target, path = %prim.path, "persistent delete target is not authorable in its owning USD document");
         return;
     };
@@ -1994,7 +2004,9 @@ pub struct SetUsdConnection {
 pub fn on_set_usd_connection(
     trigger: On<SetUsdConnection>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
@@ -2003,7 +2015,9 @@ pub fn on_set_usd_connection(
         cmd.target,
         &q_prim,
         &usd_registry,
-        workspace.as_deref(),
+        backed.as_deref(),
+        canonical.as_deref(),
+        usd_assets.as_deref(),
     ) else {
         return;
     };

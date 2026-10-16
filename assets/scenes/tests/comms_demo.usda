@@ -24,7 +24,7 @@ def Xform "CommsDemoScene" (
     {
     }
     def Plane "Ground" (
-        prepend apiSchemas = "LunCoTerrainAPI"
+        prepend apiSchemas = ["LunCoTerrainAPI"]
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
@@ -62,18 +62,26 @@ def Xform "CommsDemoScene" (
         double3 xformOp:translate = (6.0, 1.4, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         over "Comms" (
-            prepend references = @lunco://components/comms/radio.usda@</CommsRadio>
+            references = @lunco://components/comms/antenna_tracking.usda@</CommsAntenna>
         )
         {
-            double inputs:target_mount_x.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_x>
-            double inputs:target_mount_y.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_y>
-            double inputs:target_mount_z.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_z>
-            over "AntennaTrackerController" (active = true) { }
-            over "YawJoint" (active = true) { }
-            over "ElevationJoint" (active = true) { }
+            over "AntennaTrackerController"
+            {
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </CommsDemoScene/Rover/Comms/Environment.outputs:dss_goldstone_mount_z>
+            }
+            over "YawJoint"
+            {
+            }
+            over "ElevationJoint"
+            {
+            }
             over "YawHead"
             {
-                bool physics:rigidBodyEnabled = true
                 over "DishGimbal"
                 {
                     over "DishHead"
@@ -146,7 +154,7 @@ def Xform "CommsDemoScene" (
     {
         custom string lunco:scenario = "comms-demo"
         def Scope "Test" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"

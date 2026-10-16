@@ -6,6 +6,12 @@
 //! on real actions, never a timer (see first_drive.rhai for the pattern this
 //! follows).
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/DrivingBasics/Rover");
+    #{ modelica_entities: [rover],
+       entity_reads: vessel_descendants(find_path("/DrivingBasics")),
+       entity_writes: [rover], query_reads: [], required_inputs: [] }
+}
 // Teaching guidance follows the learner across workbench perspectives.
 hud_perspectives([]);
 

@@ -10,14 +10,17 @@
 // tick when their policy changes it; persistence is what makes a one-shot
 // command deterministic rather than a one-tick pulse.
 
-/// Drive a rover: `forward` throttle + `steer` in [-1, 1], brake released.
+/// Drive a rover from its authored program: direct throttle/steer in [-1, 1].
+/// Select direct program control and release the brake; waypoint guidance uses
+/// modelica_waypoint instead. Session input adapters use SetPorts directly.
 /// The complete setpoint persists until another command or a release.
 /// `seq`/`tick` default to 0 — fine for host-local scenarios; networked control
 /// should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
     let result = cmd("SetPorts", #{
         target: rover,
-        writes: [["throttle", forward], ["steer", steer], ["brake", 0.0]],
+        writes: [["program_active", 1.0], ["autopilot_enable", 0.0],
+                 ["throttle", forward], ["steer", steer], ["brake", 0.0]],
     });
     result
 }
@@ -41,7 +44,8 @@ fn intent_pulse(target, intent) {
 fn brake(rover) {
     cmd("SetPorts", #{
         target: rover,
-        writes: [["throttle", 0.0], ["steer", 0.0], ["brake", 1.0]],
+        writes: [["program_active", 1.0], ["autopilot_enable", 0.0],
+                 ["throttle", 0.0], ["steer", 0.0], ["brake", 1.0]],
     })
 }
 

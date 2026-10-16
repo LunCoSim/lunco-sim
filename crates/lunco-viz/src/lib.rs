@@ -28,6 +28,8 @@ pub mod panel;
 pub mod plot_fmt;
 #[cfg(feature = "ui")]
 pub mod registry;
+#[cfg(feature = "ui")]
+mod scene_state;
 pub mod signal;
 #[cfg(feature = "ui")]
 pub mod telemetry_browser;
@@ -105,21 +107,24 @@ pub struct LuncoVizPlugin;
 #[cfg(feature = "ui")]
 impl Plugin for LuncoVizPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
         if !app.is_plugin_added::<lunco_signal::SignalRegistryPlugin>() {
             app.add_plugins(lunco_signal::SignalRegistryPlugin);
         }
+        scene_state::install(app);
         app.insert_resource(SignalRegistry::with_default_capacity(
             DEFAULT_SIGNAL_HISTORY,
         ))
         .register_settings_section::<telemetry_browser::TelemetryDisplaySettings>()
         .init_resource::<VisualizationRegistry>()
-        .init_resource::<telemetry_browser::TelemetryBrowserView>()
-        .init_resource::<telemetry_browser::TelemetryCatalogBuildState>()
+        .init_scene_resource::<telemetry_browser::TelemetryBrowserView>()
+        .init_scene_resource::<telemetry_browser::TelemetryBrowserState>()
+        .init_scene_resource::<telemetry_browser::TelemetryCatalogBuildState>()
         .init_resource::<VizKindCatalog>()
-        .init_resource::<VizFitRequests>()
+        .init_scene_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
         .register_instance_panel(VizPanel)
-        .register_panel(TelemetryBrowserPanel::default())
+        .register_panel(TelemetryBrowserPanel)
         .add_observer(kinds::line_plot::on_line_plot_edit_requested)
         .add_observer(kinds::line_plot::on_line_plot_fit_requested)
         .add_observer(panel::on_bind_channel_requested)
@@ -132,10 +137,6 @@ impl Plugin for LuncoVizPlugin {
             )
                 .chain()
                 .after(lunco_signal::SignalDescriptorPublish),
-        )
-        .add_systems(
-            lunco_core::SceneTeardown,
-            telemetry_browser::clear_telemetry_catalog,
         )
         // A plot config survives scene replacement; its Bevy entity does not.
         // Reconcile only when the config or a stable entity identity changes,

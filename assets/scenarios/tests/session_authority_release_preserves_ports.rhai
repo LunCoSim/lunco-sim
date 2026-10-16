@@ -3,7 +3,7 @@
 // @timing simulation
 
 fn simulation_dependencies(me, params) {
-    #{ modelica_entities: [], entity_reads: [find_path("/TerrainOnly/Avatar")], entity_writes: [],
+    #{ modelica_entities: [], entity_reads: [find_path("/World/InputEndpoint")], entity_writes: [],
        query_reads: ["ReadSessionInputStream", "ReadPorts"], required_inputs: [] }
 }
 
@@ -12,9 +12,9 @@ fn on_start(me, params) {
     this.producer_id = params["producer_id"];
     this.correlation_id = params["correlation_id"];
     this.admission = params["admission"];
-    this.expected_writes = [
-        ["forward", 0.7], ["side", -0.25], ["up", 0.4], ["speed_boost", 1.0],
-    ];
+    this.expected_writes = params["expected_writes"];
+    this.port_names = [];
+    for write in this.expected_writes { this.port_names.push(write[0]); }
     this.ticks = 0;
     this.done = false;
 }
@@ -50,7 +50,7 @@ fn on_tick(me, params) {
     if port_write == () || lifecycle_release == () { return; }
 
     let ports = query("ReadPorts", #{ api_id: this.target_gid,
-        port_names: ["forward", "side", "up", "speed_boost"] });
+        port_names: this.port_names });
     if ports == () || ports["ports"] == () { return; }
     let values = #{};
     for port in ports["ports"] {
@@ -77,10 +77,10 @@ fn on_tick(me, params) {
             == this.producer_id.to_string()
         && port_write["payload"]["value"]["correlation_id"].to_string()
             == this.correlation_id.to_string();
-    let ports_preserved = values["forward"] == 0.7
-        && values["side"] == -0.25
-        && values["up"] == 0.4
-        && values["speed_boost"] == 1.0;
+    let ports_preserved = true;
+    for write in this.expected_writes {
+        if values[write[0]] != write[1] { ports_preserved = false; }
+    }
     let stopped = cmd("StopSessionInputCapture", #{});
     let complete = query("ReadSessionInputStream", #{});
     let checks = [

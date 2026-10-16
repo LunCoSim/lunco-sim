@@ -93,7 +93,9 @@ pub fn persist_wheel_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
@@ -140,14 +142,18 @@ pub fn persist_wheel_to_runtime_layer(
         return;
     };
 
-    let Some(workspace) = workspace else { return };
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    let Some((doc, path)) =
-        crate::doc_resolve::authorable_prim(target, &q_prim, &usd_registry, Some(&*workspace))
-    else {
+    let Some((doc, path)) = crate::doc_resolve::authorable_prim(
+        target,
+        &q_prim,
+        &usd_registry,
+        backed.as_deref(),
+        canonical.as_deref(),
+        usd_assets.as_deref(),
+    ) else {
         return;
     };
 

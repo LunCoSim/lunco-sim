@@ -62,9 +62,8 @@ fn point_position(doc, path) {
 fn x_is(doc, path, expected) {
     let position = point_position(doc, path);
     if position == () { return false; }
-    // NewDocument uses USD's default centimetre stage units, and document
-    // authoring operations accept values in those stage units.
-    let prefix = if expected == 0.0 { "(0.0," } else { "(300.0," };
+    // The document scaffold uses metres; SetTranslate accepts canonical metres.
+    let prefix = "(" + expected.to_string() + ",";
     position.starts_with(prefix)
 }
 
@@ -213,7 +212,7 @@ fn apply_step(state, action) {
 
     if action == "set_initial_pose" {
         let positioned = assembly_edit::transform(
-            state.doc, "@runtime@", P0, [0.0, 100.0, -800.0], (), (),
+            state.doc, "@runtime@", P0, [0.0, 1.0, -8.0], (), (),
             assembly_edit::describe(state.doc).generation,
         );
         if !query_ok(positioned) {
@@ -226,7 +225,7 @@ fn apply_step(state, action) {
 
     if action == "move_point" {
         let moved = assembly_edit::transform(
-            state.doc, "@runtime@", P0, [300.0, 100.0, -800.0], (), (),
+            state.doc, "@runtime@", P0, [3.0, 1.0, -8.0], (), (),
             assembly_edit::describe(state.doc).generation,
         );
         if !query_ok(moved) {
@@ -322,10 +321,16 @@ fn apply_step(state, action) {
                 }},
             ], generation,
         );
-        if !query_ok(authored) {
+        if !query_ok(authored) && (authored == () || authored.status != "pending") {
             state.failure = "the mounted Twin rejected the referenced-root plan";
             return state;
         }
+        state.pending_edit = authored;
+        state.waiting_for = "referenced-root command completion";
+        return state;
+    }
+
+    if action == "remove_and_restore_pending_reference" {
         let removed = assembly_edit::remove_prim(
             state.scene_doc, "@runtime@", PENDING_POINT,
             assembly_edit::describe(state.scene_doc).generation,
@@ -343,6 +348,67 @@ fn apply_step(state, action) {
         return state;
     }
 
+    if action == "check_dome_command" {
+        let path = ROOT + "/TestSky";
+        let yaw = 0.123456789012345;
+        let applied = cmd("SetDomeLight", #{
+            doc_id: state.doc, path: path, intensity: 0.75,
+            rotation: [0.0, yaw, 0.0],
+        });
+        let rotation = attribute_value(state.doc, path, "xformOp:rotateXYZ");
+        let generation = assembly_edit::describe(state.doc).generation;
+        let rejected = cmd("SetDomeLight", #{
+            doc_id: state.doc, path: "relative/Sky", intensity: 9.0,
+        });
+        state.dome_verified = applied != () && applied.ok == true
+            && attribute_value(state.doc, path, "inputs:intensity") == 0.75
+            && rotation != () && rotation.len() == 3 && rotation[1] == yaw
+            && rejected != () && rejected.ok == false && rejected.status == "rejected"
+            && rejected.error != ()
+            && assembly_edit::describe(state.doc).generation == generation;
+        if !state.dome_verified {
+            state.failure = "dome command precision or terminal rejection failed: applied="
+                + applied.to_string() + "; rotation=" + rotation.to_string()
+                + "; rejected=" + rejected.to_string();
+        }
+        return state;
+    }
+
+    if action == "invalidate_pending_discard" {
+        let pending = cmd("DiscardDocument", #{doc_id: state.scene_doc});
+        if pending == () || pending.status != "pending" || pending.id == () {
+            state.failure = "file discard did not expose a pending command ticket: " + pending.to_string();
+            return state;
+        }
+        state.discard_ticket = pending.id;
+        let edited = assembly_edit::attribute(state.scene_doc, "@runtime@", SCENE_ROOT + "/TestLight",
+            "userProperties:discardLeaseProbe", "string", "newer",
+            assembly_edit::describe(state.scene_doc).generation);
+        if edited == () || edited.ok != true {
+            state.failure = "the newer edit was rejected while discard was reading: " + edited.to_string();
+        }
+        state.waiting_for = "stale discard rejection";
+        return state;
+    }
+
+    if action == "cancel_pending_reference" {
+        let result = assembly_edit::batch(state.doc, "Cancelled reference preparation", [
+            #{ AddPrim: #{
+                edit_target: "@runtime@", parent_path: ROOT, name: "CancelledPoint",
+                type_name: "Xform", reference: "lunco://markers/route_point.usda",
+                reference_prim_path: "/RoutePoint",
+            }},
+        ], assembly_edit::describe(state.doc).generation);
+        if result == () || result.status != "pending" || result.id == () {
+            state.failure = "cold reference edit did not expose a pending command ticket";
+            return state;
+        }
+        state.cancel_ticket = result.id;
+        cmd("CloseDocument", #{ doc_id: state.doc });
+        state.waiting_for = "closed-document edit rejection";
+        return state;
+    }
+
     if action == "finish" {
         state.done = true;
         report_verdict([
@@ -352,6 +418,11 @@ fn apply_step(state, action) {
             t_true(true, "point deletion redo removes the restored subtree"),
             t_true(true, "attribute undo restores the exact value and redo removes it"),
             t_true(true, "undo restores a referenced subtree while its asset is pending"),
+            t_true(state.dome_verified, "dome rotation retains double precision and invalid paths reject without mutation"),
+            t_true(state.stale_discard_rejected, "a pending discard cannot overwrite a newer document revision"),
+            t_true(state.unmounted_edit_verified, "an unmounted file prepares its existing dependency closure before an atomic child override"),
+            t_true(state.closed_discard_rejected, "closing the addressed document rejects and retires its pending discard"),
+            t_true(state.cancelled_edit_rejected, "closing the exact document rejects its pending dependency edit"),
         ], "ROUTE AUTHORING HISTORY", "ROUTE_AUTHORING_HISTORY");
         return state;
     }
@@ -397,11 +468,97 @@ fn task_remove_attribute(me) { this = apply_step(this, "remove_attribute"); }
 fn task_undo_attribute(me) { this = apply_step(this, "undo_attribute"); }
 fn task_redo_attribute(me) { this = apply_step(this, "redo_attribute"); }
 fn task_restore_pending_reference(me) { this = apply_step(this, "restore_pending_reference"); }
+fn referenced_edit_complete(me) {
+    let result = this.pending_edit;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return false; }
+    if result.ok != true { this.failure = "referenced-root plan failed: " + result.to_string(); }
+    true
+}
+fn task_remove_and_restore_pending_reference(me) { this = apply_step(this, "remove_and_restore_pending_reference"); }
+fn task_check_dome_command(me) { this = apply_step(this, "check_dome_command"); }
+fn task_invalidate_pending_discard(me) { this = apply_step(this, "invalidate_pending_discard"); }
+fn stale_discard_finished(me) {
+    let result = command_result(this.discard_ticket);
+    if result == () || result.status == "pending" { return false; }
+    this.stale_discard_rejected = result.ok == false && result.status == "rejected"
+        && result.error != () && pending_reference_restored(me)
+        && attribute_value(this.scene_doc, SCENE_ROOT + "/TestLight", "userProperties:discardLeaseProbe") == "newer";
+    if !this.stale_discard_rejected {
+        this.failure = "stale discard did not preserve newer state: " + result.to_string();
+    }
+    true
+}
+fn task_cancel_pending_reference(me) { this = apply_step(this, "cancel_pending_reference"); }
+fn cancelled_reference_finished(me) {
+    let result = command_result(this.cancel_ticket);
+    if result == () || result.status == "pending" { return false; }
+    let closed = true;
+    for document in query("ListOpenDocuments").open_documents {
+        if document.doc_id == this.doc { closed = false; }
+    }
+    this.cancelled_edit_rejected = closed && result.ok == false
+        && result.status == "rejected" && result.error != ();
+    if !this.cancelled_edit_rejected {
+        this.failure = "closed-document edit did not terminate with rejection: " + result.to_string();
+    }
+    true
+}
+fn task_open_source(me) {
+    this.source_request = cmd("OpenUsdSourceDocument", #{source: "lunco://components/comms/antenna_tracking.usda"});
+    this.waiting_for = "unmounted source document";
+}
+fn source_opened(me) {
+    let result = this.source_request;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return false; }
+    if result.ok != true || result.data == () || result.data.doc_id == () {
+        this.failure = "source document failed to open: " + result.to_string();
+    } else { this.source_doc = result.data.doc_id; }
+    true
+}
+fn task_edit_unmounted_source(me) {
+    this.source_request = assembly_edit::attribute(this.source_doc, "@runtime@",
+        "/CommsAntenna/Mast", "userProperties:historyProbe", "string", "prepared",
+        assembly_edit::describe(this.source_doc).generation);
+    this.unmounted_was_pending = this.source_request != () && this.source_request.status == "pending";
+    this.waiting_for = "unmounted referenced-prim edit";
+}
+fn unmounted_edit_finished(me) {
+    let result = this.source_request;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return false; }
+    this.unmounted_edit_verified = this.unmounted_was_pending && result.ok == true
+        && attribute_value(this.source_doc, "/CommsAntenna/Mast", "userProperties:historyProbe") == "prepared";
+    if !this.unmounted_edit_verified { this.failure = "unmounted dependency preparation failed: " + result.to_string(); }
+    true
+}
+fn task_close_pending_discard(me) {
+    let result = cmd("DiscardDocument", #{doc_id: this.source_doc});
+    if result == () || result.status != "pending" || result.id == () {
+        this.failure = "source discard did not return a pending ticket: " + result.to_string();
+        return;
+    }
+    this.source_discard_ticket = result.id;
+    cmd("CloseDocument", #{doc_id: this.source_doc});
+    this.waiting_for = "closed-document discard rejection";
+}
+fn closed_discard_finished(me) {
+    let result = command_result(this.source_discard_ticket);
+    if result == () || result.status == "pending" { return false; }
+    let closed = true;
+    for document in query("ListOpenDocuments").open_documents {
+        if document.doc_id == this.source_doc { closed = false; }
+    }
+    this.closed_discard_rejected = closed && result.ok == false && result.status == "rejected" && result.error != ();
+    if !this.closed_discard_rejected { this.failure = "closed-document discard did not reject: " + result.to_string(); }
+    true
+}
 fn task_finish(me) { this = apply_step(this, "finish"); }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -411,6 +568,18 @@ fn on_start(me, ctx) {
     this.route_children_before_delete = [];
     this.doc = ();
     this.scene_doc = ();
+    this.pending_edit = ();
+    this.cancel_ticket = ();
+    this.discard_ticket = ();
+    this.source_doc = ();
+    this.source_request = ();
+    this.source_discard_ticket = ();
+    this.unmounted_was_pending = false;
+    this.unmounted_edit_verified = false;
+    this.closed_discard_rejected = false;
+    this.dome_verified = false;
+    this.stale_discard_rejected = false;
+    this.cancelled_edit_rejected = false;
     this.failure = "";
     this.waiting_for = "route history task start";
 }
@@ -468,7 +637,31 @@ fn task(me, ctx) {
         wait_until(Fn("attribute_removed")),
         once(Fn("task_restore_pending_reference")),
         check(Fn("test_state_is_valid")),
+        wait_until(Fn("referenced_edit_complete")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_remove_and_restore_pending_reference")),
+        check(Fn("test_state_is_valid")),
         wait_until(Fn("pending_reference_restored")),
+        once(Fn("task_check_dome_command")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_invalidate_pending_discard")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("stale_discard_finished")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_open_source")),
+        wait_until(Fn("source_opened")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_edit_unmounted_source")),
+        wait_until(Fn("unmounted_edit_finished")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_close_pending_discard")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("closed_discard_finished")),
+        check(Fn("test_state_is_valid")),
+        once(Fn("task_cancel_pending_reference")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("cancelled_reference_finished")),
+        check(Fn("test_state_is_valid")),
         once(Fn("task_finish")),
     ])
 }

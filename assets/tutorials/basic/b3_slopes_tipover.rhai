@@ -9,6 +9,12 @@
 //! when needed but is not a completion condition. Tilt is read with `is_tipped` /
 //! `tilt_deg` (prelude, off `world_rotation`).
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/SlopeTest/Rover");
+    #{ modelica_entities: [rover],
+       entity_reads: vessel_descendants(find_path("/SlopeTest")),
+       entity_writes: [rover], query_reads: [], required_inputs: [] }
+}
 // Teaching guidance follows the learner across workbench perspectives.
 hud_perspectives([]);
 

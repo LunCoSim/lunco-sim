@@ -25,6 +25,7 @@ pub struct SceneContextMenuState {
     pending: Option<PendingMenu>,
 }
 
+impl lunco_core::SceneResource for SceneContextMenuState {}
 impl SceneContextMenuState {
     fn clear(&mut self, commands: &mut Commands) {
         if let Some(menu) = self.pending.take() {
@@ -53,7 +54,7 @@ pub fn on_script_ui_request(
             let bindings: Result<Vec<_>, _> = items
                 .iter()
                 .map(|item| {
-                    ToolHookBinding::new(
+                    ToolHookBinding::for_scene(
                         item.tool.clone(),
                         item.hook.clone(),
                         scope.owner_twin_id,
@@ -70,7 +71,9 @@ pub fn on_script_ui_request(
                 }
             };
             state.clear(&mut commands);
-            let root = commands.spawn(lunco_core::Provenance::Local).id();
+            let root = commands
+                .spawn((lunco_core::Provenance::Local, lunco_core::SceneOwned))
+                .id();
             let items = items
                 .iter()
                 .cloned()
@@ -196,5 +199,72 @@ pub fn draw_scene_context_menu(
     let clicked_elsewhere = dismiss_armed && response.response.clicked_elsewhere();
     if clicked_elsewhere {
         state.clear(&mut commands);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::AppSceneExt;
+    use lunco_interaction_core::{
+        ArmedScriptTool, DragModeActive, SpawnToolActive, TerrainToolActive,
+    };
+    use lunco_luncosim_edit_core::{
+        SpawnState,
+        terrain_tools::{TerrainTool, TerrainToolState},
+    };
+
+    #[test]
+    fn scene_lifecycle_disarms_editor_intent_and_drops_menu_actions() {
+        let mut app = App::new();
+        app.init_scene_resource::<SceneContextMenuState>()
+            .init_scene_resource::<ArmedScriptTool>()
+            .init_scene_resource::<SpawnState>()
+            .init_scene_resource::<TerrainToolState>()
+            .init_scene_resource::<DragModeActive>()
+            .init_scene_resource::<SpawnToolActive>()
+            .init_scene_resource::<TerrainToolActive>()
+            .add_observer(on_script_ui_request);
+        for _ in 0..3 {
+            app.world_mut().trigger(ScriptUiRequest::ContextMenu {
+                screen_position: [10.0, 10.0],
+                items: vec![ScriptMenuItem {
+                    label: "outgoing action".into(),
+                    tool: "reused_tool_name".into(),
+                    hook: "on_click".into(),
+                    args: Default::default(),
+                }],
+            });
+            app.world_mut().resource_mut::<ArmedScriptTool>().0 = Some("reused_tool_name".into());
+            *app.world_mut().resource_mut::<SpawnState>() = SpawnState::Selecting {
+                entry_id: "reused_asset_name".into(),
+            };
+            *app.world_mut().resource_mut::<TerrainToolState>() = TerrainToolState {
+                tool: TerrainTool::Sculpt,
+                radius: 19.0,
+                strength: 3.0,
+            };
+            app.world_mut().resource_mut::<DragModeActive>().active = true;
+            app.world_mut().resource_mut::<SpawnToolActive>().0 = true;
+            app.world_mut().resource_mut::<TerrainToolActive>().0 = true;
+            lunco_core::run_scene_teardown(app.world_mut());
+            assert!(
+                app.world()
+                    .resource::<SceneContextMenuState>()
+                    .pending
+                    .is_none()
+            );
+            assert!(!app.world().resource::<ArmedScriptTool>().armed());
+            assert!(matches!(
+                *app.world().resource::<SpawnState>(),
+                SpawnState::Idle
+            ));
+            let brush = app.world().resource::<TerrainToolState>();
+            assert!(!brush.armed());
+            assert_eq!((brush.radius, brush.strength), (19.0, 3.0));
+            assert!(!app.world().resource::<DragModeActive>().active);
+            assert!(!app.world().resource::<SpawnToolActive>().0);
+            assert!(!app.world().resource::<TerrainToolActive>().0);
+        }
     }
 }

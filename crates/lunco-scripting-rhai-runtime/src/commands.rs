@@ -5,7 +5,7 @@
 //! command. They are registered only with this Rhai runtime, so an accepted
 //! command always has a corresponding handler.
 //!
-//! The handler returns `Result<Ack, String>`. API callers receive the completed
+//! Queue admission returns `CommandOutcome::Pending`. API callers receive the completed
 //! stdout or error on the same deferred request; in-process `cmd()` callers
 //! continue to use the internal command-result substrate.
 //!
@@ -34,8 +34,8 @@ use lunco_scripting::scenario::{ScenarioExecutionGate, ScenarioPreparationAdmiss
 use lunco_scripting_bridge_core as bridge_core;
 #[cfg(feature = "rhai")]
 use lunco_scripting_rhai_world::world_bridge::{
-    PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits, WorldScriptWorkspace,
-    WorldToolOwner,
+    PendingWorldScript, PendingWorldScripts, WorldScriptExecution, WorldScriptExecutionLimits,
+    WorldScriptWorkspace, WorldToolOwner,
 };
 #[cfg(feature = "rhai")]
 use lunco_telemetry_core::TelemetryValue;
@@ -224,29 +224,28 @@ fn on_run_rhai(
     limits: Res<WorldScriptExecutionLimits>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) -> Result<Ack, String> {
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+) -> Result<lunco_core::CommandOutcome, String> {
     let id = active.get().unwrap_or(0);
     // §3.4: gate the snippet's cmd()s against the submitting session. `Some`
     // only when this RunRhai arrived from the wire (a remote peer); `None` for a
     // local / host-issued snippet → host-trusted (ungated).
-    let authority = guard.and_then(|g| g.0);
+    let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    let admitted_workspace = WorldScriptWorkspace::capture(workspace.as_deref())?;
+    execution.validate_scene(scene.as_deref())?;
+    let admitted_workspace = WorldScriptWorkspace::capture(workspace.as_deref(), execution)?;
     pending.enqueue(
         PendingWorldScript::Code {
             id,
             code: cmd.code.clone(),
-            authority,
+            execution,
             correlation_id,
             workspace: admitted_workspace,
         },
         *limits,
     )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 #[cfg(feature = "rhai")]
@@ -260,18 +259,19 @@ fn on_run_rhai_tool(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
-) -> Result<Ack, String> {
+) -> Result<lunco_core::CommandOutcome, String> {
     let cmd = trigger.event();
+    let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
+    execution.validate_scene(scene.as_deref())?;
     let owner = WorldToolOwner::capture(
         &cmd.tool,
         "on_click",
-        None,
+        execution.twin_owner(None)?,
         workspace.as_deref(),
         scene.as_deref(),
     )
     .inspect_err(|error| warn!("[rhai] {error}"))?;
     let id = active.get().unwrap_or(0);
-    let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
     pending.enqueue_ui(
@@ -280,16 +280,13 @@ fn on_run_rhai_tool(
             tool: cmd.tool.clone(),
             hook: "on_click".to_string(),
             args: cmd.args.clone(),
-            authority,
+            execution,
             correlation_id,
             owner,
         },
         *limits,
     )?;
-    Ok(Ack::with_data(
-        OpId::new(),
-        lunco_api_core::api_value!({ "status": "queued" }),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 #[cfg(feature = "rhai")]
@@ -305,36 +302,42 @@ fn on_run_rhai_tool_hook(
     bindings: Query<&lunco_scripting_bridge_core::ToolHookBinding>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     mut commands: Commands,
-) -> Result<Ack, String> {
+) -> Result<lunco_core::CommandOutcome, String> {
     let cmd = trigger.event();
-    let retirement = cmd.binding.filter(|entity| {
-        bindings.get(*entity).is_ok_and(|binding| {
-            binding.retention == lunco_scripting_bridge_core::ToolHookBindingRetention::Invocation
+    // Resolve the lease once. Omitted request ownership is supplied by the
+    // binding, never compared as an unrelated optional field during cleanup.
+    let binding = cmd
+        .binding
+        .and_then(|entity| bindings.get(entity).ok().map(|b| (entity, b)));
+    let retirement = binding
+        .filter(|(_, binding)| {
+            binding.retention == bridge_core::ToolHookBindingRetention::Invocation
                 && binding.tool == cmd.tool
                 && binding.hook == cmd.hook
-                && binding.owner_twin_id == cmd.owner_twin_id
         })
-    });
+        .map(|(entity, binding)| (entity, binding.clone()));
+    let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
     let result = (|| {
+        execution.validate_scene(scene.as_deref())?;
         let mut owner = WorldToolOwner::capture(
             &cmd.tool,
             &cmd.hook,
-            cmd.owner_twin_id,
+            execution.twin_owner(
+                cmd.owner_twin_id
+                    .or_else(|| binding.and_then(|(_, b)| b.owner_twin_id)),
+            )?,
             workspace.as_deref(),
             scene.as_deref(),
         )
         .inspect_err(|error| warn!("[rhai] {error}"))?;
         if let Some(entity) = cmd.binding {
-            let binding = bindings
-                .get(entity)
-                .map_err(|_| "UI callback binding has been retired".to_owned())
-                .inspect_err(|error| warn!("[rhai] {error}"))?;
+            let (_, binding) =
+                binding.ok_or_else(|| "UI callback binding has been retired".to_owned())?;
             owner
                 .bind_callback(entity, binding, &cmd.tool, &cmd.hook, scene.as_deref())
                 .inspect_err(|error| warn!("[rhai] {error}"))?;
         }
         let id = active.get().unwrap_or(0);
-        let authority = guard.and_then(|g| g.0);
         let correlation_id =
             (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
         pending.enqueue_ui(
@@ -343,20 +346,17 @@ fn on_run_rhai_tool_hook(
                 tool: cmd.tool.clone(),
                 hook: cmd.hook.clone(),
                 args: cmd.args.clone(),
-                authority,
+                execution,
                 correlation_id,
                 owner,
             },
             *limits,
         )?;
-        Ok(Ack::with_data(
-            OpId::new(),
-            lunco_api_core::api_value!({ "status": "queued" }),
-        ))
+        Ok(lunco_core::CommandOutcome::Pending)
     })();
     if result.is_err() {
-        if let Some(entity) = retirement {
-            commands.entity(entity).try_despawn();
+        if let Some((entity, binding)) = retirement {
+            commands.queue(move |world: &mut World| binding.retire_invocation(entity, world));
         }
     }
     result
@@ -2036,6 +2036,66 @@ register_commands!(
 mod tests {
     //! Runtime behavior for typed timeline values is covered by the authored
     //! Rhai scene-test gate; this module checks generic reflection and admission seams.
+
+    #[test]
+    fn deferred_bound_invocation_rejection_releases_lease_with_inferred_twin_owner() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = lunco_workspace::WorkspaceResource::new();
+        let twin = match lunco_workspace::TwinMode::open(root.path()).unwrap() {
+            lunco_workspace::TwinMode::Twin(twin) | lunco_workspace::TwinMode::Folder(twin) => twin,
+            _ => panic!("fixture must be a workspace folder"),
+        };
+        let twin = workspace.add_twin(twin);
+        let mut app = App::new();
+        app.insert_resource(workspace)
+            .init_resource::<ActiveCommandId>()
+            .init_resource::<PendingApiRequest>()
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<PendingWorldScripts>()
+            .insert_resource(WorldScriptExecutionLimits::new(1, 1, 100).unwrap());
+        super::__register_on_run_rhai_tool_hook(&mut app);
+        let tool = "invocation_admission_lease_probe";
+        lunco_scripting_rhai_world::tool_libs::register_tool_library(
+            tool,
+            "fn apply(ctx) { true }",
+        );
+        let binding = bridge_core::ToolHookBinding::for_scene(
+            tool.into(),
+            "apply".into(),
+            Some(twin.raw()),
+            bridge_core::ToolHookBindingRetention::Invocation,
+            None,
+        )
+        .unwrap();
+        // First invocation consumes the only queue slot. The second has no
+        // redundant owner field: its exact binding supplies that identity.
+        let first = app.world_mut().spawn(binding.clone()).id();
+        let second = app.world_mut().spawn(binding).id();
+        for entity in [first, second] {
+            app.world_mut().trigger(RunRhaiToolHook {
+                binding: Some(entity),
+                tool: tool.into(),
+                hook: "apply".into(),
+                args: TelemetryValue::Bool(true),
+                owner_twin_id: None,
+            });
+            app.world_mut().flush();
+        }
+        assert!(
+            app.world()
+                .resource::<PendingWorldScripts>()
+                .has_ui_pending()
+        );
+        assert!(app.world().get_entity(first).is_ok());
+        assert!(
+            app.world().get_entity(second).is_err(),
+            "admission rejection must release the selected lease"
+        );
+        lunco_scripting_rhai_world::world_bridge::retire_scene_world_scripts(app.world_mut());
+        assert!(app.world().get_entity(first).is_err());
+        lunco_tools::unregister_scoped(&lunco_tools::ToolScope::Application, tool);
+    }
 
     #[test]
     fn source_admission_tracks_replacement_failure_removal_and_despawn() {

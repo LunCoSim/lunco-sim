@@ -18,7 +18,8 @@ fn simulation_dependencies(me, ctx) {
             find_path("/BatteryMountsTest/RockerBogie"),
             find_path("/BatteryMountsTest/Rucheyok"),
         ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        entity_reads: vessel_descendants(find_path("/BatteryMountsTest")),
+        entity_writes: [], query_reads: ["QueryUsdPrim"], required_inputs: [],
     }
 }
 

@@ -5,7 +5,7 @@ use rhai::{Engine, ImmutableString};
 /// Register Unicode-aware Rust string operations missing from Rhai's default
 /// string package. Case conversion returns a new string; Rhai's ordinary `==`
 /// keeps its exact, case-sensitive semantics for names and identity keys.
-pub fn register_string_functions(engine: &mut Engine) {
+pub(super) fn register_string_functions(engine: &mut Engine) {
     engine
         // Source revisions and other opaque unsigned identities must retain
         // all 64 bits when rendered; Rhai otherwise prints the type name.

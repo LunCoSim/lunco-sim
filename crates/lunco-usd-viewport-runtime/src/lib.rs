@@ -230,6 +230,7 @@ pub struct UsdViewportPlugin;
 impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
+        app.init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
         app.init_resource::<UsdPrimDisplayModes>();
         app.register_settings_section::<UsdInspectionSettings>();
         app.init_resource::<PendingUsdPreviewTextReads>();
@@ -637,6 +638,8 @@ fn on_usd_document_ready(
 /// also wakes the state transition.
 fn preview_projection_inputs_changed(
     revision: Option<Res<UsdStageRevision>>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     changed: Query<
         (),
         Or<(
@@ -670,6 +673,8 @@ fn preview_projection_inputs_changed(
     let removed_meshes = removed_meshes.read().next().is_some();
     let removed_failures = removed_failures.read().next().is_some();
     revision.is_some_and(|revision| revision.is_changed())
+        || registry.is_changed()
+        || backed.is_changed()
         || !changed.is_empty()
         || removed_paths
         || removed_awaiting
@@ -686,6 +691,7 @@ fn reconcile_preview_projection_state(
     mut state: ResMut<UsdViewportState>,
     mut commands: Commands,
     registry: Res<DocumentRegistry<UsdDocument>>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     roots: Query<
         (
             Entity,
@@ -745,18 +751,21 @@ fn reconcile_preview_projection_state(
                 .all(|(_, _, synced, awaiting, queued, mesh_pending, failed)| {
                     synced && !awaiting && !queued && !mesh_pending && !failed
                 });
-        let generation = registry.host(doc).map(|host| host.document().generation());
+        let generation = registry
+            .host(doc)
+            .map(|host| host.document().generation())
+            .filter(|generation| {
+                backed.applied_stage_generation(doc, stage_id) == Some(*generation)
+                    && backed.synced_generation(doc) == Some(*generation)
+            });
         let Some(session) = state.session_mut(preview) else {
             continue;
         };
-        if descendants_ready {
-            if let Some(generation) = generation {
-                if !session.projection_ready || session.projected_generation != generation {
-                    session.projected_generation = generation;
-                    session.projection_ready = true;
-                    commands
-                        .queue(move |world: &mut World| request_preview_text_read(world, preview));
-                }
+        if let Some(generation) = generation.filter(|_| descendants_ready) {
+            if !session.projection_ready || session.projected_generation != generation {
+                session.projected_generation = generation;
+                session.projection_ready = true;
+                commands.queue(move |world: &mut World| request_preview_text_read(world, preview));
             }
         } else {
             session.projection_ready = false;
@@ -1138,10 +1147,11 @@ fn frame_preview_views(
             else {
                 continue;
             };
-            let Some((entity, _)) = q_paths
-                .iter()
-                .find(|(_, prim)| prim.stage_handle.id() == stage_id && prim.path == path)
-            else {
+            let Some((entity, _)) = q_paths.iter().find(|(entity, prim)| {
+                prim.stage_handle.id() == stage_id
+                    && prim.path == path
+                    && is_descendant_of(*entity, root, &q_children)
+            }) else {
                 // Keep the target pending until the exact prim is projected;
                 // framing the whole assembly here would hide a stale path.
                 continue;
@@ -3446,82 +3456,17 @@ fn workspace_twin_coordinates(
 }
 
 #[cfg(test)]
+#[path = "../tests/support/quality.rs"]
+mod test_quality;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_quality::preview_quality;
     use lunco_render::SceneCamera;
     use lunco_usd_commands::UsdCommandsPlugin;
     use lunco_usd_document::document::UsdOp;
     use lunco_usd_viewport_core::UsdPreviewExplodeAxis;
-
-    fn preview_quality() -> RenderQualityProfile {
-        RenderQualityProfile {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            directional_cascades: 2,
-            shadow_filtering_quality: lunco_render::ShadowFilteringQuality::Hardware2x2,
-            max_directional_shadow_casters: 1,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 1,
-            shadow_budget_bytes: 64 * 1024 * 1024,
-            horizon_shadow_cache_sun_threshold_deg: 0.2,
-            horizon_march_steps: 24,
-            horizon_cache_samples_per_axis: 1,
-            shadow_minimum_distance: 0.1,
-            shadow_first_cascade_far_bound: 20.0,
-            shadow_maximum_distance: 600.0,
-            shadow_cascade_overlap: 0.1,
-            shadow_depth_bias: 0.1,
-            shadow_normal_bias: 4.0,
-            camera_exposure_ev100: 16.0,
-            render_failure_quiet_period_secs: 0.5,
-            render_failure_give_up_after_secs: 5.0,
-            editor_camera_bloom_enabled: false,
-            camera_bloom_intensity: 0.0,
-            camera_bloom_low_frequency_boost: 0.0,
-            editor_preview_illuminance: 128_000.0,
-            local_light_default_range: 30.0,
-            local_shadow_map_near_z: 0.2,
-            dome_cubemap_face_size: 512,
-            primitive_sphere_longitudes: 24,
-            primitive_sphere_latitudes: 16,
-            primitive_radial_segments: 32,
-            primitive_capsule_longitudes: 16,
-            primitive_capsule_latitudes: 8,
-            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
-            terrain_derived_map_resolution: 512,
-            terrain_derived_ao_directions: 4,
-            terrain_derived_ao_steps: 4,
-            terrain_derived_ao_radius_fraction: 0.1,
-            terrain_derived_roughness_base: 0.6,
-            terrain_derived_roughness_saturation_radians: 0.6,
-            terrain_derived_texture_anisotropy: 1,
-            terrain_rock_max_instances: 2_000,
-            terrain_rock_mesh_buckets: 3,
-            terrain_rock_mesh_cube_count: 2,
-            terrain_rock_lod_start_distance: 1_500.0,
-            terrain_rock_lod_fade_distance: 300.0,
-            terrain_lod_tile_resolution: 33,
-            terrain_lod_cinematic_resolution: 1025,
-            terrain_lod_pixel_error: 4.0,
-            terrain_lod_max_depth: 6,
-            terrain_lod_probe_resolution: 5,
-            terrain_lod_bakes_per_frame: 8,
-            terrain_lod_max_inflight_bakes: 16,
-            terrain_lod_tile_budget: 256,
-            terrain_lod_cover_edits_per_frame: 16,
-            terrain_lod_hysteresis_ratio: 1.2,
-            terrain_lod_morph_start_ratio: 0.45,
-            nurbs_surface_samples_per_control_span: 3,
-            nurbs_surface_minimum_subdivisions: 6,
-            nurbs_surface_maximum_subdivisions: 64,
-            nurbs_trim_curve_samples: 12,
-            nurbs_trim_minimum_subdivisions: 8,
-            nurbs_trim_maximum_subdivisions: 48,
-            curve_samples_per_segment: 4,
-            curve_radial_segments: 6,
-            ..Default::default()
-        }
-    }
 
     #[test]
     fn workspace_owned_preview_uses_the_mounted_twin_authority() {
@@ -4283,12 +4228,14 @@ mod tests {
     }
 
     #[test]
-    fn preview_readiness_ignores_live_projection_with_the_same_stage_handle() {
+    fn preview_readiness_requires_own_projection_and_consumed_source_generation() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<Assets<Image>>();
+        app.init_resource::<Assets<UsdStageAsset>>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdViewportState>();
+        app.init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
         app.add_systems(Update, reconcile_preview_projection_state);
 
         let doc = app
@@ -4297,6 +4244,15 @@ mod tests {
             .open_file("/tmp/shared_preview_stage.usda", "#usda 1.0\n".to_string())
             .0;
         let stage = Handle::<UsdStageAsset>::default();
+        let stage_id = stage.id();
+        {
+            let mut backed = app
+                .world_mut()
+                .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+            backed.track_preview(doc, "shared".into(), "scene.usda".into());
+            backed.mark_applied(doc, stage_id, 0);
+            backed.mark_stage_projected(stage_id);
+        }
         let session = create_preview_session(
             app.world_mut(),
             UsdPreviewId(1),
@@ -4367,6 +4323,75 @@ mod tests {
                 .document()
                 .generation()
         );
+        let generation = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .apply(
+                doc,
+                UsdOp::AddPrim {
+                    edit_target: LayerId::root(),
+                    parent_path: "/".into(),
+                    name: "Changed".into(),
+                    type_name: Some("Scope".into()),
+                    reference: None,
+                    reference_prim_path: None,
+                },
+            )
+            .expect("document edit succeeds")
+            .new_gen
+            .unwrap();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<UsdViewportState>()
+                .session(UsdPreviewId(1))
+                .unwrap()
+                .projection_ready()
+        );
+        app.world_mut()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .mark_applied(doc, stage_id, generation);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<UsdViewportState>()
+                .session(UsdPreviewId(1))
+                .unwrap()
+                .projection_ready(),
+            "application is not consumption"
+        );
+        let other_stage: AssetId<UsdStageAsset> = bevy::asset::AssetIndex::from_bits(11).into();
+        {
+            let mut backed = app
+                .world_mut()
+                .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+            backed.mark_applied(doc, other_stage, generation);
+            backed.mark_stage_projected(other_stage);
+        }
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<UsdViewportState>()
+                .session(UsdPreviewId(1))
+                .unwrap()
+                .projection_ready(),
+            "another stage cannot authorize this lease"
+        );
+        {
+            let mut backed = app
+                .world_mut()
+                .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+            backed.mark_applied(doc, stage_id, generation);
+            backed.mark_stage_projected(stage_id);
+        }
+        app.update();
+        let session = app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(UsdPreviewId(1))
+            .unwrap();
+        assert!(session.projection_ready());
+        assert_eq!(session.projected_generation(), generation);
     }
 
     #[test]

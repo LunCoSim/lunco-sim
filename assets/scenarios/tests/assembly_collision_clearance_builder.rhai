@@ -18,8 +18,21 @@ fn query_ok(record) {
 fn finish(me, checks) {
     if !me.done {
         me.done = true;
-        report_verdict(checks, "ASSEMBLY COLLISION CLEARANCE BUILDER",
-            "ASSEMBLY_COLLISION_CLEARANCE_BUILDER");
+        for check in checks {
+            if check != "" {
+                report_verdict(checks, "ASSEMBLY COLLISION CLEARANCE BUILDER",
+                    "ASSEMBLY_COLLISION_CLEARANCE_BUILDER");
+                return;
+            }
+        }
+        // A malformed annotation is inert until explicitly made physical.
+        // Require the collider owner to reject it after the positive checks.
+        print("Collision clearance checks completed: " + checks.len());
+        expect_runtime_fault("usd-avian-collider-invalid");
+        cmd("ApplyUsdOp", #{doc_id: me.doc, op: #{SetAttribute: #{
+            edit_target: "@runtime@", path: MALFORMED + "/Shape",
+            name: "purpose", type_name: "token", value: "\"default\"",
+        }}});
     }
 }
 
@@ -29,7 +42,7 @@ fn fail(me, message) {
 
 fn find_document() {
     let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
+    if docs == () || docs.open_documents == () { return (); }
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = assembly_edit::inspect(item.doc_id, ROOT);
@@ -38,16 +51,16 @@ fn find_document() {
             }
         }
     }
-    -1
+    ()
 }
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "ResolveUsdTarget", "QueryUsdPrims"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
+    this.doc = ();
     this.elapsed = 0.0;
     this.done = false;
     this.phase = 0;
@@ -56,9 +69,9 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.doc < 0 {
+    if this.doc == () {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 {
                 fail(this, "collision clearance fixture document was not discoverable");
             }
@@ -119,10 +132,11 @@ fn on_tick(me, ctx) {
             t_true(this.rotated_rejected == true,
                 "rotated blocker frames are rejected instead of guessed"),
             t_true(this.malformed_rejected == true,
-                "malformed collision bounds fail visibly through the shared reader"),
+                "guide annotation must not supply physical collision bounds"),
             t_true(this.duplicate_rejected == true,
                 "duplicate blocker paths are rejected"),
         ]);
+        this.done = true;
         return;
     }
 
@@ -174,10 +188,10 @@ fn on_tick(me, ctx) {
         return;
     }
     this.center_alignment_ok = center_alignment.kind == "collision_center_alignment"
-        && center_alignment.ops.len() == 1
+        && center_alignment.ops.len() == 2
         && center_alignment.ops[0].SetTranslate.value[0].abs() <= 0.001;
     this.edge_alignment_ok = edge_alignment.kind == "collision_edge_alignment"
-        && edge_alignment.ops.len() == 1
+        && edge_alignment.ops.len() == 2
         && (edge_alignment.ops[0].SetTranslate.value[0] - 2.75).abs() <= 0.001;
     this.invalid_axis_rejected = invalid_axis.error.contains("axis");
     this.invalid_edge_rejected = invalid_edge.error.contains("moving_edge");
@@ -227,7 +241,7 @@ fn on_tick(me, ctx) {
     this.negative_gap_rejected = negative_gap.error.contains("non-negative");
     this.visual_only_rejected = visual_only.error.contains("no composed collision geometry");
     this.rotated_rejected = rotated.error.contains("translation-only");
-    this.malformed_rejected = malformed.error.contains("invalid collision bounds");
+    this.malformed_rejected = malformed.error.contains("no composed collision geometry");
     this.duplicate_rejected = duplicate.error.contains("unique");
 
     let proposal = assembly_edit::propose(
