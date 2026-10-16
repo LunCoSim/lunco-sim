@@ -6,6 +6,8 @@ license.workspace = true
 description = "Render-free composed USD readers for vehicle simulation authoring"
 
 [dependencies]
+lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
+openusd-schemas = { workspace = true }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy_ecs = { workspace = true }
 bevy_math = { workspace = true }

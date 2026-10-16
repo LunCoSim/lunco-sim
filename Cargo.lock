@@ -10776,8 +10776,10 @@ dependencies = [
  "bevy_math",
  "lunco-hooks",
  "lunco-mobility",
+ "lunco-usd-avian-reader",
  "lunco-usd-bevy-stage",
  "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -10807,6 +10809,7 @@ dependencies = [
  "bevy_math",
  "bevy_reflect",
  "lunco-mobility",
+ "lunco-physics",
 ]
 
 [[package]]

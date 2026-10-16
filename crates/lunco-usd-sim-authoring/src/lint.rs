@@ -9,7 +9,7 @@
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_stage::{StageView, UsdRead};
 
-use crate::{is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio};
+use crate::{is_gear_drive, read_gear_drive_values, read_gear_ratio};
 use lunco_mobility::DifferentialDriveType;
 
 /// Add gear-drive facts to the shared USD physics fact map.
@@ -93,7 +93,7 @@ fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
 
         let ratio = read_gear_ratio(reader, &path);
         let values = read_gear_drive_values(reader, &path);
-        let drive_type = read_gear_drive_type(reader, &path);
+        let drive_type = values.as_ref().ok().map(|values| values.drive_type);
         let valid = ratio.is_some() && values.is_ok() && drive_type.is_some();
         let values = values.ok();
         let realization = match drive_type {

@@ -7,6 +7,92 @@ use openusd_schemas::physics::{DriveType, tokens as ptok};
 
 use crate::{read_authored_quat, read_authored_real, read_authored_vec3};
 
+/// Read a standard PhysicsDriveAPI law and normalize targets, gains and caps
+/// into metres/radians, seconds and physical force/torque. Shared by ordinary
+/// joints and multi-body gear relations.
+pub fn read_drive(
+    view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+    ns: &str,
+) -> Result<Option<JointDrive>, ()> {
+    let api_name = format!("PhysicsDriveAPI:{ns}");
+    if !view.has_api_schema(path, &api_name) {
+        return Ok(None);
+    }
+    // Drive quantities convert by their SPEC units, per instance. An angular
+    // drive authors DEGREES (`targetPosition` deg, `targetVelocity` deg/s,
+    // stiffness/damping per degree) and its torques carry distance² — so
+    // targets go deg→rad and gains ×(180/π). Only force-based gains carry
+    // metersPerUnit²; acceleration-based gains are mass-normalized.
+    // Torque caps always carry metersPerUnit².
+    // A linear drive authors stage units: targets and `maxForce` (mass ·
+    // distance / s²) scale by metersPerUnit; its stiffness (mass/s²) and
+    // damping (mass/s) are distance-free and pass through.
+    let conv = lunco_usd_bevy_stage::stage_convention(view).map_err(|_| ())?;
+    let property = |template: &str| {
+        openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, ns).to_string()
+    };
+    let type_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TYPE);
+    let ty = match view.attr_value(path, &type_name) {
+        Some(value) => Some(value.get::<DriveType>().ok_or(())?),
+        None if !view.has_authored_attribute(path, &type_name) => None,
+        None => return Err(()),
+    };
+    let acceleration = ty == Some(DriveType::Acceleration);
+    let angular = ns == "angular";
+    let target = |v: f64| {
+        if angular {
+            v.to_radians()
+        } else {
+            conv.length(v)
+        }
+    };
+    let gain = |v: f64| {
+        if angular {
+            if acceleration {
+                v.to_degrees()
+            } else {
+                conv.length(conv.length(v.to_degrees()))
+            }
+        } else {
+            v
+        }
+    };
+    let force = |v: f64| {
+        if angular {
+            conv.length(conv.length(v))
+        } else {
+            conv.length(v)
+        }
+    };
+    let read_value =
+        |name: &str| -> Result<Option<f64>, ()> { read_authored_real(view, path, name) };
+    let target_position_name =
+        property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_POSITION);
+    let target_velocity_name =
+        property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_VELOCITY);
+    let max_force_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_MAX_FORCE);
+    let stiffness_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_STIFFNESS);
+    let damping_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_DAMPING);
+    let tp = read_value(&target_position_name)?.map(target);
+    let tv = read_value(&target_velocity_name)?.map(target);
+    let mf = read_value(&max_force_name)?.map(force);
+    let k = read_value(&stiffness_name)?.map(gain);
+    let c = read_value(&damping_name)?.map(gain);
+    Ok(
+        (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
+            JointDrive {
+                target_position: tp,
+                target_velocity: tv,
+                max_force: mf,
+                stiffness: k,
+                damping: c,
+                drive_type: ty,
+            },
+        ),
+    )
+}
+
 /// True when some ancestor prim of `sdf_path` is a rigid body — i.e. this prim's
 /// collider is a piece of that body's compound shape rather than a body (or
 /// standalone static collider) in its own right.
@@ -345,78 +431,6 @@ fn read_joint_spec_with_policy(
             local_rot1,
         })
     };
-    let read_drive = |ns: &str| -> Result<Option<JointDrive>, ()> {
-        let api_name = format!("PhysicsDriveAPI:{ns}");
-        if !view.has_api_schema(path, &api_name) {
-            return Ok(None);
-        }
-        // Drive quantities convert by their SPEC units, per instance. An angular
-        // drive authors DEGREES (`targetPosition` deg, `targetVelocity` deg/s,
-        // stiffness/damping per degree) and its torques carry distance² — so
-        // targets go deg→rad, gains ×(180/π), and every torque ×metersPerUnit².
-        // A linear drive authors stage units: targets and `maxForce` (mass ·
-        // distance / s²) scale by metersPerUnit; its stiffness (mass/s²) and
-        // damping (mass/s) are distance-free and pass through.
-        let angular = ns == "angular";
-        let target = |v: f64| {
-            if angular {
-                v.to_radians()
-            } else {
-                conv.length(v)
-            }
-        };
-        let gain = |v: f64| {
-            if angular {
-                conv.length(conv.length(v.to_degrees()))
-            } else {
-                v
-            }
-        };
-        let force = |v: f64| {
-            if angular {
-                conv.length(conv.length(v))
-            } else {
-                conv.length(v)
-            }
-        };
-        let read_value =
-            |name: &str| -> Result<Option<f64>, ()> { read_authored_real(view, path, name) };
-        let property = |template: &str| {
-            openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, ns)
-                .to_string()
-        };
-        let target_position_name =
-            property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_POSITION);
-        let target_velocity_name =
-            property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TARGET_VELOCITY);
-        let max_force_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_MAX_FORCE);
-        let stiffness_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_STIFFNESS);
-        let damping_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_DAMPING);
-        let tp = read_value(&target_position_name)?.map(target);
-        let tv = read_value(&target_velocity_name)?.map(target);
-        let mf = read_value(&max_force_name)?.map(force);
-        let k = read_value(&stiffness_name)?.map(gain);
-        let c = read_value(&damping_name)?.map(gain);
-        let type_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TYPE);
-        let ty = match view.attr_value(path, &type_name) {
-            Some(value) => Some(value.get::<DriveType>().ok_or(())?),
-            None if !view.has_authored_attribute(path, &type_name) => None,
-            None => return Err(()),
-        };
-        Ok(
-            (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
-                JointDrive {
-                    target_position: tp,
-                    target_velocity: tv,
-                    max_force: mf,
-                    stiffness: k,
-                    damping: c,
-                    drive_type: ty,
-                },
-            ),
-        )
-    };
-
     let read_limit = |name: &str, default: f64| -> Option<f64> {
         match view.real(path, name) {
             Some(value) if !value.is_nan() => Some(value),
@@ -456,7 +470,7 @@ fn read_joint_spec_with_policy(
             let axis = read_axis()?;
             let lo = read_limit(ptok::PHYSICS_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
             let hi = read_limit(ptok::PHYSICS_UPPER_LIMIT, f64::INFINITY)?.to_radians();
-            let drive = read_drive(ptok::ANGULAR).ok()?;
+            let drive = read_drive(view, path, ptok::ANGULAR).ok()?;
             pending_from(b, axis, lo, hi, ptok::PHYSICS_REVOLUTE_JOINT, None, drive)
         }
         ptok::PHYSICS_PRISMATIC_JOINT => {
@@ -465,7 +479,7 @@ fn read_joint_spec_with_policy(
             // Linear limits are authored in scene units, like the anchors.
             let lo = conv.length(read_limit(ptok::PHYSICS_LOWER_LIMIT, f64::NEG_INFINITY)?);
             let hi = conv.length(read_limit(ptok::PHYSICS_UPPER_LIMIT, f64::INFINITY)?);
-            let drive = read_drive(ptok::LINEAR).ok()?;
+            let drive = read_drive(view, path, ptok::LINEAR).ok()?;
             pending_from(b, axis, lo, hi, ptok::PHYSICS_PRISMATIC_JOINT, None, drive)
         }
         ptok::PHYSICS_SPHERICAL_JOINT => {

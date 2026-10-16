@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::joint_projection::{JointProjection, ProjectionJoint};
+use crate::joint_projection::{JointDrive, JointProjection, ProjectionJoint};
 use crate::order::{ordered_physics_entities, report_invalid_physics_order};
 use crate::{PhysicsHolds, PhysicsOrderKey};
 use avian3d::dynamics::integrator::IntegrationSystems;
@@ -74,13 +74,18 @@ impl JointSolverOrder {
 #[derive(Resource, Default)]
 pub(crate) struct PhysicsJointPositionScope(pub(crate) Option<std::collections::HashSet<Entity>>);
 
-trait OrderedJoint: Component + ProjectionJoint {
+trait OrderedJoint: Component + ProjectionJoint + XpbdConstraint<2> + Clone {
+    fn drive(&self) -> Option<JointDrive> {
+        None
+    }
+    fn disable_drive(&mut self) {}
     fn solver_entities(order: &JointSolverOrder) -> &[Entity];
     fn local_anchors(&self) -> Option<[avian3d::math::Vector; 2]>;
 }
 macro_rules! ordered_joint {
-    ($joint:ty,$field:ident) => {
+    ($joint:ty,$field:ident $(, $methods:item)*) => {
         impl OrderedJoint for $joint {
+            $($methods)*
             fn solver_entities(order: &JointSolverOrder) -> &[Entity] {
                 &order.$field
             }
@@ -91,9 +96,31 @@ macro_rules! ordered_joint {
     };
 }
 ordered_joint!(FixedJoint, fixed);
-ordered_joint!(RevoluteJoint, revolute);
+ordered_joint!(
+    RevoluteJoint,
+    revolute,
+    fn drive(&self) -> Option<JointDrive> {
+        self.motor
+            .enabled
+            .then_some(JointDrive::Angular(self.motor, self.hinge_axis))
+    },
+    fn disable_drive(&mut self) {
+        self.motor.enabled = false;
+    }
+);
 ordered_joint!(SphericalJoint, spherical);
-ordered_joint!(PrismaticJoint, prismatic);
+ordered_joint!(
+    PrismaticJoint,
+    prismatic,
+    fn drive(&self) -> Option<JointDrive> {
+        self.motor
+            .enabled
+            .then_some(JointDrive::Linear(self.motor, self.slider_axis))
+    },
+    fn disable_drive(&mut self) {
+        self.motor.enabled = false;
+    }
+);
 ordered_joint!(DistanceJoint, distance);
 
 /// Replaces Avian's ECS-order-dependent XPBD joint loops with stable-key order.
@@ -103,7 +130,6 @@ pub struct DeterministicJointSolverPlugin;
 enum JointPass {
     Ordinary,
     Closure,
-    WarmStart(f64),
 }
 
 impl Plugin for DeterministicJointSolverPlugin {
@@ -181,16 +207,6 @@ impl Plugin for DeterministicJointSolverPlugin {
             )
                 .chain()
                 .in_set(SolverSystems::PrepareJoints),
-        );
-        app.add_systems(
-            SubstepSchedule,
-            (
-                stable_warm_start_motors::<RevoluteJoint, RevoluteJointSolverData>,
-                stable_warm_start_motors::<PrismaticJoint, PrismaticJointSolverData>,
-            )
-                .chain()
-                .after(SubstepSolverSystems::WarmStart)
-                .before(SubstepSolverSystems::SolveConstraints),
         );
         app.add_systems(
             SubstepSchedule,
@@ -526,35 +542,6 @@ fn project_joint_velocities(
     }
 }
 
-fn stable_warm_start_motors<C, D>(
-    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
-    mut joints: Query<(&mut C, &mut D), (Without<RigidBody>, Without<JointDisabled>)>,
-    mut projections: Query<&mut JointProjection>,
-    order: Res<JointSolverOrder>,
-    time: Res<Time<Substeps>>,
-    config: Res<avian3d::dynamics::solver::SolverConfig>,
-    scope: Res<PhysicsJointPositionScope>,
-    mut holds: ResMut<PhysicsHolds>,
-    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    mut physics_time: ResMut<Time<Physics>>,
-) where
-    C: Component<Mutability = Mutable> + OrderedJoint + XpbdConstraint<2, SolverData = D>,
-    D: Component<Mutability = Mutable>,
-{
-    solve_ordered_joint::<C, D, false>(
-        &bodies,
-        &mut joints,
-        &mut projections,
-        &order,
-        time.delta_secs_f64(),
-        JointPass::WarmStart(config.warm_start_coefficient),
-        &scope,
-        &mut holds,
-        faults.as_deref_mut(),
-        &mut physics_time,
-    );
-}
-
 fn stable_solve_xpbd_joint<C, D>(
     bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
     mut joints: Query<(&mut C, &mut D), (Without<RigidBody>, Without<JointDisabled>)>,
@@ -684,7 +671,7 @@ where
         } else {
             index
         }];
-        let Ok((mut joint, mut solver_data)) = joints.get_mut(*entity) else {
+        let Ok((joint, mut solver_data)) = joints.get_mut(*entity) else {
             report_stale_joint_order(
                 holds,
                 faults.as_deref_mut(),
@@ -756,16 +743,39 @@ where
                 );
                 return false;
             }
-        } else if let JointPass::WarmStart(coefficient) = pass {
-            joint.warm_start_motors(
-                [body1, body2],
-                [inertia1, inertia2],
-                &mut solver_data,
-                delta_secs,
-                coefficient,
-            );
         } else {
-            joint.solve(
+            let Ok(mut projection) = projections.get_mut(*entity) else {
+                report_stale_joint_order(
+                    holds,
+                    faults.as_deref_mut(),
+                    physics_time,
+                    *entity,
+                    std::any::type_name::<C>(),
+                );
+                return false;
+            };
+            if let Some(drive) = joint.drive()
+                && let Err(detail) = projection.integrate_drive(
+                    drive,
+                    [&mut *body1, &mut *body2],
+                    [inertia1, inertia2],
+                    delta_secs,
+                )
+            {
+                report_joint_solver_fault(
+                    holds,
+                    faults.as_deref_mut(),
+                    physics_time,
+                    *entity,
+                    std::any::type_name::<C>(),
+                    "physics-joint-drive-invalid",
+                    detail,
+                );
+                return false;
+            }
+            let mut native = (*joint).clone();
+            native.disable_drive();
+            native.solve(
                 [body1, body2],
                 [inertia1, inertia2],
                 &mut solver_data,
@@ -972,7 +982,7 @@ fn prepare_joint_reactions<C: Component + OrderedJoint + XpbdConstraint<2>>(
         }
         let force = (data.total_position_lagrange() + projection.position_lagrange) / denominator;
         let torque = (data.total_rotation_lagrange() + projection.rotation_lagrange) / denominator;
-        let motor = data.total_motor_lagrange() / denominator;
+        let motor = projection.motor_impulse / duration;
         if !force.is_finite() || !torque.is_finite() || !motor.is_finite() {
             report_joint_solver_fault(
                 &mut holds,

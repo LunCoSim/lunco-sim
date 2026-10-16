@@ -2745,40 +2745,55 @@ def PhysicsRevoluteJoint "Hinge" (
     }
 
     #[test]
-    fn angular_force_drive_preserves_dimensional_coefficients() {
-        let source = "#usda 1.0\n\
-(\n\
-    metersPerUnit = 1\n\
-)\n\
-def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
-{\n\
-    float physics:mass = 10.0\n\
-    float3 physics:diagonalInertia = (100.0, 100.0, 100.0)\n\
-    def Xform \"Link\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
-    {\n\
-        float physics:mass = 2.0\n\
-        float3 physics:diagonalInertia = (2.0, 3.0, 4.0)\n\
-    }\n\
-}\n\
-def PhysicsRevoluteJoint \"Hinge\" ( prepend apiSchemas = [\"PhysicsDriveAPI:angular\"] )\n\
-{\n\
-    rel physics:body0 = </Host>\n\
-    rel physics:body1 = </Host/Link>\n\
-    uniform token physics:axis = \"Y\"\n\
-    point3f physics:localPos0 = (1.0, 0.0, 0.0)\n\
-    point3f physics:localPos1 = (1.0, 1.0, 0.0)\n\
-    uniform token drive:angular:physics:type = \"force\"\n\
-    float drive:angular:physics:stiffness = 300.0\n\
-    float drive:angular:physics:damping = 30.0\n\
-}\n";
-        let stage = write_and_compose("angular_inertia.usda", source);
-        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
-            .expect("angular force drive reads");
-        let drive = joint.drive.expect("drive is authored");
-        assert!(
-            matches!(drive.motor_model(),Ok(MotorModel::ForceBased{stiffness,damping})
-            if (stiffness-300.0f64.to_degrees()).abs()<1e-9 && (damping-30.0f64.to_degrees()).abs()<1e-9)
-        );
+    fn angular_drives_share_units_without_scaling_acceleration_gains_by_length() {
+        for (drive_type, scale, expected_gain_scale) in [
+            ("force", 1.0, 1.0),
+            ("force", 0.01, 0.0001),
+            ("acceleration", 1.0, 1.0),
+            ("acceleration", 0.01, 1.0),
+        ] {
+            let source = format!(
+                r#"#usda 1.0
+( metersPerUnit = {scale} )
+def Xform "Host" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {{}}
+def Xform "Link" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {{}}
+def PhysicsRevoluteJoint "Hinge" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] ) {{
+    rel physics:body0 = </Host>
+    rel physics:body1 = </Link>
+    uniform token drive:angular:physics:type = "{drive_type}"
+    float drive:angular:physics:targetPosition = 90
+    float drive:angular:physics:targetVelocity = 180
+    float drive:angular:physics:stiffness = 300
+    float drive:angular:physics:damping = 30
+    float drive:angular:physics:maxForce = 100
+}}
+"#
+            );
+            let stage = stage_from_source(&source);
+            let path = SdfPath::new("/Hinge").unwrap();
+            let joint = read_joint_spec(&stage.view(), &path).expect("standard angular drive");
+            let joint_drive = joint.drive.unwrap();
+            // Gear relations enter exactly the same schema reader.
+            let gear_drive =
+                lunco_usd_avian_reader::joint::read_drive(&stage.view(), &path, "angular")
+                    .unwrap()
+                    .unwrap();
+            for drive in [joint_drive, gear_drive] {
+                assert_eq!(drive.target_position, Some(std::f64::consts::FRAC_PI_2));
+                assert_eq!(drive.target_velocity, Some(std::f64::consts::PI));
+                assert!((drive.max_force.unwrap() - 100.0 * scale * scale).abs() < 1e-12);
+                let expected_k = 300.0f64.to_degrees() * expected_gain_scale;
+                let expected_d = 30.0f64.to_degrees() * expected_gain_scale;
+                match drive.motor_model().unwrap() {
+                    MotorModel::ForceBased { stiffness, damping }
+                    | MotorModel::AccelerationBased { stiffness, damping } => {
+                        assert!((stiffness - expected_k).abs() < 1e-9);
+                        assert!((damping - expected_d).abs() < 1e-9);
+                    }
+                    other => panic!("unexpected model {other:?}"),
+                }
+            }
+        }
     }
 
     /// Where a raked joint's axis actually POINTS, from the authoring a landing

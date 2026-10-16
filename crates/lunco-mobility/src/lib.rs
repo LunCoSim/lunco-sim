@@ -22,12 +22,16 @@
 //! final drive torques and wheel headings through generic ports; this crate
 //! realizes those values as wheel, suspension, tire, and brake mechanics.
 
-use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
+use avian3d::dynamics::solver::{
+    schedule::SolverSystems,
+    solver_body::{SolverBody, SolverBodyInertia},
+};
 use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_core::MobilityRoot;
+use lunco_physics::drive::{CoordinateDrive, integrate_coordinate_drive};
 use lunco_port_core::Port;
 use lunco_port_core::{InputPorts, OutputPorts};
 use lunco_spatial::coords::{GridPos, GridRot};
@@ -114,6 +118,13 @@ impl Plugin for LunCoMobilityPlugin {
         sensing::register_collision_event_bridge(app);
 
         app.init_resource::<DynamicFixedBodies>()
+            .init_resource::<DifferentialSolverOrder>()
+            .add_systems(
+                PhysicsSchedule,
+                prepare_differential_order
+                    .after(SolverSystems::PrepareSolverBodies)
+                    .before(SolverSystems::PrepareJoints),
+            )
             .register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             .register_type::<JointedWheelTire>()
@@ -2057,6 +2068,8 @@ pub enum DifferentialDriveType {
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct DifferentialCoupling {
+    /// Explicit authored hinge relationships, in ratio order.
+    pub hinges: [Entity; 2],
     /// The chassis body the two rockers pivot against (reaction torque target).
     pub chassis: Entity,
     /// Left rocker body.
@@ -2096,178 +2109,157 @@ fn native_revolute_state(
     )
 }
 
-/// The gear's relation `c = θ_a − r·θ_b − rest_offset`, on rocker pitches
-/// measured in the CHASSIS frame. Zero ⇒ the drive is at its target.
-fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
-    angle_a - ratio * angle_b - rest_offset
+#[derive(Resource, Default)]
+struct DifferentialSolverOrder(Vec<Entity>);
+
+fn prepare_differential_order(
+    couplings: Query<(Entity, Option<&lunco_physics::PhysicsOrderKey>), With<DifferentialCoupling>>,
+    mut order: ResMut<DifferentialSolverOrder>,
+    mut holds: ResMut<lunco_physics::PhysicsHolds>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut time: ResMut<Time<Physics>>,
+) {
+    order.0.clear();
+    match lunco_physics::ordered_physics_entities(couplings.iter(), "gear drive") {
+        Ok(entities) => order.0 = entities,
+        Err(invalid) => lunco_physics::report_invalid_physics_order(
+            Some(&mut holds),
+            Some(&mut faults),
+            Some(&mut time),
+            "physics-gear-order-invalid",
+            &invalid,
+        ),
+    }
 }
 
-/// Generalized impulse for one authored USD drive update.
-///
-/// The update is implicit in both position and velocity. Solving the authored
-/// law at `(e_next, v_next)` instead of the current state removes the explicit
-/// penalty's `k < I/dt²` restriction while preserving the continuous
-/// force/acceleration law and the authored max-force limit. This is the same
-/// numerical ownership rule as the standard joint-drive bridge: stability
-/// belongs to the solver realization, not to a guessed asset-specific stiffness
-/// cap.
-fn gear_drive_impulse(
-    position_error: f64,
-    relation_velocity: f64,
-    target_velocity: f64,
-    stiffness: f64,
-    damping: f64,
-    max_force: f64,
-    inverse_mass: f64,
-    dt: f64,
-    drive_type: DifferentialDriveType,
-) -> f64 {
-    if inverse_mass <= f64::EPSILON || !dt.is_finite() || dt <= 0.0 {
-        return 0.0;
-    }
-    let denominator = match drive_type {
-        DifferentialDriveType::Force => 1.0 + inverse_mass * (damping * dt + stiffness * dt * dt),
-        DifferentialDriveType::Acceleration => 1.0 + damping * dt + stiffness * dt * dt,
-    };
-    if !denominator.is_finite() || denominator <= 0.0 {
-        return 0.0;
-    }
-    let next_velocity = match drive_type {
-        DifferentialDriveType::Force => {
-            (relation_velocity
-                + inverse_mass * dt * (-stiffness * position_error + damping * target_velocity))
-                / denominator
-        }
-        DifferentialDriveType::Acceleration => {
-            (relation_velocity + dt * (-stiffness * position_error + damping * target_velocity))
-                / denominator
-        }
-    };
-    let next_error = position_error + next_velocity * dt;
-    let raw = -stiffness * next_error + damping * (target_velocity - next_velocity);
-    if !raw.is_finite() {
-        return 0.0;
-    }
-    let force = match drive_type {
-        DifferentialDriveType::Force => raw,
-        DifferentialDriveType::Acceleration => raw / inverse_mass,
-    };
-    let limited = if max_force.is_finite() {
-        force.clamp(-max_force, max_force)
-    } else {
-        force
-    };
-    if !limited.is_finite() {
-        return 0.0;
-    }
-    limited * dt
-}
-
-/// The rocker-bogie differential is an authored `PhysicsDriveAPI:angular`
-/// relation inside Avian's substep solver. Its stiffness, damping, target
-/// velocity, drive type, and max-force limit are all projected from USD.
-///
-/// Runs per substep before the native revolute pass. The current world rotation
-/// of each body is `delta_rotation · Rotation` (Avian only writes `Rotation` back
-/// at the end of the step), matching Avian's own joint solver.
+/// Integrate each authored gear drive once per physical substep, before hinge
+/// alignment. Joints and gears share the same implicit coordinate law and the
+/// later position-to-velocity projection.
 fn solve_differential_gear(
+    order: Res<DifferentialSolverOrder>,
     q_coupling: Query<&DifferentialCoupling>,
-    q_revolute: Query<&RevoluteJoint>,
+    q_revolute: Query<&RevoluteJoint, Without<JointDisabled>>,
     mut q_solver: Query<
-        (&mut SolverBody, &SolverBodyInertia, &Rotation),
+        (
+            &RigidBody,
+            &Rotation,
+            Has<Sleeping>,
+            Option<&mut SolverBody>,
+            Option<&SolverBodyInertia>,
+        ),
         Without<RigidBodyDisabled>,
     >,
-    time: Res<Time>,
+    time: Res<Time<Substeps>>,
+    mut holds: ResMut<lunco_physics::PhysicsHolds>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut physics_time: ResMut<Time<Physics>>,
 ) {
-    let dt = time.delta_secs_f64();
-    for coupling in q_coupling.iter() {
-        let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) =
-            q_solver.get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
-        else {
-            continue;
-        };
-
-        let Some(joint_a) = q_revolute
-            .iter()
-            .find(|joint| joint.body1 == coupling.chassis && joint.body2 == coupling.rocker_a)
-        else {
-            continue;
-        };
-        let Some(joint_b) = q_revolute
-            .iter()
-            .find(|joint| joint.body1 == coupling.chassis && joint.body2 == coupling.rocker_b)
-        else {
-            continue;
-        };
-
-        // Current world rotations inside the substep.
-        let Some((angle_a, axis_a)) = native_revolute_state(
-            joint_a,
-            rc.0,
-            ra.0,
-            sc.delta_rotation.0,
-            sa.delta_rotation.0,
-        ) else {
-            continue;
-        };
-        let Some((angle_b, axis_b)) = native_revolute_state(
-            joint_b,
-            rc.0,
-            rb.0,
-            sc.delta_rotation.0,
-            sb.delta_rotation.0,
-        ) else {
-            continue;
-        };
-        let r = coupling.ratio;
-        let error = gear_error(angle_a, angle_b, r, coupling.rest_offset);
-        let chassis_gradient = -axis_a + r * axis_b;
-        let gradients = [axis_a, -r * axis_b, chassis_gradient];
-
-        let mut inv_inertias = [
-            ia.effective_inv_angular_inertia(),
-            ib.effective_inv_angular_inertia(),
-            ic.effective_inv_angular_inertia(),
-        ];
-        // Match Avian's pairwise dominance rule for a multi-body constraint.
-        // A kinematic body retains its authored inertia tensor, but its higher
-        // dominance makes it the immovable side of every native joint. The
-        // gear must apply the same rule or it can rotate bodies while the scene
-        // is still being held for collider admission.
-        let dominances = [ia.dominance(), ib.dominance(), ic.dominance()];
-        let least_dominance = dominances.into_iter().min().unwrap_or_default();
-        for (inverse_inertia, dominance) in inv_inertias.iter_mut().zip(dominances) {
-            if dominance > least_dominance {
-                *inverse_inertia *= 0.0;
+    if faults.active() {
+        return;
+    }
+    for &entity in &order.0 {
+        let result = (|| -> Result<(), &str> {
+            let coupling = q_coupling
+                .get(entity)
+                .map_err(|_| "prepared gear drive no longer exists")?;
+            let [joint_a, joint_b] = q_revolute
+                .get_many(coupling.hinges)
+                .map_err(|_| "gear requires its two explicitly authored active revolute joints")?;
+            if joint_a.body1 != coupling.chassis
+                || joint_a.body2 != coupling.rocker_a
+                || joint_b.body1 != coupling.chassis
+                || joint_b.body2 != coupling.rocker_b
+            {
+                return Err("gear hinge endpoints differ from admitted body topology");
             }
-        }
-        let inverse_mass: f64 = gradients
-            .iter()
-            .zip(inv_inertias.iter())
-            .map(|(gradient, inverse_inertia)| gradient.dot(*inverse_inertia * *gradient))
-            .sum();
-        let relation_velocity = gradients[0].dot(sa.angular_velocity)
-            + gradients[1].dot(sb.angular_velocity)
-            + gradients[2].dot(sc.angular_velocity);
-        let impulse = gear_drive_impulse(
-            error,
-            relation_velocity,
-            coupling.target_velocity,
-            coupling.stiffness,
-            coupling.damping,
-            coupling.max_force,
-            inverse_mass,
-            dt,
-            coupling.drive_type,
-        );
-        if impulse == 0.0 || !impulse.is_finite() {
-            continue;
-        }
-        for (body, (gradient, inv)) in [&mut sa, &mut sb, &mut sc]
-            .into_iter()
-            .zip(gradients.iter().zip(inv_inertias.iter()))
-        {
-            body.angular_velocity += *inv * (*gradient * impulse);
+            let [
+                (ba, ra, sleeping_a, sa, ia),
+                (bb, rb, sleeping_b, sb, ib),
+                (bc, rc, sleeping_c, sc, ic),
+            ] = q_solver
+                .get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
+                .map_err(|_| "gear requires three distinct admitted rigid bodies")?;
+            for (body, sleeping, has_solver, has_inertia) in [
+                (ba, sleeping_a, sa.is_some(), ia.is_some()),
+                (bb, sleeping_b, sb.is_some(), ib.is_some()),
+                (bc, sleeping_c, sc.is_some(), ic.is_some()),
+            ] {
+                if has_solver != has_inertia || (!has_solver && !body.is_static() && !sleeping) {
+                    return Err("active movable gear endpoint has no complete solver state");
+                }
+            }
+            // Native static and sleeping endpoints have no SolverBody. Their
+            // actual orientation still defines the coordinate; DUMMY supplies
+            // their documented zero mobility and zero substep increment.
+            let (mut dummy_a, mut dummy_b, mut dummy_c) =
+                (SolverBody::DUMMY, SolverBody::DUMMY, SolverBody::DUMMY);
+            let sa = sa.map(Mut::into_inner).unwrap_or(&mut dummy_a);
+            let sb = sb.map(Mut::into_inner).unwrap_or(&mut dummy_b);
+            let sc = sc.map(Mut::into_inner).unwrap_or(&mut dummy_c);
+            let (ia, ib, ic) = (
+                ia.unwrap_or(&SolverBodyInertia::DUMMY),
+                ib.unwrap_or(&SolverBodyInertia::DUMMY),
+                ic.unwrap_or(&SolverBodyInertia::DUMMY),
+            );
+            let (angle_a, axis_a) = native_revolute_state(
+                joint_a,
+                rc.0,
+                ra.0,
+                sc.delta_rotation.0,
+                sa.delta_rotation.0,
+            )
+            .ok_or("gear first hinge frame is invalid")?;
+            let (angle_b, axis_b) = native_revolute_state(
+                joint_b,
+                rc.0,
+                rb.0,
+                sc.delta_rotation.0,
+                sb.delta_rotation.0,
+            )
+            .ok_or("gear second hinge frame is invalid")?;
+            let r = coupling.ratio;
+            if !r.is_finite() || r == 0.0 {
+                return Err("gear ratio must be finite and nonzero");
+            }
+            let model = match coupling.drive_type {
+                DifferentialDriveType::Force => MotorModel::ForceBased {
+                    stiffness: coupling.stiffness,
+                    damping: coupling.damping,
+                },
+                DifferentialDriveType::Acceleration => MotorModel::AccelerationBased {
+                    stiffness: coupling.stiffness,
+                    damping: coupling.damping,
+                },
+            };
+            integrate_coordinate_drive(
+                [sa, sb, sc],
+                [ia, ib, ic],
+                [DVec3::ZERO; 3],
+                [axis_a, -r * axis_b, -axis_a + r * axis_b],
+                CoordinateDrive {
+                    model,
+                    target_position: coupling.rest_offset,
+                    target_velocity: coupling.target_velocity,
+                    max_force: coupling.max_force,
+                },
+                angle_a - r * angle_b,
+                time.delta_secs_f64(),
+            )?;
+            Ok(())
+        })();
+        if let Err(detail) = result {
+            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            physics_time.pause();
+            physics_time.advance_by(std::time::Duration::ZERO);
+            if faults.raise(
+                "physics-gear-drive-invalid",
+                Some(entity),
+                "gear drive",
+                detail,
+            ) {
+                error!("[physics] refusing invalid gear drive: {detail}");
+            }
+            return;
         }
     }
 }
@@ -3135,165 +3127,6 @@ mod oracle {
             assert!(*force >= 0.0);
             assert!(*force <= 2.0 * k * chi.max(0.0) + 1.0);
         }
-    }
-}
-
-#[cfg(test)]
-mod differential_tests {
-    use super::*;
-
-    const PRODUCTION_SUBSTEP_DT: f64 =
-        1.0 / (lunco_core_runtime::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64);
-
-    #[test]
-    fn force_drive_impulse_is_finite_and_limited() {
-        for error in [0.4, -0.15, 0.6, 0.2] {
-            let impulse = gear_drive_impulse(
-                error,
-                0.0,
-                0.0,
-                8_000.0,
-                1_200.0,
-                100.0,
-                0.11,
-                PRODUCTION_SUBSTEP_DT,
-                DifferentialDriveType::Force,
-            );
-            assert!(impulse.is_finite());
-            assert!(impulse.abs() <= 100.0 * PRODUCTION_SUBSTEP_DT);
-        }
-    }
-
-    #[test]
-    fn satisfied_drive_at_target_needs_no_impulse() {
-        assert_eq!(
-            gear_drive_impulse(
-                0.0,
-                0.0,
-                0.0,
-                8_000.0,
-                1_200.0,
-                f64::INFINITY,
-                0.11,
-                PRODUCTION_SUBSTEP_DT,
-                DifferentialDriveType::Force,
-            ),
-            0.0
-        );
-    }
-
-    #[test]
-    fn implicit_force_drive_stays_finite_under_a_stiff_authored_drive() {
-        let mut error = 1.0;
-        let mut velocity = 0.0;
-        let inverse_mass = 1.0 / 60.0;
-        let dt = 1.0 / 64.0;
-
-        for _ in 0..2_000 {
-            let impulse = gear_drive_impulse(
-                error,
-                velocity,
-                0.0,
-                400_000.0,
-                0.0,
-                f64::INFINITY,
-                inverse_mass,
-                dt,
-                DifferentialDriveType::Force,
-            );
-            velocity += inverse_mass * impulse;
-            error += velocity * dt;
-            assert!(error.is_finite() && velocity.is_finite());
-        }
-        assert!(error.abs() < 1.0);
-    }
-
-    #[test]
-    fn implicit_acceleration_drive_is_damped_without_mass_scaling() {
-        let dt = PRODUCTION_SUBSTEP_DT;
-        let inverse_mass = 1.0 / 60.0;
-        let force_mode = gear_drive_impulse(
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            10.0,
-            f64::INFINITY,
-            inverse_mass,
-            dt,
-            DifferentialDriveType::Force,
-        );
-        let acceleration_mode = gear_drive_impulse(
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            10.0,
-            f64::INFINITY,
-            inverse_mass,
-            dt,
-            DifferentialDriveType::Acceleration,
-        );
-        assert!(acceleration_mode > force_mode);
-        assert!((acceleration_mode * inverse_mass / dt - 10.0 / (1.0 + 10.0 * dt)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn drive_force_caps_bound_impulse_in_both_modes() {
-        for drive_type in [
-            DifferentialDriveType::Force,
-            DifferentialDriveType::Acceleration,
-        ] {
-            for inverse_mass in [0.01, 0.1, 1.0, 10.0] {
-                for max_force in [0.0, 1.0] {
-                    let impulse = gear_drive_impulse(
-                        0.0,
-                        0.0,
-                        1.0,
-                        0.0,
-                        1_000.0,
-                        max_force,
-                        inverse_mass,
-                        PRODUCTION_SUBSTEP_DT,
-                        drive_type,
-                    );
-                    assert_eq!(impulse, max_force * PRODUCTION_SUBSTEP_DT);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_ratio_defines_the_error() {
-        assert_eq!(gear_error(0.4, 0.4, -1.0, 0.0), 0.8);
-        assert_eq!(gear_error(0.4, 0.4, 1.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn rest_offset_moves_the_target() {
-        let c = gear_error(0.3, 0.2, -1.0, 0.5);
-        assert!(
-            c.abs() < 1e-12,
-            "offset target should be satisfied, got {c}"
-        );
-    }
-
-    #[test]
-    fn an_immovable_rig_is_left_alone() {
-        assert_eq!(
-            gear_drive_impulse(
-                0.5,
-                0.0,
-                0.0,
-                8_000.0,
-                1_200.0,
-                f64::INFINITY,
-                0.0,
-                PRODUCTION_SUBSTEP_DT,
-                DifferentialDriveType::Force,
-            ),
-            0.0
-        );
     }
 }
 

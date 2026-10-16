@@ -96,10 +96,30 @@ pub fn revolute_coordinate(
     {
         return None;
     }
-    let axis = revolute_hinge_axis_world(joint, body1_rotation)?;
-    let perpendicular = joint.hinge_axis.any_orthonormal_vector();
-    let first = body1_rotation * basis1 * perpendicular;
-    let second = body2_rotation * basis2 * perpendicular;
+    angular_frame_coordinate(
+        body1_rotation * basis1,
+        body2_rotation * basis2,
+        joint.hinge_axis,
+    )
+}
+
+pub(crate) fn angular_frame_coordinate(
+    frame1: DQuat,
+    frame2: DQuat,
+    local_axis: DVec3,
+) -> Option<(f64, DVec3)> {
+    if ![frame1, frame2]
+        .into_iter()
+        .all(crate::avian_backend_rotation_is_valid)
+        || !local_axis.is_finite()
+        || !local_axis.is_normalized()
+    {
+        return None;
+    }
+    let axis = (frame1 * local_axis).try_normalize()?;
+    let perpendicular = local_axis.any_orthonormal_vector();
+    let first = frame1 * perpendicular;
+    let second = frame2 * perpendicular;
     let angle = first.cross(second).dot(axis).atan2(first.dot(second));
     angle.is_finite().then_some((angle, axis))
 }

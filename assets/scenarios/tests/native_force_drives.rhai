@@ -13,7 +13,7 @@ fn measured(joint,angular) {
 }
 fn on_start(me,ctx) {
     let finite=find_path("/World/Finite");
-    this.omitted_unlimited=joint_drive(finite).max_force>1e300;
+    this.omitted_unlimited=joint_drive(finite).max_force.is_infinite();
     this.setter_unlimited=set_joint_drive(finite,1000.0,100.0,joint_drive(find_path("/World/Computed")).max_force);
     this.setter_rejected_negative=!set_joint_drive(finite,1000.0,100.0,-1.0);
     this.start=sim_tick();this.done=false;this.previous=[];this.cases=[];

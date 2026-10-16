@@ -34,6 +34,12 @@ pub(crate) trait ProjectionJoint: Component + EntityConstraint<2> {
     fn geometry(&self) -> Result<JointGeometry, &'static str>;
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum JointDrive {
+    Linear(LinearMotor, DVec3),
+    Angular(AngularMotor, DVec3),
+}
+
 fn hard(compliance: f64, row: Option<GeometryRow>) -> Result<Option<GeometryRow>, &'static str> {
     if !compliance.is_finite() || compliance < 0.0 {
         return Err("joint compliance must be finite and nonnegative");
@@ -142,7 +148,8 @@ impl ProjectionJoint for DistanceJoint {
     }
 }
 
-/// Prepared hard channels only. No motor or compliant multiplier participates.
+/// Shared prepared joint frames, hard channels and completed-step multipliers.
+/// Repeated closure consumes only the geometric rows.
 #[derive(Component, Clone, Debug, Default)]
 pub(crate) struct JointProjection {
     point: PointConstraintShared,
@@ -151,6 +158,7 @@ pub(crate) struct JointProjection {
     prepared: bool,
     pub(crate) position_lagrange: DVec3,
     pub(crate) rotation_lagrange: DVec3,
+    pub(crate) motor_impulse: f64,
     pub(crate) pending_reaction: Option<JointForces>,
 }
 
@@ -219,7 +227,88 @@ impl JointProjection {
         self.rows = geometry.rows;
         self.position_lagrange = DVec3::ZERO;
         self.rotation_lagrange = DVec3::ZERO;
+        self.motor_impulse = 0.0;
         self.prepared = true;
+        Ok(())
+    }
+
+    pub(crate) fn integrate_drive(
+        &mut self,
+        drive: JointDrive,
+        bodies: [&mut SolverBody; 2],
+        inertias: [&SolverBodyInertia; 2],
+        dt: f64,
+    ) -> Result<(), &'static str> {
+        use crate::drive::{CoordinateDrive, integrate_coordinate_drive};
+        if !self.prepared {
+            return Err("joint drive has no admitted frame geometry");
+        }
+        let bases = self
+            .bases
+            .ok_or("joint drive requires resolved joint frames")?;
+        let frames = [
+            bodies[0].delta_rotation.0 * bases[0],
+            bodies[1].delta_rotation.0 * bases[1],
+        ];
+        let (parameters, coordinate, axis, linear, angular, rotational) = match drive {
+            JointDrive::Linear(motor, local_axis) => {
+                let axis = unit(frames[0] * unit(local_axis)?)?;
+                let levers = [
+                    bodies[0].delta_rotation * self.point.world_r1,
+                    bodies[1].delta_rotation * self.point.world_r2,
+                ];
+                let separation = bodies[1].delta_position - bodies[0].delta_position + levers[1]
+                    - levers[0]
+                    + self.point.center_difference;
+                (
+                    CoordinateDrive {
+                        model: motor.motor_model,
+                        target_position: motor.target_position,
+                        target_velocity: motor.target_velocity,
+                        max_force: motor.max_force,
+                    },
+                    separation.dot(axis),
+                    axis,
+                    [-axis, axis],
+                    [
+                        -levers[0].cross(axis) + axis.cross(separation),
+                        levers[1].cross(axis),
+                    ],
+                    false,
+                )
+            }
+            JointDrive::Angular(motor, local_axis) => {
+                let (angle, axis) =
+                    crate::joint::angular_frame_coordinate(frames[0], frames[1], local_axis)
+                        .ok_or("joint drive requires admitted angular frames and axis")?;
+                (
+                    CoordinateDrive {
+                        model: motor.motor_model,
+                        target_position: motor.target_position,
+                        target_velocity: motor.target_velocity,
+                        max_force: motor.max_torque,
+                    },
+                    angle,
+                    axis,
+                    [DVec3::ZERO; 2],
+                    [-axis, axis],
+                    true,
+                )
+            }
+        };
+        let impulse = integrate_coordinate_drive(
+            bodies, inertias, linear, angular, parameters, coordinate, dt,
+        )?;
+        let multiplier = axis * (impulse * dt);
+        let position = self.position_lagrange - if rotational { DVec3::ZERO } else { multiplier };
+        let rotation = self.rotation_lagrange + if rotational { multiplier } else { DVec3::ZERO };
+        let motor = self.motor_impulse + impulse;
+        if !position.is_finite() || !rotation.is_finite() || !motor.is_finite() {
+            return Err("joint drive completed-step reaction is not representable");
+        }
+        self.position_lagrange = position;
+        self.rotation_lagrange = rotation;
+        self.motor_impulse = motor;
         Ok(())
     }
 

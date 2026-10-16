@@ -81,8 +81,8 @@ use lunco_port_core::{Port, PortSurface, PortSurfacePort};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_authoring::{
-    GearDriveValues, SuspensionParams, WheelParams, is_gear_drive, read_gear_drive_type,
-    read_gear_drive_values, read_gear_ratio,
+    GearDriveValues, SuspensionParams, WheelParams, is_gear_drive, read_gear_drive_values,
+    read_gear_ratio,
 };
 use lunco_usd_sim_core::{
     GroundColliderPending, PendingDifferential, PendingEntityWork, PhysicalWheel, UsdSimProcessed,
@@ -2655,7 +2655,23 @@ fn process_usd_sim_prim_read(
                 reader.rel_target(&h, "physics:body0")?,
             ))
         };
-        if let (Some((body_a, frame)), Some((body_b, _))) = (geared(&hinges.0), geared(&hinges.1)) {
+        if let (Some((body_a, frame)), Some((body_b, frame_b))) =
+            (geared(&hinges.0), geared(&hinges.1))
+        {
+            if frame != frame_b {
+                warn!(
+                    "Gear joint {} requires hinges with the same body0 frame",
+                    prim_path.path
+                );
+                return;
+            }
+            let Ok(order_key) = stable_usd_physics_order_key(stage_source, &prim_path.path) else {
+                warn!(
+                    "Gear joint {} has no stable source identity",
+                    prim_path.path
+                );
+                return;
+            };
             let Some(ratio) = read_gear_ratio(reader, &sdf_path) else {
                 warn!(
                     "Gear joint {} has no valid non-zero physxGearJoint:gearRatio; coupling ignored",
@@ -2664,6 +2680,7 @@ fn process_usd_sim_prim_read(
                 return;
             };
             let Ok(GearDriveValues {
+                drive_type,
                 rest_offset,
                 target_velocity,
                 stiffness,
@@ -2677,18 +2694,16 @@ fn process_usd_sim_prim_read(
                 );
                 return;
             };
-            let Some(drive_type) = read_gear_drive_type(reader, &sdf_path) else {
-                warn!(
-                    "Gear joint {} has an unsupported angular PhysicsDriveAPI type; coupling ignored",
-                    prim_path.path
-                );
-                return;
-            };
             info!(
                 "Gear joint {} couples {} / {} (ratio {}, stiffness {}, damping {})",
                 prim_path.path, body_a, body_b, ratio, stiffness, damping,
             );
             commands.entity(entity).try_insert(PendingDifferential {
+                hinges: [
+                    hinges.0.expect("resolved first hinge"),
+                    hinges.1.expect("resolved second hinge"),
+                ],
+                order_key,
                 chassis: frame,
                 rocker_a: body_a,
                 rocker_b: body_b,
@@ -4648,12 +4663,11 @@ mod pending_sim_work_tests {
 /// strings against live `UsdPrimPath`s, scoped by stage and instance root, so two
 /// copies of the same rover in one scene each gear their OWN rockers.
 ///
-/// The pending marker lives on the JOINT prim; the coupling is attached to the chassis,
-/// which is the body the gear's reaction torque goes into and the one the coupling
-/// system writes `Forces` through.
+/// The gear prim owns both pending and admitted coupling state. Explicit hinge
+/// relationships are resolved in the same stage/instance scope as the bodies.
 fn resolve_differential_coupling(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential)>,
-    q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
+    q_bodies: Query<(Entity, &UsdPrimPath), Or<(With<Position>, With<RevoluteJoint>)>>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -4671,25 +4685,31 @@ fn resolve_differential_coupling(
                 })
                 .map(|(e, _)| e)
         };
-        let (Some(chassis), Some(rocker_a), Some(rocker_b)) = (
+        let (Some(chassis), Some(rocker_a), Some(rocker_b), Some(hinge_a), Some(hinge_b)) = (
             find(&pending.chassis),
             find(&pending.rocker_a),
             find(&pending.rocker_b),
+            find(&pending.hinges[0]),
+            find(&pending.hinges[1]),
         ) else {
             continue; // a geared body not admitted yet — retry next frame
         };
-        commands.entity(chassis).try_insert(DifferentialCoupling {
-            chassis,
-            rocker_a,
-            rocker_b,
-            ratio: pending.ratio,
-            rest_offset: pending.rest_offset,
-            target_velocity: pending.target_velocity,
-            stiffness: pending.stiffness,
-            damping: pending.damping,
-            max_force: pending.max_force,
-            drive_type: pending.drive_type,
-        });
+        commands.entity(joint).try_insert((
+            pending.order_key.clone(),
+            DifferentialCoupling {
+                hinges: [hinge_a, hinge_b],
+                chassis,
+                rocker_a,
+                rocker_b,
+                ratio: pending.ratio,
+                rest_offset: pending.rest_offset,
+                target_velocity: pending.target_velocity,
+                stiffness: pending.stiffness,
+                damping: pending.damping,
+                max_force: pending.max_force,
+                drive_type: pending.drive_type,
+            },
+        ));
         commands.entity(joint).remove::<PendingDifferential>();
         info!(
             "Resolved gear joint {} ({} <-> {})",

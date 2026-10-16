@@ -36,7 +36,7 @@ Do not derive a second coordinate or narrow physics rotations for telemetry.
 
 The shared headless/headful physics composition disables `XpbdSolverPlugin`;
 `lunco-physics::DeterministicJointSolverPlugin` owns ordered preparation,
-warm-start, ordinary joint solving, hard closure and f64 velocity projection
+ordinary joint solving, hard closure and f64 velocity projection
 before contact relaxation. The native contact solver remains installed.
 Joint reactions stage across all types before one validated commit. A fault
 holds physics and refuses native body/contact writeback in that same step;
@@ -810,10 +810,19 @@ terrain after settling.
 ## Native drive integration and contact ownership
 
 USD force and acceleration coefficients retain their dimensional motor metadata.
-Omitted stiffness/damping use the standard zero defaults. A qualified numerical
-realization must apply force/torque caps in physical units using both endpoint
-inertias and the actual native substep duration. The stock force-based mode has
-failing qualification cases; use the `native_force_drives` production gate and
+Omitted stiffness/damping use the standard zero defaults.
+`lunco-physics::drive` integrates ordinary joint and multi-body gear drives once
+per actual native substep, after free drift. Its implicit position/velocity law
+uses effective endpoint inertias and physical force/torque caps for every motor
+model. It writes position increments consumed by the shared f64 velocity
+projection; drives have no warm-start or repeated closure integration. The
+ordinary native joint pass disables its motor on a local definition copy while
+retaining its geometric/compliant channels. Gear components live on the gear
+prim and retain explicit hinge references and stable authored ordering. Gear
+and ordinary joint drives use the same schema reader and SI unit conversion;
+angular gains convert from per-degree to per-radian, and only force-based gains
+carry squared stage length. Use the
+`native_force_drives` and positive/negative `differential_rig` production gates and
 [the integration review](../../docs/reviews/upstream-only-physics-integration.md)
 before claiming correct actuation or completed reaction telemetry.
 

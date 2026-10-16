@@ -25,6 +25,7 @@ use std::time::Duration;
 
 pub mod assembly;
 pub mod ccd;
+pub mod drive;
 pub use ccd::{
     ContinuousCollisionDiagnostics, ContinuousCollisionPlugin, ContinuousCollisionSettings,
 };

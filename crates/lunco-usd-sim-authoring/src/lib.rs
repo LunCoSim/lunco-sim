@@ -14,9 +14,11 @@ pub use wheel_params::{
     collect_wheel_attachment_topology, collect_wheel_attachment_topology_from_paths,
 };
 
-/// The authored angular drive values of one PhysX gear joint.
+/// The normalized SI angular drive values of one PhysX gear joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GearDriveValues {
+    /// Standard force or acceleration interpretation.
+    pub drive_type: lunco_mobility::DifferentialDriveType,
     /// Rest angular offset.
     pub rest_offset: f64,
     /// Target angular velocity.
@@ -53,37 +55,23 @@ pub fn read_gear_drive_values(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &openusd::sdf::Path,
 ) -> Result<GearDriveValues, ()> {
-    let read = |name: &str, default: f64, allow_infinity: bool| match reader.real(prim, name) {
-        Some(value) if value.is_finite() || (allow_infinity && value == f64::INFINITY) => Ok(value),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(prim, name) => Err(()),
-        None => Ok(default),
-    };
-    let values = GearDriveValues {
-        rest_offset: read("drive:angular:physics:targetPosition", 0.0, false)?,
-        target_velocity: read("drive:angular:physics:targetVelocity", 0.0, false)?,
-        stiffness: read("drive:angular:physics:stiffness", 0.0, false)?,
-        damping: read("drive:angular:physics:damping", 0.0, false)?,
-        max_force: read("drive:angular:physics:maxForce", f64::INFINITY, true)?,
-    };
-    if values.stiffness < 0.0 || values.damping < 0.0 || values.max_force < 0.0 {
-        return Err(());
-    }
-    Ok(values)
-}
-
-/// Read the authored angular drive realization of a PhysX gear joint.
-pub fn read_gear_drive_type(
-    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-    prim: &openusd::sdf::Path,
-) -> Option<lunco_mobility::DifferentialDriveType> {
-    match reader.text(prim, "drive:angular:physics:type") {
-        Some(value) if value == "force" => Some(lunco_mobility::DifferentialDriveType::Force),
-        Some(value) if value == "acceleration" => {
-            Some(lunco_mobility::DifferentialDriveType::Acceleration)
+    let drive = lunco_usd_avian_reader::joint::read_drive(reader, prim, "angular")?.ok_or(())?;
+    drive.motor_model().map_err(|_| ())?;
+    let drive_type = match drive
+        .drive_type
+        .unwrap_or(openusd_schemas::physics::DriveType::Force)
+    {
+        openusd_schemas::physics::DriveType::Force => lunco_mobility::DifferentialDriveType::Force,
+        openusd_schemas::physics::DriveType::Acceleration => {
+            lunco_mobility::DifferentialDriveType::Acceleration
         }
-        Some(_) => None,
-        None if reader.has_authored_attribute(prim, "drive:angular:physics:type") => None,
-        None => Some(lunco_mobility::DifferentialDriveType::Force),
-    }
+    };
+    Ok(GearDriveValues {
+        drive_type,
+        rest_offset: drive.target_position.unwrap_or(0.0),
+        target_velocity: drive.target_velocity.unwrap_or(0.0),
+        stiffness: drive.stiffness.unwrap_or(0.0),
+        damping: drive.damping.unwrap_or(0.0),
+        max_force: drive.max_force.unwrap_or(f64::INFINITY),
+    })
 }

@@ -174,7 +174,7 @@ qualification; these kernel tests do not establish agreement of both passes.
 
 The shared headless/headful physics composition disables `XpbdSolverPlugin`.
 The application joint owner installs native public preparation kernels, stable
-motor warm-start and ordinary passes, hard closure, f64 velocity projection and
+ordinary drive and geometric passes, hard closure, f64 velocity projection and
 one reaction finalization path. Projection precedes contact relaxation. The
 native contact solver remains installed. Its bundled passive damping systems
 are removed through Bevy's public schedule API because Avian exposes no separate
@@ -339,7 +339,7 @@ contracts; add a boundary-specific test if an aligned mask is actually persisted
 | Revolute coordinate | `lunco-physics::joint`; native local bases and hinge axes | One f64 joint-frame measurement shared by co-simulation, mobility and the joint panel. Use signed `atan2`, finite/rigid-frame admission and the native coordinate convention. No dependency method is needed. |
 | Rotation increment | `lunco-physics` trajectory/velocity projection; glam quaternion APIs | Use one admitted shortest-rotation convention with explicit zero, sign and small-angle handling. Qualify its derivative against the actual position integrator. Do not create separate CCD and velocity-projection formulas. |
 | Solver composition | `lunco-luncosim-simulation` plus `lunco-physics::joint_solver`; Avian plugin group and public XPBD functions | Select plugins at composition. Replace the required XPBD orchestration as one application plugin using public kernels; remove individual-system-name surgery and count assertions. Keep contact relaxation, joint/CCD closure and velocity projection in one reviewed substep graph. |
-| Dimensional joint drives | `lunco-physics` drive realization; public solver bodies, effective inertias and constraint impulse APIs | Reuse/generalize the existing implicit scalar drive calculation in `lunco-mobility::gear_drive_impulse`. Keep authored force/acceleration units, both endpoint inertias, anchor velocities and physical caps. Disable the native motor for any drive owned by this path. Targets, ports and telemetry must consume the same typed drive state. |
+| Dimensional joint drives | `lunco-physics` drive realization; public solver bodies, effective inertias and constraint impulse APIs | Use the shared implicit coordinate drive in `lunco-physics::drive` for native joints and multi-body gears. Keep authored force/acceleration units, both endpoint inertias, anchor velocities and physical caps. Disable the native motor for any drive owned by this path. Targets, ports and telemetry must consume the same typed drive state. |
 | Repeated contact/joint closure | `joint_projection::JointProjection`, CCD and ordered joint owners; public point preparation and positional/angular impulse primitives | One prepared row representation selects only zero-compliance geometric channels. It uses the shared f64 rotation displacement for world joint frames. Drives and compliant channels retain their single ordinary integration lifetime. Qualify the ordinary and closure passes together; numerical kernel tests alone do not prove that composition. |
 | Joint reactions | Ordered physics-step owner; public solver-data multiplier accessors | Accumulate actual applied impulse once per substep and divide by completed physics duration. Include application-owned drive and closure contributions. Preserve sleeping results and explicitly invalidate disabled/retired joints. One typed result feeds ports and diagnostics. |
 | Joint damping | Ordered substep owner; native solver-body and effective-inertia contracts | First determine whether the authored damping is a drive coefficient or passive joint damping. Drive damping uses the single drive realization. Any independent pair damping must conserve momentum, respect locked/kinematic axes and have one ordered application. Do not layer another damping pass over the native pass. |
@@ -460,3 +460,52 @@ are not additive. The artifacts do not establish 200 FPS or physics below 1 ms.
 This review defines the cutover and its remaining qualification work. The
 current diff compiles and loads Griffin; it does not establish sustained vehicle,
 drive, collision-kernel or performance acceptance.
+
+
+## Shared coordinate-drive realization
+
+`lunco-physics::drive` owns the implicit force/acceleration calculation for both
+ordinary joints and mobility gear relations. For freely drifted coordinate q,
+rate v, mobility w and actual substep h, a dimensional drive applies
+`J = h * (k * (target - q) + d * (target_rate - v)) /
+(1 + w * h * (d + k * h))`, bounded by the physical force limit times h.
+Acceleration-based and frequency-based models normalize gains by mobility;
+the cap remains physical force/torque. Free drift is not predicted twice.
+
+The public Avian solver body/inertia and angular increment APIs apply Jacobian
+position increments. Shared f64 velocity projection realizes their velocity
+change once. Effective mass includes locks and dominance; numeric admission
+validates every endpoint candidate before any solver body is modified.
+Ordinary joint motors run once and do not warm start. The local native joint
+definition passed to the remaining compliant/geometric solve has its motor
+disabled. Repeated hard closure never reapplies a drive. Completed reactions
+include the physical drive impulse over the completed physics duration.
+
+Gear state belongs to its authored gear prim. Projection retains both explicit
+hinge relationships, resolves them within the current stage/instance, and
+prepares stable authored order once per physics step. The gear consumer uses
+the same coordinate-drive kernel and position-to-velocity projection as joints.
+An invalid admitted gear faults and holds physics instead of disappearing or
+selecting an arbitrary matching hinge.
+
+This numerical mechanism has no changeable scenario policy or Twin-specific
+hook: USD/ports own the authored law and targets, and Rust owns its continuous
+math and solver invariants. Qualification uses the existing authored
+`native_force_drives` and positive/negative `differential_rig` gates.
+
+Gear and ordinary joint projection share `lunco-usd-avian-reader::joint::read_drive`.
+Angular targets use radians; per-degree gains convert to per-radian gains.
+Force-based angular gains and physical torque caps carry squared stage length;
+acceleration-based gains do not carry stage length. No gear-specific scalar
+parser or drive-type reader remains.
+
+The coordinate-drive slice passes regular `cargo run -j 4` and the production
+`native_force_drives` (18 checks), coupled `differential_rig` (5 checks), and
+uncoupled control (5 checks) gates. All exit 0; receipts are
+`target/coordinate-final-gates.json` and `target/coordinate-final-*.log`. Six
+coordinate-kernel tests and the four-case force/acceleration, metre/centimetre
+schema conversion test pass (`target/coordinate-drive-mechanism-tests.log` and
+`target/coordinate-drive-usd-units-test.log`). The unlimited-cap assertion uses
+`is_infinite()` to test the actual contract; the prior magnitude comparison
+reported false for the observed positive infinity in Rhai. Contact-kernel,
+sustained vehicle and performance qualification remain separate open work.

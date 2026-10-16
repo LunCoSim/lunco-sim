@@ -100,6 +100,10 @@ impl PendingEntityWork {
 /// Authored gear-joint data held until all referenced bodies are admitted.
 #[derive(Component)]
 pub struct PendingDifferential {
+    /// Composed paths of the explicitly authored geared hinges.
+    pub hinges: [String; 2],
+    /// Stable identity of the authored gear joint.
+    pub order_key: lunco_physics::PhysicsOrderKey,
     /// Composed prim path of the frame both hinges turn against.
     pub chassis: String,
     /// Composed prim path of the first geared body.
