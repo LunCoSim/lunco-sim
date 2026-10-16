@@ -10084,14 +10084,12 @@ that whole production cost to registry validation. Evidence is
 `target/port-exchange-opt1-baseline.log`, and the saved probe source
 `target/port_exchange_bench.rs`.
 
-The shader backend normalized candidate names before checking for `ShaderLook`.
-The shared converter also allocated a character vector and output string for
-canonical names. `lunco-materials::naming::to_snake_case` now borrows unchanged
-input and streams changed spellings into owned output. All projection,
-authoring, renderer and backend callers use that one converter; ownership is
-acquired only at persistence. The authoring setter consumes a borrowed name
-rather than cloning it before its own storage operation. Shader candidates
-without the component reject before conversion. Scene-property named
+`lunco-materials::naming::to_snake_case` borrows unchanged input and streams
+changed spellings into owned output. Material projection, authoring and renderer
+callers use that one converter; ownership is acquired only at persistence. The
+authoring setter consumes a borrowed name rather than cloning it before its own
+storage operation. Runtime shader ports use the exact published WGSL key.
+Scene-property named
 queries use the existing slot resolver, whose native component-membership
 check does not sample color values; full inspection retains complete listing.
 No metadata/bounds/ownership validation, solver clock, native substep, rendered
@@ -10111,13 +10109,41 @@ pass. No new owner warning is introduced; native Parry warnings pre-exist.
 Logs and probes use `target/material-name-*`, `target/material-naming-*` and
 `target/scene-port-declaration-*`.
 
-The candidate has not supplied a fresh full-application build, headful image or
-paired FPS cohort. The headless mission inventory belongs to the pre-change
-normal baseline. Whole-simulation/presentation isolation, 200 FPS, sub-1 ms
-physics and external FMU interoperability remain open. The next audit must
-also reconcile shader port declarations with normalized names and verify exact
-integer-to-f64 reads; their current naming/type resource fixtures need checking
-against the live metadata contract before claiming the full shader suite.
+The default production application builds with regular
+`cargo run -p lunco-luncosim -j 4 -- --help` (23m56s). Headless scene-runner
+PID 2180983/API 4382 and windowed production PID 2184342/API 4383 both pass the
+authored plume gate and six shader-port checks at tick 241. Their printed plume
+metrics match exactly. The windowed host reports clear readiness and zero
+retained runtime errors. Both processes and ports are released. Evidence is
+`target/shader-port-{default-build,scene,windowed,windowed-driver}.log` and
+`target/shader-port-runtime-validation.json`; the latter retains the exact
+normal binary and source hashes. The shared
+`scripts/api/run_editor_scene_test.py` drives the windowed authored fixture.
+That shared runner also passes on PID 2203615/API 4384 at tick 241, with the
+same six checks and identical printed plume metrics; its process and port are
+released. Logs are `target/shader-port-windowed-shared{,-driver}.log`.
+A user-authorized clean of the inactive USD
+checkout's development outputs recovers 26.6 GiB while preserving its clean
+source state; `target/inactive-usd-dev-clean.json` records the audit.
+
+The headless Griffin mission inventory belongs to the earlier normal baseline.
+There is no fresh paired FPS cohort or full-Twin image for these changes.
+Whole-simulation/presentation isolation, 200 FPS, sub-1 ms physics and external
+FMU interoperability remain open.
+
+Shader resource fixtures declare explicitly typed values or assert rejection
+of an untyped driven input. The integer regression reproduces
+`16777217 -> 16777216` in the baseline named read. Runtime declarations,
+metadata and resolution all use the exact
+published WGSL key, including connected geometry inputs. Named/slot reads share
+one reader that widens integers directly to f64. All eight owner tests pass,
+including rejection of untyped driven inputs
+and integer writes. Logs are `target/shader-port-{baseline-tests,contract-baseline,contract-tests}.log`.
+The authored `lander_plume_activity` gate checks canonical inspection,
+undeclared-name rejection, named writes, non-mutating GPU-range rejection,
+release through `ReleasePort`, and the following physics tick's replacement
+of the test setpoint by its connected source. The check permits only the
+declared f32 GPU storage precision when comparing that input with its f64 source.
 
 ### Continuous-query cost attribution — 2026-10-16
 

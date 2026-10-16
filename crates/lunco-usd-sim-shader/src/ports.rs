@@ -57,73 +57,48 @@
 //! That is a deliberate deferral with a known migration path — not an absence of a
 //! standard. When the binder learns graphs, this should move to primvars.
 //!
-//! ## Why this lives beside the AUTHORING, not beside the renderer
+//! ## Ownership
 //!
-//! It used to live in `lunco-render-bevy`, and answered `has_port` by reflecting the
-//! bound `ShaderMaterial`'s WGSL schema. That made a shader-driven port exist only in a
-//! build with a render stack — so in the headless harness the backend was never even
-//! registered, every shader wire in the scene dropped its value forever, and the
-//! never-landed gate reported the descent lander's plume `throttle`, its legs'
-//! `load_frac` and its light wires as authoring faults. Three green scenes went red for
-//! a reason that was purely about which crates the binary linked.
-//!
-//! Nothing here needs the GPU. [`ShaderLook::driven`] is the authoring pass's own
-//! answer to "which of this prim's wires name parameters its shader declares"
-//! (`lunco-usd-sim-shader::driven_shader_inputs`) — computed from the WGSL source at author
-//! time, present in every build. The write lands in [`ShaderLook::live`], a plain
-//! component. So the backend belongs where that component is filled, which is this
-//! crate, and it is registered unconditionally.
-//!
-//! This is the same rule the sun ports follow: a port backend belongs to the crate
-//! that owns the component it reads, never to the crate that happens to consume the
-//! value downstream.
+//! This render-free crate registers the backend unconditionally.
+//! [`ShaderLook::driven`] comes from intersecting geometry connections with the
+//! bound USD Shader prim's declared inputs. Typed values come from that same
+//! authored interface. Reads and writes use [`ShaderLook::live`] in headless
+//! and windowed hosts; only the downstream material binder requires a GPU.
 //!
 //! ## Naming
 //!
-//! `to_snake_case` is applied HERE rather than in the wiring pass, because
-//! snake_case is a fact about WGSL struct-field reflection, not about connections.
-//! `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`.
+//! Runtime names are the exact WGSL keys published by `ListPorts`. USD material
+//! authoring converts parameter spelling before constructing `ShaderLook`;
+//! connection, command and hold identities all use the published runtime key.
 
 use bevy::prelude::*;
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
-use lunco_materials::naming::to_snake_case;
 use lunco_port_core::ports::{
     PortBackend, PortDirection, PortMetadata, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
 
-fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
+fn read_value(world: &World, entity: Entity, name: &str) -> Option<f64> {
     let look = world.get::<ShaderLook>(entity)?;
-    let key = to_snake_case(name);
-    // `live` (a landed wire) beats `values` (the authored constant). There is no
-    // third fallback to the shader's declared default: that would need the reflected
-    // material schema, which only exists in a render build, and reading a port
-    // differently depending on whether a GPU is present is the defect this module
-    // was moved here to remove. An undriven, unauthored parameter reads as absent.
-    let v = look
-        .live_value(&key)
-        .or_else(|| look.values().get(key.as_ref()).copied())?;
-    match v {
-        ParamValue::F32(v) => Some(v),
-        ParamValue::I32(v) => Some(v as f32),
-        ParamValue::U32(v) => Some(v as f32),
-        // A vec parameter has no single scalar reading; a connection carries one
-        // f64, so drive components individually (`inputs:tint_r`) if you need one.
-        _ => None,
-    }
+    read_look_slot(look, look.live().resolve_slot(name)?)
 }
 
 fn resolve_shader_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
     let look = world.get::<ShaderLook>(entity)?;
-    let key = to_snake_case(name);
-    if !look.driven().contains(key.as_ref()) {
+    if !look.driven().contains(name) {
         return None;
     }
-    look.live().resolve_slot(&key)
+    look.live().resolve_slot(name)
 }
 
 fn read_shader_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
     let look = world.get::<ShaderLook>(entity)?;
+    read_look_slot(look, slot)
+}
+
+/// Live samples override authored values. Missing values and vectors have no
+/// scalar reading; integer values reach the f64 port ABI without f32 narrowing.
+fn read_look_slot(look: &ShaderLook, slot: u64) -> Option<f64> {
     let (name, live) = look.live().get_slot_entry(slot)?;
     let value = live.as_ref().or_else(|| look.values().get(name))?;
     match *value {
@@ -195,9 +170,8 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             }
             return;
         }
-        // The prim's DRIVEN parameters plus whatever it authored a value for — the
-        // same set the resolved slot writer accepts, so listing and writing cannot disagree.
-        //
+        // Inspection publishes canonical names. Only driven, explicitly typed
+        // f32 parameters are writable; other authored values remain readable.
         let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
         names.extend(look.values().keys());
         for name in names {
@@ -206,14 +180,13 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     },
     metadata: |world, entity, name, direction| {
         let authored_scalar = world.get::<ShaderLook>(entity).and_then(|look| {
-            let key = to_snake_case(name);
-            if !look.driven().contains(key.as_ref()) {
+            if !look.driven().contains(name) {
                 return None;
             }
             look.values()
-                .get(key.as_ref())
+                .get(name)
                 .copied()
-                .or_else(|| look.live_value(&key))
+                .or_else(|| look.live_value(name))
         });
         let writable = matches!(authored_scalar, Some(ParamValue::F32(_)));
         PortMetadata::scalar(
@@ -228,7 +201,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         )
     },
     read_output: |_, _, _| None,
-    read_input: |world, entity, name| read_value(world, entity, name).map(|v| v as f64),
+    read_input: read_value,
     initial_expression: None,
     resolve_output: None,
     resolve_input: Some(resolve_shader_input),
@@ -289,20 +262,68 @@ mod tests {
     /// A look as the USD pass authors it for a prim driving `name`.
     fn driving(name: &str) -> ShaderLook {
         ShaderLook::default()
+            .with_values([(name.to_string(), ParamValue::F32(0.0))].into())
             .with_driven([name.to_string()].into_iter().collect())
             .unshared()
     }
 
-    /// The whole point: a value arriving through the ordinary port graph lands on a
-    /// WGSL uniform, and the USD spelling (`inputs:loadFrac`) reaches the WGSL
-    /// spelling (`load_frac`) without the author having to know the difference.
     #[test]
-    fn a_port_write_drives_a_uniform_and_snake_cases_the_name() {
+    fn scalar_reads_preserve_integer_precision_in_named_and_slot_paths() {
+        let mut app = app();
+        let reg = app.world().resource::<PortRegistry>().clone();
+        for (authored, expected) in [
+            (ParamValue::I32(16_777_217), 16_777_217.0),
+            (ParamValue::I32(i32::MIN), f64::from(i32::MIN)),
+            (ParamValue::U32(u32::MAX), f64::from(u32::MAX)),
+        ] {
+            let e = app
+                .world_mut()
+                .spawn(
+                    ShaderLook::default()
+                        .with_values([("sample_count".to_owned(), authored)].into())
+                        .with_driven(["sample_count".to_owned()].into()),
+                )
+                .id();
+            assert_eq!(
+                reg.read_input_port(app.world(), e, "sample_count"),
+                Some(expected)
+            );
+            let slot = reg
+                .resolve_input_read(app.world(), e, "sample_count")
+                .unwrap();
+            assert_eq!(reg.read_resolved(app.world(), e, &slot), Some(expected));
+            assert!(
+                reg.write_port(app.world_mut(), e, "sample_count", 1.0)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn untyped_driven_input_has_no_fabricated_value_or_writable_type() {
+        let mut app = app();
+        let e = app
+            .world_mut()
+            .spawn(ShaderLook::default().with_driven(["load_frac".to_owned()].into()))
+            .id();
+        let reg = app.world().resource::<PortRegistry>().clone();
+        assert_eq!(reg.read_input_port(app.world(), e, "load_frac"), None);
+        assert!(
+            reg.write_port(app.world_mut(), e, "load_frac", 0.5)
+                .is_err()
+        );
+        assert!(!app.world().get::<ShaderLook>(e).unwrap().has_live_values());
+    }
+
+    /// A value arriving through the ordinary port graph lands on the published
+    /// WGSL parameter, through the same owner used without a renderer.
+    #[test]
+    fn a_port_write_drives_the_declared_uniform() {
         let mut app = app();
         let e = app.world_mut().spawn(driving("load_frac")).id();
 
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert!(reg.write_port(app.world_mut(), e, "loadFrac", 0.5).is_ok());
+        assert!(reg.write_port(app.world_mut(), e, "load_frac", 0.5).is_ok());
 
         let look = app.world().get::<ShaderLook>(e).unwrap();
         assert_eq!(look.live_value("load_frac"), Some(ParamValue::F32(0.5)));
@@ -314,14 +335,14 @@ mod tests {
     }
 
     #[test]
-    fn resolved_shader_slot_writes_without_re_normalizing_the_port_name() {
+    fn resolved_shader_slot_preserves_topology_and_change_detection() {
         let mut app = app();
         let e = app.world_mut().spawn(driving("load_frac")).id();
         app.update();
         let topology_revision = app.world().resource::<PortTopologyRevision>().0;
         let reg = app.world().resource::<PortRegistry>().clone();
         let slot = reg
-            .resolve_input(app.world(), e, "loadFrac")
+            .resolve_input(app.world(), e, "load_frac")
             .expect("the authored driven field resolves at wiring time");
 
         assert!(reg.write_resolved(app.world_mut(), e, &slot, 0.5).is_ok());

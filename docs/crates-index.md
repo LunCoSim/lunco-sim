@@ -1076,7 +1076,10 @@ Independent render-free projection of USD-authored celestial and connectivity fa
 Independent render-free `UsdShade` material-intent projection. Its
 `UsdShaderPlugin` owns shader resolution invalidation, shader-port registration,
 and the `ShaderLook` projection; `lunco-render-bevy` remains the only material
-binder. The application runtime installs it beside `UsdSimPlugin`, so shader
+binder. Named and resolved scalar ports share one live-slot reader with exact
+integer widening to f64. Runtime port keys are the exact published WGSL names;
+USD material parameter projection owns the authoring spelling conversion.
+The application runtime installs it beside `UsdSimPlugin`, so shader
 authoring changes rebuild this leaf without rebuilding the vehicle projector.
 
 **`lunco-usd-sim-telemetry`**

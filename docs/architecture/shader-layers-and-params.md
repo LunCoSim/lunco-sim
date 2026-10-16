@@ -68,12 +68,17 @@ resolve those slots once and update them directly; empty slots remain stable unt
 the first sample, and live samples do not rehash authored names.
 
 Parameter spelling is owned by `lunco_materials::naming::to_snake_case`, shared
-by USD projection, live authoring, the render binder and shader ports. It returns
+by USD material projection, live authoring and the render binder. It returns
 `Cow<str>`: canonical names borrow their input, while changed camel/Pascal-case
 spellings allocate one normalized string. Consumers borrow during lookup and
-call `into_owned` only when storing a name. Shader-port admission checks the
-entity's `ShaderLook` before normalizing a candidate. Keep this conversion at
-its owner rather than adding per-reader normalizers or name caches.
+call `into_owned` only when storing a name. Runtime ports use exact keys from
+`ShaderLook`, published by `ListPorts`. Geometry connections and commands must
+use those WGSL keys so wiring, holds and admission retain one input identity.
+Named declaration, metadata, resolution and reads use that same exact name.
+Named and resolved scalar reads share the live-slot reader and widen integer samples
+directly to `f64`; only writes to explicitly typed, driven `F32` parameters
+narrow at the validated GPU boundary. A driven name without a typed value is
+not a writable scalar declaration.
 Scene-property named declarations use their existing slot resolver and check
 native component ownership without sampling field values. Full port inspection
 still enumerates the owner's complete light/transform schema. Value reads and

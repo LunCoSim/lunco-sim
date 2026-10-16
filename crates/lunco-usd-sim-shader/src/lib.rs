@@ -567,9 +567,8 @@ fn fill_prim_engine_params(
 ///
 /// The connection itself is not resolved here. `rewire_usd_connections` turns every
 /// `inputs:*.connect` on every prim into a `SimConnection` regardless of target, and
-/// `lunco-render-bevy`'s shader-parameter port backend receives the write. This pass
-/// decides only what the render layer cannot: which of those names are SHADER
-/// parameters, and therefore whether the material must be private.
+/// this crate's shader-parameter port backend receives the write. This pass
+/// identifies the shader parameters and whether the material must be private.
 ///
 /// `inputs:` is the engine's spelling for every port, so the prim's connected inputs
 /// must be intersected with the parameters the bound shader actually declares. A
@@ -593,9 +592,9 @@ fn driven_shader_inputs(
         .attr_names(prim)
         .iter()
         .filter_map(|attr| {
-            let name = to_snake_case(attr.strip_prefix("inputs:")?);
-            (declared.contains(name.as_ref()) && !reader.connections(prim, attr).is_empty())
-                .then(|| name.into_owned())
+            let name = attr.strip_prefix("inputs:")?;
+            (declared.contains(name) && !reader.connections(prim, attr).is_empty())
+                .then(|| name.to_owned())
         })
         .collect()
 }
