@@ -58,6 +58,11 @@ distinct and retain missing-base/cycle diagnostics when tracing indexing delays.
 Scope reads share immutable cached interfaces; source edits replace the affected
 file's facts and leave retained snapshots isolated.
 Canvas diagrams consume the shared engine's resolved declaration snapshot.
+Before that query, resolve the selected name with the admitted AST's
+`qualified_class_name`; document-relative index names must carry their authored
+`within` prefix into the compiler. When a parsed file fails after reloads,
+inspect the projection diagnostic and test a fresh open as well as retained
+documents. A parsed AST and a ready world do not prove a completed diagram.
 The source-library indexer requests the same owner's `ClassInterface` scope;
 canvas projection requests `ComponentGraph`. Bulk indexing must not construct
 unused internal component graphs or icons. Missing or cyclic types

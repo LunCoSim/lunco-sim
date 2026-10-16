@@ -446,17 +446,17 @@ fn spawn_projection_task(
                     });
                 }
                 bevy::tasks::futures_lite::future::yield_now().await;
-                let target = target_for_log
+                let requested = target_for_log
                     .clone()
                     .or_else(|| {
                         lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast_arc)
                     })
                     .ok_or_else(|| "the Modelica source contains no diagram target".to_owned())?;
-                if ast_arc.get_class_by_qualified_name(&target).is_none() {
-                    return Err(format!(
-                        "Modelica diagram target `{target}` is absent from the current source"
-                    ));
-                }
+                let target = ast_arc.qualified_class_name(&requested).ok_or_else(|| {
+                    format!(
+                        "Modelica diagram target `{requested}` is absent from the current source"
+                    )
+                })?;
                 let handle = crate::engine_resource::global_engine_handle()
                     .ok_or_else(|| "the shared Modelica engine is unavailable".to_owned())?;
                 let snapshot = match handle

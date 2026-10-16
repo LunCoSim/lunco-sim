@@ -74,6 +74,12 @@ loaded root definitions; changed owned sources, mixed ownership and conflicting
 contents under one URI fail before overlay installation. New `within` namespaces
 can compile without requiring a filesystem package. Participating source identity
 reads `Session::document_source_text`, which addresses the parser's retained text.
+Diagram projection resolves its selected document-relative name through
+Rumoca `StoredDefinition::qualified_class_name` before querying the shared
+engine. The source document owns its `within` scope; a successful local AST
+lookup alone does not establish the compiler identity. This same rule applies
+to fresh files and retained documents after scene reloads.
+
 [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/) owns AST interface
 projections and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless

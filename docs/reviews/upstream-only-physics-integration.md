@@ -1,12 +1,12 @@
 # Upstream-only physics integration review
 
 Status: regular `cargo run` compiles and launches against stock dependencies.
-Griffin loads and advances, then faults on a continuous-contact query;
-production qualification is incomplete.
+Joint-drive and coupled/uncoupled differential gates pass. Griffin loads and
+advances; sustained contact and performance qualification remain incomplete.
 2026-10-16.
 
 The five local dependency patches and their source directories are removed in
-the working tree. This is not a qualified application replacement yet. Do not
+the application checkpoint. This is not a fully qualified replacement yet. Do not
 merge this removal until the application builds and the production gates pass.
 
 No new remote repositories or dependency branches were created. Rumoca's
@@ -88,7 +88,7 @@ failure. Receipts: `target/upstream-contact-reproduction/` and
 `target/upstream-contact-editor-reproduction/`. The owned diagnostic session
 exited through API `Exit`, and port 4384 was verified closed.
 
-The production headless `native_force_drives` gate fails at tick 2 with
+The pre-cutover headless `native_force_drives` baseline failed at tick 2 with
 `avian-backend-pose-invalid` on `/World/ComputedBob`: its solved X coordinate
 reaches approximately -3.85e77 metres. Receipt:
 `target/upstream-native-force-drives.log`. This confirms that the stock motor
@@ -458,8 +458,9 @@ are not additive. The artifacts do not establish 200 FPS or physics below 1 ms.
    the newest target-branch changes during integration.
 
 This review defines the cutover and its remaining qualification work. The
-current diff compiles and loads Griffin; it does not establish sustained vehicle,
-drive, collision-kernel or performance acceptance.
+current application compiles, loads Griffin and passes the drive/differential
+gates; sustained vehicle, collision-kernel and performance acceptance remain
+open.
 
 
 ## Shared coordinate-drive realization
