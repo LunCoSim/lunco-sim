@@ -39,7 +39,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::sun_visibility_resolved
+#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
 #import lunco::lunar::regolith_factor
 #import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color}
 
@@ -262,18 +262,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var fine_h = 0.5;
     var micro_h = 0.5;
     if (micro_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, micro_scale, 1, 0.5, 0.1, 0.9, micro_bump * micro_fade, &micro_h);
+        detail_n = bump_layer(detail_n, detail_p, micro_scale, 1, 0.5, 0.1, 0.9, micro_bump, pw, &micro_h);
     }
     // Measured geometry owns landform relief. Sub-metre clumps and grain remain
     // shading detail; the mid band is reserved for non-measured surfaces.
     if (mat.terrain_geometry_on < 0.5 && mid_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
+        detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump, pw, &mid_h);
     }
     if (macro_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, macro_scale, 2, 0.6, 0.1, 0.9, macro_bump * macro_fade, &macro_h);
+        detail_n = bump_layer(detail_n, detail_p, macro_scale, 2, 0.6, 0.1, 0.9, macro_bump, pw, &macro_h);
     }
     if (fine_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.1, 0.9, fine_bump * fine_fade, &fine_h);
+        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.1, 0.9, fine_bump, pw, &fine_h);
     }
 
     var n = detail_n;
@@ -407,9 +407,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Keep the high-frequency normal detail stable as it leaves the pixel
     // footprint. Its unresolved slope variance becomes GGX roughness instead
     // of vanishing at the anti-aliasing fade.
-    roughness = filter_detail_roughness(roughness, micro_bump, micro_scale, micro_fade);
-    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, macro_fade);
-    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, fine_fade);
+    roughness = filter_detail_roughness(roughness, micro_bump, micro_scale, 1, 0.5, pw);
+    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, 2, 0.6, pw);
+    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, 3, 0.5, pw);
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags;
@@ -444,10 +444,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    march_blend = 1.0;
-    if (csm_far > 0.0) {
-        march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
-    }
+    march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
     if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,

@@ -135,10 +135,12 @@ for another tick. Buffered-result rejection remains a low-level lifecycle seam.
    state. The production test wrappers give each process a run-scoped
    `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as
    ephemeral settings and runtime overlays.
-   Discovery resolves source assets through the same owning Twin and prepared
-   asset paths as runtime. A source search path may resolve from the Twin root
-   after a layer miss; `./` paths require the layer-relative source. Do not copy
-   a script beside its scene to satisfy discovery or bypass a failing fixture.
+   `luncosim test --list` uses the owning Twin's admitted asset context and
+   prepared composed USD reads. A bare `scripts/probe.rhai` searches beside
+   the contributing layer before the Twin root; `./scripts/probe.rhai` is
+   strictly layer-relative. Preserve that spelling in resolution fixtures and
+   verify catalogue discovery as well as the authored runtime verdict. Do not
+   copy a missing layer-local script or add a separate runner search path.
 7. Repeat with deterministic clocks and explicit seeds. Record the clock
    contract, timestep/substeps, source revision, and finite-state result. A
    repeatability check compares the same sampled evidence, not merely a zero

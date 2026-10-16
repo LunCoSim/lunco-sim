@@ -54,15 +54,18 @@ fn terrain_material_needs_engine_inputs(
         || material
             .get_scalar("shadow_cache_on")
             .is_none_or(|value| (value - inputs.shadow_cache_on).abs() > 1.0e-3)
-        || material
-            .get_vec3("sun_dir")
-            .is_none_or(|value| (value - inputs.sun_dir).length() > SUN_DIR_EPSILON)
+        || material.get_vec3("sun_dir").is_none_or(|value| {
+            // The local horizon is a shader branch, so crossing it must
+            // publish even when the angular change is visually subpixel.
+            (value.y <= 0.0) != (inputs.sun_dir.y <= 0.0)
+                || (value - inputs.sun_dir).length() > SUN_DIR_EPSILON
+        })
         || material
             .get_vec3("sun_dir_world")
             .is_none_or(|value| (value - inputs.sun_dir_world).length() > SUN_DIR_EPSILON)
         || material
             .get_scalar("sun_tan_radius")
-            .is_none_or(|value| (value - inputs.sun_tan_radius).abs() > 1.0e-6)
+            .is_none_or(|value| value != inputs.sun_tan_radius)
         || material.get("hf_size").is_none_or(|value| {
             let ParamValue::Vec2(value) = value else {
                 return true;
@@ -244,7 +247,10 @@ pub fn wire_terrain_materials(
             Option<&MeshMaterial3d<ShaderMaterial>>,
         ),
         (
-            With<lunco_terrain_surface::DemTerrainSurface>,
+            Or<(
+                With<lunco_terrain_surface::DemTerrainSurface>,
+                With<HorizonMap>,
+            )>,
             Without<RenderLayers>,
         ),
     >,
@@ -255,8 +261,6 @@ pub fn wire_terrain_materials(
         ),
         Without<RenderLayers>,
     >,
-    // Hysteresis state for the cache↔march handoff, per terrain (see below).
-    mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
     // The visible tile set is rebuilt from ECS every frame, but its grouping
     // buffers persist so streaming does not allocate a new map/vector set per
     // frame.
@@ -269,7 +273,6 @@ pub fn wire_terrain_materials(
     mut removed_terrains: RemovedComponents<HorizonMap>,
 ) {
     for e in removed_terrains.read() {
-        cache_engaged.remove(&e);
         sun_projection_cache.remove(e);
     }
     let Some(mut shader_mats) = shader_mats else {
@@ -302,18 +305,9 @@ pub fn wire_terrain_materials(
         }
         return;
     };
-    // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — inside it the configured live march is
-    // skipped (CSM owns the near field), and "march everywhere" turned low
-    // flight into a slideshow. (Streamed tiles DO get a baked cache on
-    // native — `lunco-luncosim-ui` samples the oracle
-    // into a `HorizonMap` and mirrors the cache to tiles — but the cache
-    // fades in on the same `csm_far` boundary.) The cost of the fade is
-    // that the CSM volume (~1.5 km) cannot contain multi-km ridge occluders,
-    // so near terrain can read slightly lighter than the same ground seen from
-    // altitude. We deliberately do not compensate with a terrain-only fill:
-    // it would make the terrain obey a different illumination model from every
-    // dynamic PBR object and would incorrectly look like bounced light.
+    // Static meshes fade heightfield visibility in beyond native cascade range.
+    // Cached streamed tiles sample visibility at every distance. Both retain
+    // native terrain casting and reception of object shadows.
     let Some(to_sun_world) = render_sun
         .as_deref()
         .and_then(|state| state.direction_to_sun_world)
@@ -360,34 +354,15 @@ pub fn wire_terrain_materials(
             None => (Vec2::ONE, 0.0, None),
         };
 
-        // Shadow cache binding + the uniform flag that tells the fragment
-        // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
-        // handle is bound whenever a cache exists (it stays allocated on the
-        // `HorizonShadowCache` component regardless). A committed cache is
-        // deliberately kept active while a replacement bake is pending or
-        // while the sun has moved past its sample: the old image is the
-        // double-buffered presentation value. Disabling it for every stale
-        // sample exposed the 48-step live march exactly when a fast clock was
-        // already consuming the bake workers, causing both stalls and an
-        // apparent terrain-texture loss. Below-horizon sun still falls back
-        // to the march, which short-circuits to 0 in its first branch.
+        // Cache residency is independent of the Sun crossing the horizon. The
+        // shader evaluates the current horizon gate before sampling the image,
+        // retaining a constant-cost path and stable bindings through the night.
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
-        let engaged = {
-            let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
-            let now = if prev {
-                sun_local.y > 5.0e-5
-            } else {
-                sun_local.y > 2.0e-4
-            };
-            cache_engaged.insert(entity, now);
-            now
+        let shadow_cache_on: f32 = if cache_quality_valid && cfg.enabled && shadow_cache.is_some() {
+            1.0
+        } else {
+            0.0
         };
-        let shadow_cache_on: f32 =
-            if cache_quality_valid && cfg.enabled && engaged && shadow_cache.is_some() {
-                1.0
-            } else {
-                0.0
-            };
         let horizon_march_steps = cfg.march_steps as f32;
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
@@ -516,7 +491,7 @@ impl NonTerrainSunBindingState {
         match (self.applied, next) {
             (Some(applied), Some(next)) => {
                 (applied.direction - next.direction).length() > SUN_DIR_EPSILON
-                    || (applied.tan_radius - next.tan_radius).abs() > 1.0e-6
+                    || applied.tan_radius != next.tan_radius
             }
             (None, None) => false,
             _ => true,
@@ -551,7 +526,7 @@ fn wire_non_terrain_sun_uniforms<'a>(
                 .is_none_or(|value| (value - sun.direction).length() > SUN_DIR_EPSILON)
                 || material
                     .get_scalar("sun_tan_radius")
-                    .is_none_or(|value| (value - sun.tan_radius).abs() > 1.0e-6)
+                    .is_none_or(|value| value != sun.tan_radius)
         });
         if needs {
             if let Some(mut material) = shader_mats.get_mut(&handle.0) {
@@ -657,10 +632,9 @@ pub fn wire_blueprint_origin(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-/// Minimum change in a stored sun DIRECTION before the material carrying it is
-/// repacked. On a unit vector this is ~0.006° — three orders of magnitude finer
-/// than a visible shadow-direction change. Its job is to keep a *continuously*
-/// moving sun from repacking every terrain material every frame.
+/// Coalesce small directional drift (~0.006°) between material uploads.
+/// Local horizon-side changes bypass this tolerance. Authored angular radius
+/// is compared exactly, preserving zero and small positive values.
 const SUN_DIR_EPSILON: f32 = 1e-4;
 
 #[cfg(test)]

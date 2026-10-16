@@ -52,10 +52,44 @@ one `ShaderLook`; Rust does not contain a terrain shader selector or a hidden
 default for this production path. The explicit `SpawnDemTerrain` command
 remains a generic tool API and requires its caller to provide a look.
 
+The authored vertex stage runs in the main, depth/normal, and native shadow
+passes. It selects Bevy's forward or prepass output interface using
+`PREPASS_PIPELINE`; the material group remains bound in depth-only passes so
+the same morph uniforms are available. CDLOD distance uses
+`view.lod_view_world_position`, the viewing camera's origin shared with its
+shadow cascades. Edge stitching and morph interpolation therefore describe the
+same surface in every pass. The `vertex_shadow_alignment` GPU fixture displaces
+an authored caster and requires its native shadow at the displaced position,
+with the vacated position lit.
+
+Native depth, normal, and motion-vector components are registered by the camera
+binder and can be enabled through the shared reflected component interface.
+Motion-vector definitions also occur on forward pipelines; previous-position
+outputs and previous-view bindings belong only to `PREPASS_PIPELINE`. The terrain
+appearance and vertex-shadow fixtures enable all three native prepasses and
+reject shader compilation failures as well as missing image probes.
+The separate diagnostic vertex stage obeys the same pass interfaces, including
+previous-frame positions for motion vectors. Both vertex stages consume
+`terrain_morph_weight` from the shared surface module so analysis preserves the
+production morph and parent-edge stitching law. The production GPU driver
+`scripts/api/test_terrain_overlay_prepasses.py` switches through production,
+slope, LOD-depth, and restored production views with all prepasses active.
+The render wrapper runs it for each selected quality profile. GPU validation
+callbacks must also be checked in the process log: domain `RuntimeDiagnostics`
+does not include those renderer failures, and a captured PNG can retain stale
+pixels after a failed submission.
+
 Static and streamed terrain therefore differ only in geometry delivery. A
 static mesh is effectively the non-morphing/root LOD of the same appearance
 contract; the streamed ECS quadtree may still manage residency, colliders, and
 LOD selection independently.
+
+Procedural relief operates in the terrain-local normal frame. Bevy's
+inverse-transpose maps a local normal to world space; the reverse mapping uses
+the transpose of the mesh's local-to-world linear transform. This preserves the
+normal direction under nonuniform scale as well as rotation. The
+`terrain_normal_transform` GPU fixture checks that round trip on a rotated,
+nonuniformly scaled mesh.
 
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
@@ -121,8 +155,10 @@ continues the measured edge profile outside the crop and reaches the render
 sphere; local DEM appearance maps fade across that same visual shoulder. The
 shoulder width comes from the active crop's measured boundary relief and
 one-sided slope with a 0.60 relief-grade sizing target. One measured perimeter
-signal continues over a posting and fades to the sphere. Its maximum relief
-sizes one shared width for exterior geometry and material fade. A unique corner sample closes
+signal continues over a posting and fades to the sphere over at least one full
+crop width, preserving broad landform scale outside the measured boundary.
+Crop width and maximum relief size one shared width for exterior geometry and
+material fade, independently of the Sun and camera. A unique corner sample closes
 the transition around corners. The rectangular outer boundary keeps the
 collar mesh and globe cutout watertight; this changes neither the DEM nor its
 physics surface.
@@ -151,8 +187,11 @@ diagnostic replacement:
    interpolation from the landform band.
    Analytic noise gradients evaluate each layer once. Relief uses a cubic height
    remap with continuous slopes at its clipping thresholds; colour-only ramps
-   remain linear. Unresolved slope variance
-   transfers into GGX roughness over the same pixel-footprint fade. Authored
+   remain linear. Each FBM octave filters its own footprint between two and four
+   pixels per noise period, retaining resolvable close grain while suppressing
+   finer slopes. Filtered octaves converge to their mean without renormalizing
+   the remaining spectrum. An estimate of the removed per-octave slope variance
+   transfers into GGX roughness using the same squared resolution weights. Authored
    `inputs:roughness` owns the base, with centred clump variation. The mid
    procedural hummock band is restricted to non-measured surfaces, so it cannot
    duplicate measured landforms.
@@ -193,6 +232,15 @@ second material representation. USD-authored `UsdShade` source and map roles
 remain the source of intent, while the terrain reconciler supplies only the
 engine-derived products that USD did not author.
 
+### Procedural noise continuity
+
+The shared GPU value noise hashes integer lattice identities with Bevy's PCG
+generator before floating-point interpolation. Adjacent cells must reuse exactly
+the same corner value, including at negative, high-frequency terrain coordinates;
+rounding in the hash must not become a visible lattice boundary. Scalar noise and
+analytic-gradient noise share that owner. The `noise_continuity` graphics fixture
+checks both the 2D and 3D value/gradient contracts on the production GPU path.
+
 ### Shadow ownership
 
 Static and streamed terrain both keep native directional-shadow casting and
@@ -203,6 +251,48 @@ sets cached streamed materials' `csm_far` to zero so the cached ground visibilit
 covers every distance without a fragment march. Native shadow-map resolution,
 range, and cascade count remain owned by Graphics. Static materials retain
 their native CSM range.
+
+The terrain uniform feed covers both DEM owners and static meshes carrying a
+`HorizonMap`. Ordinary meshes without a heightfield use the separate global Sun
+feed. Daytime angular drift is coalesced, but a change across local `sun_dir.y = 0`
+always reaches the material because it changes the shader's night branch.
+Authored angular-radius changes compare exact GPU values, including zero.
+
+The visibility cache stores an endpoint-inclusive nodal grid, matching the CPU
+bake's `i / (resolution - 1)` footprint coordinates. Its shader maps those nodes
+to texel centres before bilinear sampling and clamps at the footprint boundary;
+raw normalized UVs would shift shadow edges by up to half a cache texel. The
+`shadow_cache_sampling` graphics fixture checks nodes, fractional interpolation,
+and borders against independent integer texel loads on a rectangular grid.
+
+The cache binding stays resident across the local horizon. A shared shader gate
+checks the current Sun direction before sampling: at or below the DEM's horizontal
+plane, visibility is zero even inside native cascade range. This finite-site
+point-source gate is separate from whole-body occlusion and from sky visibility.
+Sunrise uses the same angular replacement scheduler as daytime; small direction
+changes use chord distance so f32 cosine rounding cannot suppress a refresh.
+The shared light projector compares its rendered quaternion directly, preserving
+small direction changes through the horizon without an angular dead zone.
+One native worker per terrain retains the last completed angular presentation
+sample until the next bake finishes. It does not delay physics or claim that
+old pixels represent the current Sun exactly. Completed results are fenced by
+heightfield identity and sampling quality. Equal-size R8 updates use the shared
+`lunco-render::data_texture` queue, preserving GPU allocation and material binding.
+`TerrainLodStatus.shadow_caches` exposes sampled direction, pending work, binding,
+and acknowledged upload/allocation counts. The `sunrise_shadow_cache` editor
+fixture exercises repeated crossings and fixed physics cadence.
+
+Procedural sky disc radius and heightfield penumbra use the same authored
+`UsdLuxDistantLight.inputs:angle`. Opaque scene depth clips the disc from the
+viewer's position; terrain shadow visibility never hides the sky globally.
+The `sun_disc_occlusion` graphics fixture checks the authored angular size and
+an opaque half-disc occluder.
+`sun_material_precision` and its DEM counterpart compare the terrain uniform's
+horizon side to Bevy's native light on the GPU. Their live driver
+`scripts/api/test_sun_material_precision.py` exercises tiny crossings and the
+zero/positive authored-angle boundary while keeping material bindings resident.
+The High render gate invokes that driver after the initial-frame pixel check.
+
 
 Physical illumination is independent of the camera and GPU shadow cache.
 `LunCoEnvironmentProbeAPI.outputs:sun_visibility` is the fraction of explicitly

@@ -226,6 +226,9 @@ composition (`ListOp::combined_with`). Full-stage flattening consumes those arcs
 and cannot replace the authored-layer transport.
 
 Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.
+The Twin root is an explicit LunCoSim resolver context; USD does not infer a
+project root from an asset path. Native scene-test discovery admits the same
+owning Twin and uses the same composed asset preparation as runtime loading.
 `./x` and `../x` are strictly layer-relative. A search path, a relative
 spelling without a scheme or leading `./`/`../` such as `@terrain/site@`,
 resolves beside its authoring layer when that location exists, otherwise from

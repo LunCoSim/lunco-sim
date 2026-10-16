@@ -75,7 +75,9 @@ for ownership and sampling.
 Derive the visual collar width from this crop's measured edge relief and
 one-sided edge slope with a 0.60 relief-grade sizing target. Continue the
 measured slope over one posting, then fade one nearest-perimeter signal to
-the sphere. Geometry and appearance share one width sized from maximum edge relief; the native
+the sphere over at least one full crop width. Broad relief must not collapse
+into a steep perimeter rim; sizing is independent of Sun and camera position.
+Geometry and appearance share one width sized from crop scale and maximum edge relief; the native
 inner posting lattice tapers to an outer boundary with at least 32 segments per side. Keep
 the DEM and all in-crop heights unchanged. Refine the globe only in the band
 between the exact crop and the collar's outer cutout; set the local minimum tile

@@ -521,11 +521,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let g = galactic_frame();
     var color = stars(d, px) + milky_way(d, g);
     if (mat.sun_tan_radius > 0.0) {
-        let sun_angle = acos(clamp(
-            dot(normalize(view_ray_direction), normalize(mat.sun_dir_view)),
-            -1.0,
-            1.0,
-        ));
+        let view_ray = normalize(view_ray_direction);
+        let sun_ray = normalize(mat.sun_dir_view);
+        // Cross magnitude retains small angular separation at the disc edge.
+        let sun_angle = atan2(length(cross(view_ray, sun_ray)), dot(view_ray, sun_ray));
         let sun_radius = atan(mat.sun_tan_radius);
         let edge = max(px * 0.5, 1.0e-6);
         let sun_disc = 1.0 - smoothstep(

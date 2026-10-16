@@ -214,6 +214,11 @@ fn on_tick(me, ctx) {
             }
             this.preview = PREVIEW_ID;
         } else {
+            let perspective = cmd("ActivatePerspective", #{ id: "editor" });
+            if !query_ok(perspective) {
+                this = fail(this, "could not activate Editor for the existing fixture preview");
+                return;
+            }
             this.preview = preview.preview;
             assembly_ui::focus("preview", this.preview, this.doc, "@root@");
         }

@@ -438,6 +438,7 @@ pub fn install_library_index(index: LibraryIndex) -> bool {
 pub fn load_library_index_from_assets() -> Result<LibraryIndex, String> {
     let bytes =
         lunco_assets_runtime::library::library_read(std::path::Path::new(LIBRARY_INDEX_FILE_NAME))
+            .map_err(|error| format!("source library editor index read failed: {error}"))?
             .ok_or_else(|| "source library editor index is not present".to_string())?;
     decode_library_index(&bytes)
 }

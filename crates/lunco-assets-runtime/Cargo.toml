@@ -5,7 +5,14 @@ edition = "2024"
 license.workspace = true
 description = "Bevy asset sources, discovery, libraries, and authored text runtime"
 
+[features]
+ui = ["dep:egui", "dep:egui_extras", "dep:image", "dep:mime_guess2"]
+
 [dependencies]
+egui = { workspace = true, optional = true }
+egui_extras = { version = "0.35", features = ["image"], optional = true }
+image = { workspace = true, optional = true }
+mime_guess2 = { version = "2.3.1", optional = true }
 anyhow = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
@@ -33,3 +40,7 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-machete]
+# UI decoder format features are supplied by the workspace image contract.
+ignored = ["image"]

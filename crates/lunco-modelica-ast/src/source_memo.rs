@@ -1,26 +1,9 @@
-//! One invalidation signal for every memo derived from Modelica source.
+//! One revision for projections derived from Modelica source.
 //!
-//! Icon extraction is expensive enough that several layers memoise it — the
-//! engine's merged-icon result (the engine adapter walks the whole
-//! inheritance chain and clones every `ClassDef` along it: ~80 ms for a deep source library
-//! chain), and the paint side's decoded `Bitmap` textures. Each memo is keyed by a
-//! class name or filename, and each caches its **misses** too — a missing asset must
-//! not be re-probed every frame.
-//!
-//! Caching a miss is what makes the invalidation signal load-bearing. Before this
-//! module the signal did not exist: three memos were invalidated by three unrelated
-//! mechanisms and the bitmap-texture cache was invalidated by **nothing at all**. A
-//! Bitmap icon whose file was missing cached `None` *for the life of the process* —
-//! and on wasm the source library bundle ships no `Resources/`, so every Bitmap icon takes that
-//! path. The moment the bundler starts shipping images, they would still have
-//! rendered blank until restart. A stale `.png` on native had the same shape.
-//!
-//! So: memos derived from source hold a [`SourceMemo`], which carries the epoch it
-//! was filled at and drops itself the first time it is touched in a newer one.
-//! Anything that changes the source or the library calls
-//! [`invalidate_source_memos`] — **one** call, and every memo (including ones added
-//! later, including ones in other modules) is stale. No memo can be forgotten,
-//! because none of them are named at the invalidation site.
+//! Engine icon metadata uses [`SourceMemo`], including negative results.
+//! The UI also uses [`source_epoch`] to invalidate shared asset bytes, decoded
+//! images and textures together. Source or library changes call
+//! [`invalidate_source_memos`]; consumers refresh lazily at the new revision.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

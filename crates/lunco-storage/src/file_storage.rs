@@ -55,8 +55,12 @@ fn native_entry_kind(
         StorageEntryKind::Symlink
     } else if metadata.is_dir() {
         StorageEntryKind::Directory
-    } else {
+    } else if metadata.is_file() {
         StorageEntryKind::File
+    } else {
+        return Err(StorageError::Unsupported(
+            "entry is not a regular file, directory or symlink".into(),
+        ));
     })
 }
 
@@ -210,6 +214,15 @@ impl FileStorage {
                 "streaming reads require a native File handle".into(),
             ));
         };
+        let file = Self::open_regular_file(path)?;
+        read_chunks_bounded(file, max_bytes, consume)
+    }
+
+    /// Open a regular file without admitting directories, devices or FIFOs.
+    /// Symlinks to regular files are supported. This checks both the path and
+    /// opened handle; it is not a race-free hostile filesystem admission.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_regular_file(path: &std::path::Path) -> StorageResult<std::fs::File> {
         let metadata = std::fs::metadata(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 StorageError::NotFound
@@ -219,16 +232,16 @@ impl FileStorage {
         })?;
         if !metadata.is_file() {
             return Err(StorageError::Unsupported(
-                "streaming reads require a regular file".into(),
+                "reads require a regular file".into(),
             ));
         }
         let file = std::fs::File::open(path)?;
         if !file.metadata()?.is_file() {
             return Err(StorageError::Unsupported(
-                "streaming reads require a regular file".into(),
+                "reads require a regular file".into(),
             ));
         }
-        read_chunks_bounded(file, max_bytes, consume)
+        Ok(file)
     }
 
     /// Stream regular direct files into a deterministic bounded snapshot.
@@ -284,13 +297,7 @@ impl FileStorage {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => {
-                let file = std::fs::File::open(path).map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        StorageError::NotFound
-                    } else {
-                        StorageError::Io(error)
-                    }
-                })?;
+                let file = Self::open_regular_file(path)?;
                 read_contents(file, max_bytes)
             }
             StorageHandle::Memory(key) => {
@@ -823,6 +830,36 @@ mod tests {
             assert_eq!(storage.read(&handle).await.unwrap(), b"abc");
             storage.write(&handle, b"").await.unwrap();
             assert!(storage.read_bounded(&handle, 0).await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn asset_resolution_contract() {
+        block_on(async {
+            let root = tempdir().unwrap();
+            let socket = root.path().join("socket");
+            let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+            let storage = FileStorage::new();
+            for path in [root.path(), socket.as_path()] {
+                let handle = StorageHandle::File(path.to_path_buf());
+                assert!(matches!(
+                    FileStorage::open_regular_file(path),
+                    Err(StorageError::Unsupported(_))
+                ));
+                assert!(matches!(
+                    storage.read(&handle).await,
+                    Err(StorageError::Unsupported(_))
+                ));
+                assert!(matches!(
+                    storage.read_bounded(&handle, 1).await,
+                    Err(StorageError::Unsupported(_))
+                ));
+                assert!(matches!(
+                    storage.read_chunks_bounded(&handle, 1, |_| panic!("non-file bytes")),
+                    Err(StorageError::Unsupported(_))
+                ));
+            }
         });
     }
 

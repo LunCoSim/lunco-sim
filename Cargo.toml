@@ -248,8 +248,9 @@ resolver = "2"
 [patch.crates-io]
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
-# GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
-transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
+# GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews,
+# and manipulation must read the same native PointerLocation as picking.
+transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "1de3502749617ed63bd35f407a3e4734aa79930f" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"

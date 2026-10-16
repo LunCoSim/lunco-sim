@@ -45,7 +45,7 @@
     mesh_bindings::mesh,
     mesh_view_bindings::view,
 }
-#import lunco::horizon::sun_visibility_resolved
+#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
 #import lunco::lunar::regolith_factor
 #import lunco::terrain::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
@@ -179,15 +179,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var macro_h = 0.5;
     var fine_h = 0.5;
     if (mid_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
+        detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump, pw, &mid_h);
     }
     if (macro_fade > 0.0) {
-        // Ramp widened from the authored 0.40..0.62 — the tight ramp made
-        // every clump near-binary black/white at grazing sun angles.
-        detail_n = bump_layer(detail_n, detail_p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump * macro_fade, &macro_h);
+        // The broad height remap avoids near-binary clump contrast at grazing light.
+        detail_n = bump_layer(detail_n, detail_p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump, pw, &macro_h);
     }
     if (fine_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump * fine_fade, &fine_h);
+        detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump, pw, &fine_h);
     }
 
     var n = detail_n;
@@ -209,9 +208,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // relaxing to its mean where the layer has faded out.
     let macro_rough = mix(0.5, macro_h, macro_fade);
     var roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
-    roughness = filter_detail_roughness(roughness, mid_bump, mid_scale, mid_fade);
-    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, macro_fade);
-    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, fine_fade);
+    roughness = filter_detail_roughness(roughness, mid_bump, mid_scale, 4, 0.55, pw);
+    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, 5, 0.6, pw);
+    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, 3, 0.5, pw);
 
     // Full scene lighting: real sun direction, shadow maps, ambient.
     var pbr_input = pbr_types::pbr_input_new();
@@ -250,10 +249,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // than multiplying a second terrain-shadow term over the CSM result.
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    var march_blend = 1.0;
-    if (csm_far > 0.0) {
-        march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
-    }
+    let march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
     var sun_vis = 1.0;
     if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(

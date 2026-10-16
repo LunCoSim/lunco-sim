@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    defaultPrim = "VertexShadowAlignment"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    documentation = "Native shadow probes for a uniform-driven authored vertex deformation; green and cyan are success, red is failure."
+)
+
+def Xform "VertexShadowAlignment" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/vertex_shadow_alignment.rhai@
+    }
+    def Scope "Looks"
+    {
+        def Material "Caster"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </VertexShadowAlignment/Looks/Caster/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
+                custom token outputs:surface = ""
+                custom asset info:wgsl:vertexAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
+                custom float3 inputs:offset = (3.0, 0.0, 0.0)
+            }
+        }
+        def Material "Receiver"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </VertexShadowAlignment/Looks/Receiver/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_receiver.wgsl@
+                custom token outputs:surface = ""
+            }
+        }
+    }
+    def Cube "Caster" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom rel material:binding = </VertexShadowAlignment/Looks/Caster>
+    }
+    def Plane "Receiver" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double width = 12.0
+        double length = 12.0
+        custom rel material:binding = </VertexShadowAlignment/Looks/Receiver>
+    }
+    def DistantLight "Sun"
+    {
+        custom double3 xformOp:rotateXYZ = (-45.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        float inputs:intensity = 1000.0
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (1.5, 9.0, -10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (1.5, 0.0, -1.0)
+        float focalLength = 24.0
+    }
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera
+        token lunco:activeCamera.timeSamples = {
+            0.0: "Camera",
+        }
+    }
+}

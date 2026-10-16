@@ -29,7 +29,6 @@
 pub mod catalog;
 pub mod dyn_params;
 pub mod engine_params;
-pub mod float_texture;
 /// Native asset-worker shader raster preparation and typed texture sources.
 pub mod image_loader;
 pub mod image_mips;

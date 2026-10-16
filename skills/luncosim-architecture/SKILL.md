@@ -854,8 +854,10 @@ label projection is the only remaining per-frame presentation work.
 
 Terrain strokes use producer-owned segment IDs and the mutable
 `lunco-terrain-surface` index. Ordinary edits publish dirty texels through
-`lunco-materials::float_texture` and the renderer's partial-upload adapter;
+`lunco-render::data_texture` and the renderer's partial-upload adapter;
 capacity growth follows the shared image descriptor and material refresh path.
+The same typed queue carries complete R8 horizon visibility updates without
+reallocating equal-size GPU textures.
 See `docs/architecture/50-usd-driven-visuals.md` for the ownership and lifecycle
 contract.
 
@@ -1295,3 +1297,21 @@ For native removal observers, validate the destination archetype before
 reactivation. Despawn and compound component removal must not re-admit a retiring
 joint. Include Bevy-disabled entities in teardown ownership queries; disabled
 entities retain components and lifecycle hooks.
+
+### Unified language asset resources
+
+`lunco-assets-path` owns scheme/path algebra and standard URI component decoding;
+internal source addresses keep literal filenames. `lunco-assets-core::registered_read`
+owns bounded registered-source and admitted-directory byte reads. The installed
+source store and its `library://` reader share containment and terminal I/O errors.
+Only absence advances search order. Native source walks use ordered storage
+listings and reject escapes and repeated canonical identities.
+
+Language integrations contribute semantics only: USD layer context, Rhai importer
+identity, Modelica package/source/member facts. Modelica package resources use the
+qualified hierarchy independently of physical `.mo` splitting and bind to a unique
+admitted source owner. Their immutable context carries source-root lifecycle;
+source operation mismatches cannot publish new package facts. Open document facts
+retire on document/Twin close. The common `AssetBytesLoader` and maintained egui
+image decoders serve documentation, bitmaps and `OpenAssetResource` previews;
+resource/source revisions invalidate bytes, images and textures together.

@@ -5,13 +5,15 @@ Joint-drive and coupled/uncoupled differential gates pass. Griffin loads and
 advances; sustained contact and performance qualification remain incomplete.
 2026-10-16.
 
-The five local dependency patches and their source directories are removed in
-the application checkpoint. This is not a fully qualified replacement yet. Do not
-merge this removal until the application builds and the production gates pass.
+The dependency source directories and local path patches are removed. Application
+composition uses maintained public physics APIs; the published gizmo frontend
+revision supplies its pointer-input correction. Production integration checks
+cover the application cutover; the remaining qualification limits are explicit
+below.
 
-No new remote repositories or dependency branches were created. Rumoca's
-previously authorized main-branch dependency and the existing transform-gizmo
-dependency are outside this removal.
+No new remote repositories were created. Rumoca retains its previously
+authorized main-branch pin. The existing transform-gizmo repository supplies the
+explicitly approved `fix/native-pointer-input` branch at a pinned commit.
 
 ## Decision
 
@@ -551,15 +553,16 @@ callback retirement, editor state, and native graph teardown boundaries. Joint
 solver order/scope and mobility hold/order state use `init_scene_resource`.
 No dependency source trees or path patches are admitted by the merge.
 
-The pinned gizmo frontend privately reads window cursor state. Main's injected
-gesture gate requires its pointer-reader correction, currently present only in
-a vendored dependency patch. The public frontend options have no input override;
-writing window state asks Bevy Winit to warp the OS cursor. That application
-experiment is rejected, and its passing narrow input test is not qualification.
-The production `assembly_property_editor` gate failed to commit a drag.
-`target/proposed-gizmo-native-pointer.patch` records the one-file dependency
-change requiring explicit approval before application or publication. The Git
-pin remains unchanged, and the integration is not ready for main fast-forward.
+The published `transform-gizmo-bevy` revision
+`1de3502749617ed63bd35f407a3e4734aa79930f` reads the primary mouse
+`PointerLocation` on the normalized primary window, matching its picking input.
+The existing LunCoSim dependency repository owns this one-file correction;
+Cargo pins its exact published commit. No dependency source is stored here.
+The production `assembly_property_editor` gate passes all six assertions,
+including handle drag and blank-space pan (`target/main-final-editor.log`).
+Its fixture activates Editor even when a preview already exists, so a persisted
+View perspective cannot suppress the measured image. The inspected capture is
+`target/main-final-editor.png`.
 
 `lunco-usd-avian-joints::retire_native_joints` owns graph and component retirement
 for both detach and scene teardown. It validates all component identities before
@@ -608,9 +611,8 @@ all exit 0 (`target/upstream-main-integration-physics-results.json`). The
 joint-retirement lifecycle seam passes active/disabled removal and a missing
 identity rejection without partial graph writes. Its setup finishes the native
 plugins and initializes their mesh event resources before active stepping;
-incomplete fixture attempts are not qualification. The editor gesture gate is
-still blocked on the separately proposed dependency correction. Main has not
-been fast-forwarded, and the merge remains pending that decision.
+incomplete fixture attempts are not qualification. The final integration also
+passes the editor gesture gate using the published dependency pin.
 
 The unchanged replay-capture harness records matching physics, Modelica and
 articulated checkpoints in two independent serial runs and two independent
@@ -622,12 +624,10 @@ maintained historical reference remains untouched and does not match the new
 numerical result (first difference: an articulated position at tick 11). This
 establishes current-version repeatability, not historical trajectory acceptance.
 The comparison summary is `target/upstream-main-current-replay-summary.json`.
-
-Capability review also finds the maintained `transform-gizmo-egui` frontend and
-public generic `Gizmo` math API in the pinned repository. Those support an
-application-owned frontend alternative, but require replacing rendering and
-gesture capture together. They are not an input override for the current Bevy
-frontend. No dependency patch or alternate frontend has been applied.
+The final integrated artifact passes both 24-check serial/default profiles
+against that same task-local candidate (`target/main-final-current-replay.json`);
+the maintained historical reference is unchanged. Its four focused physics
+gates pass all 40 checks (`target/main-final-physics-results.json`).
 
 Clock/coupling qualification remains open beyond pause/resume and current replay.
 The worker target still accumulates Bevy's rounded fixed `Duration`, while the
@@ -636,3 +636,13 @@ Communication scheduling needs one shared integer master-tick lattice before
 claiming long-duration clock identity. Direct-feedthrough/algebraic coupling and
 external FMU 3 interoperability are also unqualified; the current checked native
 participant facade is not evidence for those contracts.
+
+The final normal build loads Griffin with nine shared-clock Modelica participants,
+advances 300 physics steps in 5.004251 wall seconds, holds the physics counter
+during pause while frame revisions advance, and resumes
+(`target/main-final-griffin.json`). A fresh isolated Summer session opens
+SolarPanel in Diagram mode, retains it through three scene restarts, and creates
+fresh documents and nonempty projections through three Twin replacements
+(`target/main-final-solar-verified-reloads.json`). The last diagram capture is
+`target/main-final-solar-verified-twin-3.png`. These are integration checks;
+sustained performance, historical trajectory and FMI qualification remain open.

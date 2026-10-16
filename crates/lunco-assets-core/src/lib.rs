@@ -52,6 +52,10 @@ pub mod closure;
 /// git-tracked content and externally-fetched binaries without any authored
 /// file naming the cache. See `docs/architecture/56-asset-resolution-and-cache.md`.
 pub mod lunco_source;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_reader;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_reader::NativeAssetReader;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;
@@ -381,22 +385,41 @@ pub fn source_library_dir(name: &str) -> PathBuf {
 /// several top-level packages as siblings; callers derive their root names from
 /// the package contents rather than selecting one package by name.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn source_library_root_path(cache_name: &str) -> Option<PathBuf> {
+pub fn source_library_root_path(cache_name: &str) -> std::io::Result<Option<PathBuf>> {
     let root = source_library_dir(cache_name);
-    if !root.is_dir() {
-        return None;
+    match std::fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+        Ok(_) => {}
     }
-    // Canonicalize so callers see the same absolute path regardless of CWD.
-    // The parser's source-root cache keys on the exact path it receives,
-    // so a CWD-dependent relative form would produce different keys per caller
-    // and force duplicate reparses.
-    std::fs::canonicalize(&root).ok().or(Some(root))
+    canonical_directory_root(&root).map(Some)
 }
 
-/// wasm has no filesystem-backed source-library root.
+/// Admit one explicit native directory identity. Directory mounts, source
+/// stores and configured roots share this boundary rather than retaining a
+/// spelling which can change identity with CWD, symlinks or native path case.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn canonical_directory_root(root: &Path) -> std::io::Result<PathBuf> {
+    if !root.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source directory must be absolute",
+        ));
+    }
+    let canonical = std::fs::canonicalize(root)?;
+    if !std::fs::metadata(&canonical)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            format!("{} is not a directory", root.display()),
+        ));
+    }
+    Ok(canonical)
+}
+
+/// Browser source libraries have no native root; their resident store is in memory.
 #[cfg(target_arch = "wasm32")]
-pub fn source_library_root_path(_cache_name: &str) -> Option<PathBuf> {
-    None
+pub fn source_library_root_path(_cache_name: &str) -> std::io::Result<Option<PathBuf>> {
+    Ok(None)
 }
 
 // ============================================================================
@@ -1133,3 +1156,5 @@ mod asset_directory_tests {
         );
     }
 }
+
+pub mod registered_read;

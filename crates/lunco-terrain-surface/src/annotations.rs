@@ -6,8 +6,8 @@ use crate::{DemHeightField, LodTileOf};
 use bevy::math::DVec2;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
-use lunco_materials::float_texture::{FloatTexturePatch, FloatTextureUpdates};
 use lunco_materials::{ShaderLook, ShaderLookSourceInterface, TextureLayer};
+use lunco_render::data_texture::{DataTexturePatch, DataTextureTexels, DataTextureUpdates};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
@@ -808,7 +808,7 @@ pub(crate) fn prepare_surface_annotations(
     interfaces: Query<Ref<ShaderLookSourceInterface>>,
     settings: Res<SurfaceAnnotationSettings>,
     mut state: ResMut<SurfaceAnnotationImages>,
-    mut uploads: ResMut<FloatTextureUpdates>,
+    mut uploads: ResMut<DataTextureUpdates>,
 ) {
     let retired: Vec<_> = state
         .owners
@@ -1113,7 +1113,7 @@ pub(crate) fn prepare_surface_annotations(
 pub(crate) fn publish_surface_annotations(
     mut state: ResMut<SurfaceAnnotationImages>,
     mut images: ResMut<Assets<Image>>,
-    mut uploads: ResMut<FloatTextureUpdates>,
+    mut uploads: ResMut<DataTextureUpdates>,
     mut looks: Query<(Entity, &mut ShaderLook, Option<&LodTileOf>)>,
 ) {
     let completed: Vec<_> = state
@@ -1186,11 +1186,11 @@ pub(crate) fn publish_surface_annotations(
                         }
                     } else {
                         let handle = previous_handle.expect("partial upload has a resident image");
-                        uploads.submit(FloatTexturePatch {
+                        uploads.submit(DataTexturePatch {
                             image: handle.clone(),
                             sequence,
                             size: UVec2::new(IMAGE_WIDTH as u32, height as u32),
-                            texels,
+                            texels: DataTextureTexels::Rgba32Float(texels),
                         });
                         handle
                     };
@@ -1251,7 +1251,7 @@ pub(crate) fn publish_surface_annotations(
 
 pub(crate) fn clear_surface_annotations(
     mut state: ResMut<SurfaceAnnotationImages>,
-    mut updates: ResMut<FloatTextureUpdates>,
+    mut updates: ResMut<DataTextureUpdates>,
 ) {
     for image in state.published.values().filter_map(|p| p.image.as_ref()) {
         updates.retire(image.id());

@@ -32,8 +32,6 @@ impl ResolvedClassSource {
 pub(crate) struct ClassSourcePlan {
     qualified: String,
     resident: Option<ResolvedClassSource>,
-    #[cfg(not(target_arch = "wasm32"))]
-    file_admission: lunco_workspace::FileDocumentAdmission,
 }
 
 impl ClassSourcePlan {
@@ -55,16 +53,17 @@ impl ClassSourcePlan {
         Self {
             qualified: qualified.to_owned(),
             resident,
-            #[cfg(not(target_arch = "wasm32"))]
-            file_admission: lunco_workspace::FileDocumentAdmission::capture(workspace, replication),
         }
     }
 
     /// Preserve indexed-library, resident, bundled priority. A selected library
     /// path's read/decode failure must not resolve another source with that name.
     pub(crate) async fn resolve(self) -> Result<ResolvedClassSource, String> {
-        if let Some(path) = crate::library_fs::resolve_class_path_indexed(&self.qualified)
-            .or_else(|| crate::library_fs::locate_library_file(&self.qualified))
+        if let Some(path) =
+            lunco_modelica_library::package_paths::resolve_class_path_indexed(&self.qualified)
+                .or_else(|| {
+                    lunco_modelica_library::package_paths::locate_library_file(&self.qualified)
+                })
         {
             let provider = lunco_assets_runtime::library::global_library_sources()
                 .iter()
@@ -75,42 +74,21 @@ impl ClassSourcePlan {
                         path.display()
                     )
                 })?;
-            let (runtime, source) = match provider {
-                lunco_assets_runtime::library::LibrarySource::InMemory(_) => {
-                    let bytes = provider.read(&path).ok_or_else(|| {
-                        format!("selected library source is unavailable: {}", path.display())
-                    })?;
-                    let source = String::from_utf8(bytes).map_err(|error| {
-                        format!(
-                            "selected library source {} is not UTF-8: {error}",
-                            path.display()
-                        )
-                    })?;
-                    (DocumentRuntimeOwner::Application, source)
-                }
-                lunco_assets_runtime::library::LibrarySource::Filesystem(_) => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let (resolved, source) =
-                            lunco_modelica_runtime::source_asset::read_admitted_file(
-                                &path,
-                                self.file_admission,
-                            )
-                            .await?;
-                        (resolved.runtime, source)
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        return Err(format!(
-                            "selected filesystem library source is unavailable in browser: {}",
-                            path.display()
-                        ));
-                    }
-                }
-            };
+            let bytes = provider
+                .read(&path)
+                .map_err(|error| format!("selected library source {}: {error}", path.display()))?
+                .ok_or_else(|| {
+                    format!("selected library source is unavailable: {}", path.display())
+                })?;
+            let source = String::from_utf8(bytes).map_err(|error| {
+                format!(
+                    "selected library source {} is not UTF-8: {error}",
+                    path.display()
+                )
+            })?;
             return Ok(ResolvedClassSource {
                 source: source.into(),
-                runtime,
+                runtime: DocumentRuntimeOwner::Application,
                 resident: None,
             });
         }

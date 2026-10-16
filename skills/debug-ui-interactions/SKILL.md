@@ -32,6 +32,16 @@ After publishing or switching a surface, capture its rendered layout before
 injecting pointer input. A command acknowledgement precedes widget layout and
 does not establish a hit target.
 
+For shared resource-window layout, run
+`scripts/api/test_resource_preview_layout.py` with `LUNCOSIM_BIN`, an explicit
+free `LUNCOSIM_API_PORT`, and a fresh `LUNCOSIM_PREVIEW_TEST_OUTPUT` directory.
+Repeat with `--compact` for the 960x540 production window profile. Inspect all
+captures: the four colored image corners, title/close controls, long URI hover
+text/copy action, text-size notice and image-after-text transition must remain reachable
+inside the window. The capture driver's exit status verifies lifecycle and
+render-log health; it is not an automatic layout verdict. Browser HTTP byte
+allocation remains a separate TODO in the asset-resolution review.
+
 Build or resolve the production binary as `LUNCOSIM_BIN`, launch exactly one
 windowed `luncosim` process with an explicit free API port, and wait for
 `/api/ready` before injecting input. The `InjectWindowInput` command and
@@ -43,6 +53,10 @@ Rhai tools process the injected Bevy events. Injected events do not mutate the
 native window cursor. Bevy Picking's `PointerLocation` is the shared application
 cursor state; cursor-driven consumers such as the transform gizmo read it
 through `PrimaryMousePointer` in `lunco-interaction-core`.
+
+Editor gesture fixtures activate the `editor` perspective after the scene is
+admitted, including when its document preview already exists. A restored
+perspective is not evidence that the preview image is displayed.
 
 Authored pointer automation uses `// @timing presentation`, so each gesture
 phase occupies a host frame even when one frame admits several simulation

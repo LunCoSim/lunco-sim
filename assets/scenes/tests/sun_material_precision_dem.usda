@@ -1,0 +1,55 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    documentation = "Streamed DEM GPU native-light versus terrain horizon sign and zero-angle sky gate."
+)
+
+def Xform "World" (
+    prepend references = @lunco://scenes/tests/sun_material_precision.usda@</World>
+)
+{
+    def Plane "Ground" (
+        active = false
+    )
+    {
+    }
+    def Xform "Terrain" (
+        prepend apiSchemas = ["LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        custom token lunco:assetMode = "dem"
+        bool lunco:terrain:horizonShadows = true
+        int lunco:terrain:horizonMapResolution = 8
+        custom rel material:binding = </World/Looks/Ground>
+        def Xform "DEM" (
+            prepend apiSchemas = ["LunCoTerrainLayerAPI"]
+        )
+        {
+            uniform token lunco:layer = "dem"
+            asset lunco:layer:demSource = @fixtures/terrain_shader_appearance@
+            float lunco:layer:windowM = 0.0
+            int lunco:layer:targetRes = 0
+            bool lunco:layer:lodViz = true
+        }
+    }
+    def Scope "Looks"
+    {
+        def Material "Ground"
+        {
+            def Shader "Shader"
+            {
+                custom asset info:wgsl:vertexAsset = @lunco://shaders/tests/sun_material_precision.wgsl@
+            }
+        }
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, -1880.0, 5.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, -1880.0, 0.0)
+    }
+}

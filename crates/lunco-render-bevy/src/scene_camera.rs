@@ -7,7 +7,10 @@
 //! See `lunco_render::camera` for why, and for the two `R4` bugs this closes.
 
 use bevy::camera::{ClearColorConfig, Hdr};
-use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::core_pipeline::{
+    prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass},
+    tonemapping::Tonemapping,
+};
 use bevy::light::{ClusteredDecal, LightProbe, PointLight, SpotLight, cluster::ClusterConfig};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -18,6 +21,10 @@ use crate::RenderProfile;
 pub(crate) fn build(app: &mut App) {
     let initial_clusterable_object_count = count_clusterable_objects(app.world_mut());
     app.init_resource::<RenderProfile>()
+        // Native camera passes use the existing typed component authoring path.
+        .register_type::<DepthPrepass>()
+        .register_type::<NormalPrepass>()
+        .register_type::<MotionVectorPrepass>()
         .insert_resource(ClusterableObjectCount(initial_clusterable_object_count))
         .init_resource::<lunco_render::RenderingQualitySettings>()
         .init_resource::<lunco_render::SceneBloomOverride>()

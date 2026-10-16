@@ -579,24 +579,12 @@ generate_bindings() {
         rsync -a --delete --exclude='.lunco/' --exclude='history/' \
             "$PROJECT_DIR/assets/" "$dist_dir/assets/"
 
-        # The bundle ships its own file listing. The browser has no `readdir`, so
-        # the spawn/shader catalogs cannot discover `*.usda`/`*.wgsl` by walking —
-        # they fetch this manifest at boot (`lunco_assets::discovery`).
-        #
-        # It is generated HERE, from the tree we just staged, rather than baked
-        # into the wasm by a `build.rs`. A baked listing describes the bundle the
-        # binary was compiled against; this one describes the bundle that actually
-        # shipped. They are the same thing right up until they aren't — swap an
-        # asset into a deployed `dist/` and a baked listing never sees it.
-        #
-        # The listing is produced by `discovery::scan_library` — the SAME scanner
-        # the native runtime walks the library with — so packaging cannot disagree
-        # with the runtime about what counts as an asset. This used to be an inline
-        # `os.walk`, a second implementation of that rule in another language, and
-        # it had already drifted: it descended hidden directories, so it listed the
-        # `.lunco/runtime/*.usda` private layers of any Twin staged above.
+        # The browser discovers source assets from the staged bundle manifest.
+        # Its generator uses lunco_assets_runtime::discovery::scan_library,
+        # the same scanner as native discovery, including runtime-state and
+        # hidden-directory exclusions.
         info "Writing $dist_dir/assets/manifest.json"
-        cargo run --release -q -p lunco-assets --bin build_asset_manifest -- \
+        cargo run --release -q -p lunco-assets-runtime --bin build_asset_manifest -- \
             "$dist_dir/assets" || {
             # Without the manifest the browser cannot enumerate anything: the spawn
             # palette and the shader catalog come up empty. Fail the build rather

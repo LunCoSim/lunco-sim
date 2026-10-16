@@ -3,13 +3,14 @@ name = "lunco-render"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
-description = "Shared render-look configuration for LunCoSim: lunar sun shadows, Graphics quality presets, and render-owned camera/light/terrain budgets."
+description = "Render intent, graphics budgets, and typed texture update contracts for LunCoSim."
 
 [dependencies]
 # `bevy_light` supplies the directional-light + cascade-shadow component types.
 # It is data/components only — NOT the `bevy_pbr` render pipeline — so this crate
 # stays cheap and can sit below every 3D crate without dragging in rendering.
-bevy = { workspace = true, features = ["bevy_light"] }
+# Image handles and the workspace zstd codec backend are render-free too.
+bevy = { workspace = true, features = ["bevy_light", "bevy_image", "zstd_rust"] }
 lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-hooks = { path = "../lunco-hooks" }

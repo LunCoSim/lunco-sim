@@ -1981,3 +1981,46 @@ retaining each component's standalone defaults and the parent formulas. The
 scoped-defaults gate checks both modifier replacement and rejection of a
 duplicate equation. See the
 [Modelica modification rules](https://specification.modelica.org/maint/3.6/inheritance-modification-and-redeclaration.html).
+
+## External resource addressing
+
+Modelica contributes language semantics to the common
+[asset system](56-asset-resolution-and-cache.md#source-libraries-and-resource-views).
+`lunco-modelica-ast::resource_uri` interprets MLS 13.5 URIs, including
+case-insensitive schemes, qualified package authorities, percent encoding and
+separate fragments. Rumoca validates qualified names and supplies declaration
+facts. URI decoding does not apply to internal literal asset addresses.
+
+The compiler publishes `SourceFileFacts` from the exact admitted source-set
+ASTs. Source provenance stays attached to each file; package membership is a
+projection across those facts, including classes in separate files.
+`SourceRootRegistry` retains them only for the current operation and source
+lifetime. Its immutable `ResourceContext` projection maps a resource
+to a typed asset location; it does not search storage or read bytes. Installed
+library package facts come from the parsed source artifact, including packages
+that are absent from the palette index. Missing or ambiguous package owners
+reject rather than selecting another same-name library.
+
+For directory packages, resource paths follow the qualified hierarchy even if
+nested packages are stored in one `.mo` file. A top-level single-file package
+uses the source file's directory. A resource path cannot begin with a class
+member name; that member belongs in the qualified URI authority. This mapping
+is shared by documentation images, Bitmap annotations and clicked links, as
+required by [MLS 13.5](https://specification.modelica.org/maint/3.6/packages.html#external-resources).
+
+`lunco-modelica-library::package_paths` owns installed-library class-to-file
+mapping. Widgets do not join cache paths or load files. Bitmap painting uses
+the common asynchronous egui asset/image pipeline. Opening or editing a
+file-backed package refreshes facts only after its current parse settles.
+A directory-backed view overlays its existing source-set owner; saving commits
+that file's facts and fences older in-flight admission results. Closing discards
+only unsaved facts. Independent document registrations retire on document close;
+Twin-owned registrations retire on Twin close. Resource-scope changes invalidate
+bytes and textures
+before another source can reuse the same displayed URI.
+
+Native file and directory renames relocate the root and each file/package's
+provenance, including saved facts and document overlays. Pre-rename load results
+are fenced; the existing worker reloads the affected disk source sets after the
+rename/class/save transaction. Closing or reopening a view cannot restore a
+retired path or namespace.
