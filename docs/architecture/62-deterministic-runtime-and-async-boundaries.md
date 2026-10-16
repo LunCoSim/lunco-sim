@@ -401,6 +401,15 @@ on representative scenes before changing the serialized Modelica worker or
 introducing a parallel solver; use Tracy to determine whether solver service or
 other owner work dominates.
 
+Deferred world-bound Rhai calls snapshot their typed `CommandOrigin::Rhai`
+into `WorldScriptExecution` at admission. That origin carries the caller's
+runtime context, actor, session authority and client-local restriction across
+reflected dispatch as well as queue execution. UI/REPL queue membership is a
+scheduling choice and cannot change the nested call's phase, clock, sequence or
+producer stamp. Host submissions without a Rhai origin receive the owning
+UI/REPL cycle context. Nested synchronous world scopes restore all caller
+bridge state on exit, including after an evaluation error.
+
 Every cross-domain callback receives an immutable `RuntimeExecutionContext`
 from its owning Rust cycle with:
 

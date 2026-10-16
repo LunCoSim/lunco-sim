@@ -1,4 +1,5 @@
-// Run on a known host, then StopScenario; read HUD_TEARDOWN's typed verdict.
+// Register hud_binding_probe in an isolated Twin, then run/stop this host.
+// HUD_TEARDOWN and each deferred command report their own typed verdict.
 hud_perspectives([]);
 
 fn simulation_dependencies(me, ctx) {
@@ -16,6 +17,10 @@ fn on_start(me, ctx) {
 }
 
 fn on_stop(me, ctx) {
+    // Both dispatch paths must inherit Stop after this hook returns.
+    let tool = cmd("RunRhaiToolHook", #{tool: "hud_binding_probe", hook: "verify_stopping_call", args: #{String: "tool"}});
+    let snippet = cmd("RunRhai", #{code: "hud_binding_probe::verify_stopping_call(\"snippet\")"});
+    print("HUD_STOP_REQUESTS " + tool.id + " " + snippet.id);
     let checks = [
         t_true(clear_hint("hud-teardown").ok, "stop clears existing hint"),
         t_true(clear_objectives("hud-teardown").ok, "stop clears existing objectives"),

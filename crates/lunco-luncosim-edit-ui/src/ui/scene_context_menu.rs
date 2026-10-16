@@ -53,7 +53,7 @@ pub fn on_script_ui_request(
             let bindings: Result<Vec<_>, _> = items
                 .iter()
                 .map(|item| {
-                    ToolHookBinding::new(
+                    ToolHookBinding::for_scene(
                         item.tool.clone(),
                         item.hook.clone(),
                         scope.owner_twin_id,

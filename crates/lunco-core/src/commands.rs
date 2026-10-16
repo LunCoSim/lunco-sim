@@ -185,6 +185,10 @@ pub enum CommandOrigin {
         context: crate::RuntimeExecutionContext,
         /// Stable source actor when the call came from a Twin program.
         actor: Option<crate::GlobalEntityId>,
+        /// Session authority inherited by nested deferred script work.
+        authority: Option<lunco_command_contracts::SessionId>,
+        /// Whether this invocation is restricted to client-local capabilities.
+        client_local: bool,
     },
     /// Local interaction dispatched by a user-facing workbench surface.
     LocalUser {

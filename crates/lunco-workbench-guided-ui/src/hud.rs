@@ -334,7 +334,7 @@ fn on_set_guided_hud_actions(
             return Err(error);
         }
         Some(
-            ToolHookBinding::new(
+            ToolHookBinding::for_scene(
                 cmd.tool.clone(),
                 cmd.hook.clone(),
                 twin.map(|id| id.raw()),

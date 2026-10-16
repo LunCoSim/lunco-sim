@@ -300,7 +300,12 @@ fix that width before laying out wrapped rows, and let short lists shrink
 vertically instead of reserving an empty scroll region. Completion state uses
 the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
-system.
+system. Menu contributions bind endpoints under a provider-owned ECS root;
+replace the root and widget scope together. Provider bindings survive scene
+reset, while each selection acquires a scene-bound invocation child. Retire
+that child on every admission failure or completion, and retire the provider
+root on replacement or its Twin's close. See `runtime-ui` for the full callback
+lifecycle and production gate.
 
 The workbench scopes only its private mutable layout out of the `World` while
 painting. The authoritative `WorkbenchMenuRegistry` remains installed and is

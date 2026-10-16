@@ -1250,6 +1250,8 @@ mod simulated_intent_source_tests {
                 Some(CommandOrigin::Rhai {
                     context,
                     actor: Some(actor),
+                    authority: None,
+                    client_local: false,
                 }),
                 None
             ),
@@ -1268,6 +1270,8 @@ mod simulated_intent_source_tests {
                 Some(CommandOrigin::Rhai {
                     context: application_context,
                     actor: None,
+                    authority: None,
+                    client_local: false,
                 }),
                 Some(19),
             ),
@@ -1286,6 +1290,8 @@ mod simulated_intent_source_tests {
                 Some(CommandOrigin::Rhai {
                     context: lunco_core::RuntimeExecutionContext::unclassified(),
                     actor: Some(actor),
+                    authority: None,
+                    client_local: false,
                 }),
                 None
             )
@@ -1296,6 +1302,8 @@ mod simulated_intent_source_tests {
                 Some(CommandOrigin::Rhai {
                     context,
                     actor: None,
+                    authority: None,
+                    client_local: false,
                 }),
                 Some(19)
             )
@@ -2686,6 +2694,8 @@ mod tests {
                 Some(lunco_core::CommandOrigin::Rhai {
                     context: origin_context,
                     actor: Some(origin_actor),
+                    authority: None,
+                    client_local: false,
                 }),
             );
         app.world_mut().trigger(SimulateIntentEdge {
@@ -2731,6 +2741,8 @@ mod tests {
             Some(lunco_core::CommandOrigin::Rhai {
                 context: origin_context,
                 actor: Some(origin_actor),
+                authority: None,
+                client_local: false,
             })
         );
         assert_eq!(observed.typed[0].admission, None);
@@ -2781,6 +2793,8 @@ mod tests {
             Some(lunco_core::CommandOrigin::Rhai {
                 context: origin_context,
                 actor: Some(origin_actor),
+                authority: None,
+                client_local: false,
             })
         );
         assert_eq!(

@@ -742,10 +742,33 @@ Scene transitions retire queued tool work immediately, including while the
 interpreter is preparing; application REPL work retains its workspace lifetime.
 Stop hooks cannot open menus.
 
+Installed workbench menus use provider-owned ECS roots and child endpoint
+leases with `ToolHookBindingLifetime::Provider`. Each installation scopes its
+widget tree to that fresh root identity and the current input Twin/scene.
+Input is disabled while a scene transition is pending. Replacement atomically
+publishes a validated tree and despawns the outgoing root; `TwinClosed` retires the owning
+Twin's contribution. Application contributions remain installed across scene
+resets. Selecting an item creates a child `Invocation` lease pinned to the
+input's Twin and committed scene generation. Provider replacement revokes that
+child even before command admission; scene replacement rejects it at admission
+or retires it from the queue. The provider endpoint stays available for a fresh
+selection in the next scene. No menu callback dispatches by name alone.
+
+Deferred Rhai work retains its caller's typed origin, actor, authority and
+client-local restrictions. Its phase and clock are independent of which queue
+executes it; a nested `RunRhai` or tool call from `on_stop` remains a stop call
+and cannot publish new presentation. Twin-route snippets also retain the
+caller's scene generation and retire on scene transition. Idempotent cleanup
+stays available while that owning scene remains current.
+
 Run `scripts/api/test_guided_ui_callbacks.py --port PORT` against the production
 binary for held-press popup replacement, fresh selection, outside dismissal,
-scene teardown and Twin replacement. The wrapper drives window input; the
+scene teardown, installed menu replacement/reuse, deferred stop hooks and Twin
+replacement. The wrapper drives window input; the
 isolated Twin's `hud_binding_probe.rhai` library supplies the runtime verdicts.
+The wrapper creates temporary application Rhai/JSON sources for native menu
+replacement and removes them after the owned session exits. The maintained USD
+fixture supplies the lifecycle clock for the stop-hook checks.
 Injected input acknowledgements mean queued input, not completed callbacks.
 The driver waits for a rendered input frame, then completes an authored no-op
 hook on the same FIFO interaction queue before running its verdict. A REPL

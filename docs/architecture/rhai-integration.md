@@ -131,7 +131,10 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   returned in the original deferred response. Admission captures the active
   workspace Twin, including an explicitly empty workspace. Deferred code is
   rejected if that workspace identity changes before evaluation; its execution
-  context remains `Application/Repl/Evaluation`.
+  context is `Application/Repl/Evaluation` for external submissions. Nested
+  Rhai work retains its caller's complete typed invocation context.
+  `command_result(id)` accepts native unsigned command IDs and non-negative
+  Rhai integer literals; negative IDs report an evaluation error.
 - **Structured UI tools:** `RunRhaiTool { tool, args }` and
   `RunRhaiToolHook { tool, hook, args }` enqueue typed calls in a bounded UI
   queue. The exclusive drain runs after Bevy picking in `PreUpdate`, before
@@ -149,17 +152,26 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   caller must agree with that registration. Before dispatch, the owner must
   still be active and the visible tool must still belong to the admitted scope;
   a lower-scope definition or another Twin's same-name tool cannot receive the
-  old request. Application tools keep `Application/Ui/Evaluation` context
-  unless the caller supplies a Twin flow or has a typed Twin route. A workbench
+  old request. External application tools use `Application/Ui/Evaluation`;
+  an explicit Twin flow uses a Twin route. Nested calls retain the originating
+  route, phase, clock samples, sequence, producer stamp, actor, authority and
+  client-local restriction through the typed `CommandOrigin::Rhai` and
+  `WorldScriptExecution` admission snapshot. Queue placement never reclassifies
+  a stop or simulation invocation as UI/REPL evaluation. Synchronous nested
+  world evaluation restores the entire caller bridge state on return. A workbench
   menu captures that flow owner at selection time. Twin tool-flow routes use
-  generation zero until a scenario is admitted against the committed scene.
+  the committed scene generation (zero only when no scene has committed).
+  Nested Twin-route snippets retain and validate that same generation; scene
+  transitions retire them along with queued tools.
   `TwinClosed` removes its queued tool calls and snippets immediately, without
   waiting for Rhai readiness, and completes deferred results as
   `CommandRejected`. Drain-time ownership rejection uses the same terminal
   result and a concise warning. Application-owned calls retain their own
   lifetime within their admitted scene. Persistent UI callbacks supply an explicit
   `RunRhaiToolHook.binding` entity lease (`ToolHookBinding`). Admission checks its
-  endpoint, tool scope, Twin, and scene; execution also requires the exact entity
+  endpoint, tool scope, Twin, and scene; an omitted request owner is supplied
+  by the binding. Every terminal rejection releases an exact invocation lease,
+  including queue overload before admission. Execution also requires the exact entity
   and binding value to remain live. Replacing or tearing down a UI binding
   despawns that lease. Surface bindings are retained by their publisher; a
   popup selection transfers an invocation binding to the queue for terminal

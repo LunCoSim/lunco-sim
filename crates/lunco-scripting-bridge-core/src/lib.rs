@@ -31,7 +31,7 @@
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
 mod tool_binding;
-pub use tool_binding::{ToolHookBinding, ToolHookBindingRetention};
+pub use tool_binding::{ToolHookBinding, ToolHookBindingLifetime, ToolHookBindingRetention};
 
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::math::DVec3;
@@ -411,31 +411,38 @@ thread_local! {
 }
 
 /// RAII guard that publishes a `&mut World` to the thread-local for the lifetime
-/// of a script evaluation, and clears it on drop (even on panic).
-pub struct WorldScope;
+/// of a script evaluation, restoring the caller on drop (even on panic).
+pub struct WorldScope {
+    previous_world: *mut World,
+    previous_context: lunco_core::RuntimeExecutionContext,
+    previous_authority: Option<SessionId>,
+    previous_client_local: bool,
+    previous_actor: u64,
+    previous_rejects: Vec<String>,
+}
 
 impl WorldScope {
     /// Publish `world` and its owning cycle context for the guard's lifetime.
     pub fn enter(world: &mut World, context: lunco_core::RuntimeExecutionContext) -> Self {
-        WORLD_PTR.with(|p| p.set(world as *mut World));
-        EXECUTION_CONTEXT.with(|current| current.set(context));
-        SCRIPT_AUTHORITY.with(|a| a.set(None));
-        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
-        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
-        CURRENT_SELF.with(|c| c.set(0));
-        WorldScope
+        Self {
+            previous_world: WORLD_PTR.with(|p| p.replace(world as *mut World)),
+            previous_context: EXECUTION_CONTEXT.with(|c| c.replace(context)),
+            previous_authority: SCRIPT_AUTHORITY.with(|a| a.replace(None)),
+            previous_client_local: SCRIPT_CLIENT_LOCAL.with(|c| c.replace(false)),
+            previous_actor: CURRENT_SELF.with(|c| c.replace(0)),
+            previous_rejects: SCRIPT_REJECTS.with(|r| std::mem::take(&mut *r.borrow_mut())),
+        }
     }
 }
 
 impl Drop for WorldScope {
     fn drop(&mut self) {
-        WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
-        EXECUTION_CONTEXT
-            .with(|current| current.set(lunco_core::RuntimeExecutionContext::unclassified()));
-        SCRIPT_AUTHORITY.with(|a| a.set(None));
-        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
-        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
-        CURRENT_SELF.with(|c| c.set(0));
+        WORLD_PTR.with(|p| p.set(self.previous_world));
+        EXECUTION_CONTEXT.with(|c| c.set(self.previous_context));
+        SCRIPT_AUTHORITY.with(|a| a.set(self.previous_authority));
+        SCRIPT_CLIENT_LOCAL.with(|c| c.set(self.previous_client_local));
+        CURRENT_SELF.with(|c| c.set(self.previous_actor));
+        SCRIPT_REJECTS.with(|r| *r.borrow_mut() = std::mem::take(&mut self.previous_rejects));
     }
 }
 
@@ -1005,6 +1012,8 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                 context: execution_context(),
                 actor: (current_self() != 0)
                     .then(|| lunco_core::GlobalEntityId::from_raw(current_self())),
+                authority: script_authority(),
+                client_local: script_is_client_local(),
             }),
         });
         // The dispatcher and the typed handler both use `commands.queue`: the
@@ -2099,6 +2108,8 @@ mod tests {
             lunco_core::CommandOrigin::Rhai {
                 context: lunco_core::RuntimeExecutionContext::unclassified(),
                 actor: Some(lunco_core::GlobalEntityId::from_raw(77)),
+                authority: None,
+                client_local: false,
             }
         )));
     }

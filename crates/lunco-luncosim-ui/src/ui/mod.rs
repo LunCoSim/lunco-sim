@@ -324,12 +324,14 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 install_viewport_placeholder_actions(app.world_mut());
+                app.init_resource::<scripted_menus::ScriptedMenuBindings>();
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_guided_hud_action)
                     .add_observer(on_guided_stop_requested)
                     .add_observer(on_runtime_error_warning)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
+                    .add_observer(scripted_menus::invoke_scripted_menu)
                     .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed);
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);

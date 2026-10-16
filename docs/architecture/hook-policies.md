@@ -224,7 +224,12 @@ unrequested datasets remain quiet. `SceneTransitionStarted` retires outstanding 
 `SceneTeardown` removes domain data derived from the outgoing scene.
 
 Rust also validates the generic menu tree and replaces that provider's
-contribution; selected actions route through the existing Rhai tool hook. Twin
+contribution. The UI host binds every leaf to an explicit provider-owned
+`ToolHookBinding` lease before publishing it. Each installation has a fresh
+widget identity; replacement retires that root and its endpoints. Selection
+creates a scene-bound invocation child, so application menus can remain
+installed across resets while old input and queued work are revoked.
+Selected actions route through the shared bound Rhai tool queue. Twin
 contributions are cleared on `TwinClosed`, and a late contribution for an
 already-closed Twin is discarded. An absent optional hook clears its
 contribution; a fault or malformed action map is warned and queues no asset

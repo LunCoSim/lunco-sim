@@ -116,7 +116,13 @@ to their popup root. On selection, detach only the selected `Invocation` lease
 before despawning the popup; the shared queue owns its terminal cleanup. Use
 `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` to check a held
 press across replacement, then a fresh click, dismissal, scene teardown and a
-replacement Twin. Its Rhai library supplies the assertions. The wrapper uses
+replacement Twin. Installed workbench menu endpoints belong to a provider root;
+selection creates a scene-bound invocation child. Provider replacement revokes
+the child before or after queue admission, while scene reset preserves the
+installed endpoint for fresh input. Verify completed deferred stop verdicts as
+well as input. Nested commands keep their caller's phase and capabilities;
+physical queue placement cannot grant a new authoring context. Its Rhai library
+supplies the assertions. The wrapper uses
 `--no-throttle --no-vsync` and rejects gestures that exceed the click-duration
 limit, so a stretched gesture cannot produce a false pass.
 When a UI hook reads a collection of USD prims, request the member list once
