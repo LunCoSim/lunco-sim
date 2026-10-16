@@ -196,6 +196,9 @@ tasks; mixed-lifetime stores retain only explicitly application-owned entries
 and monotonic publication counters. Domain shutdown runs first, then scene
 entities and their removal callbacks retire, then registered resources reset. Tag
 scene-owned entities outside the structural scene hierarchy with `SceneOwned`.
+For a scene-derived message queue, compose Bevy's message registration with
+`.init_scene_resource::<Messages<M>>()`; this clears unread messages after those
+callbacks while preserving message counters. Application queues stay unregistered.
 Use `run_scene_teardown_with_entities` for hierarchy retirement; state-only
 owners use `run_scene_teardown`. Both share the replacement/reload boundary.
 Script backends register `ScenarioDriver::retire_removed_model` so interactive

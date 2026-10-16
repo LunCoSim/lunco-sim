@@ -216,6 +216,14 @@ override it to preserve only explicitly application-owned state and monotonic
 publication counters. Settings, shared source caches and application registries
 keep their application lifetime.
 
+Scene-derived message queues use the same registration:
+`app.add_message::<M>().init_scene_resource::<Messages<M>>()`.
+Their reset clears unread payloads after shutdown and entity-removal callbacks,
+while preserving Bevy's message counters so surviving readers consume new
+messages correctly. Unregistered application queues retain their normal lifetime.
+The Modelica execution owner registers `Messages<ModelicaNotice>` this way;
+queued lifecycle notices cannot repopulate cleared status after teardown.
+
 `run_scene_teardown_with_entities` first drains domain `SceneTeardown` systems
 and their deferred shutdown work, then reclaims the supplied scene hierarchy
 and `SceneOwned` entities, flushes removal callbacks, then runs registered

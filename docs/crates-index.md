@@ -315,7 +315,8 @@ The stable ECS contract layer. It defines identity/provenance, shared markers,
 typed scene-lifecycle contracts, structured runtime faults/diagnostics, Bevy
 `RuntimeCycleSet` ordering labels, and generic state utilities. Its
 `AppSceneExt::init_scene_resource` installs `SceneResource` cleanup at
-initialization; `run_scene_teardown_with_entities` drains domain shutdown,
+initialization, including explicitly registered Bevy `Messages<M>` queues;
+`run_scene_teardown_with_entities` drains domain shutdown,
 reclaims scene hierarchies and `SceneOwned` entities, flushes removal callbacks,
 then resets registered state. State-only owners use `run_scene_teardown`. Owner-neutral
 cycle and invocation values are defined in `lunco-runtime-context`. Pure mutation envelopes are owned by
@@ -1410,6 +1411,8 @@ launch, and the wasm `lunica_worker` transport. It composes the generic
 `lunco-worker-transport::WorkerPool` and installs the worker callbacks consumed
 by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
+It registers the lifecycle-notice queue with scene teardown so unread notices
+cannot repopulate cleared presentation state.
 
 **`lunco-modelica-worker`**
 Stateful Modelica worker engine. It owns live solver construction and stepping,

@@ -9,6 +9,7 @@
 
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
+use lunco_core::scene_lifecycle::AppSceneExt;
 #[cfg(target_arch = "wasm32")]
 use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 use lunco_modelica_runtime::{
@@ -146,7 +147,8 @@ impl Plugin for ModelicaExecutionPlugin {
         app.init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>();
         app.add_message::<ModelicaSessionStarted>();
         app.init_resource::<lunco_modelica_runtime::ModelicaStepDiagnostics>();
-        app.add_message::<ModelicaNotice>();
+        app.add_message::<ModelicaNotice>()
+            .init_scene_resource::<Messages<ModelicaNotice>>();
         app.add_message::<CompileRequested>();
 
         app.add_plugins(lunco_modelica_runner::ModelicaRunnerPlugin);

@@ -29,6 +29,12 @@ pub trait SceneResource: Resource<Mutability = bevy::ecs::component::Mutable> + 
     }
 }
 
+impl<M: Message> SceneResource for Messages<M> {
+    fn clear_scene(&mut self) {
+        self.clear();
+    }
+}
+
 /// Register scene state at its owner, without a separate cleanup registration.
 pub trait AppSceneExt {
     fn init_scene_resource<R: SceneResource>(&mut self) -> &mut Self;
@@ -214,6 +220,51 @@ mod tests {
             .push(42);
         run_scene_teardown(app.world_mut());
         assert!(app.world().resource::<DefaultSceneState>().0.is_empty());
+    }
+
+    #[derive(Message)]
+    struct SceneNotice(u32);
+
+    #[derive(Message)]
+    struct ApplicationNotice;
+
+    #[test]
+    fn scene_message_queue_retires_after_shutdown_and_removal_publication() {
+        let mut app = App::new();
+        app.add_message::<SceneNotice>()
+            .init_scene_resource::<Messages<SceneNotice>>()
+            .add_message::<ApplicationNotice>()
+            .add_systems(SceneTeardown, |mut notices: MessageWriter<SceneNotice>| {
+                notices.write(SceneNotice(100));
+            })
+            .add_observer(
+                |_: On<Remove, PublishesOnRemoval>, mut notices: MessageWriter<SceneNotice>| {
+                    notices.write(SceneNotice(200));
+                },
+            );
+        app.world_mut().write_message(ApplicationNotice);
+        let mut cursor = bevy::ecs::message::MessageCursor::<SceneNotice>::default();
+        for cycle in 1..=3 {
+            app.world_mut().write_message(SceneNotice(0));
+            let outgoing = app.world_mut().spawn(PublishesOnRemoval).id();
+            run_scene_teardown_with_entities(app.world_mut(), [outgoing]);
+            let messages = app.world().resource::<Messages<SceneNotice>>();
+            assert!(messages.is_empty());
+            assert_eq!(
+                app.world().resource::<Messages<ApplicationNotice>>().len(),
+                1
+            );
+
+            app.world_mut().write_message(SceneNotice(cycle));
+            let messages = app.world().resource::<Messages<SceneNotice>>();
+            assert_eq!(
+                cursor
+                    .read(messages)
+                    .map(|notice| notice.0)
+                    .collect::<Vec<_>>(),
+                [cycle]
+            );
+        }
     }
 
     #[test]
