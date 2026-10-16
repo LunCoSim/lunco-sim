@@ -71,6 +71,7 @@ impl Plugin for LunCoSimRuntimePlugin {
                 "SetHint",
                 "SetObjectives",
                 "SetGuidedHudActions",
+                "SetGuidedHudPerspectives",
                 "Spotlight",
                 "ClearSpotlight",
                 "FocusPanel",

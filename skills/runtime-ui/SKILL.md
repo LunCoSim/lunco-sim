@@ -295,14 +295,59 @@ HUD also exposes a surface-specific reset that removes its per-Twin override.
 Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
-The script-driven `GuidedOverlay` is owner-tagged presentation state. A HUD
-command issued from a Twin route must carry its stable Twin ID; a stale or
-inactive owner is rejected. `TwinClosed` clears every field only when that
-Twin owns the overlay, and scene replacement clears all old presentation state
-before the next scenario starts. Core/Application scripts keep their runtime
-scope; clearing presentation does not restart them. Tutorial launchers call
-`ClearGuidedOverlay` before replacing a lesson so actions, spotlight, coach
-step, missing-anchor diagnostic, and recovery card cannot leak between lessons.
+Script-driven hint/objective/action cards belong to `lunco-workbench-guided-ui`.
+Omitting `hud` uses the calling script's card; unscripted API/REPL input uses
+a distinct command-context card. Several scenario/tool producers
+share a scene card by supplying the same explicit `hud` id, for example
+`hint("mission-controls", text)` and
+`guided_hud_actions("mission-controls", tool, hook, actions)`. The Twin is part
+of the identity; never choose a card by last writer, hook name, or label.
+
+`GuidedHudVisibility` supplies the host default (View in LunCoSim).
+`hud_perspectives(ids)` or `hud_perspectives(hud, ids)` declares a per-card
+allowlist; `[]` explicitly allows all. Unknown ids reject atomically. Scope
+covers the whole card before rendering or input creation. Switching perspective
+preserves content. Coach, spotlight, and recovery presentation remains separate.
+
+`SetGuidedHudActions` validates the endpoint and action ids, creates an explicit
+`ToolHookBinding` entity, and retires the prior binding. The UI carries that
+entity into `RunRhaiToolHook.binding`; the shared scripting queue validates its
+exact endpoint, registered owner, Twin, and scene generation at admission and
+again at execution. The immutable action row's widget identity includes its
+binding entity, so replacement also retires in-progress input. Empty actions
+retire the binding. Script removal immediately clears its card,
+including while the driver is paused or preparing. Script-instance retirement
+(including recompilation) clears implicit script cards; scene replacement clears
+all cards; `TwinClosed` clears that Twin's cards. All three despawn their leases.
+Stop hooks may clear existing content/actions idempotently; clears never create
+cards. New content, perspective declarations, and bindings reject during stop.
+HUI, dropdown, Escape, and native menu actions capture `RuntimeUiActionScope`
+at emission; validate it before interpreting the action, then retain the shared
+queue's execution-time scene check. Never resolve the next active Twin for an
+old event. Named cards are scene-owned, so callback tools can update them independently of
+a scenario host. `ClearGuidedOverlay` clears the calling script's card and the
+active coach/spotlight presentation, preserving other cards. Inspect the admitted
+scope, content, and visibility through `InspectGuidedHud`.
+Script-opened scene menus retain the same captured scope while open and clear
+on scene transition or owning Twin close; stop hooks cannot open menus. Each
+popup has its own widget identity and child callback leases. Replacement or
+dismissal retires unselected leases; selection transfers one `Invocation`
+binding to the queue, which releases it on execution or rejection. HUD rows
+use `Surface` retention. Scene transitions retire queued tools even while the
+interpreter is preparing. Never leave a selected popup endpoint unowned.
+Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
+production popup input, dismissal, reset, and Twin-replacement gate.
+
+Run `assets/scripting/tests/test_guided_hud.rhai` with
+`scripts/api/run_rhai_test.sh PORT FILE` in an owned windowed production session.
+It checks View/Build/Editor, independent teaching scope, preservation, and invalid
+scope/endpoint rejection. Capture screenshots to verify actual placement/input;
+headless presentation acknowledgements do not prove visibility.
+`assets/scenarios/tests/guided_hud_teardown.rhai` reports `HUD_TEARDOWN` after
+its host is stopped; it also publishes a script-owned teaching card with an
+explicit all-perspectives scope. Register the generic `hud_binding_probe.rhai` test library
+only in an isolated test Twin when exercising real pointer callbacks and Twin
+replacement; never persist test tools into a user's Twin.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime adds `Pickable` to those visible

@@ -138,8 +138,13 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   fixed simulation, and admits a bounded batch per application frame (one by
   default). Its capacity is independent of the REPL queue, so general `RunRhai`
   work cannot delay or consume admission for pointer and menu hooks. These calls
+  use the shared API dispatcher's per-command deferred correlation scope;
+  admission failures return a terminal result before any queued execution.
+  They
   resolve the registered tool and capture its actual `ToolScope` from one
-  registry snapshot. A Twin registration supplies its stable owner even when
+  registry snapshot and pin the committed scene generation. A pending or active
+  scene transition rejects interaction admission. Before execution, that exact
+  generation must still be current. A Twin registration supplies its stable owner even when
   `owner_twin_id` is omitted. An explicit interaction owner and a typed Twin
   caller must agree with that registration. Before dispatch, the owner must
   still be active and the visible tool must still belong to the admitted scope;
@@ -152,7 +157,15 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   waiting for Rhai readiness, and completes deferred results as
   `CommandRejected`. Drain-time ownership rejection uses the same terminal
   result and a concise warning. Application-owned calls retain their own
-  lifetime. General
+  lifetime within their admitted scene. Persistent UI callbacks supply an explicit
+  `RunRhaiToolHook.binding` entity lease (`ToolHookBinding`). Admission checks its
+  endpoint, tool scope, Twin, and scene; execution also requires the exact entity
+  and binding value to remain live. Replacing or tearing down a UI binding
+  despawns that lease. Surface bindings are retained by their publisher; a
+  popup selection transfers an invocation binding to the queue for terminal
+  cleanup. `SceneTransitionStarted` retires queued tools without waiting for
+  interpreter readiness. Ordinary tool calls omit the binding and retain the same
+  scene/registration/ownership checks. General
   `RunRhai` remains in the bounded FIFO `Repl` cycle in `Update`. Tool
   arguments use `TelemetryValue` and are
   converted directly to native Rhai values at the backend boundary. Scene click

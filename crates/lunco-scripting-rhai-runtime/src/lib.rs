@@ -198,6 +198,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         commands::register_all_commands(app);
         commands::register_command_policies(app);
         app.add_observer(wind_down_twin_scenarios);
+        app.add_observer(retire_scene_tool_calls);
     }
 }
 
@@ -216,6 +217,7 @@ fn dispatch_workbench_menu_action(
         return;
     };
     commands.trigger(commands::RunRhaiToolHook {
+        binding: None,
         tool: tool.clone(),
         hook: hook.clone(),
         args: args.clone(),
@@ -255,10 +257,16 @@ pub fn stop_scene_owned_scripts(world: &mut World) {
     }
 }
 
+/// Complete outgoing scene tool work before another scene can use its endpoints.
+#[cfg(feature = "rhai")]
+fn retire_scene_tool_calls(_: On<lunco_core::SceneTransitionStarted>, mut commands: Commands) {
+    commands.queue(lunco_scripting_rhai_world::world_bridge::retire_scene_world_scripts);
+}
+
+#[cfg(feature = "rhai")]
 /// Stop and release Rhai programs and pending source handles admitted by the
 /// outgoing Twin. Application/core runtime modules are process scoped and are
 /// not part of this owner set.
-#[cfg(feature = "rhai")]
 fn wind_down_twin_scenarios(trigger: On<lunco_workspace::TwinClosed>, mut commands: Commands) {
     let twin = trigger.event().twin;
     commands.queue(move |world: &mut World| wind_down_twin_scenarios_now(world, twin));

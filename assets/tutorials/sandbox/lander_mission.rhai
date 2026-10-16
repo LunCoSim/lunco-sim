@@ -30,6 +30,9 @@
 //! ("AiAgent" = autopilot, "Owner"/"Operator" = a person), and it's true however
 //! the student got there — click it or use the authored handoff path.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. The scene's
     // embedded scenarios do the flying; mission() coaches over their events.

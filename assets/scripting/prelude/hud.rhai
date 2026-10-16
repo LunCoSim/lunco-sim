@@ -8,8 +8,14 @@
 
 /// Set the persistent one-line hint at the top of the HUD.
 fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }
+/// Publish to a named scene card shared by scenarios and callback tools.
+fn hint(hud, msg)              { cmd("SetHint", #{ hud: hud, text: msg }) }
 /// Clear the hint line.
 fn clear_hint()                { cmd("SetHint", #{ text: "" }) }
+fn clear_hint(hud)             { hint(hud, "") }
+/// Scope the calling script's whole card. Empty ids explicitly allows all perspectives.
+fn hud_perspectives(ids)       { cmd("SetGuidedHudPerspectives", #{ perspectives: ids }) }
+fn hud_perspectives(hud, ids)  { cmd("SetGuidedHudPerspectives", #{ hud: hud, perspectives: ids }) }
 /// Resolve a user-facing control label for tutorial copy. An unbound intent is
 /// explicit state, not a hardcoded key or a guessed default.
 fn input_hint(binding)          {
@@ -62,7 +68,7 @@ fn __obj_glyph(state) {
 /// Publish an objectives checklist to the HUD. `list` is an array of
 /// `#{ text, state }` (state ∈ "pending"|"active"|"complete"|"failed"). Use this
 /// for hand-driven step lists; a declarative `mission(me, ctx)` publishes itself.
-fn objectives_hud(list) {
+fn __objectives_text(list) {
     let out = "";
     for o in list {
         let txt = if o.text != () { o.text } else { o.id };
@@ -70,10 +76,13 @@ fn objectives_hud(list) {
         if out != "" { out += "\n"; }
         out += __obj_glyph(st) + " " + txt;
     }
-    cmd("SetObjectives", #{ text: out });
+    out
 }
+fn objectives_hud(list)        { cmd("SetObjectives", #{ text: __objectives_text(list) }) }
+fn objectives_hud(hud, list)   { cmd("SetObjectives", #{ hud: hud, text: __objectives_text(list) }) }
 /// Clear the objectives checklist.
 fn clear_objectives()          { cmd("SetObjectives", #{ text: "" }) }
+fn clear_objectives(hud)       { objectives_hud(hud, []) }
 
 /// Replace the guided HUD action row. Each `actions` entry has `id`, `label`,
 /// and `enabled`; button presses dispatch the id to one registered one-arg
@@ -81,8 +90,12 @@ fn clear_objectives()          { cmd("SetObjectives", #{ text: "" }) }
 fn guided_hud_actions(tool, hook, actions) {
     cmd("SetGuidedHudActions", #{ tool: tool, hook: hook, actions: actions })
 }
+fn guided_hud_actions(hud, tool, hook, actions) {
+    cmd("SetGuidedHudActions", #{ hud: hud, tool: tool, hook: hook, actions: actions })
+}
 /// Clear the guided HUD action row.
 fn clear_guided_hud_actions() { guided_hud_actions("", "", []) }
+fn clear_guided_hud_actions(hud) { guided_hud_actions(hud, "", "", []) }
 
 /// Per-Twin runtime camera HUD policy. The surface is visible by default when
 /// the key is absent; projects and tutorials can opt out without a Rust field.

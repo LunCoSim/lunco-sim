@@ -40,10 +40,12 @@ registry, `WorkbenchSnapshot`, scheduling labels, and perspective command
 payloads. It is safe for domain UI crates that need panel behavior or published
 layout facts and does not pull the renderer or `egui_dock`. `lunco-workbench-guided-ui`
 owns optional Rhai-driven HUDs, spotlights, coach-mark tours, and guided-recovery
-surfaces; hosts add it explicitly after the shell. Its mission checklist can be
-restricted with `GuidedObjectivesVisibility`; LunCoSim shows that checklist in
-View while keeping tutorial hints, actions, spotlights, coach marks, and
-recovery surfaces available over Builder and Editor. `lunco-workbench` is the
+surfaces; hosts add it explicitly after the shell. `GuidedHudVisibility` supplies
+the default perspective for complete hint/objective/action cards. LunCoSim uses
+View. Authored scripts declare overrides with `hud_perspectives(ids)`; an empty
+list explicitly allows every perspective. Scope belongs to each card. Read
+`runtime-ui` for card identity and callback teardown; coach marks and spotlights
+keep their own anchor semantics. `lunco-workbench` is the
 concrete shell: it owns
 docking, egui/bevy integration, persistence, source editing, and shell-only
 widgets such as icons and tree renderers. `lunco-workbench-widgets` owns the

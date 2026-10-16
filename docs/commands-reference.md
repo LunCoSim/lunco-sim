@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**273 commands** across **57** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**275 commands** across **57** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -121,7 +121,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (11 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -2996,6 +2996,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
+| `binding` | `Option < Entity >` |  Explicit UI callback lease. Retired/replaced bindings reject at admission  and again before queued execution. Omitted for ordinary tool calls. |
 | `tool` | `String` |  Registered tool namespace, for example `waypoint_editor`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `args` | `TelemetryValue` |  Structured argument passed to the hook. |
@@ -3872,8 +3873,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ClearGuidedOverlay`
 
- Clear every field of the current guided presentation while retaining its
- execution owner. Rhai tutorial launchers use this before replacing a lesson.
+ Clear the calling script card and active coach presentation. Other HUD
+ cards retain their own content, callback bindings, and perspective scope.
 
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `ClearGuidedOverlay` (no params)
@@ -3915,29 +3916,50 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `GuidedSkip` (no params)
 
+#### `InspectGuidedHud`
+
+ Inspect authored cards and the same visibility/input decision used by rendering.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
+- *fields:* none — call with `InspectGuidedHud` (no params)
+
 #### `SetGuidedHudActions`
 
  Replace the HUD's authored action buttons. All buttons dispatch their id to
  one registered one-argument Rhai tool hook; an empty `actions` list clears
  the buttons.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `tool` | `String` |  Registered Rhai tool namespace, e.g. `griffin_surface_ops`. |
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
+| `tool` | `String` |  Registered Rhai tool namespace, e.g. `mission_controls`. |
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `actions` | `Vec < GuidedHudAction >` |  Current button set in display order. |
+
+#### `SetGuidedHudPerspectives`
+
+ Set the whole card's perspective scope. Empty `perspectives` allows all.
+ Unknown perspective ids reject without changing the card.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
+| `perspectives` | `Vec < String >` |  Registered workbench perspective ids allowed to display this card. |
 
 #### `SetHint`
 
  Set the persistent one-line hint. Empty `text` clears it. Rhai: `hint(msg)`
  / `clear_hint()`.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
 | `text` | `String` |  Instruction text; empty hides the hint line. |
 
 #### `SetObjectives`
@@ -3947,10 +3969,11 @@ actually call, with the fields the deserializer actually accepts. See the
  the prelude formats the list into this block and also auto-publishes it from
  declarative `mission(me, ctx)` state.
 
-- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `hud` | `String` |  Scene card id. Omitted/empty uses the calling script's own card. |
 | `text` | `String` |  Pre-formatted checklist block; empty hides the objectives card. |
 
 #### `SetTourStep`
@@ -4135,7 +4158,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 273 commands from the runtime schema; scanned 995 .rs files for docs (0 parse failure(s) skipped).
+<!-- 264 commands regenerated from the GUI runtime schema; 11 unchanged optional
+     networking entries retained from the canonical reference. Scanned 998 .rs
+     files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred
 -->

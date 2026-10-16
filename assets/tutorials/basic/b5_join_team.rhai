@@ -5,6 +5,9 @@
 //! the multiplayer flow the teams use on the day. Guaranteed-completable (no scene
 //! deps), so it is safe to run on any client. Pattern: sandbox_intro.rhai.
 
+// Teaching guidance follows the learner across workbench perspectives.
+hud_perspectives([]);
+
 fn steps() {
     [
         #{ anchor: "",                      title: "Join your team",        body: "This tour shows the team-session flow. Use Next to move through the steps; use Back to review one." },

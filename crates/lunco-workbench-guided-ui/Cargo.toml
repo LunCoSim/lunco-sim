@@ -6,11 +6,14 @@ license.workspace = true
 description = "Optional Rhai-driven guided HUD and coach-mark presentation for LunCoSim workbench hosts"
 
 [dependencies]
+lunco-api-core = { path = "../lunco-api-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-scripting = { path = "../lunco-scripting" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

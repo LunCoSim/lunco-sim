@@ -21,6 +21,14 @@ part of the failure.
 
 ## Use the real application input path
 
+Launch timed synthetic gestures with `--no-throttle` when the owned window may
+be unfocused. Power-save frame pacing can stretch a press/release beyond the
+native click-duration limit. Send separate press/release phases across frames
+within a short gesture; use `InjectWindowInput` directly when measuring timing.
+After publishing or switching a surface, capture its rendered layout before
+injecting pointer input. A command acknowledgement precedes widget layout and
+does not establish a hit target.
+
 Build or resolve the production binary as `LUNCOSIM_BIN`, launch exactly one
 windowed `luncosim` process with an explicit free API port, and wait for
 `/api/ready` before injecting input. The `InjectWindowInput` command and
@@ -103,6 +111,14 @@ and menu policy in those tool hooks rather than sending it through the general
 REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
+Persistent scene popups bind endpoints before publication and scope widget ids
+to their popup root. On selection, detach only the selected `Invocation` lease
+before despawning the popup; the shared queue owns its terminal cleanup. Use
+`python3 scripts/api/test_guided_ui_callbacks.py --port PORT` to check a held
+press across replacement, then a fresh click, dismissal, scene teardown and a
+replacement Twin. Its Rhai library supplies the assertions. The wrapper uses
+`--no-throttle --no-vsync` and rejects gestures that exceed the click-duration
+limit, so a stretched gesture cannot produce a false pass.
 When a UI hook reads a collection of USD prims, request the member list once
 and use `QueryUsdPrims` for their needed attributes, schemas, or relationships;
 declare that provider in the caller's `query_reads`. Avoid per-member
