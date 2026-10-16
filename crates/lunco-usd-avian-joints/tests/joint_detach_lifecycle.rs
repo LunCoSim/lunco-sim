@@ -67,7 +67,9 @@ fn make_app() -> App {
         MinimalPlugins,
         AssetPlugin::default(),
         TransformPlugin,
-        PhysicsPlugins::default(),
+        PhysicsPlugins::default()
+            .build()
+            .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>(),
         JointAttachPlugin,
     ));
     app.init_asset::<Mesh>();

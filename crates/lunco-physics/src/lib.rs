@@ -32,6 +32,7 @@ pub mod avian_backend;
 pub mod escape;
 pub mod force_ports;
 pub mod joint;
+mod joint_projection;
 pub mod joint_solver;
 pub mod occlusion;
 pub mod order;
@@ -231,7 +232,7 @@ fn has_supported_joint(world: &World, entity: Entity) -> bool {
             .is_some()
 }
 
-/// Add or replace Avian's native relative joint damping for a live diagnostic
+/// Add or replace passive relative joint damping for a live diagnostic
 /// run. The joint entity must already carry one of Avian's supported joint
 /// components; this function never creates or replaces a constraint.
 pub fn set_joint_damping(
@@ -266,7 +267,7 @@ pub fn set_joint_damping(
     Ok(())
 }
 
-/// Read Avian's native relative joint damping. An installed joint without a
+/// Read passive relative joint damping. An installed joint without a
 /// `JointDamping` component has the documented lossless default of zero.
 pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDampingParameters> {
     if !has_supported_joint(world, entity) {
@@ -292,7 +293,7 @@ pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDamp
 /// response also includes impacts within the completed step before discrete preparation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContactDebugSnapshot {
-    /// Actual participating native compound parts, including continuous impacts.
+    /// Contact colliders and available compound-part evidence, including continuous impacts.
     pub parts: Vec<ContactPartDebugSnapshot>,
     pub pair_count: u32,
     pub touching_pair_count: u32,
@@ -310,13 +311,14 @@ pub struct ContactDebugSnapshot {
     pub contact_point: [f64; 3],
 }
 
-/// Native composite identities and applied response for one contact manifold.
+/// Collider identity, available composite membership and applied response.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContactPartDebugSnapshot {
     pub collider1: Entity,
     pub collider2: Entity,
-    pub part1: usize,
-    pub part2: usize,
+    /// Stock discrete manifolds do not retain composite-part identity.
+    pub part1: Option<usize>,
+    pub part2: Option<usize>,
     pub normal_impulse: f64,
     pub continuous: bool,
 }
@@ -371,8 +373,8 @@ fn contact_debug_snapshot_filtered(
             snapshot.parts.push(ContactPartDebugSnapshot {
                 collider1: pair.collider1,
                 collider2: pair.collider2,
-                part1: manifold.subshape1 as usize,
-                part2: manifold.subshape2 as usize,
+                part1: None,
+                part2: None,
                 normal_impulse: manifold.total_normal_impulse(),
                 continuous: false,
             });
@@ -425,8 +427,8 @@ fn contact_debug_snapshot_filtered(
             snapshot.parts.push(ContactPartDebugSnapshot {
                 collider1: applied.collider1,
                 collider2: applied.collider2,
-                part1: applied.part1,
-                part2: applied.part2,
+                part1: Some(applied.part1),
+                part2: Some(applied.part2),
                 normal_impulse: applied.impulse,
                 continuous: true,
             });
@@ -453,8 +455,7 @@ pub enum ForceDriveMotorError {
     InvalidParameters,
 }
 
-/// Preserve dimensional coefficients in the native motor owner.
-/// Avian integrates them implicitly using its live coordinate effective inertia.
+/// Validate dimensional coefficients and retain their native motor metadata.
 pub fn force_drive_motor_model(
     stiffness: f64,
     damping: f64,

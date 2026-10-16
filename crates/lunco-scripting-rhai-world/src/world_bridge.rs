@@ -7839,7 +7839,7 @@ mod tests {
 }
 
 fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnapshot) -> Dynamic {
-    let source = |collider: Entity, part: usize| {
+    let source = |collider: Entity, part: Option<usize>| {
         lunco_usd_avian_contracts::collider_part_source(world, collider, part)
             .map_or(Dynamic::UNIT, |path| Dynamic::from(path.to_owned()))
     };

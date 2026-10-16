@@ -41,6 +41,38 @@ cross-platform equality or acceptance of the whole mission.
 The runtime remains event driven. It does not poll for readiness on every
 simulation tick, and it does not add a second authoritative time source.
 
+Passive joint damping belongs to the ordered `lunco-physics` substep owner.
+The `LunCoJointDampingAPI` rates are in 1/s. Point-velocity and angular-velocity
+decay use exponential flows in that order, once per actual physics substep;
+position-closure iterations do not integrate them again. Point impulses act at
+one common midpoint of the current joint anchors and include their moments on
+both bodies. Effective inertia, locks and dominance define the movable response.
+The numerical owner validates the complete velocity candidate before either
+endpoint write; invalid state raises a runtime fault and safety hold. The
+`native_force_drives` authored gate owns runtime acceptance, while the shared
+joint module tests its numerical kernels and conservation properties.
+
+Hard joint closure is prepared by `lunco-physics::joint_projection` after native
+joint preparation, in the same stable per-type order used by the ordinary pass.
+Its fixed-size geometric rows cover fixed, revolute, prismatic, spherical and
+distance joints. Only zero-compliance channels enter repeated closure or CCD;
+motors and compliant channels retain one ordinary integration per substep.
+The shared f64 world-frame rotation displacement and public native impulse
+kernels apply each candidate. Failure leaves both endpoint solver states
+unchanged and faults the operation. Production acceptance must exercise the
+ordinary pass and closure together, not just their isolated numerical kernels.
+
+The shared headless/headful physics composition disables Avian's XPBD plugin.
+The application joint owner composes its public preparation and impulse kernels
+with ordered warm-start, ordinary and closure passes, f64 velocity projection
+before contact relaxation, and reaction finalization. The native contact solver
+stays installed. The application finalizer stages all joint reactions before
+publishing any of them. `JointForces` retains the completed report while a body
+sleeps; disabled joints clear their report. A failed candidate faults and holds
+physics before native body and contact writeback.
+Each guarded solver phase evaluates its own fault condition at entry; a shared
+condition cached before earlier phases cannot protect against a later failure.
+
 ## 2. Cycles, clocks, and invocation context
 
 A **clock** answers which time value and delta an operation observes. A

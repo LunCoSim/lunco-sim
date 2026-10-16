@@ -17,13 +17,14 @@ use openusd_schemas::physics::CollisionApprox;
 #[derive(Component, Clone, Debug)]
 pub struct UsdColliderSources(pub Vec<String>);
 
-/// Resolve a native contact part through the provenance admitted with its
-/// collider. A non-compound collider's internal mesh triangles share one source.
-pub fn collider_part_source(world: &World, collider: Entity, part: usize) -> Option<&str> {
+/// Resolve available contact membership through admitted collider provenance.
+/// A non-compound collider's internal mesh triangles share one source. A
+/// compound requires a known part; unknown membership has no source identity.
+pub fn collider_part_source(world: &World, collider: Entity, part: Option<usize>) -> Option<&str> {
     let sources = world.get::<UsdColliderSources>(collider)?;
     let shape = world.get::<Collider>(collider)?;
     let index = if shape.shape_scaled().as_compound().is_some() {
-        part
+        part?
     } else {
         0
     };

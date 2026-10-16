@@ -165,6 +165,7 @@ fn luncosim_physics_plugins() -> impl PluginGroup {
         .with_collision_hooks::<UsdCollisionFilter>()
         .build()
         .disable::<avian3d::dynamics::ccd::CcdPlugin>()
+        .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
 }
 

@@ -157,56 +157,17 @@ lint selection and severity remain the installed USD Rhai policy.
 
 ## Maintained dependency assessment
 
-[Avian 0.7.0](https://github.com/avianphysics/avian/releases/tag/v0.7.0) is the
-latest published release checked on 2026-10-11 and matches Bevy 0.19. The local
-patch retains its published source and licences, with exact changes documented
-in `third_party/avian3d/LUNCOSIM-PROVENANCE.md`. Joint damping incorporates the
-native correction from [PR 1078](https://github.com/avianphysics/avian/pull/1078).
-Native body-only CCD does not establish articulated closure. The inspected
-unpublished CCD work in [PR 1058](https://github.com/avianphysics/avian/pull/1058)
-does not supply acceptance for this cylinder-based landing gear.
-
-Parry's newer published release is 0.31.1. Its native GJK correction fixes a
-reproduced false-negative intersection between coincident overlapping cylinders
-in our 0.27 dependency. The failing fixture exited 101 before the correction.
-`third_party/parry3d-f64` retains published 0.27 source and the Bevy 0.19 / glam
-0.32 type contract, incorporating the published 0.31.1 GJK implementation and
-the upstream scalar-math enhanced-determinism feature correction. Source archive
-hashes, licensing and verification requirements are recorded in its provenance.
-This is a native math correction; it does not substitute scene geometry or
-alter authored contact tolerances.
-
-Scalar math exposed missing aligned-mask serialization in glam 0.32.1, preventing
-Bevy reflection from compiling. `third_party/glam` retains the published native
-types and implements their tuple serialization in both scalar and SIMD builds.
-It also corrects `BVec4A` fourth-lane serialization and the `BVec3A` tuple visitor
-name. All sixteen mixed four-lane masks roundtrip with their exact wire values.
-The root lock retains existing Windows dependency resolutions. Full dependency
-upgrades and cross-platform deterministic replay require their own verification;
-the local tests do not establish either.
-
-The nonlinear motion evaluator preserves its supplied pose exactly at time zero
-and evaluates the analytic pivot displacement directly. Pure translation does
-not compose cancelling transforms. Its directional initial-overlap handler
-uses upward-rounded bounds on relative linear speed and both angular point
-speeds, including offset pivots. Contact sampling is omitted only when the
-unchanged native thickness criterion is unreachable. Positive-time impacts,
-zero-thickness pairs and stop-at-penetration mode retain native geometry.
-These generic native optimisations are local changes recorded in the Parry
-provenance; they are not attributed to an upstream release.
-The native cylinder point query also retains minimum distance at tied cap/side
-features. Equal cap distances cannot select a farther side surface, and rigid
-transforms retain the same minimum-distance contract.
-
-Development builds explicitly use optimisation level 3 for the workspace glam
-and physics owners, retaining assertions and overflow checks. Cargo's wildcard
-dependency override excludes workspace members; generic kernels are instantiated
-in their caller. See the [Cargo profile contract](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides-and-generics).
+The application uses unmodified registry Avian 0.7.0, Parry f64 0.27.0, Bevy
+Render, interpolation and glam packages. Application joint composition, damping,
+continuous contact and precision mechanisms use public native interfaces.
+Current stock-kernel failures and cutover verification belong to the
+[upstream-only integration review](upstream-only-physics-integration.md).
+The artifact-specific measurements below do not qualify that cutover.
 
 ## Verification
 
 Production binary: `cargo build -p lunco-luncosim -j 4`, repository target and
-regular sccache. The current artifact SHA256 is
+regular sccache. The measured artifact SHA256 is
 `5e1998376d84ab44e6302d494767db6ef8bd83ca237a2623ff9e31aa3ced1562`.
 Six production runs used owned API ports 6372–6377 at 60 Hz and zero jitter.
 Every gate returned exit zero and released its process and port. Receipts,

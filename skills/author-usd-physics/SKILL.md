@@ -30,8 +30,18 @@ Native joint `angle` and `displacement` commands preserve the configured drive
 model and force/torque limit. They enable the motor and change its position
 target with zero target velocity; author drive gains and limits through the
 standard USD drive owner rather than through command-side tuning.
-Revolute angle reads use the native motor's signed `atan2` coordinate in f64.
+Revolute angle reads share `lunco-physics::joint::revolute_coordinate`, using
+both native joint frames and a signed f64 `atan2` coordinate.
 Do not derive a second coordinate or narrow physics rotations for telemetry.
+
+The shared headless/headful physics composition disables `XpbdSolverPlugin`;
+`lunco-physics::DeterministicJointSolverPlugin` owns ordered preparation,
+warm-start, ordinary joint solving, hard closure and f64 velocity projection
+before contact relaxation. The native contact solver remains installed.
+Joint reactions stage across all types before one validated commit. A fault
+holds physics and refuses native body/contact writeback in that same step;
+each guarded phase checks the current fault state separately. Numerical seam
+tests do not replace the authored drive/contact acceptance gates.
 
 Omitted joint limits retain standard unbounded travel. The native port adapter
 maps lower negative infinity and upper positive infinity to absent bounds;
@@ -799,124 +809,58 @@ terrain after settling.
 
 ## Native drive integration and contact ownership
 
-Independent native body loops use Bevy's adaptive batching with the shared
-`SolverConfig.minimum_body_batch_size` lower bound, default 64. Populations at
-or below that bound execute the same kernel directly on the caller. Larger
-populations retain adaptive parallel batches. This setting changes work
-assignment only. Verify full-step timing separately from diagnostic
-task counts, retaining body arithmetic, substeps and contact/joint order.
+USD force and acceleration coefficients retain their dimensional motor metadata.
+Omitted stiffness/damping use the standard zero defaults. A qualified numerical
+realization must apply force/torque caps in physical units using both endpoint
+inertias and the actual native substep duration. The stock force-based mode has
+failing qualification cases; use the `native_force_drives` production gate and
+[the integration review](../../docs/reviews/upstream-only-physics-integration.md)
+before claiming correct actuation or completed reaction telemetry.
 
-Force and acceleration coefficients retain dimensional native motor models.
-The pinned Avian owner integrates them implicitly using the actual coordinate
-inverse effective inertia and anchor velocities. Omitted stiffness/damping have
-standard USD zero defaults; author gains for a commanded actuator. A zero
-force/torque limit admits no motor impulse. Closed-form motor updates do not
-reuse a previous tick's motor impulse as warm start.
+The prismatic `force` port reads the signed axial reaction from the completed
+solver tick on body2 along the slider axis. It does not infer newtons from an
+unsolved gain formula. Ordered hard closure and continuous contact constraints
+run before f64 velocity projection and contact relaxation. Closure integrates
+no compliant channel, drive or passive damping a second time. All reactions
+stage before a single validated commit; every guarded writeback phase checks
+current fault state independently.
 
-The prismatic `force` port is the signed axial reaction from the completed native
-solver tick on body2 along the slider axis, including the drive and travel stops. It does not infer newtons from
-a body mass, frequency, or an unsolved gain formula. Continuous impact closure
-repeats only hard geometric channels in the affected native joint topology.
-Compliant channels and motors are integrated exclusively by the ordinary pass.
-Prepared native contact anchors and separation offsets bound further penetration
-without using zero-time cast witnesses. Their applied normal correction updates
-the native impulse accumulator used by friction, restitution and warm starting.
-Material inequalities and hard joints close before a full geometry refresh;
-the refreshed sweep must be clear before the tick can commit.
-One serial closure system acquires the body query for both directions of every
-native joint kind. Unique leaf trajectories enter Parry's swept BVH, with
-pair-specific CCD eligibility and prepared hook/layer decisions retained.
-Candidate order follows the stable prepared pair table. Body motion is shared
-across leaves within each immutable sweep. The native BVH topology lasts for
-one prepared step; every corrected trajectory replaces exact leaf bounds and
-refits ancestors with zero change-detection margin. Both moving bounds and full offset-COM
-arcs must be tested. A witness chord remainder can certify a clear trajectory
-without extremum search; uncertain trajectories keep the complete search.
+Continuous contact preparation retains native pair filtering, collider identity
+and stable pair order. Sweeps use public Parry geometry queries and full-arc
+support bounds. Candidate axes provide no contact or clearance without a fresh
+bound. A missing or invalid native query result faults and refuses the affected
+step; it never becomes clear space or a guessed contact. Each worker owns a
+disjoint contact cache, and joined results commit in prepared order. The
+`minimum_query_batch_size` setting changes work assignment only. Verify touching,
+finite edges, offset pivots, large common translations and actual production
+landing/rover response; a kernel probe alone cannot qualify the vehicle.
 
-New impact witnesses stay admitted until the next native contact preparation.
-Native closest-contact axes and whole-arc support bounds certify separation
-of finite features without a directional cast. Cylinder radial features supply
-another candidate axis, with the cap component removed; the actual full shapes
-must still pass the whole-arc bound. Cached separation axes are rechecked after
-every endpoint change. The same bound can certify an initially
-intersecting convex leaf only when its minimum translation depth matches its
-support depth and that depth cannot increase beyond tolerance. A finite triangle
-depth certificate uses either the whole convex projection's clearance at all
-three edges or an interior ball at a real finite triangle point inside a native
-cylinder. Its native nearest-boundary distance supplies the lower depth bound;
-the support depth supplies the matching upper bound. The whole-arc gap must
-respect the lower bound. Edge and deep-overlap cases without a proof use native
-GJK/EPA. An infinite face-plane overlap or another compound leaf's contact does
-not establish initial contact. A chord between opposite native cylinder supports
-can supply a plane-crossing candidate for tilted geometry. Its finite triangle
-projection must produce a real strictly interior cylinder witness; touching,
-finite-edge misses and uncertain witnesses keep the full native query.
-Initial depth certificates and native geometry
-are cached only within one substep and per composite
-leaf. Every changed endpoint trajectory still recomputes its whole-arc bound.
-Candidate separation directions may survive substeps of the same prepared
-physics step, with fresh full-shape support bounds on every use. Capturing new
-starting poses invalidates all native contacts, depth and overlap proofs in
-every composite leaf; rebuilding the physics-step pair table clears all caches.
-One immutable convex query interval shares its native endpoint poses and local
-bounding spheres across axis tests, and is rebuilt for every changed sweep.
-Support-gap certificates use native relative poses and outward arithmetic
-allowances. Material-witness gaps and collider-to-COM offsets also subtract
-origins before adding local geometry. Validate both pair orientations of small
-clearances and material crossings under large common translations.
-An immutable deep initial contact rules out other clear separating axes at
-time zero; its cached axis is checked first without repeating impossible tests.
-Enclosing initial queries must return validated native geometry for separated
-shapes as well as overlaps; missing results fault instead of proving clear space.
-Candidate geometry uses a synchronous Bevy compute-pool scope over immutable
-shapes and trajectories. `ContinuousCollisionSettings.minimum_query_batch_size`
-bounds queries per worker (default 64; zero permits one). Smaller populations
-execute the same kernel directly. Workers own disjoint contact caches and native EPA
-workspaces; joined results and failures are consumed in prepared pair order
-before any body correction. Verify native witness and error equality across
-pool sizes, then require authored production replay evidence separately.
-Native triangle/cylinder and triangle/cuboid references specialise the same
-GJK/EPA entry point; both pair orientations retain the generic kernel's witness,
-normal and depth without virtual support calls inside its iterations. Native EPA
-scratch is reusable allocation storage; every query resets its geometry. Exact
-single-point touching must retain its generating support normal and real material
-witnesses. Include a non-origin corner fixture and missing-provenance negative
-case when changing the native contact kernel.
-An upward-rounded native relative-point displacement bound may certify the
-existing convex-leaf residual tolerance directly. The complete bound includes
-both offset pivots and native arithmetic at the actual coordinate and geometry
-scale, and must be re-established on changed trajectories. Larger
-or uncertain bounds retain native geometry; prepared material-contact checks
-still run. Test beyond-tolerance movement, rotation with a remote pivot and
-large-coordinate pose rounding. A strictly interior cylinder witness at a real
-finite triangle point can prove initial intersection without an MTD query.
-Only a conservative motion bound below Parry's unchanged directional impact
-criterion can omit that query; Parry owns the criterion for both callers.
-Changed trajectories revalidate the motion bound. Test its strict threshold,
-offset pivots, separated finite edges and tiny positive-time impacts.
-Exactly unchanged poses need no new crossing query; existing prepared contacts
-retain their continuous inequality checks.
-The native initial-overlap speed certificate retains the existing directional
-thickness threshold and accounts for both offset pivots. It does not certify a
-future positive-time cast or a zero-thickness pair. Keep exact starting poses,
-finite-edge negative cases, positive-time witnesses and production landing/rover
-verdicts when changing these native kernels; measure full Avian step time.
 For a particular compound member, consume `parts[].source1`/`source2` and
-`normal_impulse`; these resolve native contact part identities through admitted
-collider provenance. The containing body's impulse alone does not identify the
-member that actually struck the rover.
-Read `total_normal_impulse + continuous_normal_impulse` for actual normal response:
-the latter records applied new-impact corrections before native preparation has
-a discrete manifold. Both facts use exact collider pair filtering.
-Native velocity projection, sweeps and convergence share the native `atan2` SO(3)
-logarithm without a small-angle dead zone or norm-drift floor. Completed
-joint force averages use the actual native substep and physics-step clocks.
-`clock_snapshot().physics_substep_dt_s` exposes that native duration for analytic
-scene gates; do not infer it from the substep count after clock rounding.
+`normal_impulse`; admitted provenance resolves known part identities. Continuous
+contacts retain part indices. Stock discrete compound membership is unknown and
+its source is `()`; a non-compound collider has one owning source. A body's
+aggregate impulse cannot identify a compound member. Read
+`total_normal_impulse + continuous_normal_impulse` for normal response, retaining
+exact collider pair scope.
 
-Joint damping uses effective inverse inertia, conserves momentum, preserves
-kinematic velocities, and runs in the same stable joint order. Joint endpoints
-must resolve to distinct bodies: the shared reader and generic admission owner
+CCD trajectories and hard closure share
+`lunco-physics::joint::rotation_displacement`. Only zero-compliance geometry
+enters repeated closure. Completed force averages use actual physics/substep
+clocks; `clock_snapshot().physics_substep_dt_s` exposes the native duration for
+analytic scene gates.
+
+Passive joint damping is owned by `lunco-physics::joint::integrate_joint_damping`.
+The `LunCoJointDampingAPI` values are relative-velocity decay rates in 1/s;
+the solver integrates point-velocity decay followed by angular-velocity decay
+once per physics substep, outside position closure. Both flows use exponential
+decay. Equal/opposite point impulses include their moments at the midpoint of
+the current joint anchors. Full effective inertia responses conserve momentum
+and preserve locked or dominant endpoints. Invalid
+numeric state faults the operation before either endpoint is written. The
+ordered pass uses the prepared stable joint order. This passive damping is
+separate from the dimensional damping coefficient of `PhysicsDriveAPI`. Use the
+`native_force_drives` production scene gate to qualify the runtime contract.
+Joint endpoints must resolve to distinct bodies: the shared reader and generic admission owner
 reject aliases to the same body before installing a native constraint; the
 solver also guards this invariant before acquiring mutable endpoint references.
 

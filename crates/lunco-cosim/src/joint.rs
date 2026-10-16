@@ -148,15 +148,15 @@ fn check_revolute_joint_structure(
 }
 
 /// Measured angle (`Out`): the twist between the two joint frames about the
-/// authored hinge axis. The native f64 coordinate owner applies both local
-/// bases and shares its measurement with the motor. Reads Avian's
+/// authored hinge axis. The shared physics coordinate owner applies both local
+/// bases using Avian's motor convention. Reads Avian's
 /// authoritative [`Rotation`] (populated by `Writeback`), so during the next
 /// tick's propagation it reflects the physics step that just completed.
 fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<RevoluteJoint>(entity)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    j.angle_and_axis(r1.0, r2.0).map(|(angle, _)| angle)
+    lunco_physics::joint::revolute_coordinate(j, r1.0, r2.0).map(|(angle, _)| angle)
 }
 
 /// Measured revolute-coordinate rate (rad/s), projected onto the joint's

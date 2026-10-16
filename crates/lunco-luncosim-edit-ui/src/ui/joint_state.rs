@@ -193,7 +193,9 @@ pub fn populate_joint_state_view(
             continue;
         };
 
-        let Some((angle, axis_world)) = joint.angle_and_axis(rot1.0, rot2.0) else {
+        let Some((angle, axis_world)) =
+            lunco_physics::joint::revolute_coordinate(joint, rot1.0, rot2.0)
+        else {
             continue;
         };
         let omega = (av2.0 - av1.0).dot(axis_world);

@@ -25,6 +25,12 @@ package checks after changing skill metadata or packaging.
 
 - Rust edition policy: every repository-owned Rust package uses edition 2024.
 
+- Ask the user explicitly before vendoring, forking, or modifying third-party
+  dependency source, or publishing dependency patches. Ordinary application
+  fixes do not authorize those changes. Prefer supported upstream APIs and
+  application-owned integration mechanisms; do not relocate a dependency fork
+  into application code to bypass this requirement.
+
 - **Discover capabilities before declaring them absent.** A missing symbol,
   unfamiliar UI, failed first command, stale report, or one empty search is not
   proof that LunCoSim cannot do something. Before saying “not possible”, “not

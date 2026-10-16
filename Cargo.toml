@@ -1,7 +1,5 @@
 [workspace]
 members = [
-    "third_party/bevy_render",
-    "third_party/glam",
     "crates/lunco-core",
     "crates/lunco-runtime-context",
     "crates/lunco-geometry-core",
@@ -248,17 +246,6 @@ default-members = [
 resolver = "2"
 
 [patch.crates-io]
-# GPU output allocation follows ShaderType stride, including scalar math builds.
-bevy_render = { path = "third_party/bevy_render" }
-# Bounded render easing over retained fixed cycles; see vendor provenance.
-bevy_transform_interpolation = { path = "third_party/bevy_transform_interpolation" }
-# Native dimensional motor integration; see third_party/avian3d/LUNCOSIM-PROVENANCE.md.
-avian3d = { path = "third_party/avian3d" }
-# Native GJK stall classification and scalar determinism; see the vendor provenance.
-parry3d-f64 = { path = "third_party/parry3d-f64" }
-# Scalar aligned-mask serialization for Bevy reflection; see vendor provenance.
-glam = { path = "third_party/glam" }
-
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
@@ -608,15 +595,6 @@ debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
-opt-level = 3
-
-[profile.dev.package.bevy_render]
-opt-level = 3
-
-# Workspace math owners instantiate the native collision and joint kernels.
-# Cargo's dependency wildcard excludes workspace members; retain optimized
-# code generation here along with the development profile's invariant checks.
-[profile.dev.package."glam:0.32.1"]
 opt-level = 3
 
 [profile.dev.package.lunco-physics]

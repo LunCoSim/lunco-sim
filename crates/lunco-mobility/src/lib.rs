@@ -2089,7 +2089,11 @@ fn native_revolute_state(
     body1_delta: DQuat,
     body2_delta: DQuat,
 ) -> Option<(f64, DVec3)> {
-    joint.angle_and_axis(body1_delta * body1_rotation, body2_delta * body2_rotation)
+    lunco_physics::joint::revolute_coordinate(
+        joint,
+        body1_delta * body1_rotation,
+        body2_delta * body2_rotation,
+    )
 }
 
 /// The gear's relation `c = θ_a − r·θ_b − rest_offset`, on rocker pitches
@@ -2144,18 +2148,19 @@ fn gear_drive_impulse(
     if !raw.is_finite() {
         return 0.0;
     }
+    let force = match drive_type {
+        DifferentialDriveType::Force => raw,
+        DifferentialDriveType::Acceleration => raw / inverse_mass,
+    };
     let limited = if max_force.is_finite() {
-        raw.clamp(-max_force, max_force)
+        force.clamp(-max_force, max_force)
     } else {
-        raw
+        force
     };
     if !limited.is_finite() {
         return 0.0;
     }
-    match drive_type {
-        DifferentialDriveType::Force => limited * dt,
-        DifferentialDriveType::Acceleration => limited / inverse_mass * dt,
-    }
+    limited * dt
 }
 
 /// The rocker-bogie differential is an authored `PhysicsDriveAPI:angular`
@@ -3231,6 +3236,31 @@ mod differential_tests {
         );
         assert!(acceleration_mode > force_mode);
         assert!((acceleration_mode * inverse_mass / dt - 10.0 / (1.0 + 10.0 * dt)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn drive_force_caps_bound_impulse_in_both_modes() {
+        for drive_type in [
+            DifferentialDriveType::Force,
+            DifferentialDriveType::Acceleration,
+        ] {
+            for inverse_mass in [0.01, 0.1, 1.0, 10.0] {
+                for max_force in [0.0, 1.0] {
+                    let impulse = gear_drive_impulse(
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                        1_000.0,
+                        max_force,
+                        inverse_mass,
+                        PRODUCTION_SUBSTEP_DT,
+                        drive_type,
+                    );
+                    assert_eq!(impulse, max_force * PRODUCTION_SUBSTEP_DT);
+                }
+            }
+        }
     }
 
     #[test]

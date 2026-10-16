@@ -1,5 +1,6 @@
 //! Continuous contact constraints share the native substep joint solve.
 
+use crate::joint::rotation_displacement;
 use crate::{
     PhysicsHolds,
     joint_solver::{
@@ -10,11 +11,10 @@ use crate::{
 use avian3d::dynamics::integrator::IntegrationSystems;
 use avian3d::dynamics::solver::constraint_graph::ConstraintGraph;
 use avian3d::dynamics::solver::{
-    schedule::{SolverSystems, SubstepSolverSystems},
+    schedule::SolverSystems,
     solver_body::{SolverBody, SolverBodyInertia},
     xpbd::{PositionConstraint, XpbdSolverSystems},
 };
-use avian3d::math::rotation_vector;
 #[cfg(test)]
 use avian3d::parry::bounding_volume::BoundingVolume;
 use avian3d::parry::query::details::{NormalConstraints, NormalConstraintsPair};
@@ -106,29 +106,8 @@ where
                 solve_contacts
                     .after(XpbdSolverSystems::SolveUserConstraints)
                     .before(XpbdSolverSystems::VelocityProjection),
-            )
-            .configure_sets(
-                SubstepSchedule,
-                (
-                    XpbdSolverSystems::VelocityProjection,
-                    SubstepSolverSystems::Relax,
-                )
-                    .run_if(no_fault),
-            )
-            .configure_sets(
-                PhysicsSchedule,
-                (
-                    SolverSystems::PostSubstep,
-                    SolverSystems::Restitution,
-                    SolverSystems::Finalize,
-                    SolverSystems::StoreContactImpulses,
-                )
-                    .run_if(no_fault),
             );
     }
-}
-fn no_fault(faults: Res<lunco_core::RuntimeFaults>) -> bool {
-    !faults.active()
 }
 #[derive(Clone)]
 struct Shape {
@@ -152,7 +131,6 @@ struct ContinuousContacts {
     pair_indices: HashMap<(usize, usize), usize>,
     active_shapes: std::collections::BTreeSet<usize>,
     swept_bvh: avian3d::parry::partitioning::Bvh,
-    native_epa: Vec<avian3d::parry::query::epa::EPA>,
     initial_contacts: HashMap<usize, InitialContactCache>,
     prepared: Vec<Plane>,
     impacts: Vec<Plane>,
@@ -553,13 +531,13 @@ struct BodyMotion {
     angular: DVec3,
 }
 impl BodyMotion {
-    fn new(start: &SolverBody, end: &SolverBody) -> Self {
-        Self {
+    fn new(start: &SolverBody, end: &SolverBody) -> Result<Self, String> {
+        Ok(Self {
             start_position: start.delta_position,
             start_rotation: start.delta_rotation.0,
             linear: end.delta_position - start.delta_position,
-            angular: rotation_vector(end.delta_rotation.0 * start.delta_rotation.0.inverse()),
-        }
+            angular: rotation_displacement(start.delta_rotation.0, end.delta_rotation.0)?,
+        })
     }
 }
 fn motion(shape: &Shape, body: &BodyMotion) -> NonlinearRigidMotion {
@@ -734,7 +712,6 @@ fn triangle_separation_axis(
 /// Native composite part identities isolate each leaf query.
 #[derive(Default)]
 struct InitialContactCache {
-    initial_overlap_proven: Option<bool>,
     candidate_axis: Option<DVec3>,
     depth_axis: Option<Option<DepthAxis>>,
     contact: Option<avian3d::parry::query::Contact>,
@@ -744,72 +721,12 @@ impl InitialContactCache {
     /// Only an advisory world direction survives a changed starting pose.
     /// It supplies no geometry or clearance; every use evaluates fresh supports.
     fn advance_substep(&mut self) {
-        self.initial_overlap_proven = None;
         self.depth_axis = None;
         self.contact = None;
         for part in self.parts.values_mut() {
             part.advance_substep();
         }
     }
-}
-
-/// A finite triangle point strictly inside a cylinder proves initial
-/// intersection without computing a minimum translation depth. The arithmetic
-/// margin includes both world poses, native projection and occupied geometry.
-fn triangle_cylinder_initial_overlap(
-    m1: &NonlinearRigidMotion,
-    s1: &dyn avian3d::parry::shape::Shape,
-    m2: &NonlinearRigidMotion,
-    s2: &dyn avian3d::parry::shape::Shape,
-) -> Result<bool, String> {
-    if s1.as_cylinder().is_some() && s2.as_triangle().is_some() {
-        return triangle_cylinder_initial_overlap(m2, s2, m1, s1);
-    }
-    let (Some(triangle), Some(cylinder)) = (s1.as_triangle(), s2.as_cylinder()) else {
-        return Ok(false);
-    };
-    let Some(normal) = triangle.normal() else {
-        return Ok(false);
-    };
-    let relative = m1.start.inv_mul(&m2.start);
-    let scale = triangle.a.abs().element_sum()
-        + triangle.b.abs().element_sum()
-        + triangle.c.abs().element_sum()
-        + m1.start.translation.abs().element_sum()
-        + m2.start.translation.abs().element_sum();
-    let contains = |candidate| -> Result<bool, String> {
-        let Some(point) = triangle_projection_witness(triangle, candidate)? else {
-            return Ok(false);
-        };
-        let local_point = relative.inverse_transform_point(point);
-        Ok(cylinder_interior_radius(cylinder, local_point, scale)?
-            .is_some_and(|radius| radius > 0.0))
-    };
-    if contains(relative.translation)? {
-        return Ok(true);
-    }
-    // A tilted cylinder can intersect the triangle far from its center's
-    // projection. Its opposite native supports define a chord through the
-    // occupied shape. Project the chord's plane crossing onto the finite
-    // triangle, then require a strictly interior native cylinder witness.
-    use avian3d::parry::shape::SupportMap;
-    let positive = cylinder.support_point(&relative, normal);
-    let negative = cylinder.support_point(&relative, -normal);
-    let high = (positive - triangle.a).dot(normal);
-    let low = (negative - triangle.a).dot(normal);
-    let span = high - low;
-    if !positive.is_finite()
-        || !negative.is_finite()
-        || !high.is_finite()
-        || !low.is_finite()
-        || !span.is_finite()
-    {
-        return Err("native cylinder support chord exceeded its finite numeric range".into());
-    }
-    if low >= 0.0 || high <= 0.0 {
-        return Ok(false);
-    }
-    contains(negative.lerp(positive, -low / span))
 }
 
 /// Reconstruct a real convex-combination witness from native feature location.
@@ -886,14 +803,13 @@ struct SweepResult {
 }
 
 /// Evaluate immutable candidate geometry in scoped native workers. Each worker
-/// owns its cache and EPA scratch; the caller consumes the joined results in
+/// owns its cache; the caller consumes the joined results in
 /// prepared pair order before applying any authoritative correction.
 fn query_sweep_jobs(
     shapes: &[Shape],
     pairs: &[SweepPair],
     trajectories: &[(NonlinearRigidMotion, Aabb)],
-    jobs: &mut [SweepJob],
-    scratch: &mut Vec<avian3d::parry::query::epa::EPA>,
+    mut jobs: &mut [SweepJob],
     tolerance: f64,
     minimum_batch_size: usize,
     pool: &bevy::tasks::TaskPool,
@@ -907,10 +823,7 @@ fn query_sweep_jobs(
         .min((jobs.len() / minimum_batch_size.max(1)).max(1));
     let _span =
         bevy::log::debug_span!("ccd_query_dispatch", queries = jobs.len(), workers).entered();
-    if scratch.len() < workers {
-        scratch.resize_with(workers, avian3d::parry::query::epa::EPA::new);
-    }
-    let evaluate_chunk = |jobs: &mut [SweepJob], epa: &mut avian3d::parry::query::epa::EPA| {
+    let evaluate_chunk = |jobs: &mut [SweepJob]| {
         let _span = bevy::log::debug_span!("ccd_query_chunk", queries = jobs.len()).entered();
         jobs.iter_mut()
             .map(|job| {
@@ -933,7 +846,6 @@ fn query_sweep_jobs(
                     &mut queries,
                     tolerance,
                     &mut job.cache,
-                    epa,
                 )
                 .map_err(|detail| {
                     format!(
@@ -946,18 +858,10 @@ fn query_sweep_jobs(
             .collect::<Vec<_>>()
     };
     if workers == 1 {
-        return evaluate_chunk(jobs, &mut scratch[0]);
+        return evaluate_chunk(jobs);
     }
     let chunk_size = jobs.len().div_ceil(workers);
-    let mut chunks = jobs
-        .chunks_mut(chunk_size)
-        .zip(scratch.iter_mut())
-        .collect::<Vec<_>>();
-    chunks
-        .par_chunk_map_mut(pool, 1, |_, chunks| {
-            let (jobs, epa) = &mut chunks[0];
-            evaluate_chunk(jobs, epa)
-        })
+    jobs.par_chunk_map_mut(pool, chunk_size, |_, jobs| evaluate_chunk(jobs))
         .into_iter()
         .flatten()
         .collect()
@@ -1060,9 +964,8 @@ fn finite_triangle_depth_axis(
     }))
 }
 
-/// Certify the native interval with whole-arc supports, the residual displacement
-/// bound or a proven initial intersection that cannot meet the directional
-/// impact criterion. Each convex leaf retains its finite-feature geometry.
+/// Certify the native interval with whole-arc supports while retaining each
+/// convex leaf's finite-feature geometry.
 fn certified_native_interval(
     m1: &NonlinearRigidMotion,
     s1: &dyn avian3d::parry::shape::Shape,
@@ -1070,33 +973,9 @@ fn certified_native_interval(
     s2: &dyn avian3d::parry::shape::Shape,
     tolerance: f64,
     cache: &mut InitialContactCache,
-    epa: &mut avian3d::parry::query::epa::EPA,
 ) -> Result<bool, String> {
     if s1.as_support_map().is_none() || s2.as_support_map().is_none() {
         return Ok(false);
-    }
-    // For convex shapes, relative point displacement bounds the change of
-    // every support gap, including the initial separation/penetration axis.
-    // A bound within the existing residual tolerance needs no initial contact
-    // geometry. Every corrected trajectory must establish the bound anew.
-    let displacement =
-        avian3d::parry::query::details::relative_point_displacement_bound(m1, s1, m2, s2, 1.0);
-    if displacement <= tolerance {
-        return Ok(true);
-    }
-    let mode = avian3d::parry::query::details::NonlinearShapeCastMode::directional_toi(s1, s2);
-    if mode.initial_overlap_motion_is_inert(displacement) {
-        let proven = match cache.initial_overlap_proven {
-            Some(proven) => proven,
-            None => {
-                let proven = triangle_cylinder_initial_overlap(m1, s1, m2, s2)?;
-                cache.initial_overlap_proven = Some(proven);
-                proven
-            }
-        };
-        if proven {
-            return Ok(true);
-        }
     }
     let Some(interval) = SupportInterval::new(m1, s1, m2, s2) else {
         return Ok(false);
@@ -1179,7 +1058,7 @@ fn certified_native_interval(
     let contact = match cache.contact {
         Some(contact) => contact,
         None => {
-            let contact = initial_native_contact(m1, s1, m2, s2, prediction, axis, epa)?;
+            let contact = initial_native_contact(m1, s1, m2, s2, prediction, axis)?;
             cache.contact = Some(contact);
             contact
         }
@@ -1221,7 +1100,6 @@ fn initial_native_contact(
     s2: &dyn avian3d::parry::shape::Shape,
     prediction: f64,
     axis: DVec3,
-    epa: &mut avian3d::parry::query::epa::EPA,
 ) -> Result<avian3d::parry::query::Contact, String> {
     let _span = bevy::log::debug_span!("ccd_initial_native_contact", shape1=?s1.shape_type(), shape2=?s2.shape_type()).entered();
     use avian3d::parry::query::{
@@ -1249,7 +1127,6 @@ fn initial_native_contact(
                     $second,
                     prediction,
                     &mut VoronoiSimplex::new(),
-                    epa,
                     direction,
                 )
             };
@@ -1278,12 +1155,20 @@ fn initial_native_contact(
                 contact.transform_by_mut(&m1.start, &m2.start);
                 contact
             }
-            _ => return Err("native continuous initial contact did not return contact geometry for its enclosing prediction".into()),
+            result => {
+                return Err(format!(
+                    "native continuous initial contact did not return contact geometry for its enclosing prediction: shape1={:?}; shape2={:?}; relative={relative:?}; prediction={prediction:?}; initial_direction={direction:?}; result={result:?}",
+                    s1.as_typed_shape(),
+                    s2.as_typed_shape()
+                ));
+            }
         }
     } else {
         avian3d::parry::query::contact(&m1.start, s1, &m2.start, s2, prediction)
             .map_err(|error| format!("unsupported continuous initial contact: {error:?}"))?
-            .ok_or("native continuous initial contact did not return contact geometry for its enclosing prediction")?
+            .ok_or_else(|| format!(
+                "native continuous initial contact did not return contact geometry for its enclosing prediction: shape1={:?}; shape2={:?}; relative={:?}; prediction={prediction:?}",
+                s1.as_typed_shape(), s2.as_typed_shape(), m1.start.inv_mul(&m2.start)))?
     };
     validate_native_contact(&contact)?;
     Ok(contact)
@@ -1466,7 +1351,6 @@ fn shape_hits(
     queries: &mut usize,
     tolerance: f64,
     cache: &mut InitialContactCache,
-    epa: &mut avian3d::parry::query::epa::EPA,
 ) -> Result<Vec<ShapeCastHit>, String> {
     if let Some(composite) = s1.as_composite_shape() {
         let local_bounds = if m1.linvel == DVec3::ZERO && m1.angvel == DVec3::ZERO {
@@ -1510,7 +1394,6 @@ fn shape_hits(
                         queries,
                         tolerance,
                         cache.parts.entry(id).or_default(),
-                        epa,
                     )
                     .map(|hits| {
                         hits.into_iter()
@@ -1529,12 +1412,10 @@ fn shape_hits(
     if s2.as_composite_shape().is_some() {
         return shape_hits(
             mode, m2, s2, bounds2, normals2, m1, s1, bounds1, normals1, queries, tolerance, cache,
-            epa,
         )
         .map(|hits| hits.into_iter().map(ShapeCastHit::swapped).collect());
     }
-    if mode == SweepMode::NonLinear
-        && certified_native_interval(m1, s1, m2, s2, tolerance, cache, epa)?
+    if mode == SweepMode::NonLinear && certified_native_interval(m1, s1, m2, s2, tolerance, cache)?
     {
         return Ok(Vec::new());
     }
@@ -1651,7 +1532,7 @@ fn sweep_geometry(
                     if end.angular_velocity.length() * dt >= std::f64::consts::PI {
                         return Err("continuous collision requires an angular integration increment below pi radians per substep".into());
                     }
-                    entry.insert(BodyMotion::new(start, end))
+                    entry.insert(BodyMotion::new(start, end)?)
                 }
             };
             let motion = motion(shape, body);
@@ -1703,7 +1584,6 @@ fn sweep_geometry(
         &contacts.pairs,
         &trajectories,
         &mut jobs,
-        &mut contacts.native_epa,
         tolerance,
         world
             .resource::<ContinuousCollisionSettings>()
@@ -1847,13 +1727,13 @@ struct WitnessMotion {
     point: DVec3,
 }
 impl WitnessMotion {
-    fn new(start: &SolverBody, end: &SolverBody, point: DVec3) -> Self {
-        Self {
+    fn new(start: &SolverBody, end: &SolverBody, point: DVec3) -> Result<Self, String> {
+        Ok(Self {
             start: start.delta_position,
             end: end.delta_position,
-            omega: rotation_vector(end.delta_rotation.0 * start.delta_rotation.0.inverse()),
+            omega: rotation_displacement(start.delta_rotation.0, end.delta_rotation.0)?,
             point: start.delta_rotation.0 * point,
-        }
+        })
     }
     fn rotated_point(&self, t: f64) -> DVec3 {
         DQuat::from_scaled_axis(self.omega * t) * self.point
@@ -1883,8 +1763,8 @@ fn minimum_gap(
 ) -> Result<(f64, f64), String> {
     let _span =
         bevy::log::debug_span!(target: "lunco_physics::ccd::minimum", "ccd_minimum_gap").entered();
-    let motion1 = WitnessMotion::new(s1, e1, p.point1);
-    let motion2 = WitnessMotion::new(s2, e2, p.point2);
+    let motion1 = WitnessMotion::new(s1, e1, p.point1)?;
+    let motion2 = WitnessMotion::new(s2, e2, p.point2)?;
     if ![
         p.center1,
         p.center2,
@@ -2005,8 +1885,8 @@ fn project(
     if gap >= -tolerance {
         return Ok(0.0);
     }
-    let a1 = WitnessMotion::new(s1, &b1, plane.point1).gradient(t, plane.normal);
-    let a2 = WitnessMotion::new(s2, &b2, plane.point2).gradient(t, plane.normal);
+    let a1 = WitnessMotion::new(s1, &b1, plane.point1)?.gradient(t, plane.normal);
+    let a2 = WitnessMotion::new(s2, &b2, plane.point2)?.gradient(t, plane.normal);
     let n = plane.normal * t;
     let w = n.dot((i1.effective_inv_mass() + i2.effective_inv_mass()) * n)
         + a1.dot(i1.effective_inv_angular_inertia() * a1)
@@ -2225,7 +2105,7 @@ fn solve_contacts(world: &mut World) {
                 joint_position_change = joint_position_change
                     .max((after.delta_position - before.delta_position).length());
                 joint_rotation_change = joint_rotation_change.max(
-                    rotation_vector(after.delta_rotation.0 * before.delta_rotation.0.inverse())
+                    rotation_displacement(before.delta_rotation.0, after.delta_rotation.0)?
                         .length(),
                 );
             }
@@ -2264,13 +2144,11 @@ fn solve_contacts(world: &mut World) {
             let e1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
             let e2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
             let (time, gap) = minimum_gap(plane, s1, e1, s2, e2, settings.position_tolerance_m)?;
+            let first_motion = WitnessMotion::new(s1, e1, plane.point1)?;
+            let second_motion = WitnessMotion::new(s2, e2, plane.point2)?;
             let separation = |time| {
-                let a = WitnessMotion::new(s1, e1, plane.point1)
-                    .position_and_velocity(time)
-                    .0;
-                let b = WitnessMotion::new(s2, e2, plane.point2)
-                    .position_and_velocity(time)
-                    .0;
+                let a = first_motion.position_and_velocity(time).0;
+                let b = second_motion.position_and_velocity(time).0;
                 ((plane.center2 - plane.center1) + (b - a)).dot(plane.normal) + plane.offset
             };
             remaining.push(format!(
@@ -2318,57 +2196,6 @@ mod tests {
     use avian3d::math::SymmetricMatrix;
 
     #[test]
-    fn continuous_tilted_cylinder_overlap_uses_real_finite_witness() {
-        use avian3d::parry::shape::{Cylinder, Triangle};
-        let floor = Triangle::new(
-            DVec3::new(-10.0, 0.0, -10.0),
-            DVec3::new(10.0, 0.0, -10.0),
-            DVec3::new(0.0, 0.0, 10.0),
-        );
-        let cylinder = Cylinder::new(2.0, 0.1);
-        let fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
-        let moving = NonlinearRigidMotion::new(
-            Pose::from_parts(
-                DVec3::Y * 1.47,
-                DQuat::from_rotation_z(std::f64::consts::FRAC_PI_4),
-            ),
-            DVec3::ZERO,
-            -DVec3::Y * 1e-4,
-            DVec3::ZERO,
-        );
-        let contact =
-            avian3d::parry::query::contact(&fixed.start, &floor, &moving.start, &cylinder, 2.0)
-                .unwrap()
-                .unwrap();
-        assert!(
-            contact.dist < -1e-6,
-            "fixture must have native initial intersection"
-        );
-        assert!(
-            triangle_cylinder_initial_overlap(&fixed, &floor, &moving, &cylinder).unwrap(),
-            "tilted cylinder needs a finite interior witness away from its center projection"
-        );
-        assert!(triangle_cylinder_initial_overlap(&moving, &cylinder, &fixed, &floor).unwrap());
-        let outside = Triangle::new(
-            floor.a + DVec3::X * 30.0,
-            floor.b + DVec3::X * 30.0,
-            floor.c + DVec3::X * 30.0,
-        );
-        assert!(
-            !triangle_cylinder_initial_overlap(&fixed, &outside, &moving, &cylinder).unwrap(),
-            "crossing the infinite plane cannot prove finite triangle intersection"
-        );
-        let touching = NonlinearRigidMotion::constant_position(Pose::from_parts(
-            DVec3::Y * (2.1 * std::f64::consts::FRAC_1_SQRT_2),
-            moving.start.rotation,
-        ));
-        assert!(
-            !triangle_cylinder_initial_overlap(&fixed, &floor, &touching, &cylinder).unwrap(),
-            "touching cannot supply a strictly interior witness"
-        );
-    }
-
-    #[test]
     fn continuous_initial_contact_uses_native_relative_pose_at_large_translation() {
         use avian3d::parry::shape::{Cylinder, Triangle};
         let triangle = Triangle::new(
@@ -2391,17 +2218,9 @@ mod tests {
         let local_fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
         let local_moving = NonlinearRigidMotion::constant_position(relative);
         let axis = floor.rotation * DVec3::Y;
-        let mut scratch = avian3d::parry::query::epa::EPA::new();
-        let world = initial_native_contact(
-            &fixed,
-            &triangle,
-            &moving,
-            &cylinder,
-            2.0,
-            axis,
-            &mut scratch,
-        )
-        .unwrap();
+
+        let world =
+            initial_native_contact(&fixed, &triangle, &moving, &cylinder, 2.0, axis).unwrap();
         let local = initial_native_contact(
             &local_fixed,
             &triangle,
@@ -2409,7 +2228,6 @@ mod tests {
             &cylinder,
             2.0,
             DVec3::Y,
-            &mut scratch,
         )
         .unwrap();
         assert_eq!(
@@ -2526,15 +2344,13 @@ mod tests {
         let mut parallel_jobs = jobs();
         let serial_pool = bevy::tasks::TaskPoolBuilder::new().num_threads(4).build();
         let parallel_pool = bevy::tasks::TaskPoolBuilder::new().num_threads(4).build();
-        let mut serial_scratch = Vec::new();
-        let mut parallel_scratch = Vec::new();
+
         for _ in 0..2 {
             let serial = query_sweep_jobs(
                 &shapes,
                 &pairs,
                 &trajectories,
                 &mut serial_jobs,
-                &mut serial_scratch,
                 1e-6,
                 64,
                 &serial_pool,
@@ -2544,13 +2360,11 @@ mod tests {
                 &pairs,
                 &trajectories,
                 &mut parallel_jobs,
-                &mut parallel_scratch,
                 1e-6,
                 0,
                 &parallel_pool,
             );
-            assert_eq!(serial_scratch.len(), 1);
-            assert_eq!(parallel_scratch.len(), 4);
+
             assert_eq!(serial.len(), 5);
             assert_eq!(parallel.len(), serial.len());
             assert!(serial[0].hits.is_err());
@@ -2594,10 +2408,6 @@ mod tests {
                     serial.cache.candidate_axis.map(bits),
                     parallel.cache.candidate_axis.map(bits)
                 );
-                assert_eq!(
-                    serial.cache.initial_overlap_proven,
-                    parallel.cache.initial_overlap_proven
-                );
             }
         }
     }
@@ -2631,94 +2441,6 @@ mod tests {
                 + DQuat::from_scaled_axis(angular * time) * (start.rotation * (point - center));
             assert!((pose * point - expected).length() < 1e-12);
         }
-    }
-
-    #[test]
-    fn continuous_native_initial_overlap_queries_require_possible_impact() {
-        use avian3d::parry::{
-            query::details::{
-                NonlinearShapeCastMode, cast_shapes_nonlinear_support_map_support_map,
-            },
-            shape::{Cylinder, Triangle},
-        };
-        use std::sync::atomic::Ordering;
-        let floor = Triangle::new(
-            DVec3::new(-20.0, 0.0, -20.0),
-            DVec3::new(-20.0, 0.0, 20.0),
-            DVec3::new(20.0, 0.0, -20.0),
-        );
-        let cylinder = Cylinder::new(0.1, 0.2);
-        let fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
-        let start = Pose::from_translation(DVec3::new(-1.0, 0.099, -1.0));
-        let slow = NonlinearRigidMotion::new(start, DVec3::ZERO, -DVec3::Y * 0.001, DVec3::ZERO);
-        let queries = CheckedNativeQueries::default();
-        let hit = cast_shapes_nonlinear_support_map_support_map(
-            &queries,
-            &fixed,
-            &floor,
-            &floor,
-            &slow,
-            &cylinder,
-            &cylinder,
-            0.0,
-            1.0,
-            NonlinearShapeCastMode::directional_toi(&floor, &cylinder),
-        );
-        assert!(hit.is_none());
-        assert_eq!(
-            queries.contact_queries.load(Ordering::Relaxed),
-            0,
-            "motion that cannot exceed the native directional threshold must not sample contact geometry"
-        );
-        assert!(queries.failure.into_inner().unwrap().is_none());
-
-        // The off-center pivot makes angular point speed exceed that threshold,
-        // even though the COM has no linear velocity.
-        let rotating =
-            NonlinearRigidMotion::new(start, -DVec3::X * 10.0, DVec3::ZERO, -DVec3::Z * 0.2);
-        let queries = CheckedNativeQueries::default();
-        let hit = cast_shapes_nonlinear_support_map_support_map(
-            &queries,
-            &fixed,
-            &floor,
-            &floor,
-            &rotating,
-            &cylinder,
-            &cylinder,
-            0.0,
-            1.0,
-            NonlinearShapeCastMode::directional_toi(&floor, &cylinder),
-        );
-        assert!(hit.is_some());
-        assert!(queries.contact_queries.load(Ordering::Relaxed) > 0);
-        assert!(queries.failure.into_inner().unwrap().is_none());
-
-        // A future impact must retain its time and native geometry even when
-        // the full interval's translation is small relative to shape thickness.
-        let approaching = NonlinearRigidMotion::new(
-            Pose::from_translation(DVec3::new(-1.0, 0.100002, -1.0)),
-            DVec3::ZERO,
-            -DVec3::Y * 0.000003,
-            DVec3::ZERO,
-        );
-        let hit = native_nonlinear_cast(&fixed, &floor, &approaching, &cylinder)
-            .unwrap()
-            .unwrap();
-        // Parry may return an early Failed-status conservative hit. Its actual
-        // material witnesses must approach and cross, without skipping the TOI.
-        assert!(
-            hit.time_of_impact > 0.0 && hit.time_of_impact <= 2.0 / 3.0 + 1e-6,
-            "{hit:?}"
-        );
-        assert!(hit.witness1.is_finite() && hit.witness2.is_finite());
-        let separation = |time| {
-            (approaching.position_at_time(time) * hit.witness2 - hit.witness1).dot(hit.normal1)
-        };
-        assert!(separation(hit.time_of_impact) >= -1e-12);
-        assert!(separation(1.0) < 0.0);
-        assert!(hit.witness1.y.abs() < 1e-12);
-        assert!((hit.witness2.y + cylinder.half_height).abs() < 1e-12);
-        assert!(hit.witness2.x.powi(2) + hit.witness2.z.powi(2) <= cylinder.radius.powi(2) + 1e-12);
     }
 
     #[test]
@@ -2759,7 +2481,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new()
             )
             .unwrap()
         );
@@ -2773,7 +2494,6 @@ mod tests {
                 &triangle,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new()
             )
             .unwrap()
         );
@@ -2796,12 +2516,10 @@ mod tests {
             DVec3::ZERO,
         );
         let mut cache = InitialContactCache::default();
-        let mut epa = avian3d::parry::query::epa::EPA::new();
+
         assert!(
-            certified_native_interval(
-                &fixed, &triangle, &clear, &cylinder, 1e-6, &mut cache, &mut epa
-            )
-            .unwrap()
+            certified_native_interval(&fixed, &triangle, &clear, &cylinder, 1e-6, &mut cache)
+                .unwrap()
         );
         let axis = cache.candidate_axis.unwrap();
         let overlap = NonlinearRigidMotion::new(
@@ -2812,27 +2530,15 @@ mod tests {
         );
         let mut part = InitialContactCache::default();
         assert!(
-            certified_native_interval(
-                &fixed, &triangle, &overlap, &cylinder, 1e-6, &mut part, &mut epa
-            )
-            .unwrap()
+            certified_native_interval(&fixed, &triangle, &overlap, &cylinder, 1e-6, &mut part)
+                .unwrap()
         );
-        assert_eq!(part.initial_overlap_proven, Some(true));
         part.depth_axis = Some(Some(DepthAxis {
             axis,
             lower_depth: 0.05,
         }));
         part.contact = Some(
-            initial_native_contact(
-                &fixed,
-                &triangle,
-                &overlap,
-                &cylinder,
-                10.0,
-                DVec3::Y,
-                &mut epa,
-            )
-            .unwrap(),
+            initial_native_contact(&fixed, &triangle, &overlap, &cylinder, 10.0, DVec3::Y).unwrap(),
         );
         part.candidate_axis = Some(axis);
         cache.parts.insert(7, part);
@@ -2840,11 +2546,7 @@ mod tests {
         assert_eq!(cache.candidate_axis, Some(axis));
         let mut part = cache.parts.remove(&7).unwrap();
         assert_eq!(part.candidate_axis, Some(axis));
-        assert!(
-            part.initial_overlap_proven.is_none()
-                && part.depth_axis.is_none()
-                && part.contact.is_none()
-        );
+        assert!(part.depth_axis.is_none() && part.contact.is_none());
         let crossing = NonlinearRigidMotion::new(
             Pose::from_translation(DVec3::new(-0.5, 0.100002, -0.5)),
             DVec3::ZERO,
@@ -2853,150 +2555,14 @@ mod tests {
         );
         for cache in [&mut cache, &mut part] {
             assert!(
-                !certified_native_interval(
-                    &fixed, &triangle, &crossing, &cylinder, 1e-6, cache, &mut epa
-                )
-                .unwrap()
+                !certified_native_interval(&fixed, &triangle, &crossing, &cylinder, 1e-6, cache)
+                    .unwrap()
             );
-            assert_eq!(cache.initial_overlap_proven, Some(false));
         }
         let hit = native_nonlinear_cast(&fixed, &triangle, &crossing, &cylinder)
             .unwrap()
             .unwrap();
         assert!(hit.time_of_impact > 0.0 && hit.time_of_impact < 1.0);
-    }
-
-    #[test]
-    fn continuous_initial_overlap_proof_retains_native_criterion_and_future_impacts() {
-        use avian3d::parry::{
-            query::details::NonlinearShapeCastMode,
-            shape::{Cylinder, Triangle},
-        };
-        let triangle = Triangle::new(
-            DVec3::new(-2.0, 0.0, -2.0),
-            DVec3::new(-2.0, 0.0, 2.0),
-            DVec3::new(2.0, 0.0, -2.0),
-        );
-        let cylinder = Cylinder::new(0.1, 0.2);
-        let fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
-        let mode = NonlinearShapeCastMode::directional_toi(&triangle, &cylinder);
-        for displacement in [-1.0, 0.2, f64::NAN, f64::INFINITY] {
-            assert!(!mode.initial_overlap_motion_is_inert(displacement));
-        }
-        assert!(mode.initial_overlap_motion_is_inert(0.2f64.next_down()));
-        assert!(!NonlinearShapeCastMode::StopAtPenetration.initial_overlap_motion_is_inert(0.0));
-        for angle in [0.0, 0.02, 0.3] {
-            let moving = NonlinearRigidMotion::new(
-                Pose::new(DVec3::new(-0.5, 0.05, -0.5), DVec3::X * angle),
-                DVec3::ZERO,
-                -DVec3::Y * 0.001,
-                DVec3::X * 0.001,
-            );
-            assert!(
-                triangle_cylinder_initial_overlap(&fixed, &triangle, &moving, &cylinder).unwrap()
-            );
-            assert!(
-                triangle_cylinder_initial_overlap(&moving, &cylinder, &fixed, &triangle).unwrap()
-            );
-            assert!(
-                avian3d::parry::query::intersection_test(
-                    &fixed.start,
-                    &triangle,
-                    &moving.start,
-                    &cylinder
-                )
-                .unwrap()
-            );
-            assert!(
-                native_nonlinear_cast(&fixed, &triangle, &moving, &cylinder)
-                    .unwrap()
-                    .is_none()
-            );
-            let mut cache = InitialContactCache::default();
-            assert!(
-                certified_native_interval(
-                    &fixed,
-                    &triangle,
-                    &moving,
-                    &cylinder,
-                    1e-6,
-                    &mut cache,
-                    &mut avian3d::parry::query::epa::EPA::new()
-                )
-                .unwrap()
-            );
-            assert!(cache.contact.is_none() && cache.depth_axis.is_none());
-            let fast = NonlinearRigidMotion {
-                linvel: -DVec3::Y * 0.5,
-                ..moving
-            };
-            assert!(
-                !certified_native_interval(
-                    &fixed,
-                    &triangle,
-                    &fast,
-                    &cylinder,
-                    1e-6,
-                    &mut cache,
-                    &mut avian3d::parry::query::epa::EPA::new()
-                )
-                .unwrap()
-            );
-        }
-        let separated = NonlinearRigidMotion::new(
-            Pose::from_translation(DVec3::new(-0.5, 0.100002, -0.5)),
-            DVec3::ZERO,
-            -DVec3::Y * 0.000003,
-            DVec3::ZERO,
-        );
-        assert!(
-            !triangle_cylinder_initial_overlap(&fixed, &triangle, &separated, &cylinder).unwrap()
-        );
-        let mut cache = InitialContactCache::default();
-        assert!(
-            !certified_native_interval(
-                &fixed,
-                &triangle,
-                &separated,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new()
-            )
-            .unwrap()
-        );
-        let hit = native_nonlinear_cast(&fixed, &triangle, &separated, &cylinder)
-            .unwrap()
-            .unwrap();
-        assert!(hit.time_of_impact > 0.0 && hit.time_of_impact < 1.0);
-        let outside = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
-            1.5, 0.05, 1.5,
-        )));
-        assert!(
-            !triangle_cylinder_initial_overlap(&fixed, &triangle, &outside, &cylinder).unwrap()
-        );
-        let skinny = Triangle::new(
-            DVec3::new(-2.0, 0.0, -2.0),
-            DVec3::new(-2.0, 0.0, 2.0),
-            DVec3::new(-2.0 + 1e-10, 0.0, -2.0),
-        );
-        let inside = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
-            -2.0 + 5e-11,
-            0.05,
-            -0.5,
-        )));
-        assert!(triangle_cylinder_initial_overlap(&fixed, &skinny, &inside, &cylinder).unwrap());
-        let outside = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
-            -1.75, 0.05, -0.5,
-        )));
-        assert!(!triangle_cylinder_initial_overlap(&fixed, &skinny, &outside, &cylinder).unwrap());
-        let witness = triangle_projection_witness(&skinny, outside.start.translation)
-            .unwrap()
-            .unwrap();
-        assert!(witness.x >= -2.0 - 1e-14 && witness.x <= -2.0 + 1e-10 + 1e-14);
-        assert_eq!(witness.y, 0.0);
-        assert!(witness.z >= -2.0 && witness.z <= 2.0);
-        assert!(triangle_projection_witness(&skinny, DVec3::splat(f64::NAN)).is_err());
     }
 
     #[test]
@@ -3011,16 +2577,8 @@ mod tests {
         assert_eq!(triangle.local_support_point(normal), point);
         assert_eq!(pose * cuboid.local_support_point(-normal), point);
         let touching = NonlinearRigidMotion::constant_position(pose);
-        let contact = initial_native_contact(
-            &fixed,
-            &triangle,
-            &touching,
-            &cuboid,
-            10.0,
-            normal,
-            &mut avian3d::parry::query::epa::EPA::new(),
-        )
-        .unwrap();
+        let contact =
+            initial_native_contact(&fixed, &triangle, &touching, &cuboid, 10.0, normal).unwrap();
         assert_eq!(
             contact.point1, point,
             "native touching must retain the triangle's material point"
@@ -3068,123 +2626,10 @@ mod tests {
             NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::X * 100.0));
         // Deliberately supply an incomplete internal prediction. The consumer
         // requires initial geometry, so a missing result must remain an error.
-        let result = initial_native_contact(
-            &fixed,
-            &triangle,
-            &distant,
-            &cylinder,
-            0.1,
-            DVec3::Y,
-            &mut avian3d::parry::query::epa::EPA::new(),
-        );
+        let result = initial_native_contact(&fixed, &triangle, &distant, &cylinder, 0.1, DVec3::Y);
         assert!(
             result.is_err(),
             "missing initial geometry cannot classify clear space: {result:?}"
-        );
-    }
-
-    #[test]
-    fn continuous_native_displacement_bound_retains_tolerance_and_offset_pivots() {
-        use avian3d::parry::{
-            query::details::relative_point_displacement_bound,
-            shape::{Cuboid, Triangle},
-        };
-        let triangle = Triangle::new(-DVec3::X, DVec3::X, DVec3::Z);
-        let cuboid = Cuboid::new(DVec3::splat(0.1));
-        let fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
-        let tolerance = 1e-6;
-        let moving = NonlinearRigidMotion::new(
-            Pose::from_translation(DVec3::Y * 0.05),
-            DVec3::ZERO,
-            -DVec3::Y * (tolerance * 0.25),
-            DVec3::ZERO,
-        );
-        let mut cache = InitialContactCache::default();
-        let mut epa = avian3d::parry::query::epa::EPA::new();
-        assert!(
-            relative_point_displacement_bound(&fixed, &triangle, &moving, &cuboid, 1.0) < tolerance
-        );
-        assert!(
-            certified_native_interval(
-                &fixed, &triangle, &moving, &cuboid, tolerance, &mut cache, &mut epa
-            )
-            .unwrap()
-        );
-        assert!(
-            cache.contact.is_none() && cache.depth_axis.is_none(),
-            "the motion bound alone must prove the existing tolerance"
-        );
-        let changed = NonlinearRigidMotion::new(
-            moving.start,
-            DVec3::ZERO,
-            -DVec3::Y * (tolerance * 8.0),
-            DVec3::ZERO,
-        );
-        assert!(
-            relative_point_displacement_bound(&fixed, &triangle, &changed, &cuboid, 1.0)
-                > tolerance
-        );
-        assert!(
-            !certified_native_interval(
-                &fixed, &triangle, &changed, &cuboid, tolerance, &mut cache, &mut epa
-            )
-            .unwrap(),
-            "a changed trajectory must not reuse the small-motion certificate"
-        );
-
-        let pivot = -DVec3::X * 10.0;
-        let rotating =
-            NonlinearRigidMotion::new(moving.start, pivot, DVec3::ZERO, -DVec3::Z * tolerance);
-        let bound = relative_point_displacement_bound(&fixed, &triangle, &rotating, &cuboid, 1.0);
-        assert!(
-            bound > tolerance,
-            "offset pivots must contribute point speed"
-        );
-        for x in [-0.1, 0.1] {
-            for y in [-0.1, 0.1] {
-                for z in [-0.1, 0.1] {
-                    let point = DVec3::new(x, y, z);
-                    for time in [0.25, 0.5, 0.75, 1.0] {
-                        let displacement = (rotating.position_at_time(time) * point
-                            - rotating.start * point)
-                            .length();
-                        assert!(displacement <= bound, "{displacement:e} exceeds {bound:e}");
-                    }
-                }
-            }
-        }
-        assert!(
-            !certified_native_interval(
-                &fixed,
-                &triangle,
-                &rotating,
-                &cuboid,
-                tolerance,
-                &mut InitialContactCache::default(),
-                &mut epa
-            )
-            .unwrap()
-        );
-        for duration in [-1.0, f64::NAN, f64::INFINITY] {
-            assert_eq!(
-                relative_point_displacement_bound(&fixed, &triangle, &moving, &cuboid, duration),
-                f64::INFINITY
-            );
-        }
-        // Native pose arithmetic can move by more than the supplied velocity
-        // at a large coordinate. That rounding must remain inside the proof.
-        let far = NonlinearRigidMotion::new(
-            Pose::from_translation(DVec3::Y * 1e10),
-            DVec3::ZERO,
-            -DVec3::Y * (tolerance * 0.97),
-            DVec3::ZERO,
-        );
-        let actual = (far.position_at_time(1.0).translation - far.start.translation).length();
-        assert!(actual > tolerance);
-        let bound = relative_point_displacement_bound(&fixed, &triangle, &far, &cuboid, 1.0);
-        assert!(
-            bound >= actual,
-            "native arithmetic displacement {actual:e} exceeds {bound:e}"
         );
     }
 
@@ -3206,16 +2651,8 @@ mod tests {
             NonlinearRigidMotion::new(pose, DVec3::ZERO, DVec3::Y * 0.00001, DVec3::ZERO);
         let mut cache = InitialContactCache::default();
         assert!(
-            certified_native_interval(
-                &fixed,
-                &triangle,
-                &separating,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            certified_native_interval(&fixed, &triangle, &separating, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         assert!(cache.candidate_axis.is_some());
         assert!(
@@ -3231,7 +2668,6 @@ mod tests {
                 &triangle,
                 1e-6,
                 &mut reverse,
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap()
         );
@@ -3245,7 +2681,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap()
         );
@@ -3289,16 +2724,8 @@ mod tests {
         );
         let mut cache = InitialContactCache::default();
         assert!(
-            certified_native_interval(
-                &fixed,
-                &floor,
-                &touching,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            certified_native_interval(&fixed, &floor, &touching, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         assert!(
             cache.contact.is_none(),
@@ -3306,30 +2733,14 @@ mod tests {
         );
         let entering = NonlinearRigidMotion::new(start, DVec3::ZERO, -DVec3::Y * 0.5, DVec3::ZERO);
         assert!(
-            !certified_native_interval(
-                &fixed,
-                &floor,
-                &entering,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            !certified_native_interval(&fixed, &floor, &entering, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         let rotating =
             NonlinearRigidMotion::new(start, -DVec3::X * 10.0, DVec3::ZERO, -DVec3::Z * 0.2);
         assert!(
-            !certified_native_interval(
-                &fixed,
-                &floor,
-                &rotating,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            !certified_native_interval(&fixed, &floor, &rotating, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         for center in [
             DVec3::new(0.0, 0.099, 0.0),
@@ -3378,31 +2789,15 @@ mod tests {
         );
         let mut cache = InitialContactCache::default();
         assert!(
-            certified_native_interval(
-                &fixed,
-                &small,
-                &centered,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            certified_native_interval(&fixed, &small, &centered, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         assert!(cache.contact.is_none());
         let changed =
             NonlinearRigidMotion::new(centered.start, DVec3::ZERO, -DVec3::Y * 0.5, DVec3::ZERO);
         assert!(
-            !certified_native_interval(
-                &fixed,
-                &small,
-                &changed,
-                &cylinder,
-                1e-6,
-                &mut cache,
-                &mut avian3d::parry::query::epa::EPA::new(),
-            )
-            .unwrap()
+            !certified_native_interval(&fixed, &small, &changed, &cylinder, 1e-6, &mut cache,)
+                .unwrap()
         );
         let outside = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
             0.3, 0.099, 0.0,
@@ -3426,7 +2821,7 @@ mod tests {
             DVec3::new(2.0, 0.0, -2.0),
         );
         let cylinder = Cylinder::new(0.1, 0.2);
-        let mut reusable_epa = avian3d::parry::query::epa::EPA::new();
+
         assert!(
             DefaultQueryDispatcher
                 .intersection_test(
@@ -3468,7 +2863,6 @@ mod tests {
                             b.as_support_map().unwrap(),
                             10.0,
                             &mut avian3d::parry::query::gjk::VoronoiSimplex::new(),
-                            &mut avian3d::parry::query::epa::EPA::new(),
                             Some(DVec3::Y),
                         );
                     let avian3d::parry::query::gjk::GJKResult::ClosestPoints(
@@ -3486,7 +2880,6 @@ mod tests {
                         b,
                         10.0,
                         DVec3::Y,
-                        &mut reusable_epa,
                     )
                     .unwrap();
                     assert_eq!(
@@ -3550,16 +2943,7 @@ mod tests {
         let reference = avian3d::parry::query::contact(&m1.start, &ball, &m2.start, &cylinder, 1.0)
             .unwrap()
             .unwrap();
-        let contact = initial_native_contact(
-            &m1,
-            &ball,
-            &m2,
-            &cylinder,
-            1.0,
-            DVec3::Y,
-            &mut avian3d::parry::query::epa::EPA::new(),
-        )
-        .unwrap();
+        let contact = initial_native_contact(&m1, &ball, &m2, &cylinder, 1.0, DVec3::Y).unwrap();
         assert!((contact.point1 - reference.point1).length() < 1e-12);
         assert!((contact.point2 - reference.point2).length() < 1e-12);
         assert!((contact.dist - reference.dist).abs() < 1e-12);
@@ -3626,7 +3010,6 @@ mod tests {
                 &mut queries,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap();
             if side < 0.0 {
@@ -3663,7 +3046,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut initial_contact,
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "full cylinder supports certify an unchanged initial face depth while sliding and spinning"
@@ -3688,7 +3070,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap()
         );
@@ -3705,7 +3086,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "cylinder symmetry cannot hide COM-offset motion or a changing axis"
@@ -3722,7 +3102,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "a changing support feature that deepens initial contact must retain its cast"
@@ -3731,7 +3110,6 @@ mod tests {
             linvel: -DVec3::Y * 0.5,
             ..sliding
         };
-        assert_eq!(initial_contact.initial_overlap_proven, Some(true));
         assert!(
             !certified_native_interval(
                 &floor,
@@ -3740,12 +3118,10 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut initial_contact,
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "reusing immutable initial contact must still revalidate a changed endpoint trajectory"
         );
-        assert_eq!(initial_contact.initial_overlap_proven, Some(true));
         let outside = NonlinearRigidMotion {
             start: Pose::from_translation(DVec3::new(1.5, 0.099, 1.5)),
             ..sliding
@@ -3758,7 +3134,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "the finite triangle edge has a certified separating axis despite overlapping infinite face planes"
@@ -3775,7 +3150,6 @@ mod tests {
                 &cylinder,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap(),
             "initial finite-edge separation cannot hide a future crossing"
@@ -3801,7 +3175,6 @@ mod tests {
                 &mut resting_queries,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap()
             .is_empty()
@@ -3827,7 +3200,6 @@ mod tests {
                 &mut queries,
                 1e-6,
                 &mut InitialContactCache::default(),
-                &mut avian3d::parry::query::epa::EPA::new(),
             )
             .unwrap()
             .is_empty()
@@ -3856,7 +3228,6 @@ mod tests {
             &mut queries,
             1e-6,
             &mut InitialContactCache::default(),
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         assert!(
@@ -3915,7 +3286,6 @@ mod tests {
             &mut queries,
             1e-6,
             &mut InitialContactCache::default(),
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         assert_eq!(
@@ -3945,7 +3315,6 @@ mod tests {
             &mut reverse_queries,
             1e-6,
             &mut InitialContactCache::default(),
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         let reverse = reverse
@@ -3976,7 +3345,6 @@ mod tests {
             &mut queries,
             1e-6,
             &mut InitialContactCache::default(),
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         let mut exhaustive = Vec::new();
@@ -4009,7 +3377,10 @@ mod tests {
         app.init_resource::<lunco_core::RuntimeFaults>()
             .add_plugins((
                 MinimalPlugins,
-                PhysicsPlugins::default().build().disable::<CcdPlugin>(),
+                PhysicsPlugins::default()
+                    .build()
+                    .disable::<CcdPlugin>()
+                    .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>(),
                 crate::DeterministicJointSolverPlugin,
                 ContinuousCollisionPlugin::<()>::default(),
             ));
@@ -4062,95 +3433,23 @@ mod tests {
         let joint = RevoluteJoint::new(a, b).with_hinge_axis(DVec3::Y);
         let rotation = DQuat::from_rotation_y(0.7);
         for angle in [0.0, 2e-10, -2e-10, 0.3, -0.3] {
-            let (measured, axis) = joint
-                .angle_and_axis(rotation, rotation * DQuat::from_rotation_y(angle))
-                .unwrap();
+            let (measured, axis) = crate::joint::revolute_coordinate(
+                &joint,
+                rotation,
+                rotation * DQuat::from_rotation_y(angle),
+            )
+            .unwrap();
             assert!((measured - angle).abs() < 1e-15, "{measured} {angle}");
             assert!((axis - DVec3::Y).length() < 1e-15);
             for sign in [-1.0, 1.0] {
                 let drifted = DQuat::from_rotation_y(angle) * (sign * (1.0 - 1e-12));
-                assert!((rotation_vector(drifted) - DVec3::Y * angle).length() < 1e-15);
+                assert!(
+                    (rotation_displacement(DQuat::IDENTITY, drifted).unwrap() - DVec3::Y * angle)
+                        .length()
+                        < 1e-15
+                );
             }
         }
-    }
-
-    #[test]
-    fn continuous_native_damping_preserves_free_locked_axes() {
-        let mut fixed = SolverBody::DUMMY;
-        let mut body = SolverBody {
-            angular_velocity: DVec3::Y * 2.0,
-            ..default()
-        };
-        let inertia = SolverBodyInertia::new(
-            1.0,
-            SymmetricMatrix::IDENTITY,
-            LockedAxes::new().lock_rotation_x().lock_rotation_z(),
-            0,
-            true,
-        );
-        avian3d::dynamics::solver::apply_joint_damping(
-            [&mut fixed, &mut body],
-            [&SolverBodyInertia::DUMMY, &inertia],
-            JointDamping {
-                linear: 0.0,
-                angular: 20.0,
-            },
-            1.0 / 480.0,
-        );
-        assert!((body.angular_velocity.y - 2.0 * (1.0 - 20.0 / 480.0)).abs() < 1e-12);
-        assert_eq!(fixed.angular_velocity, DVec3::ZERO);
-        assert_eq!(body.angular_velocity.x, 0.0);
-        assert_eq!(body.angular_velocity.z, 0.0);
-    }
-
-    #[test]
-    fn continuous_hard_joint_pass_preserves_soft_channels() {
-        use avian3d::dynamics::solver::xpbd::{HardJointConstraint, joints::FixedJointSolverData};
-        let mut world = World::new();
-        let a = world.spawn_empty().id();
-        let b = world.spawn_empty().id();
-        let mut joint = FixedJoint::new(a, b);
-        joint.point_compliance = 1.0;
-        joint.angle_compliance = 1.0;
-        let mut data = FixedJointSolverData::default();
-        let inertia =
-            SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, LockedAxes::new(), 0, true);
-        let mut first = SolverBody::default();
-        let mut second = SolverBody {
-            delta_position: DVec3::X,
-            delta_rotation: Rotation(DQuat::from_rotation_y(0.2)),
-            ..default()
-        };
-        let before = second.clone();
-        joint.solve_hard_constraints(
-            [&mut first, &mut second],
-            [&inertia, &inertia],
-            &mut data,
-            1.0 / 480.0,
-        );
-        assert_eq!(first.delta_position, DVec3::ZERO);
-        assert_eq!(second.delta_position, before.delta_position);
-        assert_eq!(second.delta_rotation, before.delta_rotation);
-        joint.angle_compliance = 0.0;
-        joint.solve_hard_constraints(
-            [&mut first, &mut second],
-            [&inertia, &inertia],
-            &mut data,
-            1.0 / 480.0,
-        );
-        assert_eq!(first.delta_position, DVec3::ZERO);
-        assert_eq!(
-            second.delta_position, before.delta_position,
-            "a hard rotation must not stiffen soft translation"
-        );
-        assert!(
-            second
-                .delta_rotation
-                .0
-                .angle_between(first.delta_rotation.0)
-                < 0.01,
-            "the hard angular channel was solved"
-        );
     }
 
     #[test]
@@ -4180,7 +3479,7 @@ mod tests {
                 shape.position += DVec3::X * 2.0;
                 end.delta_rotation = Rotation(DQuat::from_rotation_z(std::f64::consts::PI));
             }
-            let motion = motion(&shape, &BodyMotion::new(&start, &end));
+            let motion = motion(&shape, &BodyMotion::new(&start, &end).unwrap());
             trajectories.push((motion, swept_bounds(&shape, &motion)));
             contacts.shapes.push(shape);
         }
@@ -4226,7 +3525,10 @@ mod tests {
             delta_position: DVec3::X * 7.0,
             ..default()
         };
-        let m = motion(shape, &BodyMotion::new(&SolverBody::default(), &corrected));
+        let m = motion(
+            shape,
+            &BodyMotion::new(&SolverBody::default(), &corrected).unwrap(),
+        );
         trajectories[0] = (m, swept_bounds(shape, &m));
         assert!(
             swept_pair_candidates(&mut contacts, &trajectories)
@@ -4238,7 +3540,10 @@ mod tests {
             ..default()
         };
         let shape = &contacts.shapes[0];
-        let m = motion(shape, &BodyMotion::new(&SolverBody::default(), &restored));
+        let m = motion(
+            shape,
+            &BodyMotion::new(&SolverBody::default(), &restored).unwrap(),
+        );
         trajectories[0] = (m, swept_bounds(shape, &m));
         assert_eq!(
             swept_pair_candidates(&mut contacts, &trajectories).unwrap(),
@@ -4397,13 +3702,14 @@ mod tests {
             ..default()
         };
         let t = 0.37;
-        let witness_motion = WitnessMotion::new(&s, &e, DVec3::X);
+        let witness_motion = WitnessMotion::new(&s, &e, DVec3::X).unwrap();
         let (r, _) = witness_motion.position_and_velocity(t);
         let analytic = witness_motion.gradient(t, DVec3::Y);
         for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
             let mut perturbed = e.clone();
             perturbed.delta_rotation.0 = DQuat::from_scaled_axis(axis * 1e-7) * e.delta_rotation.0;
             let numerical = (WitnessMotion::new(&s, &perturbed, DVec3::X)
+                .unwrap()
                 .position_and_velocity(t)
                 .0
                 .dot(DVec3::Y)
@@ -4418,7 +3724,7 @@ mod tests {
         let mut sa = sa;
         sa.position = sa.center + DVec3::X;
         sa.rotation = DQuat::from_rotation_y(0.3);
-        let motion = motion(&sa, &BodyMotion::new(&s, &e));
+        let motion = motion(&sa, &BodyMotion::new(&s, &e).unwrap());
         let expected =
             sa.center + e.delta_position + e.delta_rotation.0 * (sa.position - sa.center);
         assert!((motion.position_at_time(1.0).translation - expected).length() < 1e-12);

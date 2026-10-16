@@ -64,7 +64,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-terrain-surface`** | Local DEM ground terrain (surface scale): authoritative height queries, sampled triangle collider rings with nonlinear CCD support, immutable active-frame coverage snapshots for bounded presentation work, and an opt-in visualization plugin for camera-driven visual LOD, overlays, and bounded persistent surface-annotation indexes and transactional segment patches. |
 | **`lunco-terrain-bake`** | Pure (bevy/avian-free) DEM bake pipeline shared verbatim by the native async task and the wasm Web Worker: GeoTIFF decode → crop/resample → crater stamp → `HeightGrid`. Owns the `dem_worker` companion binary + its main-thread client (over `lunco-worker-transport`), moving the ~40 MB decode + crater stamp off the page's main thread on web (coarse-then-full progressive). |
 | **`lunco-geotiff`** | The **geo** half of a GeoTIFF: GeoKey/tie-point/pixel-scale read and write, shared by the writer (`lunco-assets-processing`) and the reader (`lunco-terrain-bake`). A raster states its own extent and projection; nothing restates it in a sidecar. See `docs/architecture/57-dem-georeferencing.md`. |
-| **`lunco-physics`** | The physics **readiness, backend-admission, compute-profile, solver-configuration, contact-fact, raw-query, Avian force-port, and joint-mechanics contract owner** — `avian_backend` is the single numeric/shape contract for Avian's f64-to-f32 points, AABBs, and compound-child structure; lifecycle bridges decide when to admit it, while Rhai chooses initialization policy. It owns shared articulated-object pausing so a policy can disable one invalid body set, keep its joints and colliders disabled through readiness release, and let independent physics admit. It owns continuous contact constraints over solved COM trajectories, coupled to the existing position-only joint schedule before velocity projection, with stable candidate identity, whole-arc bounds, repeated sweeps and same-tick writeback refusal on failure. Its `assembly::DynamicJointIslandMassPlugin` retains lifecycle invalidation for active island mass and stable initial mechanical membership, including disabled prepared joint definitions; normal and rollback co-simulation refresh the shared cache only after mass or topology edits. It also owns shared contact aggregation, Avian impulse-to-load conversion, raw `raycast::RaycastObservation` sampling, `force_ports` admission classification, and reusable revolute-joint torque/axis, port-name, and holder-selection mechanics used by telemetry, co-simulation ports, mobility, and render/editor consumers. It decides whether the world is safe to integrate, installs the single cross-platform Avian eight-substep contract, publishes the observed `PhysicsComputeProfile`, and keeps Avian's collider-tree optimization on the owner schedule so async worker joins cannot stall a physics tick. A DEM still baking or a collider ring not yet paged in suspends integration without touching the user's transport clock, so a `Dynamic` body cannot free-fall through a collider that does not exist yet. |
+| **`lunco-physics`** | The physics **readiness, backend-admission, compute-profile, solver-configuration, contact-fact, raw-query, Avian force-port, and joint-mechanics contract owner** — `avian_backend` is the single numeric/shape contract for Avian's f64-to-f32 points, AABBs, and compound-child structure; lifecycle bridges decide when to admit it, while Rhai chooses initialization policy. It owns shared articulated-object pausing so a policy can disable one invalid body set, keep its joints and colliders disabled through readiness release, and let independent physics admit. It owns continuous contact constraints over solved COM trajectories, coupled to the existing position-only joint schedule before velocity projection, with stable candidate identity, whole-arc bounds, repeated sweeps and same-tick writeback refusal on failure. Its `assembly::DynamicJointIslandMassPlugin` retains lifecycle invalidation for active island mass and stable initial mechanical membership, including disabled prepared joint definitions; normal and rollback co-simulation refresh the shared cache only after mass or topology edits. It also owns shared contact aggregation, Avian impulse-to-load conversion, raw `raycast::RaycastObservation` sampling, `force_ports` admission classification, and passive joint damping and reusable f64 revolute-coordinate, torque/axis, port-name, and holder-selection mechanics used by telemetry, co-simulation ports, mobility, and render/editor consumers. It decides whether the world is safe to integrate, installs the single cross-platform Avian eight-substep contract, publishes the observed `PhysicsComputeProfile`, and keeps Avian's collider-tree optimization on the owner schedule so async worker joins cannot stall a physics tick. A DEM still baking or a collider ring not yet paged in suspends integration without touching the user's transport clock, so a `Dynamic` body cannot free-fall through a collider that does not exist yet. |
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Shared `ExperimentSettings` (Bevy), `RunResultLimits`, and complete-result validation; backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; `ExperimentOrigins` admits immutable local/replicated attribution and archived history; versioned result artifacts carry immutable execution definitions and compiler-provided source CIDs through a bounded codec; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
 | **`lunco-experiments-ui`** | Render-independent experiment view state: per-plot variable/run selections, Twin-scoped plot-state preservation, active-plot selection, and the change-gated trajectory sample cache. It has no Modelica, document, egui, or workbench ownership. |
@@ -216,7 +216,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
-| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Native GPU output buffers use the pinned `third_party/bevy_render` shader-stride patch (see its provenance file); scalar-math physics must not alter their WGSL allocation stride. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, partial float-texture GPU uploads, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, a native shared-shadow schedule for point/spot roots, and diagnostics-enabled native shadow GPU spans. Headless never adds it. |
+| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Uses unmodified Bevy Render with its supported math feature layout; physics feature selection must preserve the renderer's GPU ABI. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, partial float-texture GPU uploads, capability-gated Bevy GPU camera culling, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, a native shared-shadow schedule for point/spot roots, and diagnostics-enabled native shadow GPU spans. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
 
 ---
@@ -1337,7 +1337,7 @@ invalidate that presentation cache without changing the authored hierarchy.
 Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `ScreenConstantMarker` and its view visibility gate, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
 
 **`lunco-render-bevy`**
-The **only** crate that names `bevy_pbr`. Native GPU output buffers use the pinned `third_party/bevy_render` shader-stride patch (see its provenance file); scalar-math physics must not alter their WGSL allocation stride. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. It routes native point/spot roots through a compact shared-shadow schedule using native GPU preprocessing and shadow delegates, preserving camera and custom schedules. Diagnostics-enabled hosts wrap the native shared and camera shadow passes with GPU timestamps, retaining their dependency sets and command-buffer order. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
+The **only** crate that names `bevy_pbr`. Uses unmodified Bevy Render with its supported math feature layout; physics feature selection must preserve the renderer's GPU ABI. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. It routes native point/spot roots through a compact shared-shadow schedule using native GPU preprocessing and shadow delegates, preserving camera and custom schedules. Diagnostics-enabled hosts wrap the native shared and camera shadow passes with GPU timestamps, retaining their dependency sets and command-buffer order. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
 
 **`lunco-render-recovery`**
 Render-bound resilience for the presentation boundary. It installs the
@@ -1553,44 +1553,17 @@ tutorial policy.
 **`lunco-luncosim-server`**
 Headless launcher for the luncosim runtime — a three-line binary that depends directly on `lunco-luncosim-runtime`, with the API + networking host enabled. The GUI shell is not in its dependency closure.
 
-The patched published Avian 0.7.0 source lives in `third_party/avian3d` with
-its licence and provenance. Native joints own implicit dimensional force and
-acceleration integration, effective inertia, saturation, and hard-only geometry
-passes. Native mass reduction stops at nested bodies and excludes retired
-collider geometry. Collider insertion retains constructor scale; the
-`lunco-usd-avian-core` bridge supplies rootless collider transforms before
-native scale cooking and mass reduction in fixed preparation.
-`lunco-physics` owns stable ordering and continuous impact closure;
-`lunco-cosim` admits native prismatic force writeback for its measured force port.
+Physics uses the unmodified registry Avian 0.7.0 and Parry f64 0.27.0 packages.
+`lunco-physics` owns deterministic joint orchestration, prepared hard closure,
+passive damping, f64 rotation coordinates, continuous contact constraints and
+same-step fault/writeback refusal through public native APIs. The shared
+headless/headful host disables native body-only CCD and the XPBD plugin while
+retaining native contact solving. `lunco-cosim` reads completed joint reactions.
 
-`third_party/bevy_transform_interpolation` is the published 0.5.0 easing owner
-with bounded fixed-clock fractions for linear, spherical, and Hermite render
-interpolation. `lunco-time` retains whole pending fixed cycles during holds;
-the easing owner presents its captured upper endpoint instead of extrapolating
-that queued demand. Simulation time and solved Avian poses retain their
-authoritative owners. The physics bridge reports faults with canonical USD
-paths or native entity names.
-
-The pinned Parry f64 source in `third_party/parry3d-f64` retains the native
-Bevy/glam type contract while supplying maintained GJK stall classification and
-scalar enhanced determinism, exact initial poses and conservative directional
-initial-overlap speed certificates and minimum-distance cylinder point
-projection at tied features. Exact single-point touching retains real material
-witnesses and the generating native support direction; missing provenance
-rejects the query. Native contact queries accept reusable EPA scratch while
-resetting current geometry. `lunco-physics` pools unique CCD leaves and uses
-the native swept BVH while retaining prepared pair filtering and ordering.
-Its `ContinuousCollisionSettings.minimum_query_batch_size` bounds scoped
-query work assignment; smaller populations run directly with identical
-ordered results, while larger batches use the native compute pool.
-`ccd_query_dispatch` attributes bounded query and worker counts at that boundary.
-It also certifies finite-triangle minimum translation depths using all three
-edges or an interior ball at a real triangle point, with native supports and
-nearest-boundary point projection.
-The shared native relative-point displacement bound can certify convex-leaf
-residual tolerance directly, including offset pivots and coordinate-scale
-arithmetic margin, without changing the authored contact tolerance.
-`third_party/glam` retains aligned-mask tuple
-serialization for scalar Bevy reflection. Each dependency records its source
-and changes in `LUNCOSIM-PROVENANCE.md`. Continuous native-query failures remain
-owned by `lunco-physics`, which refuses the affected tick's pose writeback.
+The registry interpolation package owns render easing; bounded presentation
+under retained fixed-step backlog remains an application integration task.
+Canonical simulation clocks and solved physics poses retain their owners.
+Physics keeps enhanced determinism without enabling global scalar math.
+Stock drive and collision kernels still have failing qualification cases;
+see [the integration review](reviews/upstream-only-physics-integration.md) for
+current acceptance boundaries. Do not infer production acceptance from compilation.

@@ -1328,10 +1328,13 @@ with identical positive double dimensions, axes and active transform stacks.
 `lunco-usd-avian-reader` rejects stale derivations at the same cook boundary used
 by runtime and authoring queries. The runtime publishes `UsdColliderSources` with
 the admitted collider; `QueryPhysicsState.collider_source_paths` reports those
-facts. Native contact manifolds preserve composite part identities; the same
-admitted provenance maps `contact_debug(...).parts` to actual `source1` and
-`source2` paths with each manifold's applied normal impulse. Internal mesh
-triangles share their owning non-compound source. Composed source geometry is not substituted silently. NURBS mesh derivation
+facts. Contact diagnostics retain collider identity and available composite
+part evidence. Continuous contacts carry their known part indices; stock Avian
+discrete manifolds do not retain those indices. Admitted provenance maps known
+parts to `contact_debug(...).parts[].source1` and `source2`; unknown compound
+membership is `()`. Internal mesh triangles share their owning non-compound
+source. Each row carries its applied normal impulse. Composed source geometry is
+not substituted silently. NURBS mesh derivation
 uses the same API with its source cook fingerprint and refinement settings.
 
 `RemoveRelationship` removes only the selected authored layer's opinion, restores

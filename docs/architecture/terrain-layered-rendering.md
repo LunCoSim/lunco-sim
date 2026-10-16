@@ -10,11 +10,11 @@ overlays (slope, minerals), a lat/lon graticule, and **time-dependent maps**
 (connectivity, illumination) — as a single extensible, live-tunable, USD-authored
 system, without a bespoke shader per layer.
 
-Native GPU preprocessing allocates each uninitialized output record using its
-`ShaderSize::SHADER_SIZE` stride. The pinned `bevy_render` patch owns this buffer
-contract; Rust `size_of` is not the shader stride under scalar math. Physics
-keeps enhanced determinism and the renderer keeps native GPU culling and shadows.
-See `third_party/bevy_render/LUNCOSIM-PROVENANCE.md` for the patch and its test.
+The renderer uses the unmodified Bevy Render package and its supported math
+feature layout. Physics retains enhanced determinism without enabling global
+scalar math, preserving the renderer's GPU ABI and native culling and shadows.
+See [the physics integration review](../reviews/upstream-only-physics-integration.md)
+for dependency feature selection and current runtime qualification.
 
 ## Terrain material decision record (2026-09-21)
 

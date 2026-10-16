@@ -48,7 +48,7 @@ fn on_tick(me,ctx) {
     let damped=[get(find_path("/World/KinematicDamped"),"velocity"),get(find_path("/World/KinematicSpin"),"angular_velocity")];
     if this.previous_damping.len()!=0 {
         let factor=1.0;
-        for substep in 0..physics_substeps() {factor*=1.0-20.0*clock.physics_substep_dt_s;}
+        for substep in 0..physics_substeps() {factor*=(-20.0*clock.physics_substep_dt_s).exp();}
         for i in 0..damped.len() {this.max_damping_error=max(this.max_damping_error,(damped[i]-this.previous_damping[i]*factor).abs());}
     }
     this.previous_damping=damped;
@@ -82,9 +82,9 @@ fn on_tick(me,ctx) {
         t_true(this.setter_unlimited && joint_drive(find_path("/World/Finite")).max_force.is_infinite(),"the live drive setter retains the unlimited-force contract"),
         t_true(this.setter_rejected_negative,"the live drive setter rejects a negative force cap without mutation"),
         t_true(joint_drive(find_path("/World/Computed")).max_force.is_infinite(),"explicit positive infinity retains unlimited drive effort"),
-        t_true(this.max_momentum_error<1e-10,"native angular damping conserves unequal-inertia momentum"),
-        t_true(this.max_kinematic_error<1e-12,"native damping preserves kinematic motion authority"),
-        t_true(this.max_damping_error<1e-10,"native damping applies its decay law against infinite-inertia endpoints"),
+        t_true(this.max_momentum_error<1e-10,"passive joint damping conserves unequal-inertia momentum"),
+        t_true(this.max_kinematic_error<1e-12,"passive joint damping preserves kinematic motion authority"),
+        t_true(this.max_damping_error<1e-10,"passive joint damping integrates its decay rate against infinite-inertia endpoints"),
         t_true(get(find_path("/World/Damped"),"angular_velocity").abs()<0.01,"angular damping dissipates relative spin"),
         t_true((get(find_path("/World/Stop"),"displacement")-0.02).abs()<1e-8 && get(find_path("/World/Stop"),"force").abs()<1e-5,"opposing motor and travel-stop reactions cancel in the net force port"),
         t_true(this.samples>=20,"each admitted tick was observed"),
