@@ -1099,7 +1099,16 @@ fn scenario_execution_context(
                 .map(|tick| tick.0),
             world
                 .get_resource::<Time<Fixed>>()
-                .map(|time| (time.timestep().as_secs_f64(), time.delta_secs_f64())),
+                .map(|time| {
+                    (
+                        lunco_core_runtime::SECS_PER_TICK,
+                        if time.delta().is_zero() {
+                            0.0
+                        } else {
+                            lunco_core_runtime::SECS_PER_TICK
+                        },
+                    )
+                }),
         )
     } else {
         (None, None)
@@ -1114,7 +1123,9 @@ fn scenario_execution_context(
         let delta = fixed_sample.map(|(_, delta)| delta);
         (
             lunco_core::RuntimeClock::Simulation,
-            sequence.zip(timestep).map(|(tick, dt)| tick as f64 * dt),
+            sequence
+                .zip(timestep)
+                .map(|(tick, _)| lunco_core_runtime::SimTick(tick).seconds()),
             delta,
         )
     } else {

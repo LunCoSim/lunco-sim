@@ -143,6 +143,11 @@ impl AvianPortContract {
     );
     pub const JOINT_FORCE: Self =
         Self::new(AvianUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
+    pub const JOINT_TORQUE: Self = Self::new(
+        AvianUnit::NewtonMeter,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
     pub const FORCE_ACTUATOR: Self = Self::new(
         AvianUnit::Newton,
         AvianFrame::None,

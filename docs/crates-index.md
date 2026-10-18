@@ -326,6 +326,10 @@ registry, synchronization helper, port-registry, BigSpace, or celestial
 semantics.
 
 **`lunco-core-runtime`**
+Owns `SimTick`'s canonical seconds projection and `TickClock`, the checked integer
+child timeline used by live Modelica participants. Simulation scripting and
+timers consume the same master coordinate; native duration samples remain
+scheduler/solver diagnostics rather than an independent logical clock.
 The Bevy runtime owner for `lunco-core` contracts. It installs the fixed simulation tick, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, and recoverable synchronization helpers. Contract-only consumers can depend on `lunco-core` without compiling this package.
 
 **`lunco-geometry-core`**

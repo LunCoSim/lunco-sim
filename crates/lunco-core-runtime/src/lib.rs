@@ -14,6 +14,9 @@ pub mod health;
 pub mod pacing;
 pub mod subsystems;
 pub mod sync;
+pub mod tick_clock;
+
+pub use tick_clock::{TickClock, simulation_timestep_seconds};
 
 pub use async_work::{
     AsyncWorkAdmission, AsyncWorkAdmissionPlugin, AsyncWorkKey, AsyncWorkKind, AsyncWorkLimitError,
@@ -94,6 +97,16 @@ impl Plugin for SimulationCompletionPlugin {
 }
 
 impl SimTick {
+    /// Seconds at this integer boundary on the canonical simulation lattice.
+    pub fn seconds(self) -> f64 {
+        self.0 as f64 * SECS_PER_TICK
+    }
+
+    /// Signed seconds from another boundary, preserving wrapping tick semantics.
+    pub fn seconds_since(self, origin: SimTick) -> f64 {
+        self.wrapping_diff(origin) as f64 * SECS_PER_TICK
+    }
+
     /// Signed tick distance `self - other`, wrapping-safe.
     pub fn wrapping_diff(self, other: SimTick) -> i64 {
         self.0.wrapping_sub(other.0) as i64

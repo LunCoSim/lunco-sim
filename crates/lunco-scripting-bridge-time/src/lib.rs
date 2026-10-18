@@ -40,18 +40,11 @@ pub fn dt() -> Result<f64, String> {
             report_runtime_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
             return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
-        let delta = time.timestep().as_secs_f64();
-        if !delta.is_finite() || delta <= 0.0 {
-            report_runtime_contract_fault(
-                world,
-                "fixed-clock-invalid",
-                format!("Time<Fixed>.timestep must be finite and positive, got {delta:?}"),
-            );
-            return Err(format!(
-                "deterministic simulation clock has invalid fixed timestep {delta:?}"
-            ));
+        let result = lunco_core_runtime::simulation_timestep_seconds(time);
+        if let Err(error) = &result {
+            report_runtime_contract_fault(world, "fixed-clock-invalid", error.clone());
         }
-        Ok(delta)
+        result
     })
     .ok_or_else(|| "dt() requires an active script WorldScope".to_owned())?
 }
@@ -74,18 +67,11 @@ pub fn elapsed_seconds() -> Result<f64, String> {
             report_runtime_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
             return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
-        let dt = time.timestep().as_secs_f64();
-        if !dt.is_finite() || dt <= 0.0 {
-            report_runtime_contract_fault(
-                world,
-                "fixed-clock-invalid",
-                format!("Time<Fixed>.timestep must be finite and positive, got {dt:?}"),
-            );
-            return Err(format!(
-                "deterministic simulation clock has invalid fixed timestep {dt:?}"
-            ));
+        if let Err(error) = lunco_core_runtime::simulation_timestep_seconds(time) {
+            report_runtime_contract_fault(world, "fixed-clock-invalid", error.clone());
+            return Err(error);
         }
-        Ok(tick as f64 * dt)
+        Ok(lunco_core_runtime::SimTick(tick).seconds())
     })
     .ok_or_else(|| "elapsed_seconds() requires an active script WorldScope".to_owned())?
 }
@@ -286,7 +272,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
         }
         let tick = tick.unwrap_or(0);
         let fixed_dt = fixed_snapshot.map_or(f64::NAN, |(_, _, timestep)| timestep);
-        let admitted_sim_elapsed = (tick as f64) * fixed_dt;
+        let admitted_sim_elapsed = lunco_core_runtime::SimTick(tick).seconds();
         let real_snapshot = world
             .get_resource::<Time<Real>>()
             .map(|time| (time.delta_secs_f64(), time.elapsed_secs_f64()));
@@ -421,6 +407,12 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             (
                 "admitted_sim_elapsed_s".to_owned(),
                 b.float(admitted_sim_elapsed),
+            ),
+            // Logical seconds share SimTick's lattice. Native Duration fields
+            // below retain their actual rounded values for solver diagnostics.
+            (
+                "simulation_dt_s".to_owned(),
+                b.float(fixed_snapshot.map_or(f64::NAN, |_| lunco_core_runtime::SECS_PER_TICK)),
             ),
             ("fixed_dt_s".to_owned(), b.float(fixed_dt)),
             (
@@ -692,24 +684,27 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(lunco_core_runtime::SimTick(12));
         let mut fixed = Time::<bevy::time::Fixed>::default();
-        fixed.set_timestep_seconds(0.25);
-        fixed.advance_by(std::time::Duration::from_millis(250));
+        fixed.set_timestep_seconds(lunco_core_runtime::SECS_PER_TICK);
+        fixed.advance_by(fixed.timestep());
         world.insert_resource(fixed);
         world.init_resource::<lunco_core::RuntimeFaults>();
         let context = RuntimeExecutionContext {
             route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 3)),
             phase: RuntimePhase::Behavior,
             clock: RuntimeClock::Simulation,
-            time_seconds: Some(3.0),
-            delta_seconds: Some(0.25),
+            time_seconds: Some(lunco_core_runtime::SimTick(12).seconds()),
+            delta_seconds: Some(lunco_core_runtime::SECS_PER_TICK),
             sequence: Some(12),
             producer: None,
         };
         let _scope = WorldScope::enter(&mut world, context);
 
         assert_eq!(sim_tick().unwrap(), 12);
-        assert!((dt().unwrap() - 0.25).abs() < f64::EPSILON);
-        assert!((elapsed_seconds().unwrap() - 3.0).abs() < f64::EPSILON);
+        assert_eq!(dt().unwrap(), lunco_core_runtime::SECS_PER_TICK);
+        assert_eq!(
+            elapsed_seconds().unwrap(),
+            lunco_core_runtime::SimTick(12).seconds()
+        );
     }
 
     #[test]

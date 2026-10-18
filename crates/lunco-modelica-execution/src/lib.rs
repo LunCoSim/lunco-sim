@@ -254,6 +254,7 @@ mod tests {
                 is_stepping: true,
                 in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
                     step_id: 1,
+                    stop_tick: 3,
                     start_time: 0.0,
                     stop_time: 0.05,
                     sampled_inputs: Vec::new(),

@@ -1209,6 +1209,9 @@ struct CheckedNativeQueries {
 }
 impl CheckedNativeQueries {
     fn reject(&self, error: String) -> avian3d::parry::query::Unsupported {
+        // Invalid witnesses cannot become "no collision": that would admit
+        // unchecked motion. Preserve the first failure for same-tick writeback
+        // refusal instead of inventing a contact point or alternate normal.
         // The dispatcher trait is Sync, but the native cast invokes it serially.
         // A poisoned error collector is rejected when the cast completes.
         if let Ok(mut failure) = self.failure.lock() {

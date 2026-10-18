@@ -13,7 +13,8 @@
 //! | revolute  | `angle`        | target angle (rad)       | current twist (rad)     |
 //! | prismatic | `displacement` | target offset (m)        | current slider offset(m)|
 //!
-//! A revolute joint additionally exposes `angular_velocity` (rad/s); a prismatic
+//! A revolute joint additionally exposes `angular_velocity` (rad/s) and the
+//! completed hinge reaction `torque` (N m); a prismatic
 //! joint exposes `velocity` (m/s) and `force` (N), the rate it is sliding at and
 //! the axial reaction from the completed native joint solve. A physical part reads the
 //! latter to know its load — a landing-leg strut's load is that number, and a
@@ -58,7 +59,7 @@ use std::hash::{Hash, Hasher};
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_physics::joint::{
     JOINT_ANGLE_PORT, JOINT_ANGULAR_VELOCITY_PORT, JOINT_DISPLACEMENT_PORT, JOINT_FORCE_PORT,
-    JOINT_VELOCITY_PORT,
+    JOINT_TORQUE_PORT, JOINT_VELOCITY_PORT,
 };
 use lunco_port_core::ports::PortDirection;
 
@@ -100,11 +101,21 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
             read: Some(read_measured_angular_velocity),
             write: None,
         },
+        AvianPort {
+            name: JOINT_TORQUE_PORT,
+            contract: AvianPortContract::JOINT_TORQUE,
+            dir: PortDirection::Out,
+            read: Some(joint_reaction_torque),
+            write: None,
+        },
     ],
     install_topology: register_revolute_joint_topology,
 };
 
 fn register_revolute_joint_topology(app: &mut App) {
+    // Native reaction writeback is opt-in. The measured port must have a
+    // producer even when no motor is installed and only passive damping acts.
+    app.register_required_components::<RevoluteJoint, JointForces>();
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
         .add_systems(PostUpdate, check_revolute_joint_structure);
@@ -117,12 +128,13 @@ fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
     let measured = world.get::<Rotation>(joint.body1).is_some()
         && world.get::<Rotation>(joint.body2).is_some()
         && joint.local_hinge_axis1().is_some();
-    revolute_joint_identity_key(joint, measured)
+    revolute_joint_identity_key(joint, measured, world.get::<JointForces>(entity).is_some())
 }
 
-fn revolute_joint_identity_key(joint: &RevoluteJoint, measured: bool) -> u64 {
+fn revolute_joint_identity_key(joint: &RevoluteJoint, measured: bool, reaction: bool) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     measured.hash(&mut hasher);
+    reaction.hash(&mut hasher);
     joint
         .angle_limit
         .map(|limit| (limit.min.to_bits(), limit.max.to_bits()))
@@ -131,8 +143,9 @@ fn revolute_joint_identity_key(joint: &RevoluteJoint, measured: bool) -> u64 {
 }
 
 fn check_revolute_joint_structure(
-    changed: Query<(Entity, &RevoluteJoint), Changed<RevoluteJoint>>,
+    changed: Query<(Entity, &RevoluteJoint), Or<(Changed<RevoluteJoint>, Added<JointForces>)>>,
     rotations: Query<(), With<Rotation>>,
+    forces: Query<(), With<JointForces>>,
     mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
     mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
@@ -140,7 +153,7 @@ fn check_revolute_joint_structure(
         let measured = rotations.get(joint.body1).is_ok()
             && rotations.get(joint.body2).is_ok()
             && joint.local_hinge_axis1().is_some();
-        let key = revolute_joint_identity_key(joint, measured);
+        let key = revolute_joint_identity_key(joint, measured, forces.contains(entity));
         if state.changed::<RevoluteJoint>(entity, key) {
             revision.bump();
         }
@@ -181,6 +194,18 @@ fn read_measured_angular_velocity(world: &World, entity: Entity) -> Option<f64> 
     let body1_rate = angular_rate(joint.body1)?;
     let body2_rate = angular_rate(joint.body2)?;
     Some((body2_rate - body1_rate).dot(axis))
+}
+
+/// Completed pure-couple reaction on body2 along the positive hinge axis.
+/// Avian stores angular reactions on body2, whereas its linear reactions are
+/// stored on body1. Keeping that convention here avoids negating damping and
+/// motor torques differently at the public port boundary.
+fn joint_reaction_torque(world: &World, entity: Entity) -> Option<f64> {
+    let joint = world.get::<RevoluteJoint>(entity)?;
+    let rotation = world.get::<Rotation>(joint.body1)?.0;
+    let axis = lunco_physics::joint::revolute_hinge_axis_world(joint, rotation)?;
+    let torque = world.get::<JointForces>(entity)?.torque().dot(axis);
+    torque.is_finite().then_some(torque)
 }
 
 /// Commit a metadata-validated angle without changing the configured drive law or limit.

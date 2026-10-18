@@ -124,6 +124,8 @@ pub struct ModelicaStepSample {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InFlightModelicaStep {
     pub step_id: u64,
+    /// Integer endpoint on this participant's master-tick timeline.
+    pub stop_tick: u64,
     pub start_time: f64,
     pub stop_time: f64,
     /// The values sent to the solver, in stable name order.
@@ -596,8 +598,15 @@ pub struct ModelicaModel {
     #[reflect(ignore)]
     pub source_uri: String,
     pub current_time: f64,
+    /// Seconds projected from `master_clock`, never an accumulated duration.
     pub target_time: f64,
     pub communication_period_secs: f64,
+    /// Resettable child of the authoritative physics tick.
+    #[reflect(ignore)]
+    pub master_clock: lunco_core_runtime::TickClock,
+    /// Last accepted communication endpoint in master intervals.
+    #[reflect(ignore)]
+    pub communication_tick: u64,
     #[reflect(ignore)]
     pub next_communication_time: f64,
     pub last_step_time: f64,
@@ -650,6 +659,8 @@ impl Default for ModelicaModel {
             current_time: 0.0,
             target_time: 0.0,
             communication_period_secs: DEFAULT_COMMUNICATION_PERIOD_SECS,
+            master_clock: Default::default(),
+            communication_tick: 0,
             next_communication_time: DEFAULT_COMMUNICATION_PERIOD_SECS,
             last_step_time: 0.0,
             session_id: 0,
@@ -682,12 +693,44 @@ impl ModelicaModel {
         validate_communication_period_secs(self.communication_period_secs)
     }
 
-    /// Recompute the next communication point from the model's current clock.
+    /// Recompute the next communication point on the integer master grid.
     #[inline]
     pub fn reset_communication_schedule(&mut self) -> Result<(), String> {
-        let period = self.validated_communication_period_secs()?;
-        self.next_communication_time = self.current_time + period;
+        self.next_communication_time =
+            lunco_core_runtime::SimTick(self.next_communication_tick()?).seconds();
         Ok(())
+    }
+
+    /// Next endpoint, validated before dispatch or publication.
+    pub fn next_communication_tick(&self) -> Result<u64, String> {
+        let period = self.validated_communication_period_secs()?;
+        let ticks = (period / lunco_core_runtime::SECS_PER_TICK).round() as u64;
+        self.communication_tick
+            .checked_add(ticks)
+            .ok_or_else(|| "Modelica communication tick range exhausted".to_owned())
+    }
+
+    /// Admit a physics boundary, or freeze this child while inactive.
+    pub fn observe_master_tick(
+        &mut self,
+        master: lunco_core_runtime::SimTick,
+        active: bool,
+    ) -> Result<(), String> {
+        self.master_clock
+            .observe(master, active)
+            .map_err(str::to_owned)?;
+        self.target_time = self.master_clock.elapsed_secs();
+        Ok(())
+    }
+
+    /// Retire the local timeline together with its solver session.
+    pub fn clear_clock(&mut self) {
+        self.master_clock = Default::default();
+        self.communication_tick = 0;
+        self.current_time = 0.0;
+        self.target_time = 0.0;
+        self.next_communication_time = 0.0;
+        self.last_step_time = 0.0;
     }
 }
 

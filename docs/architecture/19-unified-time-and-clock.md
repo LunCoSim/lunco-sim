@@ -14,6 +14,22 @@ that same sample.
 the single authority for play/pause and rate; UI, API, and input surfaces use
 `SetTimeTransport` rather than keeping another pause or rate state.
 
+`lunco-core-runtime::SimTick` owns the integer lattice and its canonical seconds
+projection. `TickClock` admits participant intervals from that master exactly
+once, with checked tick arithmetic. Modelica demand and communication endpoints
+are integer ticks; floating seconds are derived at dispatch, never accumulated.
+A participant pause reanchors its child without accruing intervals; reset or
+recompilation resets that child's origin. Global pause admits no master ticks,
+and speed changes alter tick demand without changing the interval.
+
+Simulation Rhai `dt()`, `elapsed_seconds()`, execution contexts and their timers
+use the same lattice. `clock_snapshot().simulation_dt_s` is its logical quantum;
+`admitted_sim_elapsed_s` is the integer master's seconds projection. The native
+`fixed_*` and `physics_*` duration fields retain nanosecond-representable values
+for scheduler and solver diagnostics. They must not be accumulated as a second
+Modelica or timer clock. `simulation_timestep_seconds` rejects a native timestep
+that does not represent the canonical quantum.
+
 The live transport exposes one bounded ladder: `0.1x, 0.25x, 0.5x, 1x, 2x,
 4x, 8x, 16x, 32x, 64x`. Every accepted positive rate advances the fixed-step
 world. The fixed timestep does not change, so a higher rate performs more

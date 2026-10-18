@@ -268,8 +268,10 @@ The duplicated damping assertion in CCD is removed; damping has one test owner.
 The existing production `native_force_drives` Rhai gate now asserts the
 exponential passive-rate contract. It has not run against this cutover. Rust owns this continuous numerical
 mechanism; it has no changeable lifecycle or selection policy requiring a hook.
-The final reaction owner must also include passive damping impulses in completed
-joint-force reports. That telemetry cutover is not implemented or qualified yet.
+The reaction owner accumulates passive point and angular damping impulses across
+substeps alongside its position multipliers. It converts each by its physical
+units to a completed-tick average in `JointForces`. Prismatic force and revolute
+torque ports consume that same report with body2's positive coordinate sign.
 
 ## Targeted custom integration
 
@@ -371,6 +373,16 @@ The current Avian release and inspected upstream development manifest both
 depend on Parry `0.27`. The newer published Parry `0.31.1` uses glamx `0.3`,
 where the current package uses `0.2`; it is not a patch-compatible version
 substitution. An unrestricted Cargo update will not perform this migration.
+
+Avian's supported `AnyCollider`/`ScalableCollider` and `NarrowPhasePlugin<C>`
+interfaces permit an application-owned collision backend without a dependency
+fork. Its 0.7 spatial-query `SystemParam` and swept-CCD systems explicitly query
+the built-in `Collider`, however. Replacing narrow-phase contact generation alone
+does not replace those geometry consumers. A complete application-owned backend
+must cover shape admission/scaling, mass properties, bounds, manifolds, spatial
+queries and CCD under one shape identity and qualify all three reproduced cases.
+Do not leave two kernels answering the same scene's geometry queries or copy
+upstream algorithms into application code to disguise a dependency patch.
 
 Upstream documents maintained GJK fixes in its
 [changelog](https://github.com/dimforge/parry/blob/master/CHANGELOG.md).
@@ -629,13 +641,34 @@ against that same task-local candidate (`target/main-final-current-replay.json`)
 the maintained historical reference is unchanged. Its four focused physics
 gates pass all 40 checks (`target/main-final-physics-results.json`).
 
-Clock/coupling qualification remains open beyond pause/resume and current replay.
-The worker target still accumulates Bevy's rounded fixed `Duration`, while the
-mission mapping and default communication interval use `SECS_PER_TICK`.
-Communication scheduling needs one shared integer master-tick lattice before
-claiming long-duration clock identity. Direct-feedthrough/algebraic coupling and
+Modelica demand and communication endpoints now derive from the integer
+`SimTick` lattice through the core runtime's checked `TickClock`. Simulation
+Rhai contexts, `dt()`, elapsed seconds and timers consume the same logical
+coordinate. Native duration diagnostics retain their actual rounded values;
+`clock_snapshot().simulation_dt_s` exposes the logical quantum. Direct-feedthrough/algebraic coupling and
 external FMU 3 interoperability are also unqualified; the current checked native
 participant facade is not evidence for those contracts.
+
+The focused production qualification is 43 mixed-rate/pause/speed clock checks,
+30 manual-step checks, 20 dimensional drive/reaction checks and the exact
+initialization-failure fault. The same windowed binary passes the 30 step checks
+and 25 recording checks; ffprobe confirms 4, 1 and 2 saved frames. The owned
+recording session exits and releases port 4391. Evidence is under
+`target/integer-clock-reaction-*` and `target/integer-clock-recording-*`.
+The low-level clock gate checks 60,000 intervals, inactive reanchoring, duplicate,
+missing and backward active ticks, overflow refusal and invalid native timestep
+rejection (`target/integer-clock-mechanism-final-test.log`). These are clock and
+reaction qualification; they do not qualify an external FMU or fix a geometry
+kernel failure.
+
+The current normal binary also passes the authored unattended
+`Griffin1Requirements::Verify_GriffinSurfaceOperations` mission against Twin
+revision `e996705`: 16 checks, 5,460 ticks and 91 simulation seconds, through
+landing, ramps, rover release and route completion. The scene-test process exits
+0 and owned API port 4392 is released (`target/integer-clock-griffin-mission.log`).
+Its oversized evidence event is reported as truncated by the runner; the real
+authored verdict and individual failures remain separate, with no failed checks.
+This manual-time mission gate does not establish sustained realtime FPS.
 
 The final normal build loads Griffin with nine shared-clock Modelica participants,
 advances 300 physics steps in 5.004251 wall seconds, holds the physics counter

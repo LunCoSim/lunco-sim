@@ -749,7 +749,7 @@ impl TimeAnchor {
     /// [`MissionClock::sim_secs`]; this is the calendar mapping's own offset.)
     #[inline]
     pub fn secs_since(&self, tick: u64) -> f64 {
-        (tick.wrapping_sub(self.tick0) as i64) as f64 * SECS_PER_TICK
+        SimTick(tick).seconds_since(SimTick(self.tick0))
     }
 
     /// Derived epoch (Julian Date, TDB): `epoch0 + secs_since/86400`. **Pure** —
@@ -800,7 +800,7 @@ impl MissionClock {
     /// animation sampler keys on.
     #[inline]
     pub fn sim_secs(&self, tick: u64) -> f64 {
-        (tick.wrapping_sub(self.mission_tick0) as i64) as f64 * SECS_PER_TICK
+        SimTick(tick).seconds_since(SimTick(self.mission_tick0))
     }
 
     /// The current derived epoch for the authoritative simulation tick.

@@ -47,6 +47,12 @@ participants and grant both directions of access. Directional read/write ids
 may identify any live entity. All active Modelica participants already share
 the fixed-step clock; declarations grant access independently of membership. Unresolved ids fail that source revision with a visible
 diagnostic.
+`SimTick` is the integer authority. Modelica's `TickClock` derives demand and
+communication endpoints from admitted intervals; simulation Rhai and timers use
+the same seconds projection. Compare logical intervals with
+`clock_snapshot().simulation_dt_s`; native `fixed_*` and `physics_*` samples
+retain their rounded duration values for diagnostics. See architecture 19 for
+pause, reset and speed semantics.
 Every simulation-clock Modelica port access must be covered by the calling
 scenario's own plan, including `get`, `port`, and
 `query("ReadPorts", #{ api_id, port_names })`;
@@ -94,6 +100,10 @@ Physics operations that can accumulate into shared bodies use `PhysicsOrderKey`
 from the stable logical stage source and native composed prim path.
 Joint solving, motor warm-start, custom prismatic correction, raycast and jointed tire forces,
 and raycast mass-property folds consume stable key order.
+Completed prismatic `force` and revolute `torque` ports include passive damping
+impulses and use body2's positive coordinate sign. Verify their impulse/load
+conversion through the authored `native_force_drives` production gate; do not
+derive a replacement load from configured gains.
 The production `multi_rover_stress` Rhai gate selects a profile from typed
 scene-test parameters and compares only the requested reference row at each
 sample. Rust loads the portable JSON at the `--determinism-reference PATH`

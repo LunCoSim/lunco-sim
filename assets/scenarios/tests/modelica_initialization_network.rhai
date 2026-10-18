@@ -106,11 +106,20 @@ fn step_case(state) {
 fn check_clock(state, a, b, label) {
     let clock = clock_snapshot();
     let elapsed = clock.fixed_elapsed_s - state.clock_start.fixed_elapsed_s;
+    let master_elapsed = (clock.sim_tick - state.clock_start.sim_tick).to_float()
+        * a.modelica_communication_period_secs;
     let samples = query("ReadModelicaStepSamples", #{targets: [
         #{api_id: state.a_id, input_names: ["feedback"], output_names: ["solverTime"]},
         #{api_id: state.b_id, input_names: ["feedback", "clockFeedback"], output_names: ["solverTime", "clockSeen"]}
     ]}).entities;
     state.failures += [
+        t_true(abs(execution_context().time_seconds - elapsed_seconds()) < 1.0e-13
+            && dt() == clock.simulation_dt_s,
+            label + ": simulation scripts and timers inherit the integer master clock"),
+        t_true(abs(a.modelica_target_time - state.a_start - master_elapsed) < 1.0e-13,
+            label + ": default Modelica time is derived from the authoritative physics tick"),
+        t_true(abs(b.modelica_target_time - state.b_start - master_elapsed) < 1.0e-13,
+            label + ": subrate Modelica time is derived from the same authoritative physics tick"),
         t_true(clock.virtual_rate == (if state.phase == 1 { 4.0 } else if state.phase == 2 { 0.25 } else { 1.0 }),
             label + ": the shared transport applies the requested rate"),
         t_true(abs(clock.fixed_delta_s - state.clock_start.fixed_delta_s) < 1.0e-12,

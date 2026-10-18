@@ -2207,7 +2207,6 @@ const LIVE_TOL: f64 = 1e-6;
 /// integrates on this lattice; adaptive integration owns its accepted steps.
 const LIVE_INTERNAL_STEP_SECS: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0;
 
-const COMMUNICATION_EPS: f64 = 1e-9;
 const COMMUNICATION_TIME_ROUNDOFF: f64 = 32.0 * f64::EPSILON;
 
 /// Compare finite communication timestamps at floating point roundoff scale.
@@ -4396,9 +4395,10 @@ mod macro_step_tests {
     }
 
     #[test]
-    fn communication_schedule_default_is_valid_and_reanchors_exactly() {
+    fn communication_schedule_is_derived_from_its_integer_endpoint() {
         let mut model = ModelicaModel {
             current_time: 3.25,
+            communication_tick: 195,
             ..Default::default()
         };
 
@@ -4409,7 +4409,7 @@ mod macro_step_tests {
         model.reset_communication_schedule().unwrap();
         assert_eq!(
             model.next_communication_time,
-            3.25 + lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
+            lunco_core_runtime::SimTick(196).seconds()
         );
     }
 

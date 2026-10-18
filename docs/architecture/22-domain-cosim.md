@@ -20,6 +20,14 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+Joint measurements consume the completed native solve: prismatic `force` (N)
+and revolute `torque` (N m) are signed on body2 along the positive coordinate
+axis. `lunco-physics` retains passive damping impulses alongside constraint and
+drive reactions, then publishes one completed-tick average through `JointForces`.
+The measured port reads that report rather than reconstructing a spring force
+or omitting velocity-only damping. Its native producer is required when the
+joint port backend is installed.
+
 The USD-specific boundary is split between
 [`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/),
 [`lunco-usd-sim-domain-api`](../../crates/lunco-usd-sim-domain-api/),

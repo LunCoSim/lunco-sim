@@ -23,7 +23,7 @@ fn baseline(me) {
 fn capture_frame(me, index) {
     let clock = clock_snapshot();
     let observation = #{index: index, tick: clock.sim_tick,
-        model_time: probe().modelica_current_time, quantum: clock.fixed_dt_s};
+        model_time: probe().modelica_current_time, quantum: clock.simulation_dt_s};
     if index > 0 {
         observation.capture_tick = query("GetOfflineRecordingStatus").last_capture_sim_tick.to_int();
     }
@@ -55,7 +55,7 @@ fn check_take(me, count) {
             "the final image includes its final admitted cycle"),
         t_true(clock.sim_tick - this.start.sim_tick == count,
             "the recorder neither duplicates nor skips physical cycles"),
-        t_true(abs(probe().modelica_current_time - this.model_start - count * clock.fixed_dt_s) < 1.0e-8,
+        t_true(abs(probe().modelica_current_time - this.model_start - count * clock.simulation_dt_s) < 1.0e-13,
             "the completed take retains the coupled Modelica coordinate")
     ];
 }

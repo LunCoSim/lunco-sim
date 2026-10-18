@@ -877,6 +877,7 @@ pub fn validate_physics_clock(
     fixed_time: &Time<Fixed>,
     cycle_in_progress: bool,
 ) -> Result<(), String> {
+    lunco_core_runtime::simulation_timestep_seconds(fixed_time)?;
     let upper = fixed_time.elapsed();
     let lower = if cycle_in_progress {
         upper.saturating_sub(fixed_time.timestep())

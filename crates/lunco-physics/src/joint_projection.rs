@@ -159,6 +159,8 @@ pub(crate) struct JointProjection {
     pub(crate) position_lagrange: DVec3,
     pub(crate) rotation_lagrange: DVec3,
     pub(crate) motor_impulse: f64,
+    pub(crate) damping_linear_impulse: DVec3,
+    pub(crate) damping_angular_impulse: DVec3,
     pub(crate) pending_reaction: Option<JointForces>,
 }
 
@@ -228,6 +230,8 @@ impl JointProjection {
         self.position_lagrange = DVec3::ZERO;
         self.rotation_lagrange = DVec3::ZERO;
         self.motor_impulse = 0.0;
+        self.damping_linear_impulse = DVec3::ZERO;
+        self.damping_angular_impulse = DVec3::ZERO;
         self.prepared = true;
         Ok(())
     }

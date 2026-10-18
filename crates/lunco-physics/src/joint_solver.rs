@@ -790,7 +790,7 @@ where
 
 fn stable_joint_damping<C: Component + EntityConstraint<2> + OrderedJoint>(
     order: Res<JointSolverOrder>,
-    joints: Query<(&C, Option<&JointDamping>)>,
+    mut joints: Query<(&C, Option<&JointDamping>, &mut JointProjection)>,
     bodies: Query<(&mut SolverBody, &SolverBodyInertia)>,
     poses: Query<RigidBodyQueryReadOnly, Without<RigidBodyDisabled>>,
     time: Res<Time<Substeps>>,
@@ -802,7 +802,7 @@ fn stable_joint_damping<C: Component + EntityConstraint<2> + OrderedJoint>(
         return;
     }
     for entity in C::solver_entities(&order) {
-        let Ok((joint, damping)) = joints.get(*entity) else {
+        let Ok((joint, damping, mut projection)) = joints.get_mut(*entity) else {
             report_stale_joint_order(
                 &mut holds,
                 faults.as_deref_mut(),
@@ -878,13 +878,24 @@ fn stable_joint_damping<C: Component + EntityConstraint<2> + OrderedJoint>(
             (anchor1 + anchor2 + centers) * 0.5,
             (anchor1 + anchor2 - centers) * 0.5,
         ];
-        if let Err(detail) = crate::joint::integrate_joint_damping(
+        let result = crate::joint::integrate_joint_damping(
             [body1, body2],
             [inertia1, inertia2],
             levers,
             *damping,
             time.delta_secs_f64(),
-        ) {
+        )
+        .and_then(|impulse| {
+            let linear = projection.damping_linear_impulse + impulse.linear;
+            let angular = projection.damping_angular_impulse + impulse.angular;
+            if !linear.is_finite() || !angular.is_finite() {
+                return Err("completed damping impulse is not representable");
+            }
+            projection.damping_linear_impulse = linear;
+            projection.damping_angular_impulse = angular;
+            Ok(())
+        });
+        if let Err(detail) = result {
             report_joint_solver_fault(
                 &mut holds,
                 faults.as_deref_mut(),
@@ -982,8 +993,15 @@ fn prepare_joint_reactions<C: Component + OrderedJoint + XpbdConstraint<2>>(
             );
             return;
         }
-        let force = (data.total_position_lagrange() + projection.position_lagrange) / denominator;
-        let torque = (data.total_rotation_lagrange() + projection.rotation_lagrange) / denominator;
+        // Position multipliers have impulse * substep units; damping already
+        // returns impulses. Sum every substep, then divide each representation
+        // by its own units once, to report the completed tick's average load.
+        let force = (data.total_position_lagrange() + projection.position_lagrange) / denominator
+            + projection.damping_linear_impulse / duration;
+        // Native linear multipliers report the first endpoint's force; angular
+        // multipliers report the second endpoint's pure couple.
+        let torque = (data.total_rotation_lagrange() + projection.rotation_lagrange) / denominator
+            - projection.damping_angular_impulse / duration;
         let motor = projection.motor_impulse / duration;
         if !force.is_finite() || !torque.is_finite() || !motor.is_finite() {
             report_joint_solver_fault(

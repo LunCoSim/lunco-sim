@@ -416,15 +416,15 @@ fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> 
 /// macro-step dispatch**.
 ///
 /// Runs in [`FixedUpdate`]. Each live model's clock is driven toward
-/// `target_time`, which advances by exactly one `Time<Fixed>` delta per FIXED
-/// TICK. Model time is therefore a pure function of the fixed-step clock: it does
+/// `target_time`, projected from admitted integer physics ticks. Model time is
+/// therefore a pure function of the master clock: it does
 /// not depend on the render frame rate, on GPU load, or on window focus.
 ///
 /// Also measures the model-vs-world lag and publishes it to [`CosimLag`] — the
 /// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    fixed_time: Res<Time<Fixed>>,
+    master_tick: Res<lunco_core_runtime::SimTick>,
     mut q_models: Query<(
         Entity,
         &mut ModelicaModel,
@@ -444,11 +444,6 @@ pub fn spawn_modelica_requests(
     {
         return;
     }
-    // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
-    // show up as MORE fixed ticks, never as a longer one, so accumulating it
-    // per tick is exactly "one tick of world time".
-    let fixed_dt = fixed_time.delta_secs_f64();
-
     let mut worst_secs = 0.0_f64;
     let mut worst_entity = None;
     let mut live_models = 0usize;
@@ -499,6 +494,19 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
+        // Worker completion never decides how much physical time elapsed.
+        // The shared barrier prevents another master interval while a step is
+        // pending; participant pause/preparation alone freezes its child clock.
+        let active = !model.paused && model.is_compiled;
+        if let Err(error) = model.observe_master_tick(*master_tick, active) {
+            model.paused = true;
+            model.last_error = Some(error.clone());
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise("modelica-master-clock-invalid", Some(entity), model.model_name.clone(), error);
+            }
+            continue;
+        }
+
         if model.paused {
             // A paused model's clock is frozen WITH the world's: the target does
             // not advance, so unpausing does not trigger a catch-up burst for
@@ -539,9 +547,6 @@ pub fn spawn_modelica_requests(
             model.pending_step_inputs = Some(ordered_modelica_inputs(&model.inputs));
         }
 
-        // ── The world clock advances by exactly one FIXED tick ──────────────
-        model.target_time += fixed_dt;
-
         // ── Lag measurement (A3.2) ─────────────────────────────────────────
         live_models += 1;
         if shared_clock_participant {
@@ -554,10 +559,23 @@ pub fn spawn_modelica_requests(
         }
 
         // ── Macro step to the next declared communication point ─────────────
-        if model.target_time + COMMUNICATION_EPS < model.next_communication_time {
+        let stop_tick = match model.next_communication_tick() {
+            Ok(tick) => tick,
+            Err(error) => {
+                model.paused = true;
+                model.last_error = Some(error.clone());
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise("modelica-master-clock-invalid", Some(entity), model.model_name.clone(), error);
+                }
+                continue;
+            }
+        };
+        if model.master_clock.elapsed_ticks() < stop_tick {
             continue;
         }
-        let dt = model.next_communication_time - model.current_time;
+        let start_time = lunco_core_runtime::SimTick(model.communication_tick).seconds();
+        let stop_time = lunco_core_runtime::SimTick(stop_tick).seconds();
+        let dt = stop_time - start_time;
 
         let sampled_inputs = model
             .pending_step_inputs
@@ -585,9 +603,6 @@ pub fn spawn_modelica_requests(
             continue;
         };
         let step_id = model.next_step_id;
-        let start_time = model.current_time;
-        let stop_time = model.next_communication_time;
-
         let sent = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
@@ -602,6 +617,7 @@ pub fn spawn_modelica_requests(
             model.next_step_id = next_step_id;
             model.in_flight_step = Some(InFlightModelicaStep {
                 step_id,
+                stop_tick,
                 start_time,
                 stop_time,
                 sampled_inputs,
@@ -1404,10 +1420,7 @@ pub fn handle_modelica_responses(
                     model.inputs.entry(name).or_insert(val);
                 }
 
-                model.current_time = 0.0;
-                model.target_time = 0.0;
-                model.next_communication_time = 0.0;
-                model.last_step_time = 0.0;
+                model.clear_clock();
 
                 info!(
                     "[Modelica] lifecycle state for `{}`: compiled={} compiling={} stepping={} paused={}",
@@ -1418,18 +1431,9 @@ pub fn handle_modelica_responses(
                     model.paused
                 );
             } else if result.is_parameter_update {
-                model.current_time = 0.0;
-                model.target_time = 0.0;
-                model.next_communication_time = 0.0;
-                model.last_step_time = 0.0;
+                model.clear_clock();
             } else if result.is_reset {
-                model.current_time = 0.0;
-                // The world clock this model is coupled to restarts WITH it —
-                // otherwise the fresh model would immediately owe the catch-up
-                // path every second the old one had run (A3).
-                model.target_time = 0.0;
-                model.next_communication_time = 0.0;
-                model.last_step_time = 0.0;
+                model.clear_clock();
                 let values = &mut variables.bypass_change_detection().values;
                 variables_changed |= !values.is_empty();
                 values.clear();
@@ -1462,6 +1466,9 @@ pub fn handle_modelica_responses(
             // momentarily zero a running sim's clock. An errored step also
             // didn't progress, so leave the clock where it was.
             if result.error.is_none() && result.loaded_source_root_id.is_none() {
+                if let Some(in_flight) = &accepted_step {
+                    model.communication_tick = in_flight.stop_tick;
+                }
                 model.current_time = result.new_time;
                 model.last_step_time = result.new_time;
                 if let Err(error) = model.reset_communication_schedule() {
@@ -1854,6 +1861,7 @@ mod compile_fault_tests {
                     parameters: [("gain".to_owned(), 2.0)].into(),
                     in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
                         step_id: 1,
+                        stop_tick: 3,
                         start_time: 0.0,
                         stop_time: 0.05,
                         sampled_inputs: inputs,

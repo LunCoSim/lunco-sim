@@ -195,6 +195,12 @@ Live sessions have no stop time. Their finite options span supplies the
 root-scan scale. Batch runs use the admitted `RunBounds` and canonical output
 grid through Rumoca's checked batch solver in both native and browser hosts.
 Live co-simulation uses the separately admitted persistent participant session.
+Its demand and communication endpoints come from `TickClock` on the physics
+master's integer lattice, with the default exchange every master interval.
+Explicit slower exchanges are validated integer multiples. The worker receives
+derived start/stop seconds and returns its actual accepted solver coordinate;
+transaction validation never fabricates a corrected output timestamp. See
+[architecture 19](19-unified-time-and-clock.md) for pause, reset and speed semantics.
 Fixed RK4 applies exactly the configured step lattice and rejects models
 with unsupported event, discrete, clock, or external-table constructs.
 

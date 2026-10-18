@@ -34,6 +34,13 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+Live Modelica demand and communication endpoints derive from the integer physics
+`SimTick` through `TickClock`. Global pause and speed affect master admission;
+participant pause/reset affect only its child origin. Check timing against
+`clock_snapshot().simulation_dt_s`, not the rounded native `fixed_dt_s` diagnostic.
+Use the authored `modelica_initialization_network` and `shared_simulation_step`
+production gates to verify mixed rates, pause, speed and explicit stepping.
+
 When composing a component with bound input defaults, supply replacements as
 instance modifiers. Follow the
 [declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)

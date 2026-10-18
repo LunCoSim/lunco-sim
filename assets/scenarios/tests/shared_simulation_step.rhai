@@ -46,15 +46,18 @@ fn verify_frozen(me) {
 }
 fn verify_steps(me, count) {
     let clock = clock_snapshot();
-    let elapsed = count * this.start.fixed_dt_s;
+    let elapsed = count * this.start.simulation_dt_s;
+    let native_elapsed = count * this.start.fixed_dt_s;
     this.failures += [
         t_true(clock.clock_contract_ok, "stepped clocks retain the shared contract"),
         t_true(clock.sim_tick - this.start.sim_tick == count, "the requested count admits exact complete cycles"),
-        t_true(abs(clock.fixed_elapsed_s - this.start.fixed_elapsed_s - elapsed) < 1.0e-12,
+        t_true(abs(clock.fixed_elapsed_s - this.start.fixed_elapsed_s - native_elapsed) < 1.0e-12,
             "manual cycles retain the fixed physics quantum"),
-        t_true(abs(clock.physics_elapsed_s - this.start.physics_elapsed_s - elapsed) < 1.0e-12,
+        t_true(abs(clock.physics_elapsed_s - this.start.physics_elapsed_s - native_elapsed) < 1.0e-12,
             "native integration consumes every shared cycle"),
-        t_true(abs(probe().modelica_current_time - this.model_start - elapsed) < 1.0e-8,
+        t_true(abs(clock.admitted_sim_elapsed_s - this.start.admitted_sim_elapsed_s - elapsed) < 1.0e-13,
+            "manual cycles advance exact integer master time"),
+        t_true(abs(probe().modelica_current_time - this.model_start - elapsed) < 1.0e-13,
             "Modelica consumes the same elapsed interval"),
         t_true(abs(probe().outputs.solverTime - probe().modelica_current_time) < 1.0e-8,
             "Modelica time uses the committed solver coordinate")

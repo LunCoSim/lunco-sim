@@ -421,6 +421,8 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         current_time: 0.0,
         target_time: 0.0,
         communication_period_secs: communication_period,
+        master_clock: Default::default(),
+        communication_tick: 0,
         next_communication_time: communication_period,
         last_step_time: 0.0,
         session_id,

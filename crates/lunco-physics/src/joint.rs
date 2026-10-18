@@ -26,6 +26,9 @@ pub const JOINT_VELOCITY_PORT: &str = "velocity";
 /// The port name a prismatic joint exposes for its completed net force on body2 along the slider axis (N).
 pub const JOINT_FORCE_PORT: &str = "force";
 
+/// Completed torque on body2 along a revolute joint's positive hinge axis (N m).
+pub const JOINT_TORQUE_PORT: &str = "torque";
+
 /// A solved scalar torque applied across a revolute joint.
 ///
 /// The scalar is a physical torque from an authored runtime port. The joint
@@ -144,6 +147,14 @@ pub fn rotation_displacement(start: DQuat, end: DQuat) -> Result<DVec3, &'static
     Ok(vector * (2.0 * length.atan2(hemisphere * relative.w) / length))
 }
 
+/// Damping impulses retained for the completed joint's reaction report.
+pub(crate) struct JointDampingImpulse {
+    /// Point impulse received by the first endpoint.
+    pub linear: DVec3,
+    /// Pure angular impulse received by the first endpoint.
+    pub angular: DVec3,
+}
+
 /// Integrate passive relative-velocity damping for one physics substep.
 ///
 /// The authored coefficients are decay rates in 1/s. The point-velocity and
@@ -160,7 +171,7 @@ pub(crate) fn integrate_joint_damping(
     levers: [DVec3; 2],
     damping: JointDamping,
     dt: f64,
-) -> Result<(), &'static str> {
+) -> Result<JointDampingImpulse, &'static str> {
     let [first, second] = bodies;
     if ![dt, damping.linear, damping.angular]
         .into_iter()
@@ -201,7 +212,10 @@ pub(crate) fn integrate_joint_damping(
     inverse_unlocked_inertia(angular2)?;
     let angular_sum_inverse = inverse_unlocked_inertia(angular1 + angular2)?;
     if dt == 0.0 || (damping.linear == 0.0 && damping.angular == 0.0) {
-        return Ok(());
+        return Ok(JointDampingImpulse {
+            linear: DVec3::ZERO,
+            angular: DVec3::ZERO,
+        });
     }
     let fraction = |rate: f64| -(-rate * dt).exp_m1();
     let mass_sum = mass1 + mass2;
@@ -251,7 +265,10 @@ pub(crate) fn integrate_joint_damping(
     second.linear_velocity = linear2;
     first.angular_velocity = velocity1;
     second.angular_velocity = velocity2;
-    Ok(())
+    Ok(JointDampingImpulse {
+        linear: linear_impulse,
+        angular: angular_impulse,
+    })
 }
 
 fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {

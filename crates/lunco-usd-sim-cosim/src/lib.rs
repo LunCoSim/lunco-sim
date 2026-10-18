@@ -2365,10 +2365,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         model.last_error = None;
         model.paused = true;
         model.resume_after_compile = resume_after_compile;
-        model.current_time = 0.0;
-        model.target_time = 0.0;
-        model.next_communication_time = 0.0;
-        model.last_step_time = 0.0;
+        model.clear_clock();
         variables.values.clear();
         component.outputs.clear();
         component.status = SimStatus::Compiling;
