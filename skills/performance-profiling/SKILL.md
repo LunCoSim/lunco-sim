@@ -128,6 +128,10 @@ before clock projection, before admission of a held pending fixed cycle, and by
 the native driver on response readiness between application updates. A ready
 receipt can release another cycle in the same update; unfinished work yields
 without a wait. Full presentation isolation remains a separate requirement.
+Native headless readiness is shared through `SimulationCompletionSources` for
+participant workers. Its worker leases control registration lifetime;
+readiness does not consume a receipt. Windowed hosts never block on this wait.
+Complete-cycle continuation checks both coupling and generic progress holds.
 The default communication period is one physics tick; longer periods must be
 authored explicitly.
 For deliberately frozen captures use `StepSimulation` and presentation-timed

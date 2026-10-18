@@ -20,6 +20,14 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+Native host pacing uses core runtime `SimulationCompletionSources`, registering
+each worker's typed result channel and retaining a worker-lifetime lease. The
+readiness service never receives results or chooses commit order. Only the
+existing `SimulationCompletions` owner systems consume and validate receipts.
+At complete fixed-cycle boundaries the runner admits ready receipts for both
+the native coupling barrier and owner-neutral progress holds, so another frame
+is unnecessary when a ready worker can release the next tick.
+
 Joint measurements consume the completed native solve: prismatic `force` (N)
 and revolute `torque` (N m) are signed on body2 along the positive coordinate
 axis. `lunco-physics` retains passive damping impulses alongside constraint and

@@ -145,56 +145,6 @@ pub struct ModelicaChannels {
     pub tx_res: Sender<ModelicaResult>,
 }
 
-impl ModelicaChannels {
-    /// Let a native simulation host sleep until a response or its next pacing
-    /// deadline. Readiness never consumes a response: the ordered ECS admission
-    /// system remains the sole reader. Window/UI hosts must not block here.
-    pub fn wait_until_response_or(&self, deadline: std::time::Instant) {
-        let mut ready = crossbeam_channel::Select::new();
-        ready.recv(&self.rx);
-        let _ = ready.ready_deadline(deadline);
-        // A disconnected receiver is permanently ready. Leave its diagnostic
-        // to the admission owner, while preserving bounded host cadence.
-        if self.rx.is_empty() {
-            std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
-        }
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod channel_tests {
-    use super::*;
-
-    #[test]
-    fn host_response_wait_preserves_the_admission_reader() {
-        let (tx, _) = crossbeam_channel::unbounded();
-        let (result_tx, rx) = crossbeam_channel::unbounded();
-        let channels = ModelicaChannels { tx, rx };
-        result_tx
-            .send(ModelicaResult::worker_failure("first"))
-            .unwrap();
-        result_tx
-            .send(ModelicaResult::worker_failure("second"))
-            .unwrap();
-        channels.wait_until_response_or(std::time::Instant::now());
-        assert_eq!(
-            channels.rx.try_recv().unwrap().worker_failure.as_deref(),
-            Some("first")
-        );
-        assert_eq!(
-            channels.rx.try_recv().unwrap().worker_failure.as_deref(),
-            Some("second")
-        );
-        assert!(channels.rx.try_recv().is_err());
-        drop(result_tx);
-        channels.wait_until_response_or(std::time::Instant::now());
-        assert!(matches!(
-            channels.rx.try_recv(),
-            Err(crossbeam_channel::TryRecvError::Disconnected)
-        ));
-    }
-}
-
 /// The admitted actor's execution domain, retained through cached rebuilds.
 /// Native document construction must not occupy a scene solver owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

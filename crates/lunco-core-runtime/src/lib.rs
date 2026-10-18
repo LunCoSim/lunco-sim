@@ -9,6 +9,8 @@
 
 pub mod async_work;
 pub mod cadence;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod completion_readiness;
 pub mod gate;
 pub mod health;
 pub mod pacing;
@@ -16,6 +18,8 @@ pub mod subsystems;
 pub mod sync;
 pub mod tick_clock;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use completion_readiness::SimulationCompletionSources;
 pub use tick_clock::{TickClock, simulation_timestep_seconds};
 
 pub use async_work::{
@@ -86,6 +90,8 @@ pub struct SimulationCompletionPlugin;
 
 impl Plugin for SimulationCompletionPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(not(target_arch = "wasm32"))]
+        app.init_resource::<SimulationCompletionSources>();
         app.init_schedule(SimulationCompletions).add_systems(
             First,
             admit_simulation_completions

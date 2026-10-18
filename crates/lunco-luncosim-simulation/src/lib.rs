@@ -1060,9 +1060,9 @@ fn install_dynamic_headless_runner(app: &mut App) {
                     if Instant::now() >= deadline {
                         break;
                     }
-                    app.world()
-                        .resource::<lunco_modelica_runtime::ModelicaChannels>()
-                        .wait_until_response_or(deadline);
+                    app.world_mut()
+                        .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
+                        .wait_until_ready_or(deadline);
                     // Partial receipts do not need another application update.
                     // The same schedule serves First and native continuation;
                     // its systems retain one state and one validated reader.

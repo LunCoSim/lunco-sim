@@ -44,6 +44,11 @@ impl Plugin for ModelicaExecutionPlugin {
         }
         let (tx_cmd, rx_cmd) = unbounded();
         let (tx_res, rx_res) = unbounded();
+        #[cfg(not(target_arch = "wasm32"))]
+        let completion_lease = app
+            .world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
+            .register(&rx_res);
         app.init_resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
         let cache_limits = *app
             .world()
@@ -63,6 +68,7 @@ impl Plugin for ModelicaExecutionPlugin {
             let spawn = thread::Builder::new()
                 .name("modelica-worker".into())
                 .spawn(move || {
+                    let _completion_lease = completion_lease;
                     let failure_sender = tx_res.clone();
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -9,6 +9,7 @@ description = "Bevy runtime schedules and scene-scoped engine resources for LunC
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 serde = { workspace = true }
+crossbeam-channel.workspace = true
 
 [lints]
 workspace = true
