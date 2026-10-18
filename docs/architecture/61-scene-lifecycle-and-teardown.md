@@ -232,6 +232,14 @@ override it to preserve only explicitly application-owned state and monotonic
 publication counters. Settings, shared source caches and application registries
 keep their application lifetime.
 
+Dependency-owned mutable resources use
+`AppSceneExt::init_scene_resource_with::<R>(R::clear)` to register their public
+reset operation at the same boundary. This needs no trait implementation on a
+foreign type. The physics owner registers Avian's `ContactGraph` and
+`ConstraintGraph` this way: removal observers retire active constraints first,
+then native graph resets release isolated nodes and cached handles before the
+replacement scene is admitted.
+
 Scene-derived message queues use the same registration:
 `app.add_message::<M>().init_scene_resource::<Messages<M>>()`.
 Their reset clears unread payloads after shutdown and entity-removal callbacks,

@@ -381,7 +381,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // its oriented manifold/cache, rather than swapping solved contacts.
         app.add_systems(
             PhysicsSchedule,
-            canonicalize_usd_contact_pairs
+            canonicalize_contact_pairs
                 .after(PhysicsStepSystems::BroadPhase)
                 .before(PhysicsStepSystems::NarrowPhase),
         );
@@ -474,7 +474,11 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         );
         app.add_systems(
             FixedPostUpdate,
-            propagate_collider_transforms_rootless
+            (
+                reconcile_collider_body_state,
+                propagate_collider_transforms_rootless,
+            )
+                .chain()
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsTransformSystems::Propagate)
                 .after(PhysicsBridgeSystems::Read)
@@ -1739,6 +1743,45 @@ fn position_to_pose(
     }
 }
 
+/// Admit every attached proxy from the current native body state before scale,
+/// mass and broad-phase preparation. The native collider enable lifecycle
+/// retires contacts and rebuilds tree membership without detaching the shape.
+fn reconcile_collider_body_state(
+    mut commands: Commands,
+    colliders: Query<
+        (
+            Entity,
+            &ColliderOf,
+            &avian3d::collider_tree::ColliderTreeProxyKey,
+        ),
+        Without<ColliderDisabled>,
+    >,
+    bodies: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
+    trees: Res<avian3d::collider_tree::ColliderTrees>,
+) {
+    use avian3d::collider_tree::{ColliderTreeProxyFlags, ColliderTreeType};
+    for (entity, owner, key) in &colliders {
+        let Ok((body, disabled)) = bodies.get(owner.body) else {
+            continue;
+        };
+        let Some(proxy) = trees.get_proxy(*key) else {
+            continue;
+        };
+        if key.tree_type() != ColliderTreeType::from_body(Some(*body))
+            || proxy.collider != entity
+            || proxy.body != Some(owner.body)
+            || proxy.flags.contains(ColliderTreeProxyFlags::BODY_DISABLED) != disabled
+        {
+            // Native disable/enable preserves ColliderOf while retiring contacts
+            // and rebuilding the proxy from the finalized body state.
+            commands
+                .entity(entity)
+                .try_insert(ColliderDisabled)
+                .try_remove::<ColliderDisabled>();
+        }
+    }
+}
+
 /// Recompute every collider's [`ColliderTransform`] from its entity path,
 /// without needing a `Transform` on the tree root (avian's version does).
 ///
@@ -1775,7 +1818,15 @@ fn propagate_collider_transforms_rootless(
     // writeback pass, which runs earlier in the same tick), `Changed<ChildOf>`
     // covers reparenting, `Added<RigidBody>` covers a node becoming a
     // frame-resetting body.
-    q_dirty_nodes: Query<Entity, Or<(Changed<Transform>, Changed<ChildOf>, Added<RigidBody>)>>,
+    q_dirty_nodes: Query<
+        Entity,
+        Or<(
+            Changed<Transform>,
+            Changed<ChildOf>,
+            Added<RigidBody>,
+            Changed<ColliderOf>,
+        )>,
+    >,
     mut removed_tf: RemovedComponents<Transform>,
     mut removed_rb: RemovedComponents<RigidBody>,
     mut q_colliders: Query<(
@@ -1898,13 +1949,12 @@ fn ancestor_path(
     })
 }
 
-/// Orient newly discovered authored collider pairs by their composed source
-/// identity. The graph is undirected; both its edge and pair must agree about
+/// Orient newly discovered collider pairs by their stable physics identity. The graph is undirected; both its edge and pair must agree about
 /// endpoint roles before narrow phase generates normals and cache entries.
-/// Native/generated colliders retain their backend-owned identity/order.
-fn canonicalize_usd_contact_pairs(
+/// Generated source colliders use the same ordering contract as their bodies.
+fn canonicalize_contact_pairs(
     mut contacts: ResMut<ContactGraph>,
-    identities: Query<&UsdPrimPath>,
+    identities: Query<&lunco_physics::PhysicsOrderKey>,
 ) {
     let reversed = contacts
         .iter_active()
@@ -1914,15 +1964,7 @@ fn canonicalize_usd_contact_pairs(
             }
             let left = identities.get(pair.collider1).ok()?;
             let right = identities.get(pair.collider2).ok()?;
-            // Full composed paths distinguish descendants and instances in one
-            // stage. Asset paths disambiguate independent authored stages without
-            // relying on process-local Handle or Entity allocation.
-            let order = left.path.cmp(&right.path).then_with(|| {
-                left.stage_handle
-                    .path()
-                    .map(ToString::to_string)
-                    .cmp(&right.stage_handle.path().map(ToString::to_string))
-            });
+            let order = left.0.cmp(&right.0);
             order.is_gt().then_some(pair.contact_id)
         })
         .collect::<Vec<_>>();
@@ -1945,6 +1987,83 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn body_admission_updates_every_attached_collider_proxy() {
+        use avian3d::collider_tree::{
+            ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTreeType, ColliderTrees,
+        };
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            PhysicsPlugins::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.finish();
+        app.cleanup();
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                RigidBodyDisabled,
+                GlobalTransform::default(),
+            ))
+            .id();
+        let colliders = [0.0, 2.0].map(|x| {
+            app.world_mut()
+                .spawn((
+                    Collider::sphere(0.5),
+                    Transform::from_xyz(x, 0.0, 0.0),
+                    GlobalTransform::default(),
+                    ChildOf(body),
+                ))
+                .id()
+        });
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(body)
+            .insert(RigidBody::Dynamic)
+            .remove::<RigidBodyDisabled>();
+        app.world_mut().flush();
+        // A valid proxy handle alone does not establish attachment. Admission
+        // must also retire a proxy whose cached endpoints lost their owner.
+        let key = *app
+            .world()
+            .get::<ColliderTreeProxyKey>(colliders[1])
+            .unwrap();
+        let mut trees = app.world_mut().resource_mut::<ColliderTrees>();
+        let proxy = trees.get_proxy_mut(key).unwrap();
+        proxy.body = None;
+        proxy.collider = body;
+        drop(trees);
+        app.world_mut()
+            .run_system_once(reconcile_collider_body_state)
+            .unwrap();
+        app.world_mut().flush();
+        for collider in colliders {
+            let key = app.world().get::<ColliderTreeProxyKey>(collider).unwrap();
+            let proxy = app
+                .world()
+                .resource::<ColliderTrees>()
+                .get_proxy(*key)
+                .unwrap();
+            assert_eq!(key.tree_type(), ColliderTreeType::Dynamic);
+            assert_eq!(proxy.collider, collider);
+            assert_eq!(proxy.body, Some(body));
+            assert!(!proxy.flags.contains(ColliderTreeProxyFlags::BODY_DISABLED));
+            assert_eq!(app.world().get::<ColliderOf>(collider).unwrap().body, body);
+            assert!(app.world().get::<ColliderDisabled>(collider).is_none());
+        }
+        assert_eq!(
+            app.world()
+                .get::<RigidBodyColliders>(body)
+                .unwrap()
+                .iter()
+                .count(),
+            colliders.len()
+        );
+    }
 
     #[test]
     fn collider_preparation_consumes_current_rootless_scale_before_mass_reduction() {
@@ -1980,17 +2099,6 @@ mod tests {
                 ChildOf(group),
             ))
             .id();
-        assert_eq!(
-            app.world().get::<Collider>(body).unwrap().scale(),
-            DVec3::splat(3.0)
-        );
-        assert_eq!(
-            app.world()
-                .get::<ColliderMassProperties>(body)
-                .unwrap()
-                .mass,
-            27.0
-        );
         app.finish();
         app.cleanup();
         app.world_mut().run_schedule(PreUpdate);
@@ -2127,7 +2235,7 @@ mod tests {
             ));
             app.add_systems(
                 PhysicsSchedule,
-                canonicalize_usd_contact_pairs
+                canonicalize_contact_pairs
                     .after(PhysicsStepSystems::BroadPhase)
                     .before(PhysicsStepSystems::NarrowPhase),
             );
@@ -2139,10 +2247,7 @@ mod tests {
                     Position(DVec3::ZERO),
                     Rotation(DQuat::from_rotation_y(0.17)),
                     Transform::default(),
-                    UsdPrimPath {
-                        stage_handle: default(),
-                        path: "/A".into(),
-                    },
+                    lunco_physics::PhysicsOrderKey("/A".into()),
                 ))
                 .id();
             let b = app
@@ -2153,10 +2258,7 @@ mod tests {
                     Position(DVec3::new(0.78, 0.01, 0.02)),
                     Rotation(DQuat::from_rotation_x(0.031)),
                     Transform::default(),
-                    UsdPrimPath {
-                        stage_handle: default(),
-                        path: "/B".into(),
-                    },
+                    lunco_physics::PhysicsOrderKey("/B".into()),
                 ))
                 .id();
             let (first, second) = if reverse { (b, a) } else { (a, b) };

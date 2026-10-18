@@ -10561,6 +10561,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-core",
+ "lunco-usd-avian-contracts",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "openusd",

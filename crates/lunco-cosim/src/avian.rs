@@ -18,7 +18,7 @@
 //! That one system is the only per-tick avian system left.
 
 use avian3d::prelude::{
-    AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
+    AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties, ColliderOf,
     ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces, LinearVelocity, Mass,
     NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RevoluteJoint,
     RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
@@ -30,7 +30,7 @@ use std::hash::{Hash, Hasher};
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
-use lunco_port_core::ports::PortDirection;
+use lunco_port_core::ports::{PortDirection, PortTopologyRevision, PortTopologyState};
 
 /// Per-entity force accumulator written by `force_*` input ports and drained
 /// into avian each physics tick by [`apply_pending_forces`].
@@ -289,7 +289,7 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
 
 /// Contact as a PHYSICS fact, on any collider — no instrument required.
 ///
-/// Gated on [`Collider`] for the same reason the rigid-body group is gated on
+/// Gated on admitted native colliders for the same reason the rigid-body group is gated on
 /// [`RigidBody`]: a collider that is being pushed on has a contact force whether
 /// or not anyone authored a sensor to notice, exactly as a body has a velocity
 /// whether or not anyone authored a speedometer.
@@ -308,9 +308,10 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
 /// system, matching every other port in this module.
 pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
     source: "Avian contact solver",
-    present: |w, e| w.get::<Collider>(e).is_some(),
+    present: |w, e| lunco_physics::collider_entities(w, e).next().is_some(),
     entities: |world, out| {
-        out.extend(world.query_filtered::<Entity, With<Collider>>().iter(world));
+        out.extend(world.query_filtered::<Entity, Or<(With<Collider>, With<avian3d::prelude::RigidBodyColliders>)>>().iter(world)
+            .filter(|entity| lunco_physics::collider_entities(world, *entity).next().is_some()));
     },
     topology_key: collider_contact_topology_key,
     ports: &[
@@ -348,7 +349,15 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
             name: "mass",
             contract: AvianPortContract::MASS,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<ColliderMassProperties>(e).map(|m| m.mass as f64)),
+            read: Some(|w, e| {
+                lunco_physics::collider_entities(w, e)
+                    .map(|collider| {
+                        w.get::<ColliderMassProperties>(collider)
+                            .map(|mass| mass.mass as f64)
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(|masses| masses.into_iter().sum())
+            }),
             write: None,
         },
     ],
@@ -358,6 +367,22 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
 fn register_collider_contact_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Collider>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Collider>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ColliderOf>)
+        // Reattachment changes both bodies' contact surfaces. Re-admitting the
+        // same owner changes native proxy state without changing the port schema.
+        .add_observer(
+            |event: On<Insert, ColliderOf>,
+             owners: Query<&ColliderOf>,
+             mut state: ResMut<PortTopologyState>,
+             mut revision: ResMut<PortTopologyRevision>| {
+                if let Ok(owner) = owners.get(event.entity) {
+                    if state.changed::<ColliderOf>(event.entity, owner.body.to_bits()) {
+                        revision.bump();
+                    }
+                }
+            },
+        )
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ColliderOf>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ColliderMassProperties>)
         .add_observer(
             lunco_port_core::ports::bump_port_topology_on_remove::<ColliderMassProperties>,
@@ -365,10 +390,13 @@ fn register_collider_contact_topology(app: &mut App) {
 }
 
 fn collider_contact_topology_key(world: &World, entity: Entity) -> u64 {
-    let Some(_) = world.get::<Collider>(entity) else {
+    let mut colliders = lunco_physics::collider_entities(world, entity).peekable();
+    if colliders.peek().is_none() {
         return 0;
-    };
-    1 | (u64::from(world.get::<ColliderMassProperties>(entity).is_some()) << 1)
+    }
+    1 | (u64::from(
+        colliders.all(|collider| world.get::<ColliderMassProperties>(collider).is_some()),
+    ) << 1)
 }
 
 /// A USD-authored force actuator. Its command is scalar force; position and
