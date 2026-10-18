@@ -520,11 +520,17 @@ mod tests {
     #[test]
     fn ground_height_uses_the_active_physics_frame_at_an_elevated_site() {
         let mut app = App::new();
+        app.init_resource::<lunco_core_runtime::SimTick>();
+        app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<lunco_core::RuntimeFaults>();
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin::default(),
             TransformPlugin,
-            PhysicsPlugins::default(),
+            PhysicsPlugins::default()
+                .build()
+                .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>(),
+            lunco_physics::DeterministicJointSolverPlugin,
             LunCoMobilityPlugin,
         ));
         app.init_asset::<Mesh>()

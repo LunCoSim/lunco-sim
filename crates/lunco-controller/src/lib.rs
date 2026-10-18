@@ -245,6 +245,10 @@ fn physical_intent_mask(intent: UserIntent) -> u128 {
         UserIntent::Pause => 14,
         UserIntent::Cancel => 15,
         UserIntent::DeleteSelection => 16,
+        UserIntent::Auxiliary1 => 17,
+        UserIntent::Auxiliary2 => 18,
+        UserIntent::Auxiliary3 => 19,
+        UserIntent::Auxiliary4 => 20,
     };
     1_u128 << index
 }

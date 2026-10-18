@@ -68,6 +68,8 @@ struct InputBindingsDocument {
     look_button: String,
     #[serde(default)]
     pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
+    #[serde(default)]
+    key_chords: BTreeMap<String, Vec<Vec<KeyCode>>>,
 }
 
 /// Resolved user input settings shared by avatar control, UI help, tutorials,
@@ -91,6 +93,10 @@ pub struct InputBindingsSettings {
     /// Physical pointer chords mapped to authored semantic intent names.
     #[serde(default)]
     pub pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
+    /// Alternative simultaneous-key chords for semantic actions. Longer chords
+    /// take precedence through the input manager's standard clash resolution.
+    #[serde(default)]
+    pub key_chords: BTreeMap<String, Vec<Vec<KeyCode>>>,
 }
 
 impl Default for InputBindingsSettings {
@@ -99,6 +105,7 @@ impl Default for InputBindingsSettings {
             bindings: BTreeMap::new(),
             look_button: None,
             pointer_bindings: BTreeMap::new(),
+            key_chords: BTreeMap::new(),
         }
     }
 }
@@ -112,9 +119,18 @@ impl SettingsSection for InputBindingsSettings {
         {
             return Err(format!("invalid look_button '{button}'"));
         }
-        for intent in self.bindings.keys() {
+        for intent in self.bindings.keys().chain(self.key_chords.keys()) {
             if lunco_control_core::parse_user_intent(intent).is_none() {
                 return Err(format!("unknown input intent '{intent}'"));
+            }
+        }
+        for chords in self.key_chords.values() {
+            for chord in chords {
+                if chord.len() < 2
+                    || chord.iter().collect::<std::collections::HashSet<_>>().len() != chord.len()
+                {
+                    return Err("keyboard chords require at least two distinct keys".to_owned());
+                }
             }
         }
         for (intent, bindings) in &self.pointer_bindings {
@@ -144,6 +160,7 @@ impl InputBindingsSettings {
             bindings: document.bindings,
             look_button: Some(document.look_button),
             pointer_bindings: document.pointer_bindings,
+            key_chords: document.key_chords,
         };
         settings.validate_section()?;
         Ok(settings)
@@ -158,6 +175,7 @@ impl InputBindingsSettings {
     pub fn apply_defaults_json(&mut self, json: &str) -> Result<(), String> {
         let mut resolved = Self::from_json(json)?;
         resolved.bindings.extend(self.bindings.clone());
+        resolved.key_chords.extend(self.key_chords.clone());
         resolved
             .pointer_bindings
             .extend(self.pointer_bindings.clone());
@@ -173,7 +191,19 @@ impl InputBindingsSettings {
         let Some(button) = self.look_button_value() else {
             return Err(format!("invalid look_button '{}'", self.look_button_name()));
         };
-        Ok(build_input_map(bindings, button))
+        self.validate_section()?;
+        let mut map = build_input_map(bindings, button);
+        for (name, chords) in &self.key_chords {
+            let intent = lunco_control_core::parse_user_intent(name)
+                .ok_or_else(|| format!("unknown input intent '{name}'"))?;
+            for chord in chords {
+                map.insert(
+                    intent,
+                    leafwing_input_manager::prelude::ButtonlikeChord::new(chord.iter().copied()),
+                );
+            }
+        }
+        Ok(map)
     }
 
     /// Build an empty map when settings are invalid. The caller must report the
@@ -205,6 +235,7 @@ impl InputBindingsSettings {
             .key_bindings()?
             .into_iter()
             .flat_map(|(_, keys)| keys.into_iter())
+            .chain(self.key_chords.values().flatten().flatten().copied())
             .find(|key| {
                 let debug = format!("{key:?}");
                 debug.eq_ignore_ascii_case(needle)
@@ -234,19 +265,30 @@ impl InputBindingsSettings {
                 self.look_button_name().to_lowercase()
             ));
         }
-        let keys = self.bindings.get(binding)?;
-        (!keys.is_empty()).then(|| key_label(keys))
+        let mut labels = self
+            .bindings
+            .get(binding)
+            .filter(|keys| !keys.is_empty())
+            .map(|keys| vec![key_label(keys)])
+            .unwrap_or_default();
+        if let Some(chords) = self.key_chords.get(binding) {
+            labels.extend(chords.iter().map(|chord| {
+                chord
+                    .iter()
+                    .map(|key| key_label(std::slice::from_ref(key)))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            }));
+        }
+        (!labels.is_empty()).then(|| labels.join(" / "))
     }
 
     /// Resolve the display label for a semantic intent used by a vessel.
     pub fn label_for_intent(&self, intent: UserIntent) -> Result<String, String> {
-        let name = self
-            .key_bindings()?
-            .into_iter()
-            .find_map(|(candidate, keys)| (candidate == intent).then_some(keys))
-            .filter(|keys| !keys.is_empty())
-            .map_or_else(|| "unbound".to_owned(), |keys| key_label(&keys));
-        Ok(name)
+        self.validate_section()?;
+        Ok(self
+            .label(intent.canonical_name())
+            .unwrap_or_else(|| "unbound".to_owned()))
     }
 
     fn look_button_value(&self) -> Option<MouseButton> {
@@ -428,6 +470,63 @@ mod tests {
     fn invalid_pointer_binding_is_rejected() {
         assert!(parse_look_button("sideways").is_none());
         assert!(input_map_from_json(r#"{"look_button":"sideways"}"#).is_err());
+    }
+
+    #[test]
+    fn keyboard_chords_are_authored_and_use_longest_match() {
+        let settings = InputBindingsSettings::from_json(
+            r#"{
+            "pause": [], "auxiliary_2": ["KeyP"],
+            "key_chords": {"pause": [["ControlLeft", "KeyP"], ["ControlRight", "KeyP"]]}
+        }"#,
+        )
+        .expect("valid authored keyboard chords");
+        assert_eq!(
+            settings.label("pause").as_deref(),
+            Some("ControlLeft + P / ControlRight + P")
+        );
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((
+                ActionState::<UserIntent>::default(),
+                settings.input_map().unwrap(),
+            ))
+            .id();
+        KeyCode::KeyP.press(app.world_mut());
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .unwrap();
+        assert!(state.pressed(&UserIntent::Auxiliary2));
+        assert!(!state.pressed(&UserIntent::Pause));
+        KeyCode::KeyP.release(app.world_mut());
+        app.update();
+        KeyCode::ControlLeft.press(app.world_mut());
+        KeyCode::KeyP.press(app.world_mut());
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .unwrap();
+        assert!(state.pressed(&UserIntent::Pause));
+        assert!(
+            !state.pressed(&UserIntent::Auxiliary2),
+            "the longer chord must consume P"
+        );
+        assert!(InputBindingsSettings::from_json(r#"{"key_chords":{"pause":[[]]}}"#).is_err());
+        assert!(
+            InputBindingsSettings::from_json(r#"{"key_chords":{"pause":[["KeyP","KeyP"]]}}"#)
+                .is_err()
+        );
     }
 
     #[test]
