@@ -33,6 +33,15 @@ unit scale. Bounds use the same generic write validator for both backends. Nativ
 time units convert at the ABI boundary; `FmuParticipant.time_s` and shared clock
 snapshots always use seconds.
 
+Connection binding and initialization use the same SSP transform resolver:
+resolved base-unit conversion precedes the authored gain/offset. An omitted
+base-unit definition keeps the raw value under FMI's rule. Incompatible units
+produce `cosim-connection-contract-invalid` and hold physics. Inspect
+`GetReadiness` and `GetBrokenConnections.runtime_fault` for that owner result.
+Missing source samples remain pending; targets retain their prior value until
+all fan-in sources are available, unless an explicit hold drives the input.
+A diagnostic `dropped_value = ()` means no numeric write was attempted.
+
 For native external FMUs admitted by `LoadFmu`, inspect named scalar ports
 through the same port registry. Reflected `FmuParticipant.time_s` retains the
 validated native time; `communication_ticks` gives its integer master interval.

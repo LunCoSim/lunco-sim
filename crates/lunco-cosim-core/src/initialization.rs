@@ -61,6 +61,17 @@ pub fn initialization_inputs(
         .keys()
         .map(str::to_owned)
         .collect();
+    connected_initial_inputs(world, target, &input_names)
+}
+
+/// Read a complete target input transaction, including all fan-in sources and
+/// holds. A missing source waits without publishing a partial sum or a zero.
+/// The solver initializer and connection binding consume this same sampler.
+pub fn connected_initial_inputs(
+    world: &mut World,
+    target: Entity,
+    input_names: &std::collections::BTreeSet<String>,
+) -> Result<Option<Vec<(String, f64)>>, String> {
     let mut values = std::collections::BTreeMap::new();
     if let Some(pending) = world.get::<PendingInputConnections>(target) {
         for name in &pending.0 {
@@ -85,22 +96,7 @@ pub fn initialization_inputs(
         .filter(|wire| wire.end_element == target && input_names.contains(&wire.end_connector))
         .cloned()
         .collect();
-    wires.sort_by(|a, b| {
-        a.end_connector
-            .cmp(&b.end_connector)
-            .then_with(|| {
-                world
-                    .get::<lunco_core::GlobalEntityId>(a.start_element)
-                    .map(|id| id.get())
-                    .cmp(
-                        &world
-                            .get::<lunco_core::GlobalEntityId>(b.start_element)
-                            .map(|id| id.get()),
-                    )
-            })
-            .then_with(|| a.start_connector.cmp(&b.start_connector))
-            .then_with(|| a.start_element.to_bits().cmp(&b.start_element.to_bits()))
-    });
+    wires.sort_by(|a, b| a.compare_authoritative(b, world));
     let registry = world
         .get_resource::<PortRegistry>()
         .ok_or("co-simulation port registry unavailable")?;
@@ -155,7 +151,8 @@ pub fn initialization_inputs(
         ) else {
             return Ok(None);
         };
-        let contribution = source * wire.scale + wire.offset;
+        let (scale, offset) = wire.resolved_transform(registry, world)?;
+        let contribution = source * scale + offset;
         let value = values.entry(wire.end_connector.clone()).or_insert(0.0);
         *value += contribution;
         if !source.is_finite() || !contribution.is_finite() || !value.is_finite() {

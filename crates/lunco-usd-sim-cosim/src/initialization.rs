@@ -37,12 +37,25 @@ struct Member {
     resume: bool,
 }
 
+// A unit definition can change without rewriting the edge. Certification must
+// retain the resolved coefficients as well as the authored connection fields.
+type WireSnapshot = (
+    Entity,
+    String,
+    Entity,
+    String,
+    bool,
+    u64,
+    u64,
+    Result<(u64, u64), String>,
+);
+
 #[derive(Clone, Debug, PartialEq)]
 struct Plan {
     generation: u64,
     members: Vec<Member>,
     probes: Vec<(Entity, String, String)>,
-    wires: Vec<(Entity, String, Entity, String, bool, u64, u64)>,
+    wires: Vec<WireSnapshot>,
 }
 
 struct Job {
@@ -61,7 +74,10 @@ pub(super) struct CoupledInitialization {
     certificate: Option<Certificate>,
 }
 
-fn wire_snapshot(world: &mut World) -> Vec<(Entity, String, Entity, String, bool, u64, u64)> {
+fn wire_snapshot(world: &mut World) -> Vec<WireSnapshot> {
+    let registry = world
+        .resource::<lunco_port_core::ports::PortRegistry>()
+        .clone();
     let mut query = world.query::<&SimConnection>();
     let mut values: Vec<_> = query
         .iter(world)
@@ -74,6 +90,8 @@ fn wire_snapshot(world: &mut World) -> Vec<(Entity, String, Entity, String, bool
                 wire.start_is_input,
                 wire.scale.to_bits(),
                 wire.offset.to_bits(),
+                wire.resolved_transform(&registry, world)
+                    .map(|(scale, offset)| (scale.to_bits(), offset.to_bits())),
             )
         })
         .collect();
@@ -270,14 +288,8 @@ impl InitialExpressions<'_> {
                     else {
                         return Ok(None);
                     };
-                    if !wire.scale.is_finite() || !wire.offset.is_finite() {
-                        return Err("initialization affine transform is not finite".into());
-                    }
-                    terms.push(InitialExpression::Affine(
-                        Box::new(source),
-                        wire.scale,
-                        wire.offset,
-                    ));
+                    let (scale, offset) = wire.resolved_transform(self.registry, self.world)?;
+                    terms.push(InitialExpression::Affine(Box::new(source), scale, offset));
                 }
                 return Ok(Some(InitialExpression::Sum(terms)));
             }
@@ -513,19 +525,8 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         .collect();
     let mut wires_query = world.query::<&SimConnection>();
     let mut all_wires: Vec<_> = wires_query.iter(world).cloned().collect();
-    all_wires.sort_by(|a, b| {
-        let path = |entity| {
-            world
-                .get::<UsdPrimPath>(entity)
-                .map(|path| path.path.as_str())
-        };
-        path(a.end_element)
-            .cmp(&path(b.end_element))
-            .then_with(|| a.end_connector.cmp(&b.end_connector))
-            .then_with(|| path(a.start_element).cmp(&path(b.start_element)))
-            .then_with(|| a.start_connector.cmp(&b.start_connector))
-    });
-    let mut wires: Vec<_> = all_wires
+    all_wires.sort_by(|a, b| a.compare_authoritative(b, world));
+    let wires: Vec<_> = all_wires
         .iter()
         .filter(|wire| {
             input_names
@@ -534,18 +535,6 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         })
         .cloned()
         .collect();
-    wires.sort_by(|a, b| {
-        let source_path = |entity| {
-            world
-                .get::<UsdPrimPath>(entity)
-                .map(|path| path.path.as_str())
-        };
-        indices[&a.end_element]
-            .cmp(&indices[&b.end_element])
-            .then_with(|| a.end_connector.cmp(&b.end_connector))
-            .then_with(|| source_path(a.start_element).cmp(&source_path(b.start_element)))
-            .then_with(|| a.start_connector.cmp(&b.start_connector))
-    });
     let registry = world.resource::<lunco_port_core::ports::PortRegistry>();
     let expressions = InitialExpressions {
         world,
@@ -579,12 +568,10 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
             return Ok(None);
         };
         internal |= source.references_participant();
-        if !wire.scale.is_finite() || !wire.offset.is_finite() {
-            return Err("coupled initialization affine transform is not finite".into());
-        }
+        let (scale, offset) = wire.resolved_transform(registry, world)?;
         sums.entry((destination, wire.end_connector))
             .or_default()
-            .push(InitialExpression::Affine(Box::new(source), wire.scale, wire.offset).source());
+            .push(InitialExpression::Affine(Box::new(source), scale, offset).source());
     }
     if !internal {
         return Ok(None);
@@ -660,18 +647,7 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
     }
     let mut query = world.query::<&SimConnection>();
     let mut wires: Vec<_> = query.iter(world).cloned().collect();
-    wires.sort_by(|a, b| {
-        let path = |entity| {
-            world
-                .get::<UsdPrimPath>(entity)
-                .map(|path| path.path.as_str())
-        };
-        path(a.end_element)
-            .cmp(&path(b.end_element))
-            .then_with(|| a.end_connector.cmp(&b.end_connector))
-            .then_with(|| path(a.start_element).cmp(&path(b.start_element)))
-            .then_with(|| a.start_connector.cmp(&b.start_connector))
-    });
+    wires.sort_by(|a, b| a.compare_authoritative(b, world));
     let registry = world.resource::<lunco_port_core::ports::PortRegistry>();
     let indices = BTreeMap::new();
     let names = BTreeMap::new();

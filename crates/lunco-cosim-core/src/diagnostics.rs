@@ -41,8 +41,9 @@ pub struct BrokenConnection {
     /// Whether the entity exposes any port surface. `true` = genuine fault (has
     /// ports, not this one); `false` = structural/still-loading endpoint.
     pub has_port_surface: bool,
-    /// The accumulated value that was dropped (what the source(s) resolved to).
-    pub dropped_value: f64,
+    /// The rejected accumulated value. `None` means admission failed before
+    /// a numerical write was attempted (for example, incompatible units).
+    pub dropped_value: Option<f64>,
     /// Owner-supplied rejection reason, including range and writability details.
     pub failure: Option<String>,
 }
@@ -238,7 +239,7 @@ mod tests {
             global_id: None,
             port: Arc::from("demand"),
             has_port_surface: true,
-            dropped_value: 3.5,
+            dropped_value: Some(3.5),
             failure: Some("value must be ≤ 1".into()),
         };
 

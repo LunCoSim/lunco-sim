@@ -92,6 +92,8 @@ metadata through `ReadPorts`.
 `--invalid-parameter` supplies an out-of-range native parameter. Each passes
 three checks for the owner diagnostic and released preparation hold. Pure metadata lowering
 checks declared millisecond time conversion and non-time rejection; the native
-Reference FMUs use seconds. This focused profile does not qualify automatic
-wire unit conversion, broad FMI conformance or implicit coupling. Those contracts remain required before claiming general physical
-interoperability.
+Reference FMUs use seconds. The shared connection fabric compiles unit
+conversions before the authored gain/offset; its native length/mass gate is
+`scripts/api/test_connection_units.py`. External FMU-to-FMU conversion,
+broad FMI conformance and implicit coupling still require qualification before
+claiming general physical interoperability.

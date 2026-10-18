@@ -40,6 +40,29 @@ precedence over the wiring fabric. The authored layer survives authority
 release so autopilot guidance resumes naturally. Holds are iterated by borrowed names and matched once to compiled target
 indices, so the tick does not hash every target against the hold table.
 
+At admission, `SimConnection::resolved_transform` converts resolved compatible
+units before composing the authored gain and offset in target units, following
+SSP. An omitted base-unit definition keeps the raw value under FMI's unit rule.
+Incompatible unit contracts and unrepresentable coefficients reject the edge
+and hold physical execution. Dense slots cache these coefficients; steady
+exchange applies compiled arithmetic and retains the port registry's live
+write validation.
+
+Binding and solver initialization share `connected_initial_inputs`. All fan-in
+samples are captured before initial writes, in the same authoritative order as
+live exchange. Unbound contributions and missing samples wait without writing zero or a partial sum;
+explicit holds retain priority. The ordering includes input/output side and
+coefficient bits, so repeated sources with different transforms stay
+independent of ECS spawn order. A rejected initial value is a structured
+connection fault. `dropped_value` is optional in diagnostics: no attempted write
+means no numerical value.
+
+`python3 scripts/api/test_connection_units.py --port <free-port>` runs the
+authored native length/mass contract gate. Add `--windowed` to use the same
+observer in the visible production host. It requires the post-fault verdict,
+including the retained valid target value, rather than treating fault arrival
+alone as the test result.
+
 `PortRegistry::entity_port_infos` is the inspection projection used by the native
 Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live value
 as an optional sample: a declared output that has not produced a value stays

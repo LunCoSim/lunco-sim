@@ -1289,6 +1289,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn connection_transform_uses_winning_metadata_before_authored_affine_terms() {
+        use lunco_port_core::{ScalarPortContract, ScalarPortContracts};
+        let mut world = World::new();
+        let contracts = |unit| {
+            ScalarPortContracts::new([(
+                "signal".into(),
+                ScalarPortContract {
+                    unit,
+                    ..Default::default()
+                },
+            )])
+            .unwrap()
+        };
+        let source_unit = Unit::new("source", Dimension::LENGTH, 0.01, 10.0).unwrap();
+        let target_unit = Unit::new("target", Dimension::LENGTH, 1.0, 2.0).unwrap();
+        let mut source = SimComponent::default();
+        source.outputs.insert("signal".into(), 100.0);
+        let mut target = SimComponent::default();
+        target.inputs.insert("signal".into(), 0.0);
+        let source = world
+            .spawn((
+                source,
+                contracts(Some(UnitReference::resolved(source_unit))),
+            ))
+            .id();
+        let target = world
+            .spawn((
+                target,
+                contracts(Some(UnitReference::resolved(target_unit))),
+            ))
+            .id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+        let wire = SimConnection {
+            start_element: source,
+            start_connector: "signal".into(),
+            end_element: target,
+            end_connector: "signal".into(),
+            scale: 2.0,
+            offset: -1.0,
+            ..Default::default()
+        };
+        let (scale, offset) = wire.resolved_transform(&registry, &world).unwrap();
+        assert_eq!((scale, offset), (0.02, 15.0));
+        assert_eq!(100.0 * scale + offset, 17.0);
+
+        world
+            .entity_mut(target)
+            .insert(contracts(Some(UnitReference::resolved(Unit::coherent_si(
+                Dimension([0, 1, 0, 0, 0, 0, 0]),
+            )))));
+        assert!(
+            wire.resolved_transform(&registry, &world)
+                .unwrap_err()
+                .contains("incompatible units")
+        );
+        // An unresolved unit carries identity, not a guessed conversion factor.
+        world
+            .entity_mut(target)
+            .insert(contracts(Some(UnitReference::new("target", None).unwrap())));
+        assert_eq!(
+            wire.resolved_transform(&registry, &world).unwrap(),
+            (2.0, -1.0)
+        );
+    }
+
+    #[test]
     fn model_output_availability_preserves_independent_native_ports() {
         let mut world = World::new();
         world.init_resource::<PortTopologyRevision>();

@@ -895,6 +895,27 @@ impl Unit {
             && self.relative_quantity == other.relative_quantity
     }
 
+    /// Compile an affine conversion into a compatible unit. Deriving the gain
+    /// from the scales avoids subtracting two large converted sample values.
+    pub fn conversion_to(&self, target: &Self) -> Result<(f64, f64), UnitError> {
+        if !self.is_compatible_with(target) {
+            return Err(UnitError::Incompatible {
+                from: self.symbol.clone(),
+                to: target.symbol.clone(),
+            });
+        }
+        let scale = self.scale_to_si / target.scale_to_si;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(UnitError::InvalidScale);
+        }
+        let offset = if self.relative_quantity {
+            0.0
+        } else {
+            finite((self.offset_to_si - target.offset_to_si) / target.scale_to_si)?
+        };
+        Ok((scale, offset))
+    }
+
     /// Convert one value into SI base units.
     pub fn to_si(&self, value: f64) -> Result<f64, UnitError> {
         finite(value)?;
@@ -995,15 +1016,10 @@ impl Quantity {
 
     /// Convert to another compatible unit.
     pub fn in_unit(&self, target: Unit) -> Result<Self, UnitError> {
-        if !target.is_compatible_with(&self.unit) {
-            return Err(UnitError::Incompatible {
-                from: self.unit.symbol.clone(),
-                to: target.symbol,
-            });
-        }
+        let (scale, offset) = self.unit.conversion_to(&target)?;
         let conversion_exactness = self.conversion_exactness.combine(target.scale_exactness);
         Self::with_conversion_exactness(
-            target.from_si(self.unit.to_si(self.value)?)?,
+            finite(self.value * scale + offset)?,
             target,
             conversion_exactness,
         )
@@ -1185,6 +1201,28 @@ mod tests {
         let metres = Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap();
         let length = Quantity::with_unit(25.0, centimetres).unwrap();
         assert_eq!(length.value_in(metres).unwrap(), 0.25);
+    }
+
+    #[test]
+    fn conversion_coefficients_preserve_small_gains_and_affine_offsets() {
+        let source = Unit::new("source", Dimension::NONE, 0.01, 1e20).unwrap();
+        let target = Unit::new("target", Dimension::NONE, 1.0, 1e20).unwrap();
+        assert_eq!(source.conversion_to(&target).unwrap(), (0.01, 0.0));
+        assert_eq!(
+            Quantity::with_unit(100.0, source)
+                .unwrap()
+                .value_in(target)
+                .unwrap(),
+            1.0
+        );
+        let celsius = Unit::new("degC", Dimension([0, 0, 0, 0, 1, 0, 0]), 1.0, 273.15).unwrap();
+        let fahrenheit =
+            Unit::new("degF", celsius.dimension(), 5.0 / 9.0, 255.3722222222222).unwrap();
+        let (scale, offset) = celsius.conversion_to(&fahrenheit).unwrap();
+        assert!((scale * 100.0 + offset - 212.0).abs() < 1e-12);
+        let tiny = Unit::new("tiny", Dimension::NONE, f64::MIN_POSITIVE, 0.0).unwrap();
+        let huge = Unit::new("huge", Dimension::NONE, f64::MAX, 0.0).unwrap();
+        assert!(tiny.conversion_to(&huge).is_err());
     }
 
     #[test]

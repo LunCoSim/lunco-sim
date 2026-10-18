@@ -47,6 +47,28 @@ At complete fixed-cycle boundaries the runner admits ready receipts for both
 the native coupling barrier and owner-neutral progress holds, so another frame
 is unnecessary when a ready worker can release the next tick.
 
+Connection arithmetic belongs to `SimConnection::resolved_transform`. It reads
+the precedence-winning input/output metadata, checks the declared contracts,
+converts compatible resolved base units, then composes the authored SSP gain and
+offset in target units. When either base-unit definition is omitted, FMI's raw
+value rule applies; unit spellings are never parsed or guessed. Incompatible
+dimensions, radian exponents, relative-quantity flags or unrepresentable
+coefficients fail at binding through `cosim-connection-contract-invalid` and the
+physical safety hold. The compiled fabric caches the result between structural
+revisions; ordinary samples do not repeat conversion setup. The port registry
+still validates each write against its live owner contract.
+
+`SimConnection::compare_authoritative` orders targets, source identities,
+input/output side and authored coefficient bits for binding, initial sampling
+and dense-slot compilation. Distinct transforms of the same source cannot use
+ECS spawn order as a floating-point summation tie-break. Initial binding samples
+all complete fan-ins before writing any target. Solver preparation consumes the
+same `connected_initial_inputs` sampler, and asynchronous initialization
+certificates fence the effective connection transforms as well as authored
+wiring. A target with an unbound or unavailable source retains its previous
+input until all contributions are available; explicit holds retain priority. Diagnostics
+use an absent `dropped_value` when no numerical write was attempted.
+
 Joint measurements consume the completed native solve: prismatic `force` (N)
 and revolute `torque` (N m) are signed on body2 along the positive coordinate
 axis. `lunco-physics` retains passive damping impulses alongside constraint and
@@ -472,8 +494,9 @@ scheduler. FMI Model Exchange requires a separate solver integration and is
 not admitted as an FMI-CS participant. The native profile supports scalar
 Float64 ports. Other types, arrays, Scheduled Execution clocks and externally
 hosted FMUs are rejected with owner diagnostics. Unit/range projection is
-implemented; automatic wire conversion, implicit coupling and broad FMI
-conformance require separate qualification.
+implemented, and the shared connection fabric compiles compatible unit
+conversions. External FMU-to-FMU unit conversion, implicit coupling and broad
+FMI conformance require separate qualification.
 
 ## Where the master loop fits
 

@@ -7,11 +7,10 @@ import hashlib
 import io
 import os
 from pathlib import Path
-import time
 from urllib.request import urlopen
 import zipfile
 
-from runtime import ROOT, BINARY, ProductionSession, wait_for_ready
+from runtime import ROOT, BINARY, ProductionSession, run_authored_scenario, wait_for_ready
 
 REFERENCE_VERSION = "0.0.39"
 REFERENCE_SHA256 = "6863d55e5818e1ca4e4614c4d4ba4047a921b4495f6336e7002874ed791f6c2a"
@@ -72,28 +71,11 @@ def main():
         print(f"OWNED PID={pid} port={args.port} binary={BINARY}", flush=True)
         execute(session, "LoadScene", path="lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda")
         wait_for_ready(args.port)
-        execute(session, "RunScenarioAsset", source_asset=f"lunco://scenarios/tests/{scenario}.rhai",
-                reload_policy="Retain", params=fixtures)
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            output = log.read_text(errors="replace")
-            if "[rhai] TESTS_FAIL" in output:
-                raise RuntimeError(f"authored FMI verdict failed: {log}")
-            if "failed to load requested scenario asset" in output:
-                raise RuntimeError(f"authored FMI source admission failed: {log}")
-            if "[rhai] task leaf failed:" in output:
-                raise RuntimeError(f"authored FMI task failed: {log}")
-            if "[rhai] TESTS_OK" in output:
-                print(next(line for line in output.splitlines() if "[rhai] TESTS_OK" in line), flush=True)
-                break
-            readiness = execute(session, "GetReadiness")
-            if readiness.get("faulted") and not negative:
-                raise RuntimeError(f"FMI runtime fault: {readiness['fault']}")
-            if session.process.poll() is not None:
-                raise RuntimeError(f"runtime exited before FMI verdict: {log}")
-            time.sleep(.1)
-        else:
-            raise RuntimeError(f"authored FMI gate timed out: {log}")
+        run_authored_scenario(
+            session, f"lunco://scenarios/tests/{scenario}.rhai",
+            title="FMI ADMISSION REJECTION" if negative else "FMI SHARED CLOCK",
+            check_count=3 if negative else 43, params=fixtures, allow_runtime_fault=negative,
+        )
         if args.windowed:
             session.capture_screenshot(ROOT / "target" / "fmi-shared-clock.png")
     print(f"API Exit completed; port {args.port} released", flush=True)
