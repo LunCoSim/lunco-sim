@@ -720,7 +720,8 @@ impl UnitScaleExactness {
 /// A resolved unit definition supplied by a standard/library adapter.
 ///
 /// `scale_to_si` and `offset_to_si` express the affine conversion
-/// `si = value * scale_to_si + offset_to_si`. The unit symbol is metadata for
+/// `si = value * scale_to_si + offset_to_si` for absolute quantities; relative
+/// quantities ignore the offset. The unit symbol is metadata for
 /// provenance and display; conversion never parses or interprets it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Unit {
@@ -729,6 +730,8 @@ pub struct Unit {
     scale_to_si: f64,
     offset_to_si: f64,
     scale_exactness: UnitScaleExactness,
+    angle_power: i32,
+    relative_quantity: bool,
 }
 
 #[derive(Deserialize)]
@@ -740,6 +743,10 @@ struct UnitFields {
     offset_to_si: f64,
     #[serde(default)]
     scale_exactness: UnitScaleExactness,
+    #[serde(default)]
+    angle_power: i32,
+    #[serde(default)]
+    relative_quantity: bool,
 }
 
 impl<'de> Deserialize<'de> for Unit {
@@ -755,6 +762,10 @@ impl<'de> Deserialize<'de> for Unit {
             fields.offset_to_si,
             fields.scale_exactness,
         )
+        .map(|unit| {
+            unit.with_angle_power(fields.angle_power)
+                .with_relative_quantity(fields.relative_quantity)
+        })
         .map_err(serde::de::Error::custom)
     }
 }
@@ -762,8 +773,8 @@ impl<'de> Deserialize<'de> for Unit {
 impl Unit {
     /// Construct the coherent SI unit for a dimension.
     ///
-    /// The generic symbol is display metadata; the dimension vector carries
-    /// all operational meaning for a derived result.
+    /// The generic symbol is display metadata. The SI dimension vector, angular
+    /// exponent and relative-quantity semantics determine compatibility.
     pub fn coherent_si(dimension: Dimension) -> Self {
         Self {
             symbol: "derived SI".to_owned(),
@@ -771,6 +782,8 @@ impl Unit {
             scale_to_si: 1.0,
             offset_to_si: 0.0,
             scale_exactness: UnitScaleExactness::Exact,
+            angle_power: 0,
+            relative_quantity: false,
         }
     }
 
@@ -814,6 +827,8 @@ impl Unit {
             scale_to_si,
             offset_to_si,
             scale_exactness,
+            angle_power: 0,
+            relative_quantity: false,
         })
     }
 
@@ -850,21 +865,61 @@ impl Unit {
         self.scale_exactness
     }
 
+    /// Exponent of the SI derived unit radian, retained for connection checks.
+    /// The seven SI dimensions still govern equation dimensional analysis.
+    pub const fn angle_power(&self) -> i32 {
+        self.angle_power
+    }
+
+    /// Attach an explicit angular unit exponent; omitted means zero.
+    pub fn with_angle_power(mut self, exponent: i32) -> Self {
+        self.angle_power = exponent;
+        self
+    }
+
+    /// Whether this unit measures a difference rather than an absolute value.
+    pub const fn relative_quantity(&self) -> bool {
+        self.relative_quantity
+    }
+
+    /// Relative quantities use the same scale and ignore the absolute offset.
+    pub fn with_relative_quantity(mut self, relative: bool) -> Self {
+        self.relative_quantity = relative;
+        self
+    }
+
     /// Whether two resolved units measure the same physical dimension.
     pub fn is_compatible_with(&self, other: &Self) -> bool {
         self.dimension == other.dimension
+            && self.angle_power == other.angle_power
+            && self.relative_quantity == other.relative_quantity
     }
 
     /// Convert one value into SI base units.
     pub fn to_si(&self, value: f64) -> Result<f64, UnitError> {
         finite(value)?;
-        finite(value * self.scale_to_si + self.offset_to_si)
+        finite(
+            value * self.scale_to_si
+                + if self.relative_quantity {
+                    0.0
+                } else {
+                    self.offset_to_si
+                },
+        )
     }
 
     /// Convert one SI value into this unit.
     pub fn from_si(&self, value: f64) -> Result<f64, UnitError> {
         finite(value)?;
-        finite((value - self.offset_to_si) / self.scale_to_si)
+        finite(
+            (value
+                - if self.relative_quantity {
+                    0.0
+                } else {
+                    self.offset_to_si
+                })
+                / self.scale_to_si,
+        )
     }
 }
 
@@ -940,7 +995,7 @@ impl Quantity {
 
     /// Convert to another compatible unit.
     pub fn in_unit(&self, target: Unit) -> Result<Self, UnitError> {
-        if target.dimension != self.unit.dimension {
+        if !target.is_compatible_with(&self.unit) {
             return Err(UnitError::Incompatible {
                 from: self.unit.symbol.clone(),
                 to: target.symbol,
@@ -992,9 +1047,14 @@ impl Quantity {
     pub fn multiply(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
         let dimension = self.unit.dimension.checked_product(other.unit.dimension)?;
+        let angle = self
+            .unit
+            .angle_power
+            .checked_add(other.unit.angle_power)
+            .ok_or(UnitError::DimensionOverflow)?;
         Self::with_conversion_exactness(
             self.si_value()? * other.si_value()?,
-            Unit::coherent_si(dimension),
+            Unit::coherent_si(dimension).with_angle_power(angle),
             self.conversion_exactness
                 .combine(other.conversion_exactness),
         )
@@ -1004,9 +1064,14 @@ impl Quantity {
     pub fn divide(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
         let dimension = self.unit.dimension.checked_quotient(other.unit.dimension)?;
+        let angle = self
+            .unit
+            .angle_power
+            .checked_sub(other.unit.angle_power)
+            .ok_or(UnitError::DimensionOverflow)?;
         Self::with_conversion_exactness(
             self.si_value()? / other.si_value()?,
-            Unit::coherent_si(dimension),
+            Unit::coherent_si(dimension).with_angle_power(angle),
             self.conversion_exactness
                 .combine(other.conversion_exactness),
         )
@@ -1016,7 +1081,7 @@ impl Quantity {
     /// integral exponent and the result is represented in coherent SI units.
     pub fn power(&self, exponent: f64) -> Result<Self, UnitError> {
         finite(exponent)?;
-        if self.unit.offset_to_si != 0.0 {
+        if self.unit.offset_to_si != 0.0 && !self.unit.relative_quantity {
             return Err(UnitError::AffineArithmetic);
         }
         let dimension = if self.unit.dimension == Dimension::NONE {
@@ -1029,34 +1094,37 @@ impl Quantity {
         } else {
             return Err(UnitError::FractionalDimension);
         };
+        let angle = f64::from(self.unit.angle_power) * exponent;
+        if angle.fract() != 0.0 || angle < f64::from(i32::MIN) || angle > f64::from(i32::MAX) {
+            return Err(UnitError::FractionalDimension);
+        }
         Self::with_conversion_exactness(
             self.si_value()?.powf(exponent),
-            Unit::coherent_si(dimension),
+            Unit::coherent_si(dimension).with_angle_power(angle as i32),
             self.conversion_exactness,
         )
     }
 
     /// Square root a quantity whose exponents are all even.
     pub fn sqrt(&self) -> Result<Self, UnitError> {
-        if self.unit.offset_to_si != 0.0 {
+        if self.unit.offset_to_si != 0.0 && !self.unit.relative_quantity {
             return Err(UnitError::AffineArithmetic);
         }
         let dimension = self.unit.dimension.checked_sqrt()?;
+        if self.unit.angle_power % 2 != 0 {
+            return Err(UnitError::FractionalDimension);
+        }
         Self::with_conversion_exactness(
             self.si_value()?.sqrt(),
-            Unit::coherent_si(dimension),
+            Unit::coherent_si(dimension).with_angle_power(self.unit.angle_power / 2),
             self.conversion_exactness,
         )
     }
 
     fn linear_arithmetic(&self, other: &Self) -> Result<(), UnitError> {
-        if !self.unit.is_compatible_with(&other.unit) {
-            return Err(UnitError::Incompatible {
-                from: self.unit.symbol.clone(),
-                to: other.unit.symbol.clone(),
-            });
-        }
-        if self.unit.offset_to_si != 0.0 || other.unit.offset_to_si != 0.0 {
+        if (self.unit.offset_to_si != 0.0 && !self.unit.relative_quantity)
+            || (other.unit.offset_to_si != 0.0 && !other.unit.relative_quantity)
+        {
             return Err(UnitError::AffineArithmetic);
         }
         Ok(())
@@ -1117,6 +1185,43 @@ mod tests {
         let metres = Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap();
         let length = Quantity::with_unit(25.0, centimetres).unwrap();
         assert_eq!(length.value_in(metres).unwrap(), 0.25);
+    }
+
+    #[test]
+    fn angular_units_preserve_conversion_and_derived_exponents() {
+        let radians = Unit::coherent_si(Dimension::NONE).with_angle_power(1);
+        let degrees = Unit::new("deg", Dimension::NONE, std::f64::consts::PI / 180.0, 0.0)
+            .unwrap()
+            .with_angle_power(1);
+        let angle = Quantity::with_unit(180.0, degrees).unwrap();
+        assert!((angle.value_in(radians.clone()).unwrap() - std::f64::consts::PI).abs() < 1e-14);
+        assert!(angle.value_in(Unit::coherent_si(Dimension::NONE)).is_err());
+        let seconds =
+            Quantity::with_unit(2.0, Unit::coherent_si(Dimension([0, 0, 1, 0, 0, 0, 0]))).unwrap();
+        let speed = angle.divide(&seconds).unwrap();
+        assert_eq!(speed.unit().angle_power(), 1);
+        assert_eq!(speed.dimension(), Dimension([0, 0, -1, 0, 0, 0, 0]));
+        assert_eq!(speed.multiply(&seconds).unwrap().unit().angle_power(), 1);
+        assert_eq!(
+            angle
+                .power(2.0)
+                .unwrap()
+                .sqrt()
+                .unwrap()
+                .unit()
+                .angle_power(),
+            1
+        );
+        assert!(angle.sqrt().is_err());
+    }
+
+    #[test]
+    fn relative_units_ignore_offset_and_reject_absolute_connections() {
+        let celsius = Unit::new("degC", Dimension([0, 0, 0, 0, 1, 0, 0]), 1.0, 273.15).unwrap();
+        let relative = celsius.clone().with_relative_quantity(true);
+        assert_eq!(relative.to_si(5.0).unwrap(), 5.0);
+        assert_eq!(relative.from_si(5.0).unwrap(), 5.0);
+        assert!(!relative.is_compatible_with(&celsius));
     }
 
     #[test]

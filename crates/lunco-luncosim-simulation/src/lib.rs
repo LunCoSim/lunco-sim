@@ -606,7 +606,15 @@ impl Plugin for LunCoSimSimulationPlugin {
         app.add_plugins((
             lunco_modelica_core::ModelicaCorePlugin,
             lunco_modelica_execution::ModelicaExecutionPlugin,
+            lunco_fmi::FmiPlugin,
         ));
+        // Both native hosts service receipt owners in this explicit order.
+        // Readiness wakes the host; each owner still validates its transaction.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.configure_sets(
+            lunco_core_runtime::SimulationCompletions,
+            lunco_fmi::FmiCompletionSet.after(lunco_modelica_runtime::ModelicaSet::HandleResponses),
+        );
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
         // The terrain support projection must observe that promotion before it
         // decides whether physics may resume; plugin insertion order is not a

@@ -25,6 +25,23 @@ switch to it silently when a visual check is requested.
 > **Read the ports, not the log.** A telemetry port snapshot is the authoritative
 > current value. `tail -f`/`sleep`-polling a log for a number is the anti-pattern.
 
+Live Modelica and external FMU engineering metadata is owned by
+`lunco-port-core::ScalarPortContracts`. Inspect it through `ReadPorts`/`ListPorts`;
+resolved definitions include `dimension_si`, `angle_power`, `relative_quantity`,
+`scale_to_si` and `offset_to_si`. An unresolved unit identity does not imply a
+unit scale. Bounds use the same generic write validator for both backends. Native FMU
+time units convert at the ABI boundary; `FmuParticipant.time_s` and shared clock
+snapshots always use seconds.
+
+For native external FMUs admitted by `LoadFmu`, inspect named scalar ports
+through the same port registry. Reflected `FmuParticipant.time_s` retains the
+validated native time; `communication_ticks` gives its integer master interval.
+`fmu_can_restore_state` reports the FMU's declared capability, not qualification
+of an implicit master. `CosimStatus` currently scopes its rows to USD-projected
+participants; use the generic entity/port surface for command-admitted FMUs.
+See [`lunco-fmi`](../../crates/lunco-fmi/README.md) for the native profile and its
+shared-clock gate.
+
 ## The read surface
 
 | Tool / query | Answers |

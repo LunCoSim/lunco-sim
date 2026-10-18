@@ -1,0 +1,32 @@
+[package]
+name = "lunco-fmi"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "FMI 3 Co-Simulation import on the authoritative simulation clock"
+
+[dependencies]
+bevy.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-time = { path = "../lunco-time" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
+lunco-port-core = { path = "../lunco-port-core" }
+lunco-engineering-values = { path = "../lunco-engineering-values" }
+lunco-hash = { path = "../lunco-hash" }
+lunco-storage = { path = "../lunco-storage" }
+crossbeam-channel.workspace = true
+serde.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Schema interpretation and generated native bindings have separate owners.
+fmi-sys = { git = "https://github.com/jondo2010/rust-fmi", rev = "452193ed44324b23bba6ca48203f3ef0c7b4ba72", default-features = false, features = ["fmi3"] }
+fmi-rs = { version = "=0.3.1", default-features = false, features = ["zip"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+tempfile.workspace = true
+roxmltree = "0.21.1"
+
+[lints]
+workspace = true

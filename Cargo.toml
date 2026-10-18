@@ -66,6 +66,7 @@ members = [
     "crates/lunco-modelica-runner",
     "crates/lunco-modelica-worker",
     "crates/lunco-modelica-execution",
+    "crates/lunco-fmi",
     "crates/lunco-modelica-document",
     "crates/lunco-modelica-solver",
     "crates/lunco-modelica-index",

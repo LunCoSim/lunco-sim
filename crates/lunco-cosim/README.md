@@ -45,7 +45,10 @@ Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live val
 as an optional sample: a declared output that has not produced a value stays
 unavailable instead of appearing as `0.0`. The projection adds scalar type,
 typed optional unit and frame, inclusive bounds, source, current authority, and
-manual-writability contract. Consumers do not reconstruct those facts from a
+manual-writability contract. Modelica and native FMI participants publish
+`ScalarPortContracts` at source admission; their shared backend reads that
+component for topology and write validation. Unit definitions retain the
+separate radian exponent and relative-quantity semantics. Consumers do not reconstruct those facts from a
 port name; writes go through typed `SetPorts` or `SetPortsBatch` commands.
 
 `SetPorts` validates every named input against its owner metadata, including

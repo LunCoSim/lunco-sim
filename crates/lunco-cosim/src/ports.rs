@@ -242,7 +242,12 @@ impl AvianUnit {
         };
         UnitReference::resolved(
             Unit::new_with_exactness(symbol, dimension, 1.0, 0.0, UnitScaleExactness::Exact)
-                .expect("Avian port unit definition is valid"),
+                .expect("Avian port unit definition is valid")
+                .with_angle_power(if matches!(self, Self::Radian | Self::RadianPerSecond) {
+                    1
+                } else {
+                    0
+                }),
         )
     }
 }
@@ -584,7 +589,7 @@ fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
     avian_read_slot(world, entity, avian_resolve_input(world, entity, name)?)
 }
 
-/// Modelica `SimComponent` — slot-backed `inputs`/`outputs`.
+/// Engine-neutral `SimComponent` — slot-backed `inputs`/`outputs`.
 fn sim_component_topology_key(
     component: &SimComponent,
     declared: u64,
@@ -625,8 +630,8 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
                     .map(|ports| port_name_set_key(ports.names.iter()))
                     .unwrap_or(0),
                 world
-                    .get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity)
-                    .map(|layout| layout.port_contract_topology_key()),
+                    .get::<lunco_port_core::ScalarPortContracts>(entity)
+                    .map(|layout| layout.topology_key()),
             )
         })
     },
@@ -652,19 +657,19 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         }
     },
     metadata: |world, entity, name, direction| {
-        let source = "Modelica co-simulation component";
+        let source = "Co-simulation participant";
         let authority = if matches!(direction, PortDirection::Out) {
             "solver"
         } else {
             "controller / wire"
         };
-        let unit = match world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity) {
-            Some(layout) => layout
-                .unit_reference(name)
-                .expect("Modelica unit metadata carries a non-empty authored identity"),
-            None => None,
-        };
-        PortMetadata::scalar(direction, unit, None, None, source, authority, true, None)
+        world
+            .get::<lunco_port_core::ScalarPortContracts>(entity)
+            .and_then(|contracts| contracts.get(name))
+            .map(|contract| contract.metadata(direction, source, authority))
+            .unwrap_or_else(|| {
+                PortMetadata::scalar(direction, None, None, None, source, authority, true, None)
+            })
     },
     read_output: |w, e, n| {
         w.get::<SimComponent>(e)
@@ -700,7 +705,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     write_slot: Some(|world, entity, slot, value| {
         let mut component = world
             .get_mut::<SimComponent>(entity)
-            .expect("prepared Modelica input still has its SimComponent");
+            .expect("prepared participant input still has its SimComponent");
         let changed = component
             .bypass_change_detection()
             .inputs
@@ -1158,12 +1163,12 @@ pub(crate) fn check_port_owner_structure(
             Entity,
             Ref<SimComponent>,
             Option<Ref<DeclaredOutputPorts>>,
-            Option<Ref<lunco_modelica_runtime::ModelicaSignalLayout>>,
+            Option<Ref<lunco_port_core::ScalarPortContracts>>,
         ),
         Or<(
             Changed<SimComponent>,
             Changed<DeclaredOutputPorts>,
-            Changed<lunco_modelica_runtime::ModelicaSignalLayout>,
+            Changed<lunco_port_core::ScalarPortContracts>,
         )>,
     >,
     output_ports: Query<(Entity, &OutputPorts), Changed<OutputPorts>>,
@@ -1193,10 +1198,10 @@ pub(crate) fn check_port_owner_structure(
         let (signal_contract, signal_contract_changed) =
             signal_layout.as_ref().map_or((None, false), |layout| {
                 let (key, changed) = state
-                    .observe_if_changed::<lunco_modelica_runtime::ModelicaSignalLayout>(
+                    .observe_if_changed::<lunco_port_core::ScalarPortContracts>(
                         entity,
                         admitted || layout.is_changed(),
-                        || layout.port_contract_topology_key(),
+                        || layout.topology_key(),
                     );
                 (Some(key), changed)
             });
@@ -1245,6 +1250,9 @@ pub(crate) fn check_connection_structure(
 /// composed from [`AvianGroup`] declarations, each of which installs its own
 /// component watchers and any value-to-membership check it requires.
 pub(crate) fn register_builtin_port_topology(app: &mut App) {
+    if !app.is_plugin_added::<lunco_port_core::ScalarPortContractsPlugin>() {
+        app.add_plugins(lunco_port_core::ScalarPortContractsPlugin);
+    }
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<InputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<InputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<OutputPorts>)
@@ -1255,16 +1263,6 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Port>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimComponent>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<SimComponent>)
-        .add_observer(
-            lunco_port_core::ports::bump_port_topology_on_add::<
-                lunco_modelica_runtime::ModelicaSignalLayout,
-            >,
-        )
-        .add_observer(
-            lunco_port_core::ports::bump_port_topology_on_remove::<
-                lunco_modelica_runtime::ModelicaSignalLayout,
-            >,
-        )
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimConnection>)
@@ -1273,9 +1271,9 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
 }
 
 /// Register the cosim engine's builtin port backends into `registry`, in
-/// resolution-precedence order: Modelica `SimComponent`, avian state, then the
+/// resolution-precedence order: Modelica/FMU `SimComponent`, avian state, then the
 /// single-value hardware [`Port`]. Called from [`crate::CoSimPlugin`]. Other
-/// crates (a future FMU import, a script-defined component) register their own
+/// crates (for example a script-defined component) register their own
 /// backends after these.
 pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(SIMCOMPONENT_BACKEND);
@@ -1442,8 +1440,12 @@ mod tests {
 
     #[test]
     fn cached_structural_publication_tracks_units_declarations_and_readmission() {
-        use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
-        use lunco_modelica_runtime::ModelicaSignalLayout;
+        use lunco_engineering_values::UnitReference;
+        use lunco_port_core::{ScalarPortContract, ScalarPortContracts};
+        let contract = |unit| ScalarPortContract {
+            unit: Some(UnitReference::identified(unit).unwrap()),
+            ..Default::default()
+        };
 
         let mut app = App::new();
         app.init_resource::<PortTopologyState>()
@@ -1452,14 +1454,7 @@ mod tests {
         register_builtin_port_topology(&mut app);
         let mut component = SimComponent::default();
         component.outputs.insert("signal".into(), 1.0);
-        let mut layout = ModelicaSignalLayout::default();
-        layout.metadata.insert(
-            "signal".into(),
-            ModelicaVariableMetadata {
-                description: None,
-                unit: Some("V".into()),
-            },
-        );
+        let layout = ScalarPortContracts::new([("signal".into(), contract("V"))]).unwrap();
         let entity = app
             .world_mut()
             .spawn((
@@ -1481,21 +1476,12 @@ mod tests {
             .set("signal", 2.0);
         app.update();
         assert_eq!(revision(&app), seeded);
-        app.world_mut()
-            .get_mut::<ModelicaSignalLayout>(entity)
-            .unwrap()
-            .root_path = "presentation".into();
-        app.update();
-        assert_eq!(revision(&app), seeded);
-
         let live_key = (SIMCOMPONENT_BACKEND.topology_key)(app.world(), entity);
         app.world_mut()
-            .get_mut::<ModelicaSignalLayout>(entity)
+            .get_mut::<ScalarPortContracts>(entity)
             .unwrap()
-            .metadata
-            .get_mut("signal")
-            .unwrap()
-            .unit = Some("m".into());
+            .set("signal".into(), contract("m"))
+            .unwrap();
         assert_ne!(
             (SIMCOMPONENT_BACKEND.topology_key)(app.world(), entity),
             live_key
@@ -1520,12 +1506,10 @@ mod tests {
         // Edits outside the participant scope precede its new admission tick.
         app.world_mut().entity_mut(entity).remove::<SimComponent>();
         app.world_mut()
-            .get_mut::<ModelicaSignalLayout>(entity)
+            .get_mut::<ScalarPortContracts>(entity)
             .unwrap()
-            .metadata
-            .get_mut("signal")
-            .unwrap()
-            .unit = Some("A".into());
+            .set("signal".into(), contract("A"))
+            .unwrap();
         app.world_mut()
             .get_mut::<DeclaredOutputPorts>(entity)
             .unwrap()
@@ -1535,9 +1519,9 @@ mod tests {
         app.update();
         let layout_key = app
             .world()
-            .get::<ModelicaSignalLayout>(entity)
+            .get::<ScalarPortContracts>(entity)
             .unwrap()
-            .port_contract_topology_key();
+            .topology_key();
         let declared_key = port_name_set_key(
             app.world()
                 .get::<DeclaredOutputPorts>(entity)
@@ -1561,25 +1545,65 @@ mod tests {
 
         app.world_mut()
             .entity_mut(entity)
-            .remove::<ModelicaSignalLayout>();
+            .remove::<ScalarPortContracts>();
         let after_removal = revision(&app);
         app.world_mut()
             .entity_mut(entity)
-            .insert(ModelicaSignalLayout::default());
+            .insert(ScalarPortContracts::default());
         app.update();
         assert!(revision(&app) > after_removal);
         let cached_layout = app
             .world_mut()
             .resource_mut::<PortTopologyState>()
-            .observe_if_changed::<ModelicaSignalLayout>(entity, false, || unreachable!())
+            .observe_if_changed::<ScalarPortContracts>(entity, false, || unreachable!())
             .0;
         assert_eq!(
             cached_layout,
             app.world()
-                .get::<ModelicaSignalLayout>(entity)
+                .get::<ScalarPortContracts>(entity)
                 .unwrap()
-                .port_contract_topology_key()
+                .topology_key()
         );
+        // A source revision can keep the unit spelling while changing its
+        // conversion or limits. Cached handles must observe that full contract.
+        let resolved = |scale, angle, relative, min| ScalarPortContract {
+            unit: Some(UnitReference::resolved(
+                lunco_engineering_values::Unit::new(
+                    "declared-unit",
+                    lunco_engineering_values::Dimension::NONE,
+                    scale,
+                    0.0,
+                )
+                .unwrap()
+                .with_angle_power(angle)
+                .with_relative_quantity(relative),
+            )),
+            min,
+            ..Default::default()
+        };
+        let mut contracts =
+            ScalarPortContracts::new([("signal".into(), resolved(1.0, 0, false, None))]).unwrap();
+        for contract in [
+            resolved(2.0, 0, false, None),
+            resolved(2.0, 1, false, None),
+            resolved(2.0, 1, true, None),
+            resolved(2.0, 1, true, Some(0.0)),
+        ] {
+            let previous = contracts.topology_key();
+            contracts.set("signal".into(), contract.clone()).unwrap();
+            assert_ne!(contracts.topology_key(), previous);
+            let admitted = contracts.topology_key();
+            contracts.set("signal".into(), contract).unwrap();
+            assert_eq!(contracts.topology_key(), admitted);
+        }
+        let invalid = ScalarPortContract {
+            min: Some(2.0),
+            max: Some(1.0),
+            ..Default::default()
+        };
+        let admitted = contracts.clone();
+        assert!(contracts.set("signal".into(), invalid).is_err());
+        assert_eq!(contracts, admitted);
     }
 
     #[test]

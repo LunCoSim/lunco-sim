@@ -565,6 +565,7 @@ fn simulation_progress_facts(
             .blockers()
             .map(|blocker| {
                 let owner = match blocker.key.owner {
+                    lunco_core_runtime::SimulationProgressOwner::FmiExecution => "FmiExecution",
                     lunco_core_runtime::SimulationProgressOwner::SceneLifecycle => "SceneLifecycle",
                     lunco_core_runtime::SimulationProgressOwner::PhysicsIntegration => {
                         "PhysicsIntegration"
