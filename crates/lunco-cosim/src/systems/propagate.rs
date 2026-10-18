@@ -123,17 +123,6 @@ struct CompiledTarget {
     waiting_for_binding: bool,
 }
 
-/// Identify a warning by the endpoint that owns the failed port, not by the
-/// port spelling alone. Global ids remain stable across network peers; the
-/// entity bits are the only available identity for purely local scaffolding.
-fn target_report_key(world: &World, target: &CompiledTarget) -> String {
-    let identity = world
-        .get::<lunco_core::GlobalEntityId>(target.entity)
-        .map(|id| format!("gid:{}", id.get()))
-        .unwrap_or_else(|| format!("entity:{}", target.entity.to_bits()));
-    format!("target:{identity}:{}", target.name)
-}
-
 /// One force-producing feedback cycle found at compile time, spanning at least
 /// two participants.
 #[derive(Clone)]
@@ -187,6 +176,8 @@ struct PropagationScratch {
     broken: Vec<BrokenConnection>,
     pending: Vec<BrokenConnection>,
     landed_targets: Vec<usize>,
+    writes: Vec<lunco_port_core::ports::PreparedPortWrite>,
+    write_targets: Vec<usize>,
     /// Acknowledgements of successful ledger publication in this compiled fabric.
     /// These never admit a write or decide whether a failure is already landed.
     landing_published: Vec<bool>,
@@ -550,12 +541,10 @@ fn propagate_connections_with_cache(
         scratch
             .landing_published
             .resize(compiled.targets.len(), false);
-        // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
-        // so a gate can ask "did anything never land", `landed` so a wire that
-        // once worked is never re-reported. Topology loops are kept in their
-        // own current-fabric collection. The diagnostics resource is reset at
-        // `SceneTeardown`, while the liveness pass below retires endpoints that
-        // are removed by an ordinary edit without a scene replacement.
+        // Retained diagnostics and successful publication acknowledgements
+        // share endpoint lifetimes. Topology loops have their own collection.
+        // Scene teardown clears all three; ordinary endpoint retirement clears
+        // only that endpoint's retained records.
         //
         // Despawn is the exact retirement condition, and a rewire is when it is
         // cheap to notice: prim despawn is one of the two things that rebuild the
@@ -633,22 +622,14 @@ fn propagate_connections_with_cache(
                 && loop_info.requires_realtime_safe
                 && !loop_info.realtime_safe
             {
-                let raised = world
-                    .get_resource_mut::<lunco_core::RuntimeFaults>()
-                    .is_some_and(|mut faults| {
-                        faults.raise(
-                            "cosim-unsafe-force-loop",
-                            Some(loop_info.entity),
-                            "co-simulation wiring",
-                            loop_info.detail.clone(),
-                        )
-                    });
-                if raised {
-                    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>()
-                    {
-                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                    }
-                }
+                crate::failure::stop(
+                    world,
+                    "cosim-unsafe-force-loop",
+                    Some(loop_info.entity),
+                    "co-simulation wiring",
+                    loop_info.detail.clone(),
+                );
+                return;
             }
         }
     }
@@ -700,14 +681,13 @@ fn propagate_connections_with_cache(
                     .get::<lunco_cosim_core::RequiredOutputSamples>(w.src_entity)
                     .is_some_and(|required| required.0.iter().any(|name| name == &w.src_port))
             {
-                if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
-                    faults.raise(
-                        "cosim-required-sample-unavailable",
-                        Some(w.src_entity),
-                        "co-simulation exchange",
-                        format!("required output '{}' has no physical sample", w.src_port),
-                    );
-                }
+                crate::failure::stop(
+                    world,
+                    "cosim-required-sample-unavailable",
+                    Some(w.src_entity),
+                    "co-simulation exchange",
+                    format!("required output '{}' has no physical sample", w.src_port),
+                );
                 return;
             }
             continue;
@@ -716,7 +696,7 @@ fn propagate_connections_with_cache(
     }
     drop(accumulate_span);
 
-    // Phase 4: write each target once, by resolved handle where available.
+    // Phase 4: preflight every eligible target before applying the input batch.
     // Gated per target (see `peer_simulates`), never by process role.
     // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
     // current fabric (see `CosimDiagnostics`).
@@ -750,6 +730,8 @@ fn propagate_connections_with_cache(
     }
     drop(holds_span);
     let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
+    scratch.writes.clear();
+    scratch.write_targets.clear();
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity) {
             continue;
@@ -770,41 +752,27 @@ fn propagate_connections_with_cache(
         // "succeeds" and nothing happens, which is indistinguishable from a
         // broken port to whoever sent it.
         let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
-        let failure = match &t.resolved {
-            Some(resolved) => registry
-                .write_resolved(world, t.entity, resolved, value)
-                .err(),
-            None => registry.write_port(world, t.entity, &t.name, value).err(),
-        };
-        let written = failure.is_none();
-        // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
-        // dangling wire, and reporting it as one buried the real diagnostic:
-        //
-        // * mechanical-network members are compiled into their containing
-        //   Modelica participant. Their internal wires are consumed by that
-        //   participant; only its declared boundary ports enter this fabric.
-        // * `throttle`, `drive_left`, `drive_right` DO belong to real backends —
-        //   the OBC's command inputs, a `.mo` model's declared inputs — but those
-        //   backends only claim the entity once the model asset finishes loading
-        //   or the control binding lands. Warning during that window described a
-        //   load order, not a fault.
-        //
-        // An entity that exposes ports but not THIS name is a genuine case only
-        // once its interface is terminal. A compiling model may expose a partial
-        // surface while its generated contract is still landing.
-        if written {
-            if !scratch.landing_published[i] {
-                scratch.landed_targets.push(i);
+        let prepared = match &t.resolved {
+            Some(resolved) => {
+                registry.prepare_resolved_input_write(world, t.entity, resolved, value)
             }
-            continue;
-        }
+            None => registry.prepare_input_write(world, t.entity, Arc::clone(&t.name), value),
+        };
+        let failure = match prepared {
+            Ok(write) => {
+                scratch.writes.push(write);
+                scratch.write_targets.push(i);
+                continue;
+            }
+            Err(error) => error,
+        };
         let unresolved = BrokenConnection {
             entity: t.entity,
             global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
             port: Arc::clone(&t.name),
             has_port_surface: t.has_port_surface,
             dropped_value: Some(value),
-            failure: failure.map(|error| error.to_string()),
+            failure: Some(failure.to_string()),
         };
         let model_status = world
             .get::<SimComponent>(t.entity)
@@ -823,62 +791,45 @@ fn propagate_connections_with_cache(
             continue;
         }
 
-        scratch.broken.push(unresolved.clone());
-        // Insertions are the failure event. They occur once per endpoint, not on
-        // every propagation tick, and are what produces the warning.
-        let already_landed = world
-            .resource::<CosimDiagnostics>()
-            .has_landed(unresolved.entity, &unresolved.port);
-        if !already_landed {
-            let inserted = world
-                .resource_mut::<CosimDiagnostics>()
-                .record_fault(unresolved.clone());
-            let should_report = inserted && {
-                let report_key = target_report_key(world, t);
-                world
-                    .resource_mut::<CosimDiagnostics>()
-                    .report_once(report_key)
-            };
-            if should_report {
-                let label = world
-                    .get::<Name>(t.entity)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| format!("{:?}", t.entity));
-                warn!(
-                    "[cosim] connection input '{}' on {} ({:?}) rejected value {:?}: {}",
-                    t.name,
-                    label,
-                    t.entity,
-                    unresolved.dropped_value,
-                    unresolved
-                        .failure
-                        .as_deref()
-                        .unwrap_or("input write rejected")
-                );
+        scratch.landing_published[i] = false;
+        scratch.broken.push(crate::failure::reject_input(
+            world,
+            "cosim-input-write-rejected",
+            t.entity,
+            Arc::clone(&t.name),
+            Some(value),
+            failure.to_string(),
+        ));
+        break;
+    }
+    if scratch.broken.is_empty() {
+        match registry.apply_prepared_input_writes(world, &scratch.writes) {
+            Ok(()) => {
+                for index in scratch.write_targets.iter().copied() {
+                    if !scratch.landing_published[index] {
+                        scratch.landed_targets.push(index);
+                    }
+                }
             }
+            Err(error) => crate::failure::stop(
+                world,
+                "cosim-input-write-rejected",
+                None,
+                "input batch",
+                error.to_string(),
+            ),
         }
     }
     drop(write_span);
 
-    // Publish the tick's report. Overwrites last tick's (the set is "what is broken
-    // now"), so a wire that resolves once its model loads clears itself.
-    //
-    // `faults` remembers endpoints that have never accepted a write, including
-    // transient failures no longer present in the current fabric. The publication
-    // cursor suppresses only repeated successful ledger notifications; failed
-    // writes still consult the live ledger on every attempt.
-    //
-    // A wire that DOES land retracts its fault and is never reported again: the
-    // first write may well arrive late (a joint's `angle` port exists only once
-    // avian admits both bodies), and that window is load order, not an authoring
-    // error. Only a wire that never lands at all survives here.
+    // Publish only committed successes. A failed preflight or commit cannot
+    // acknowledge another target from the same rejected communication point.
     let _span = bevy::log::info_span!("cosim_exchange_diagnostics").entered();
     let mut diag = world.resource_mut::<CosimDiagnostics>();
     for index in scratch.landed_targets.drain(..) {
         let target = &compiled.targets[index];
-        if diag.mark_landed_shared(target.entity, &target.name) {
-            diag.remove_fault(target.entity, &target.name);
-        }
+        diag.mark_landed_shared(target.entity, &target.name);
+        diag.remove_fault(target.entity, &target.name);
         scratch.landing_published[index] = true;
     }
     std::mem::swap(&mut diag.pending, &mut scratch.pending);

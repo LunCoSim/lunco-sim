@@ -2352,6 +2352,22 @@ impl PortRegistry {
         r: &ResolvedPort,
         value: f64,
     ) -> Result<(), PortWriteError> {
+        let prepared = self.prepare_resolved_input_write(world, entity, r, value)?;
+        self.commit_validated_input_write(world, &prepared);
+        Ok(())
+    }
+
+    /// Validate a cached input locator without applying its value. Coupled
+    /// exchanges prepare every target before committing their shared batch.
+    /// Cached locators retain the same live-owner and metadata checks as named
+    /// writes; a stale locator is never rerouted to a different owner.
+    pub fn prepare_resolved_input_write(
+        &self,
+        world: &World,
+        entity: Entity,
+        r: &ResolvedPort,
+        value: f64,
+    ) -> Result<PreparedPortWrite, PortWriteError> {
         if r.side != ResolvedPortSide::Input {
             return Err(PortWriteError {
                 port: r.name.to_string(),
@@ -2386,8 +2402,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        self.commit_validated_input_write(world, &prepared);
-        Ok(())
+        Ok(prepared)
     }
 
     fn port_metadata_for_backend(

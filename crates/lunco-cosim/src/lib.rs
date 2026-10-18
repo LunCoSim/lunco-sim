@@ -44,6 +44,7 @@ use bevy::prelude::*;
 pub mod avian;
 pub mod avian_queries;
 pub mod binding;
+mod failure;
 pub mod joint;
 pub mod ports;
 pub mod systems;

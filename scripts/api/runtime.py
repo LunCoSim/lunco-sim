@@ -129,6 +129,15 @@ def run_authored_scenario(
                                         "reload_policy": "Retain", "params": params or {}}})
     if response.get("error"):
         raise RuntimeError(f"scenario admission failed: {response}")
+    wait_for_authored_verdict(session, title=title, check_count=check_count, offset=offset,
+                              allow_runtime_fault=allow_runtime_fault, timeout_s=timeout_s)
+
+
+def wait_for_authored_verdict(
+    session: "ProductionSession", *, title: str, check_count: int, offset: int = 0,
+    allow_runtime_fault: bool = False, timeout_s: float = 120,
+) -> None:
+    """Require an admitted observer's named, complete verdict before shutdown."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         with session.log_path.open("rb") as log:
@@ -137,7 +146,7 @@ def run_authored_scenario(
         if any(marker in output for marker in (
             "[rhai] TESTS_FAIL", "failed to load requested scenario asset", "[rhai] task leaf failed:",
         )):
-            raise RuntimeErrorWithLog(f"authored scenario failed: {source_asset}; log={session.log_path}")
+            raise RuntimeErrorWithLog(f"authored scenario failed: {title}; log={session.log_path}")
         if f"[rhai] {title}: PASS" in output and re.search(
             rf"\[rhai\] TESTS_OK {check_count}(?:\r?\n|$)", output
         ):
@@ -151,7 +160,7 @@ def run_authored_scenario(
         if session.process is None or session.process.poll() is not None:
             raise RuntimeErrorWithLog(f"runtime exited before authored verdict; log={session.log_path}")
         time.sleep(POLL_INTERVAL_S)
-    raise RuntimeErrorWithLog(f"authored scenario timed out: {source_asset}; log={session.log_path}")
+    raise RuntimeErrorWithLog(f"authored scenario timed out: {title}; log={session.log_path}")
 
 
 class ProductionSession:

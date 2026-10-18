@@ -42,6 +42,12 @@ Missing source samples remain pending; targets retain their prior value until
 all fan-in sources are available, unless an explicit hold drives the input.
 A diagnostic `dropped_value = ()` means no numeric write was attempted.
 
+Live exchange is an atomic input batch. `cosim-input-write-rejected` means the
+batch preserved its prior target values and native physics was stopped before
+integration. Read the actual rejected value and reason from the wiring
+report, even if that input accepted earlier samples. Scene retirement clears
+the terminal runtime fault; presentation remains available for inspection.
+
 For native external FMUs admitted by `LoadFmu`, inspect named scalar ports
 through the same port registry. Reflected `FmuParticipant.time_s` retains the
 validated native time; `communication_ticks` gives its integer master interval.

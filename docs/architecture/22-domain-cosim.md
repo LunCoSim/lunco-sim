@@ -69,6 +69,28 @@ wiring. A target with an unbound or unavailable source retains its previous
 input until all contributions are available; explicit holds retain priority. Diagnostics
 use an absent `dropped_value` when no numerical write was attempted.
 
+Initial handoff and live exchange preflight their complete eligible input batch
+through `PortRegistry::prepare_input_write` /
+`prepare_resolved_input_write`, then use `apply_prepared_input_writes` for the
+all-or-none commit. No target or successful-publication acknowledgement changes
+when another target rejects the communication point. Cached locators keep the
+same live-owner and metadata validation as named writes.
+
+A rejected live input latches `cosim-input-write-rejected` even after earlier
+successful exchanges. The co-simulation failure owner retains the actual value
+and reason, raises the shared runtime fault and safety hold, and pauses/zeros
+native physics time immediately. Exchange runs after `FixedPreUpdate`; deferring
+that projection until the next admission pass would integrate a failed point.
+Binding contract failures, required-sample loss and rejected prediction loops
+use the same stop boundary. The runtime fault remains terminal until scene
+retirement. Ordinary rejected user commands keep their command-result contract.
+
+`python3 scripts/api/test_connection_transaction.py --port <free-port>` runs the
+ten-check authored Modelica-to-native failure gate; `--windowed` runs that same
+observer in the visible host. It warms up with valid samples, then verifies
+mass/centre-of-mass preservation, stopped native integration and stopped
+Modelica advancement at the rejected communication point.
+
 Joint measurements consume the completed native solve: prismatic `force` (N)
 and revolute `torque` (N m) are signed on body2 along the positive coordinate
 axis. `lunco-physics` retains passive damping impulses alongside constraint and

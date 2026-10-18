@@ -111,16 +111,14 @@ fn seed_bound_inputs(world: &mut World, registry: &PortRegistry, epoch: u64) {
             }
         }
     }
-    // All inputs are sampled before any target changes, so archetype iteration
-    // and target write order cannot choose initial values in a causal chain.
+    // Resolve and validate the complete initial handoff before any target
+    // changes. Port owners commit this same batch mechanism during live exchange.
+    let mut writes = Vec::new();
+    let mut sampled_edges = Vec::new();
     for (target, name, edges, values) in samples {
         for (_, value) in values {
-            match registry.write_port(world, target, &name, value) {
-                Ok(()) => {
-                    for edge in &edges {
-                        world.entity_mut(*edge).insert(InitialSampledEpoch(epoch));
-                    }
-                }
+            match registry.prepare_input_write(world, target, name.as_str(), value) {
+                Ok(write) => writes.push(write),
                 Err(detail) => {
                     let edge = edges[0];
                     let spec = world
@@ -138,6 +136,20 @@ fn seed_bound_inputs(world: &mut World, registry: &PortRegistry, epoch: u64) {
                 }
             }
         }
+        sampled_edges.extend(edges);
+    }
+    if let Err(detail) = registry.apply_prepared_input_writes(world, &writes) {
+        crate::failure::stop(
+            world,
+            "cosim-connection-contract-invalid",
+            None,
+            "initial input batch",
+            detail.to_string(),
+        );
+        return;
+    }
+    for edge in sampled_edges {
+        world.entity_mut(edge).insert(InitialSampledEpoch(epoch));
     }
 }
 
@@ -151,38 +163,14 @@ pub(crate) fn reject_connection_contract(
     detail: String,
     dropped_value: Option<f64>,
 ) {
-    let entity = spec.end_element;
-    let global_id = world.get::<lunco_core::GlobalEntityId>(entity).copied();
-    let registry = world.resource::<PortRegistry>().clone();
-    let has_port_surface = !registry.entity_port_owners(world, entity).is_empty();
-    let failure = BrokenConnection {
-        entity,
-        global_id,
-        port: Arc::from(spec.end_connector.as_str()),
-        has_port_surface,
+    crate::failure::reject_input(
+        world,
+        "cosim-connection-contract-invalid",
+        spec.end_element,
+        Arc::from(spec.end_connector.as_str()),
         dropped_value,
-        failure: Some(detail.clone()),
-    };
-    if world
-        .resource_mut::<CosimDiagnostics>()
-        .record_fault(failure)
-    {
-        warn!(
-            "[cosim] connection contract rejected: {} -> {}: {detail}",
-            spec.start_connector, spec.end_connector
-        );
-    }
-    if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
-        faults.raise(
-            "cosim-connection-contract-invalid",
-            Some(entity),
-            spec.end_connector.clone(),
-            detail,
-        );
-    }
-    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>() {
-        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-    }
+        detail,
+    );
     world
         .entity_mut(edge)
         .insert(ConnectionBinding::Failed)
