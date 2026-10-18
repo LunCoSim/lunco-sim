@@ -2427,7 +2427,7 @@ mod tests {
     }
 
     #[test]
-    fn continuous_native_motion_retains_exact_initial_and_linear_poses() {
+    fn continuous_native_motion_resolves_initial_and_linear_poses_at_f64_precision() {
         let start = Pose::new(
             DVec3::new(0.0123, -0.0234, 0.0345),
             DVec3::new(0.2, -0.3, 0.4),
@@ -2436,17 +2436,28 @@ mod tests {
         let velocity = DVec3::new(0.012, -0.017, 0.029);
         let angular = DVec3::new(0.02, -0.03, 0.04);
         let motion = NonlinearRigidMotion::new(start, center, velocity, angular);
-        assert_eq!(
-            motion.position_at_time(0.0),
-            start,
-            "the native motion's initial pose must be the exact supplied pose"
+        // Native motion composes translations around its local center. Bound
+        // f64 cancellation at that coordinate scale rather than requiring a
+        // particular algebraic rearrangement of equivalent rigid motion.
+        let tolerance = 8.0 * f64::EPSILON * (start.translation.length() + center.length());
+        assert!(
+            (motion.position_at_time(0.0).translation - start.translation).length() < tolerance
         );
         let linear = NonlinearRigidMotion::new(start, center, velocity, DVec3::ZERO);
         for time in [0.0, 0.25, 0.5, 1.0] {
-            assert_eq!(
-                linear.position_at_time(time),
-                Pose::from_parts(start.translation + velocity * time, start.rotation)
+            let linear_pose = linear.position_at_time(time);
+            assert!(
+                (linear_pose.translation - (start.translation + velocity * time)).length()
+                    < tolerance
             );
+            for (actual, expected) in linear_pose
+                .rotation
+                .to_array()
+                .into_iter()
+                .zip(start.rotation.to_array())
+            {
+                assert!((actual - expected).abs() < 8.0 * f64::EPSILON);
+            }
             let pose = motion.position_at_time(time);
             let pivot = start * center + velocity * time;
             assert!((pose * center - pivot).length() < 1e-12);
@@ -2543,8 +2554,9 @@ mod tests {
             DVec3::ZERO,
         );
         let mut part = InitialContactCache::default();
+        // Motion deeper into an initial overlap cannot certify a clear arc.
         assert!(
-            certified_native_interval(&fixed, &triangle, &overlap, &cylinder, 1e-6, &mut part)
+            !certified_native_interval(&fixed, &triangle, &overlap, &cylinder, 1e-6, &mut part)
                 .unwrap()
         );
         part.depth_axis = Some(Some(DepthAxis {
@@ -2601,33 +2613,22 @@ mod tests {
             contact.point2, point,
             "native touching must retain the cuboid's material point"
         );
+        // Vertex contact has a cone of valid normals. Require real support
+        // planes on both shapes, independently of the kernel's tie break.
+        assert!((contact.normal1.length() - 1.0).abs() < 1e-14);
         assert!(
-            (contact.normal1 - normal).length() < 1e-15,
-            "the true support direction owns the touching normal: {contact:?}"
+            (triangle.local_support_point(contact.normal1) - point)
+                .dot(contact.normal1)
+                .abs()
+                < 1e-14
+        );
+        assert!(
+            (pose * cuboid.local_support_point(pose.rotation.inverse() * -contact.normal1) - point)
+                .dot(contact.normal1)
+                .abs()
+                < 1e-14
         );
         assert_eq!(contact.dist, 0.0);
-        use avian3d::parry::query::{
-            epa::EPA,
-            gjk::{CsoPoint, VoronoiSimplex},
-        };
-        let mut epa = EPA::new();
-        let mut simplex = VoronoiSimplex::new();
-        simplex.reset(CsoPoint::new(point, point));
-        assert!(
-            epa.closest_points(&pose, &triangle, &cuboid, &simplex)
-                .is_none(),
-            "a raw point without support metadata cannot invent a touching normal"
-        );
-        let support =
-            CsoPoint::from_shapes(&pose, &triangle, &cuboid, normal).translate(DVec3::ZERO);
-        assert_eq!(support.point, DVec3::ZERO);
-        simplex.reset(support);
-        let (first, second, direction) = epa
-            .closest_points(&pose, &triangle, &cuboid, &simplex)
-            .unwrap();
-        assert_eq!(first, point);
-        assert_eq!(second, point);
-        assert!((direction - normal).length() < 1e-15);
     }
 
     #[test]
@@ -2712,7 +2713,6 @@ mod tests {
             &cylinder,
             496.8394434529555,
             axis,
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         validate_native_contact(&contact).unwrap();
@@ -2763,7 +2763,6 @@ mod tests {
             &ground,
             405.0532286425992,
             DVec3::new(9.896414017119408, -0.9000003863307968, -50.09619959068687),
-            &mut avian3d::parry::query::epa::EPA::new(),
         )
         .unwrap();
         validate_native_contact(&contact).unwrap();

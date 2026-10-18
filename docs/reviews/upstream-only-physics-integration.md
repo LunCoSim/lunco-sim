@@ -1,9 +1,10 @@
 # Upstream-only physics integration review
 
-Status: regular `cargo run` compiles and launches against stock dependencies.
-Joint-drive and coupled/uncoupled differential gates pass. Griffin loads and
-advances; sustained contact and performance qualification remain incomplete.
-2026-10-16.
+Status: application integration uses public dependency APIs. The explicitly
+approved Parry 0.27 correction is published in the existing LunCoSim fork and
+pinned to `83494d280bda8615c812d919e6b7ab30f88a7750`. Its convex-query,
+application CCD, production contact and unattended Griffin mission gates pass.
+Sustained performance and full FMI qualification remain incomplete. 2026-10-18.
 
 The dependency source directories and local path patches are removed. Application
 composition uses maintained public physics APIs; the published gizmo frontend
@@ -17,7 +18,8 @@ explicitly approved `fix/native-pointer-input` branch at a pinned commit.
 
 ## Decision
 
-Use unmodified upstream dependencies. Keep application-specific clock,
+Use maintained upstream interfaces and narrowly reviewed dependency corrections
+where a reproduced defect belongs inside the dependency. Keep application-specific clock,
 composition, ordering, drive realization, ownership and presentation contracts
 at their existing LunCoSim owners. Reuse public native kernels and extension
 points. Do not copy the removed dependency implementations into a new module.
@@ -389,15 +391,32 @@ Upstream documents maintained GJK fixes in its
 That does not establish that every touching/EPA or projection case is fixed.
 Qualify each regression against the exact selected upstream version.
 
-Preferred resolution: obtain compatible upstream corrections, then consume an
-upstream release or explicitly reviewed unmodified upstream revision. Prepare
-minimal reproducers locally; publishing issues or patches needs explicit user
-authorization. A full collision backend replacement is a separate architectural
-decision with a substantial surface, not a small adapter cleanup.
+The selected compatible correction is Parry commit
+`83494d280bda8615c812d919e6b7ab30f88a7750`, published with explicit user approval
+as `fix/robust-convex-queries-0.27` in `LunCoSim/parry`. One exact Cargo patch
+supplies contacts, spatial queries and CCD; there is no vendored source or
+application copy of the kernel. The dependency's `PATCHES.md` identifies the
+upstream GJK/EPA corrections and the scoped projection/degeneracy fixes.
 
-Until qualified, retain the existing runtime-fault and same-tick writeback
-refusal boundary. It protects state but may stop a real mission. Neither that
-hold nor disabling a regression test counts as fixing the kernel defect.
+Four kernel regressions cover nested coincident cylinders, touching witnesses,
+nearest cylinder boundary and a large triangle/cylinder edge. A nearly flat
+support tetrahedron must be rejected at coordinate roundoff scale before its
+spurious origin containment can send EPA down an invalid expansion. Application
+tests validate genuine witness geometry and precision bounds rather than a
+particular non-unique touching normal or bit-exact translated arithmetic.
+
+Qualification passes four geometry regressions, 21 application CCD tests and
+12 production continuous-contact checks. The actual unattended Griffin mission
+also passes all 16 checks over 5,460 master ticks (91 simulation seconds),
+including landing, ramps and rover release. Evidence:
+`target/parry-027-convex-tests.log`, `target/parry-application-ccd-tests.log`,
+`target/parry-continuous-contacts-production.log` and
+`target/parry-griffin-mission-production.log`. The production processes exit 0
+and release their owned API ports. This establishes these collision and mission
+contracts, not realtime performance or arbitrary geometry correctness.
+
+Retain the runtime-fault and same-tick writeback refusal boundary for invalid
+native results. It protects state; it does not replace a kernel correction.
 
 ## Co-simulation, clocks and rendering
 
