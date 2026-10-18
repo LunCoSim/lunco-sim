@@ -29,6 +29,7 @@ impl InputIdentity {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct ProjectionInput {
     pub namespace: String,
     pub identity: InputIdentity,
@@ -36,6 +37,20 @@ pub(super) struct ProjectionInput {
     pub context: lunco_core::RuntimeExecutionContext,
     pub telemetry: Vec<PublicTelemetryValue>,
     pub driven: Option<DrivenVessel>,
+}
+
+impl ProjectionInput {
+    fn same_source(&self, other: &Self) -> bool {
+        self.namespace == other.namespace
+            && self.identity == other.identity
+            && self.facts == other.facts
+            && self.telemetry == other.telemetry
+            && self.driven == other.driven
+            && self.context.route == other.context.route
+            && self.context.phase == other.context.phase
+            && self.context.clock == other.context.clock
+            && self.context.producer == other.context.producer
+    }
 }
 
 struct PreparedSurface {
@@ -56,15 +71,16 @@ struct SourceStamp {
     scene: Option<Entity>,
 }
 
-/// One current job and one coalesced input per surface. Source changes drop
-/// the publication receiver without waiting for retired workers to finish;
-/// shared admission bounds outstanding worker execution.
+/// One current job, one coalesced input and one immutable admitted snapshot per
+/// surface. Source changes release publication and comparison state without
+/// waiting for retired workers; shared admission bounds outstanding execution.
 #[derive(Resource)]
 pub(super) struct RuntimeExposurePreparation {
     epoch: u64,
     operation: u64,
     source: Option<SourceStamp>,
     pending: BTreeMap<String, ProjectionInput>,
+    admitted_inputs: BTreeMap<String, Arc<ProjectionInput>>,
     identities: BTreeMap<String, InputIdentity>,
     failed: HashSet<String>,
     flight: Option<Flight>,
@@ -77,6 +93,7 @@ impl Default for RuntimeExposurePreparation {
             operation: 0,
             source: None,
             pending: BTreeMap::new(),
+            admitted_inputs: BTreeMap::new(),
             identities: BTreeMap::new(),
             failed: HashSet::new(),
             flight: None,
@@ -90,6 +107,7 @@ impl SceneResource for RuntimeExposurePreparation {
         self.flight = None;
         self.source = None;
         self.pending.clear();
+        self.admitted_inputs.clear();
         self.identities.clear();
         self.failed.clear();
         self.refresh_camera = true;
@@ -99,6 +117,7 @@ impl RuntimeExposurePreparation {
     pub(super) fn queue(&mut self, input: ProjectionInput, exposures: &mut EngineExposures) {
         let changed = self.identities.get(&input.namespace) != Some(&input.identity);
         if changed || !exposures.surfaces.contains_key(&input.namespace) {
+            self.admitted_inputs.remove(&input.namespace);
             self.failed.remove(&input.namespace);
             exposures.replace_surface(
                 &input.namespace,
@@ -122,6 +141,7 @@ impl RuntimeExposurePreparation {
     }
     pub(super) fn retire(&mut self, namespace: &str, exposures: &mut EngineExposures) {
         self.pending.remove(namespace);
+        self.admitted_inputs.remove(namespace);
         self.identities.remove(namespace);
         self.failed.remove(namespace);
         exposures.remove_surface(namespace);
@@ -261,6 +281,23 @@ pub(super) fn submit_preparation(
     if owner.flight.is_some() || owner.pending.is_empty() {
         return;
     }
+    // Bevy change ticks can include presentation writes of equal values.
+    // These policies project source facts rather than animate on clock ticks;
+    // retain the admitted caller context until their actual inputs change.
+    // Compare after attach_driven so derived vessel data participates too.
+    let inputs = std::mem::take(&mut owner.pending)
+        .into_values()
+        .filter(|input| {
+            owner
+                .admitted_inputs
+                .get(&input.namespace)
+                .is_none_or(|previous| !input.same_source(previous))
+        })
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+    if inputs.is_empty() {
+        return;
+    }
     owner.operation = owner.operation.wrapping_add(1);
     let key = AsyncWorkKey::new(
         AsyncWorkKind::VisualizationPreparation,
@@ -269,13 +306,11 @@ pub(super) fn submit_preparation(
         lunco_hooks::generation(),
         owner.operation,
     );
-    let inputs = std::mem::take(&mut owner.pending)
-        .into_values()
-        .collect::<Vec<_>>();
     let identities = inputs
         .iter()
         .map(|input| (input.namespace.clone(), input.identity.clone()))
         .collect();
+    let admitted_inputs = inputs.clone();
     let payload = Arc::new(Mutex::new(Some(inputs)));
     let owned_payload = Arc::clone(&payload);
     let visibility = lunco_hooks::get(RUNTIME_UI_VISIBILITY_HOOK);
@@ -296,8 +331,8 @@ pub(super) fn submit_preparation(
                         let result =
                             prepare_surface(&input, visibility.as_deref(), properties.as_deref());
                         PreparedSurface {
-                            namespace: input.namespace,
-                            identity: input.identity,
+                            namespace: input.namespace.clone(),
+                            identity: input.identity.clone(),
                             result,
                         }
                     })
@@ -307,6 +342,7 @@ pub(super) fn submit_preparation(
     };
     let admitted = submit_job(&mut admission, key, job);
     if let Err(error) = admitted {
+        drop(admitted_inputs);
         let inputs = payload
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -314,6 +350,7 @@ pub(super) fn submit_preparation(
         if let Some(inputs) = inputs {
             for input in inputs {
                 if error == lunco_core_runtime::AsyncWorkRejection::QueueFull {
+                    let input = Arc::unwrap_or_clone(input);
                     owner.pending.insert(input.namespace.clone(), input);
                 } else {
                     owner.fail(
@@ -326,6 +363,9 @@ pub(super) fn submit_preparation(
             }
         }
         return;
+    }
+    for input in admitted_inputs {
+        owner.admitted_inputs.insert(input.namespace.clone(), input);
     }
     owner.flight = Some(Flight {
         epoch: owner.epoch,
@@ -482,6 +522,78 @@ mod tests {
             result: Ok(surface),
         }
     }
+    #[test]
+    fn ui_projection_equal_facts_skip_admission_but_retirement_releases_the_snapshot() {
+        let mut world = World::new();
+        let mut owner = RuntimeExposurePreparation::default();
+        let mut registry = EngineExposures::default();
+        let initial = input(InputIdentity::Camera(1));
+        owner
+            .admitted_inputs
+            .insert("view".into(), Arc::new(initial.clone()));
+        registry.replace_surface(
+            "view",
+            ready(initial.identity.clone(), "current").result.unwrap(),
+        );
+        let mut later = initial.clone();
+        later.context.time_seconds = Some(2.0);
+        later.context.delta_seconds = Some(0.5);
+        later.context.sequence = Some(20);
+        owner
+            .identities
+            .insert("view".into(), initial.identity.clone());
+        owner.queue(later, &mut registry);
+        world.insert_resource(AsyncWorkAdmission::default());
+        world.insert_resource(registry);
+        world.insert_resource(owner);
+        let mut system = IntoSystem::into_system(submit_preparation);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let owner = world.resource::<RuntimeExposurePreparation>();
+        assert_eq!(
+            owner.operation, 0,
+            "identical facts must not request another worker job"
+        );
+        assert!(owner.pending.is_empty() && owner.flight.is_none());
+        assert_eq!(
+            world.resource::<EngineExposures>().surfaces["view"].properties["marker"].render(),
+            "current"
+        );
+        let mut changed = initial.clone();
+        changed.facts = HookValue::map([("value", HookValue::Float(1.0))]);
+        assert!(
+            !initial.same_source(&changed),
+            "a changed source requires a new projection"
+        );
+        changed = initial.clone();
+        changed.context.phase = lunco_core::RuntimePhase::Preparation;
+        assert!(
+            !initial.same_source(&changed),
+            "caller semantics are part of the source identity"
+        );
+        world.resource_scope(|world, mut owner: Mut<RuntimeExposurePreparation>| {
+            world
+                .resource_mut::<EngineExposures>()
+                .remove_surface("view");
+            owner.queue(
+                initial.clone(),
+                &mut world.resource_mut::<EngineExposures>(),
+            );
+            assert!(
+                owner.admitted_inputs.is_empty(),
+                "a missing publication must wake its producer"
+            );
+            owner.retire("view", &mut world.resource_mut::<EngineExposures>());
+            assert!(owner.admitted_inputs.is_empty());
+            owner.queue(initial, &mut world.resource_mut::<EngineExposures>());
+            assert_eq!(
+                owner.pending.len(),
+                1,
+                "a new lifetime must prepare even equal facts"
+            );
+        });
+    }
+
     #[test]
     fn ui_projection_stale_completion_cannot_republish_a_retired_epoch() {
         let mut owner = RuntimeExposurePreparation::default();
