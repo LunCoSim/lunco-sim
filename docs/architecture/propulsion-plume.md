@@ -99,6 +99,34 @@ Pause and time scaling therefore apply to advection through the shared clock. Th
 raster illumination proxy; it is not an additional propulsive energy source or
 a volumetric lighting solver. Fuel colour remains a documented heuristic.
 
+## Opaque occlusion
+
+The cylinder is a rasterization bound, not a gas surface. Testing its front face
+against the depth buffer does not stop a ray from integrating behind a leg
+inside the bound. Conversely, testing an inside-camera exit face can reject
+foreground gas because that face lies behind a solid object.
+
+`plume.wgsl` declares `//!@capability lunco.volume-depth.v1`. The render adapter
+enables Bevy's native `DepthPrepass` on 3D views while a bound mesh consumes that
+capability, including preview and alternate cameras. It retires only prepasses
+it supplied; existing explicit prepasses remain owned by their caller. Source,
+material-presence and camera lifecycle events invalidate that decision. Live
+uniform writes do not rescan the scene.
+
+The volume pipeline leaves depth writes off and lets the fragment shader own
+occlusion. Each ray starts at its pixel's near plane. The nearest opaque depth
+sample is reconstructed through the current view matrix and converted to the
+volume's local ray coordinate. Each station interval ends at
+`min(station_exit, opaque_surface_t)`; an empty interval emits nothing. Reverse-Z
+clear depth does not invent an opaque surface. Perspective and orthographic
+rays use their native projections; MSAA reads the corresponding depth sample.
+Before the required depth pass is available, the shader emits nothing.
+
+This clips against opaque and alpha-masked geometry in the native prepass. It does not implement
+transparent-surface extinction or ordered refractive volumes. Lens bloom can
+still spread light across a silhouette after compositing; it is distinct from
+integrating hidden gas.
+
 ## Acceptance
 
 Run `rocket_engine_plume_defaults.usda` through the production editor scene
@@ -109,3 +137,8 @@ valve/feed and shader-port boundary, `rcs_feed_starvation.usda` for both
 reactants, and the owning Twin's engine-out/depletion gates. Inspect powered,
 partial and idle main/RCS views in a windowed runtime and check GPU diagnostics.
 A numeric gate alone does not establish visual quality or flight accuracy.
+
+Run `scripts/api/test_plume_depth.py --output <directory> --quality high` and
+repeat with `--quality low`. The visible graphics fixture verifies front,
+embedded and rear occluders and an inside-volume camera in both projections.
+It disables bloom only to isolate geometric clipping in its pixel verdicts.

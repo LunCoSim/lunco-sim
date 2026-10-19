@@ -204,6 +204,8 @@ pub struct ParamSchema {
     pub fields: Vec<ParamField>,
     /// Optional shader ABI identifier declared by a `//!@interface` annotation.
     pub interface: Option<String>,
+    /// Source-declared rendering requirements, shared with pipeline specialization.
+    pub capabilities: std::collections::BTreeSet<String>,
     /// Total uniform size in bytes (rounded up to 16).
     pub size: usize,
     /// Field name → index into [`fields`](Self::fields), built once at
@@ -303,11 +305,15 @@ impl ParamSchema {
         Some(ParamSchema {
             fields,
             interface: shader_interface_identifier(wgsl).map(str::to_owned),
+            capabilities: shader_capabilities(wgsl),
             size,
             index,
         })
     }
 }
+
+/// A mesh shader integrates a volume against the native opaque scene depth.
+pub const VOLUME_DEPTH_CAPABILITY: &str = "lunco.volume-depth.v1";
 
 /// Read optional shader features without assuming an asset path or one interface.
 pub fn shader_capabilities(wgsl: &str) -> std::collections::BTreeSet<String> {
