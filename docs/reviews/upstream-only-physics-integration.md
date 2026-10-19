@@ -679,3 +679,24 @@ fresh documents and nonempty projections through three Twin replacements
 (`target/main-final-solar-verified-reloads.json`). The last diagram capture is
 `target/main-final-solar-verified-twin-3.png`. These are integration checks;
 sustained performance, historical trajectory and FMI qualification remain open.
+
+## Authored triangle-mesh internal edges — 2026-10-19
+
+The composed-USD collider reader now uses Avian's supported
+`try_trimesh_with_config(..., TrimeshFlags::FIX_INTERNAL_EDGES)` for exact Mesh
+and finite Plane collision geometry, matching the existing streamed-terrain
+loader. The correction belongs to generic collider cooking. It introduces no
+vehicle identity, controller, force law, material override or dependency patch.
+Geometry and approximation selection remain authored by USD; backend failures
+still return the existing typed projection error.
+
+`collider_parity_tests::authored_static_trimeshes_correct_internal_edges` failed
+before the correction and passes afterward for both Mesh and Plane. The native
+vehicle acceptance matrix in `/home/rod/Documents/models/tesla-rr/results/`
+records 11/25/40 m/s fan-on approaches and a 25 m/s fan-off approach, all with
+four chassis collision parts enabled. The 40 m/s case previously lost
+26.0314 m/s in one fixed tick; the corrected case loses at most 0.06590 m/s
+and reports zero chassis normal impulse. The complete finite-actuator course
+still reaches its four-wheel landing verdict. A headful avatar-following capture
+at about 38.4 m/s and 10.3 m height confirms four live ramp wheel contacts.
+These are authored study acceptance results, not manufacturer calibration.

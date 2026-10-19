@@ -738,12 +738,13 @@ pub fn build_collider_from_usd_at_scale(
                 Collider::convex_decomposition(verts, tris)
             }
             AvianMeshApproximation::TriangleMesh => {
-                Collider::try_trimesh(verts, tris).map_err(|error| {
-                    ColliderProjectionError::Backend {
+                // Match streamed terrain cooking: shared triangle edges are
+                // tessellation, not obstacles for a moving convex body.
+                Collider::try_trimesh_with_config(verts, tris, TrimeshFlags::FIX_INTERNAL_EDGES)
+                    .map_err(|error| ColliderProjectionError::Backend {
                         prim: sdf_path.to_string(),
                         detail: format!("authored triangle mesh could not be built: {error}"),
-                    }
-                })?
+                    })?
             }
         };
         return Ok(ColliderBuildOutcome::Built(apply_collider_scale(
@@ -788,11 +789,14 @@ pub fn build_collider_from_usd_at_scale(
                 .into_iter()
                 .map(|[x, y, z]| DVec3::new(x, y, z))
                 .collect();
-            Collider::try_trimesh(vertices, vec![[0, 1, 2], [0, 2, 3]]).map_err(|error| {
-                ColliderProjectionError::Backend {
-                    prim: sdf_path.to_string(),
-                    detail: format!("authored finite UsdGeomPlane could not be built: {error}"),
-                }
+            Collider::try_trimesh_with_config(
+                vertices,
+                vec![[0, 1, 2], [0, 2, 3]],
+                TrimeshFlags::FIX_INTERNAL_EDGES,
+            )
+            .map_err(|error| ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: format!("authored finite UsdGeomPlane could not be built: {error}"),
             })?
         }
     };

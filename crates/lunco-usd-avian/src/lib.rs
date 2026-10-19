@@ -2335,6 +2335,33 @@ mod collider_parity_tests {
         }\n";
 
     #[test]
+    fn authored_static_trimeshes_correct_internal_edges() {
+        use avian3d::prelude::TrimeshFlags;
+
+        for (source, path) in [
+            (MESH_FIXTURE, "/Tri"),
+            (super::extract_parity_tests::FLAT_TERRAIN_FIXTURE, "/Ground"),
+        ] {
+            let stage = stage_from_source(source);
+            let ColliderBuildOutcome::Built(collider) =
+                build_collider_from_usd(&stage.view(), &SdfPath::new(path).unwrap())
+                    .expect("valid static collision geometry")
+            else {
+                panic!("static geometry must produce a collider");
+            };
+            let mesh = collider
+                .shape_scaled()
+                .as_trimesh()
+                .expect("exact triangle mesh");
+            assert!(
+                mesh.flags()
+                    .contains(TrimeshFlags::FIX_INTERNAL_EDGES.into()),
+                "authored static meshes must suppress ghost contacts at internal triangle edges"
+            );
+        }
+    }
+
+    #[test]
     fn mesh_collision_approximation_selects_convex_hull() {
         let stage = stage_from_source(MESH_FIXTURE);
         let view = stage.view();
@@ -2423,7 +2450,7 @@ mod extract_parity_tests {
     // (CollisionAPI) offset by an authored xformOp:translate — the compound path.
     const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Rover\" (\n    prepend apiSchemas = [\"PhysicsRigidBodyAPI\"]\n)\n{\n    double physics:mass = 500\n    def Cube \"Body\" (\n        prepend apiSchemas = [\"PhysicsCollisionAPI\"]\n    )\n    {\n        double size = 2\n        double3 xformOp:translate = (0, 1, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
-    const FLAT_TERRAIN_FIXTURE: &str = "#usda 1.0\n\ndef Plane \"Ground\" (\n    prepend apiSchemas = [\"PhysicsCollisionAPI\", \"LunCoTerrainAPI\"]\n)\n{\n    double width = 100\n    double length = 100\n    token axis = \"Y\"\n    bool physics:collisionEnabled = true\n}\n";
+    pub(super) const FLAT_TERRAIN_FIXTURE: &str = "#usda 1.0\n\ndef Plane \"Ground\" (\n    prepend apiSchemas = [\"PhysicsCollisionAPI\", \"LunCoTerrainAPI\"]\n)\n{\n    double width = 100\n    double length = 100\n    token axis = \"Y\"\n    bool physics:collisionEnabled = true\n}\n";
 
     const MATERIAL_FIXTURE: &str = r#"#usda 1.0
 (
