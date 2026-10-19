@@ -2,9 +2,9 @@
 //!
 //! A physical body's pose has one owner: Avian's f64 [`Position`] and
 //! [`Rotation`]. Its cell-local [`Transform`] is only the render projection and
-//! necessarily rounds to f32. Non-physical entities have no Avian state, so
-//! their authoritative pose is the composed BigSpace hierarchy exposed by
-//! [`ActiveFramePoseQuery`].
+//! necessarily rounds to f32. Mounted entities compose their local hierarchy
+//! with the nearest rigid body's native pose. Entities without a rigid-body
+//! ancestor use the composed BigSpace hierarchy.
 //!
 //! [`SimulationPoseQuery`] is the single read boundary that applies that rule.
 //! Callers never "prefer Position when present": an Avian body without
@@ -21,14 +21,52 @@ use lunco_api::queries::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQ
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{api_param_array, api_param_f64, api_param_u64};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
-use lunco_spatial::coords::{ActiveFramePoseQuery, GridPos, GridRot, pose_in_grid};
+use lunco_spatial::coords::{
+    GridPos, GridRot, MAX_SPATIAL_HIERARCHY_DEPTH, grid_relative_pose, pose_in_grid,
+};
+
+/// Both ECS systems and immutable API readers use the same ownership walk.
+/// A body cuts off the presentation hierarchy: mounts inherit its native pose
+/// even before writeback, and an unseeded body makes its whole mount unavailable.
+fn simulation_pose(
+    entity: Entity,
+    frame: Entity,
+    bodies: &Query<(), With<RigidBody>>,
+    physics: &Query<(&Position, &Rotation), (With<RigidBody>, With<PhysicsPoseSeeded>)>,
+    parents: &Query<&ChildOf>,
+    grids: &Query<&Grid>,
+    spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<(GridPos, GridRot)> {
+    let mut ancestor = entity;
+    for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
+        if bodies.contains(ancestor) {
+            let (position, rotation) = physics.get(ancestor).ok()?;
+            if ancestor == entity {
+                return Some((GridPos(position.0), GridRot(rotation.0)));
+            }
+            let (offset, axes) = grid_relative_pose(entity, ancestor, parents, grids, spatial)?;
+            return Some((
+                GridPos(position.0 + rotation.0 * offset),
+                GridRot((rotation.0 * axes).normalize()),
+            ));
+        }
+        match parents.get(ancestor) {
+            Ok(parent) if ancestor != frame => ancestor = parent.parent(),
+            _ => {
+                return pose_in_grid(entity, frame, parents, grids, spatial)
+                    .map(|(position, rotation)| (GridPos(position), GridRot(rotation)));
+            }
+        }
+    }
+    None
+}
 
 /// Read-only query state for API and other non-system callers.
 ///
 /// Bevy's [`SystemState`] is initialized from `&mut World`, which is correct
 /// for systems but incompatible with the API query contract. This state uses
 /// Bevy's immutable-world [`QueryState::try_new`] path and shares the
-/// canonical [`pose_in_grid`] conversion with [`SimulationPoseQuery`].
+/// ownership walk with [`SimulationPoseQuery`].
 pub struct SimulationPoseReadState {
     bodies: QueryState<(), With<RigidBody>>,
     physics: QueryState<
@@ -55,16 +93,15 @@ impl SimulationPoseReadState {
     /// Resolve one entity in the active physics frame.
     pub fn pose(&mut self, world: &World, entity: Entity) -> Option<(GridPos, GridRot)> {
         let frame = world.get_resource::<lunco_spatial::ActivePhysicsFrame>()?.0;
-        if self.bodies.get(world, entity).is_ok() {
-            let (position, rotation) = self.physics.get(world, entity).ok()?;
-            return Some((GridPos(position.0), GridRot(rotation.0)));
-        }
-
-        let parents = self.parents.query(world);
-        let grids = self.grids.query(world);
-        let spatial = self.spatial.query(world);
-        pose_in_grid(entity, frame, &parents, &grids, &spatial)
-            .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+        simulation_pose(
+            entity,
+            frame,
+            &self.bodies.query(world),
+            &self.physics.query(world),
+            &self.parents.query(world),
+            &self.grids.query(world),
+            &self.spatial.query(world),
+        )
     }
 
     /// Resolve only an entity's active-frame position.
@@ -83,7 +120,10 @@ pub struct PhysicsPoseSeeded;
 /// Read any entity in the active simulation frame from its authoritative owner.
 #[derive(SystemParam)]
 pub struct SimulationPoseQuery<'w, 's> {
-    hierarchy: ActiveFramePoseQuery<'w, 's>,
+    frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    grids: Query<'w, 's, &'static Grid>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
     bodies: Query<'w, 's, (), With<RigidBody>>,
     physics: Query<
         'w,
@@ -96,14 +136,18 @@ pub struct SimulationPoseQuery<'w, 's> {
 impl SimulationPoseQuery<'_, '_> {
     /// Resolve `entity` into the active simulation frame.
     ///
-    /// A physical body that has not been seeded returns `None`; rounded render
-    /// state is never substituted for missing authoritative state.
+    /// An unseeded physical body or its mount returns `None`; rounded render
+    /// state is never substituted for missing native state.
     pub fn pose(&self, entity: Entity) -> Option<(GridPos, GridRot)> {
-        if self.bodies.contains(entity) {
-            let (position, rotation) = self.physics.get(entity).ok()?;
-            return Some((GridPos(position.0), GridRot(rotation.0)));
-        }
-        self.hierarchy.pose(entity)
+        simulation_pose(
+            entity,
+            self.frame.as_ref()?.0,
+            &self.bodies,
+            &self.physics,
+            &self.parents,
+            &self.grids,
+            &self.spatial,
+        )
     }
 
     pub fn position(&self, entity: Entity) -> Option<GridPos> {
@@ -297,6 +341,45 @@ mod tests {
         assert_eq!(position.0, exact);
         assert_eq!(rotation.0, exact_rotation);
         assert_ne!(position.0.y, exact.y as f32 as f64);
+    }
+
+    #[test]
+    fn mounted_pose_uses_native_ancestor_before_presentation_writeback() {
+        let mut world = World::new();
+        let frame = world
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        let position = DVec3::new(0.123_456_789_012, 50.123_456_789_012, -7.0);
+        let rotation = DQuat::from_rotation_y(0.3);
+        let body = world
+            .spawn((
+                RigidBody::Dynamic,
+                Position(position),
+                Rotation(rotation),
+                PhysicsPoseSeeded,
+                Transform::from_xyz(100.0, 200.0, 300.0),
+                ChildOf(frame),
+            ))
+            .id();
+        let mount = world
+            .spawn((Transform::from_xyz(0.25, 0.5, -0.75), ChildOf(body)))
+            .id();
+        let child = world
+            .spawn((Transform::from_xyz(1.0, 0.0, 0.0), ChildOf(mount)))
+            .id();
+        let expected = position + rotation * DVec3::new(1.25, 0.5, -0.75);
+        let (actual, axes) = read(&mut world, child).expect("a mounted native pose");
+        assert!((actual.0 - expected).length() < 1.0e-12);
+        assert!(axes.0.dot(rotation).abs() > 1.0 - 1.0e-14);
+        let mut state = SimulationPoseReadState::try_new(&world).unwrap();
+        assert_eq!(state.position(&world, child), Some(actual));
+        world.entity_mut(body).remove::<PhysicsPoseSeeded>();
+        assert!(read(&mut world, child).is_none());
+        assert!(state.position(&world, child).is_none());
+        world.remove_resource::<lunco_spatial::ActivePhysicsFrame>();
+        assert!(read(&mut world, child).is_none());
+        assert!(state.position(&world, child).is_none());
     }
 
     #[test]

@@ -1,5 +1,51 @@
 # High-quality realtime performance handover
 
+## Shared native mount and gravity owner — 2026-10-19
+
+`SimulationPoseQuery` and immutable API reads share one bounded ownership
+walk. Mounted entities compose their local chain below the nearest seeded
+rigid body with its native f64 pose. An unseeded body or missing active frame
+returns unavailable. The environment consumes this same boundary for both
+consumer and provider poses; its independent native/world-position selection
+is removed. Ancestor motion, hierarchy edits and readiness withdrawal
+invalidate mounted fields. Provider poses are reused within the pass. Flat
+fields retain missing-field admission, and surface invalidation visits only
+linked consumers and existing fields. These are spatial/readiness invariants;
+there is no scenario hook, special vehicle rule or dependency-source patch.
+
+The mounted-pose seam fails before the repair and passes afterward. The
+gravity resource seam also fails before cutover, then verifies native
+translation/rotation, render independence, readiness/frame withdrawal and
+restoration. Final review reproduces retained gravity after a mount loses
+its parent; the removal-stream repair also withdraws transformless fields
+without broadening flat-field invalidation. All six pose tests and three
+gravity tests pass. Regular `cargo run -j 4 -- --help` succeeds without
+compiler warnings; the skill
+catalogue validates 43 entries. Evidence is retained under
+`.cache/codex-evidence/mounted-probes/`.
+
+Fresh headless and GPU windowless Griffin missions each pass 16 authored
+checks with clear readiness, zero runtime errors and verified API exit/port
+release. The captured image shows rover, terrain and cast shadow. Both use
+Twin `bbc0e77b`, the pinned DEM below and binary SHA-256
+`83698abec9d9b3258474b9870825dc0102b03596e66b108438beeac5ac1a4709`.
+Through completion at tick 5459 in both hosts, 2,365 captured input records
+match exactly and contain only empty physical intent frames. Across 49,131
+communication records, the first remaining difference is the rover at step
+1441; Lander also differs from step 5428. IMU/gravity fingerprints match
+throughout that interval. Equal completion does not qualify full replay;
+neither does hash equality establish complete native-state equality. These
+diagnostic runs do not establish 200 FPS or native physics below 1 ms.
+
+The next repair belongs at celestial/environment sampling: resolve physical
+provider facts from the authoritative tick and its bound celestial domain,
+reuse the semantic f64 frame/ephemeris math, and make physical point/ray
+conversion consume native mount poses. Presentation's angular-error cadence
+must not select a physical sample. The current `PreUpdate` celestial cluster
+and raw hierarchy direction resolver still leave that boundary open. Forcing
+the complete rendering cluster to solve every tick would not establish the
+required authority separation.
+
 ## Mounted environment input divergence — 2026-10-19
 
 The worker response bridge exposes opt-in accepted-step diagnostics. Debug
@@ -24,8 +70,8 @@ host, with no nonempty physical inputs. Its first differing communication
 transaction is step 145. Full sample traces identify only gravity inputs in
 the IMU and solar inputs in the rover at that step; native pose and velocity
 inputs still match. The environment readers use composed hierarchy poses for
-non-physical probes. Native-parent pose composition and ancestor-motion
-invalidation need repair at their shared owners. Celestial frame and physical
+non-physical probes. The shared native mount/gravity repair above closes that
+part of the boundary. Celestial frame and physical
 irradiance publication also run in `PreUpdate` behind the presentation angular
 error budget. Their fixed-cycle consumers can therefore read different epochs
 at the same simulation tick; a native mount repair alone does not close this

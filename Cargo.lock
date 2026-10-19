@@ -8153,6 +8153,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-cosim-core",
+ "lunco-physics",
  "lunco-render",
  "lunco-spatial",
  "wgpu-types",

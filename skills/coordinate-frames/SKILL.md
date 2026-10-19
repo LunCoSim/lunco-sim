@@ -73,6 +73,14 @@ boundary. All explicit camera frame changes stay with the camera subsystem
 through the same atomic migration helper. For a physical entity, keep it under
 `ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. The shared
+`SimulationPoseQuery` (or immutable `SimulationPoseReadState` for API readers)
+composes mounts from their nearest seeded rigid body's native pose. Reuse that
+boundary for physical consumers, including mounted probes; do not compose
+through the body's presentation `Transform`. An unseeded parent makes a mount
+unavailable. A cached mounted field must also invalidate on ancestor native
+motion, hierarchy edits and pose-readiness withdrawal, even when its own local
+transform is unchanged.
+The shared
 `lunco-physics::avian_backend` contract owns numeric backend admission; the
 bridge owns lifecycle admission and raises the runtime fault when changed poses
 or collider AABBs are invalid. It gates the nested physics phases before Avian

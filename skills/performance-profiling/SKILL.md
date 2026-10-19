@@ -1330,6 +1330,10 @@ motion alone does not require recomputation. Retain global/frame/provider and
 link-removal invalidation, new-entity admission and unresolved surface cleanup.
 Steady surface work includes linked consumers and existing fields, excluding
 unlinked entities that have neither a field to produce nor one to remove.
+Use `SimulationPoseQuery` for body and mount poses. A parent's native motion
+must invalidate a mounted field without a presentation write; readiness
+withdrawal must remove the field. Retain bounded ancestor change detection
+and per-pass provider-pose reuse when optimizing this path.
 Profile flat and surface owners separately and require unchanged exact replay.
 
 For `sync_local_gravity_to_avian`, keep the comparison against the existing

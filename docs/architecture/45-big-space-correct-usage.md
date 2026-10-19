@@ -92,8 +92,14 @@ semantic f64 pose → target Grid::translation_to_grid → (CellCoord, Transform
 
 `Transform` is cell-local render/bridge state. `GlobalTransform` is derived
 and camera-relative; it is never an ephemeris, telemetry, network, or physics
-source of truth. Use `ActiveFramePoseQuery`, `grid_relative_pose`, or the
-typed frame conversion helpers for reads. For a placement command whose
+source of truth. Physical runtime reads use
+`lunco-physics::SimulationPoseQuery` or `SimulationPoseReadState`. Both share
+one bounded ownership walk: the nearest rigid body supplies its seeded native
+f64 pose, and a mounted descendant composes only its local chain below that
+body. An unseeded body makes its mounts unavailable too. Entities without a
+rigid-body ancestor use the BigSpace hierarchy. Spatial placement reads use
+`ActiveFramePoseQuery`, `grid_relative_pose`, or the typed frame conversion
+helpers. For a placement command whose
 semantic input is in one grid, use `pose_in_grid_to_parent_storage` for a new
 scene child or `position_in_grid_to_parent_local` for an existing entity; both
 perform the complete parent-pose inverse and split a `CellCoord` only for a

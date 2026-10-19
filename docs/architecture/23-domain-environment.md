@@ -37,13 +37,15 @@ Moon." Environmental state must be **per-entity and position-dependent**.
 
 Providers define the physics model (how does gravity vary with altitude,
 what's the atmospheric density profile, etc.). `Local*` components cache
-the computed value. Surface gravity responds to changed native positions,
-transforms and body links in `FixedUpdate`. Steady surface work selects linked
+the computed value. Surface gravity reads the shared native simulation-pose
+boundary and responds to ancestor motion/readiness and body links in
+`FixedUpdate`; mounted consumers never use a rendered parent pose. Steady surface work selects linked
 consumers and existing fields that may need cleanup; unlinked spatial entities
 without a field cannot produce an update. A flat field has no position
 dependence: between global invalidations it admits only spatial entities
-missing `LocalGravity`, using an archetypal query. Gravity, frame, provider
-and link-removal invalidations still check all spatial entities. Consumers
+missing `LocalGravity`, using an archetypal query. Flat-field global
+invalidations check all spatial entities; surface invalidations remain
+restricted to linked consumers and existing fields. Consumers
 read `Local*` rather than recomputing from position.
 
 ## Lighting — the environmental analog of gravity
