@@ -101,10 +101,10 @@ fn body_state(
 
 /// Apply the shared tire law to touching Avian wheel contacts.
 ///
-/// Avian stores the accumulated normal impulse on each contact point;
-/// that is the normal-load measurement used here.  This system runs at the
-/// fixed-frame boundary, so the accumulated impulse is converted with the
-/// fixed-frame duration rather than a solver-internal substep divisor. The axle
+/// The normal load combines Avian's prepared contacts and the physics owner's
+/// additional continuous reactions, each with its delivered contact geometry.
+/// This system runs at the fixed-frame boundary, so impulses are converted with
+/// the fixed-frame duration rather than a solver-internal substep divisor. The axle
 /// solve runs once per
 /// wheel against the aggregate load, then its force is distributed over the
 /// contact points by load share.  This avoids solving the motor torque once per
@@ -135,6 +135,7 @@ pub fn apply_jointed_tire_forces(
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     collisions: Collisions,
+    continuous: Option<Res<lunco_physics::ccd::ContinuousContacts>>,
     fixed_time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -229,15 +230,9 @@ pub fn apply_jointed_tire_forces(
                     };
                     let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
                     for point in &manifold.points {
-                        // Avian's `normal_impulse` is a diagnostic accumulation of
-                        // the full and relaxation solver phases. It is not the
-                        // impulse delivered by one physical substep. The
-                        // warm-start value is the clamped impulse from the last
-                        // solved substep; scale that one physical impulse by the
-                        // live solver resolution to recover the load over this
-                        // master interval. This keeps the contact readout tied to
-                        // Avian's actual solver contract instead of a phase-count
-                        // calibration.
+                        // The physics boundary converts Avian's biased and
+                        // relaxation accumulation to one physical load over
+                        // the completed master interval.
                         let normal_force = lunco_physics::contact_force_from_impulse(
                             point.normal_impulse,
                             full_dt,
@@ -264,6 +259,36 @@ pub fn apply_jointed_tire_forces(
                             v_lat,
                         });
                     }
+                }
+            }
+            // Fresh rolling witnesses can carry support outside the prepared
+            // graph. They are already physical impulses, not two-phase native
+            // accumulations. Use their own geometry and do not redistribute
+            // their load onto stale manifold points.
+            if let Some(continuous) = continuous.as_deref() {
+                for impulse in continuous.impulses() {
+                    let (normal, other) = if impulse.body1 == wheel {
+                        (-impulse.normal, impulse.body2)
+                    } else if impulse.body2 == wheel {
+                        (impulse.normal, impulse.body1)
+                    } else {
+                        continue;
+                    };
+                    let normal_force = impulse.impulse / full_dt;
+                    if normal_force <= 0.0 {
+                        continue;
+                    }
+                    let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
+                    let contact_velocity = wheel_state.velocity_at_point(wheel_state.position)
+                        - other_velocity_at(Some(other), wheel_state.position);
+                    contacts.push(TireContact {
+                        point: impulse.point,
+                        normal_force,
+                        forward,
+                        right,
+                        v_long: contact_velocity.dot(forward),
+                        v_lat: contact_velocity.dot(right),
+                    });
                 }
             }
             // Collision graph insertion order depends on collider admission.

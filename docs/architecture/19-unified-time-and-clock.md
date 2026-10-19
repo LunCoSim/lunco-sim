@@ -77,6 +77,12 @@ chooses shot sequencing and explicit step requests. Presentation scenarios use
 the existing scenario FSM/task interpreter with `@timing presentation`, so
 recording waits do not require simulation ticks while the world is frozen.
 
+Pre-integration actuation uses the admitted `Time<Fixed>::timestep()` for
+impulse bounds. `Time<Physics>::delta()` describes the preceding native step
+and is zero after a hold until integration runs. Joint braking bounds torque
+with the current fixed duration so the first resumed or manual cycle can brake
+without reversing the joint coordinate.
+
 Native transitions back to automatic sampling use `lunco_time::set_time_update_strategy`.
 Returning from manual duration to automatic sampling reanchors Bevy's native
 wall-time sample without advancing its elapsed time. The next sample admits

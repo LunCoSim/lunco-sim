@@ -467,6 +467,14 @@ The locked-patch projection cannot propel existing slip and is bounded by the
 remaining authored brake authority. Physical wheels apply bearing torque across
 the relative axle/housing coordinate, rather than damping world rotation.
 
+Shared physical tires consume both prepared native contact loads and additional
+continuous reactions from the physics owner's existing `ContinuousContacts`.
+The latter retain their body/collider/compound-part identities, normal and
+impulse-weighted world contact point. Their impulses are physical contributions,
+not Avian biased/relaxation samples. Tire forces and work use the delivered
+geometry; generic `contact_force` also includes these contributions once.
+Completed samples survive an admission hold and retire with the scene.
+
 USD wheel surfaces expose physical `bearing_heat`, `brake_heat`, `tire_heat`
 (W), plus support `contact` (0/1). Existing child `Port` endpoints and
 `PortSurfaceReady` own causal publication and scene retirement; no new global

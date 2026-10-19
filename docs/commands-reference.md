@@ -4065,7 +4065,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 267 commands from the runtime schema; scanned 1019 .rs files for docs (0 parse failure(s) skipped).
+<!-- 267 commands from the runtime schema; scanned 1021 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

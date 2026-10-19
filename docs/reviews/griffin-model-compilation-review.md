@@ -154,6 +154,29 @@ bank, and both wheel and ground heat paths respond. Physical/raycast drivetrain
 parity passes 20 unchanged checks. Evidence:
 `/tmp/griffin-native-heat-20261019` and `/tmp/griffin-native-heat-math-tests.log`.
 
+## Integration with current main
+
+The integration retains main's authored wheel CCD selection and admitted-cycle
+brake timing. Brake heat uses that same interval, with a focused stopping-energy
+check after a zero-delta hold. An existing CCD test now passes Avian's public
+`TrimeshFlags` to its collider constructor.
+
+The unchanged physical/raycast gate initially failed 6 of 20 checks. A production
+probe showed that fresh continuous reactions carried most rolling support,
+while shared tires consumed only the prepared contact graph. The existing
+physics-owned reaction records now retain body identities and delivered contact
+geometry, exposed read-only to the tire owner. The tire force/work balance and
+generic contact-force readout include those physical impulses once. No collision
+equation, material coefficient, solver tolerance or gate threshold was changed.
+The unchanged gate then passed all 20 checks, including speed and steering sign;
+FLIP's route/brake/thermal gate passed all 25 checks. Evidence is under
+`/tmp/griffin-main-integration`.
+The integrated binary also passed 44 cold Modelica physical-contract checks and
+46 mechanical-loss checks. Focused native tests verify stopping heat with the
+admitted interval and continuous-load ownership, hold retention, sensor exclusion
+and retirement. The settled windowed schema contains all 267 documented commands;
+the regenerated reference reports zero source parse failures.
+
 ## Remaining non-compilation findings
 
 These source-level defects remain open; successful compilation is not evidence

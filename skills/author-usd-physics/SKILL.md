@@ -30,6 +30,8 @@ top of its Coulomb impulses. The raycast realization consumes its vehicle tire
 curve independently of collider materials. Command ownership must remain
 explicit when a reset-stack body leaves its vessel transform subtree; the
 joint actuator stores its authored vehicle command owner.
+Its brake impulse bound uses the admitted fixed timestep, because actuation
+precedes native integration and the previous native delta is zero after a hold.
 
 For a physical landing member, apply `PhysicsDriveAPI:linear` to a
 `PhysicsPrismaticJoint`. Author the drive's `stiffness`, `damping`, `maxForce`,

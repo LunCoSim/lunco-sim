@@ -657,14 +657,32 @@ fn contact_of_filtered(
 /// Read contact for a caller holding only a `&World`.
 ///
 /// Contact timing belongs to [`contact_of`], independently of live admission.
+/// Include continuous reactions absent from the prepared graph exactly once;
+/// these are physical impulses and have no biased/relaxation sample factor.
 /// A missing graph means physics has not started and has no contact sample.
 pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let Some(graph) = world.get_resource::<ContactGraph>() else {
         return (false, 0.0);
     };
-    contact_of_filtered(graph, collider_entities(world, entity), |candidate| {
-        world.get::<Sensor>(candidate).is_some()
-    })
+    let (mut touching, mut force) =
+        contact_of_filtered(graph, collider_entities(world, entity), |candidate| {
+            world.get::<Sensor>(candidate).is_some()
+        });
+    if let Some(impulses) = ccd::continuous_contact_impulses(world) {
+        for applied in impulses {
+            if world.get::<Sensor>(applied.collider1).is_some()
+                || world.get::<Sensor>(applied.collider2).is_some()
+                || !collider_entities(world, entity)
+                    .any(|collider| collider == applied.collider1 || collider == applied.collider2)
+            {
+                continue;
+            }
+            touching |= applied.impulse > 0.0;
+            force += applied.impulse
+                / Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK).as_secs_f64();
+        }
+    }
+    (touching, force)
 }
 
 /// A target pose for a kinematic Avian body driven outside the physics clock.

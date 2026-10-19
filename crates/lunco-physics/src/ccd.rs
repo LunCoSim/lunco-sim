@@ -132,7 +132,7 @@ struct SweepPair {
     mode: SweepMode,
 }
 #[derive(Resource, Default)]
-struct ContinuousContacts {
+pub struct ContinuousContacts {
     shapes: Vec<Shape>,
     pairs: Vec<SweepPair>,
     pair_indices: HashMap<(usize, usize), usize>,
@@ -144,6 +144,15 @@ struct ContinuousContacts {
     starts: HashMap<Entity, SolverBody>,
     impulses: Vec<ContinuousContactImpulse>,
     responses: Vec<(Plane, f64)>,
+}
+impl ContinuousContacts {
+    /// Delivered continuous reactions absent from the prepared contact graph.
+    /// These samples retain the completed master interval across admission holds
+    /// and retire with the scene. Consumers must add each impulse once, without
+    /// applying Avian's biased/relaxation sample conversion a second time.
+    pub fn impulses(&self) -> &[ContinuousContactImpulse] {
+        &self.impulses
+    }
 }
 #[derive(Clone)]
 struct Plane {
@@ -167,11 +176,16 @@ impl PositionConstraint for Plane {}
 /// Applied continuous impulses that have not been accounted for by a native
 /// prepared contact. Exact collider identities retain the pair query's scope.
 #[derive(Clone)]
-pub(crate) struct ContinuousContactImpulse {
+pub struct ContinuousContactImpulse {
     pub collider1: Entity,
     pub collider2: Entity,
+    pub body1: Entity,
+    pub body2: Entity,
     pub part1: usize,
     pub part2: usize,
+    /// Impulse-weighted world contact position and collider-1-to-2 normal.
+    pub point: DVec3,
+    pub normal: DVec3,
     pub impulse: f64,
 }
 pub(crate) fn continuous_contact_impulses(world: &World) -> Option<&[ContinuousContactImpulse]> {
@@ -2095,6 +2109,13 @@ fn project(
     b2.delta_rotation.0 =
         DQuat::from_scaled_axis((i2.effective_inv_angular_inertia() * a2) * lambda)
             * b2.delta_rotation.0;
+    let contact_point = 0.5
+        * (plane.center1
+            + b1.delta_position
+            + b1.delta_rotation * plane.point1
+            + plane.center2
+            + b2.delta_position
+            + b2.delta_rotation * plane.point2);
     if let Some(mut body) = world.get_mut::<SolverBody>(plane.body1) {
         *body = b1;
     }
@@ -2156,14 +2177,22 @@ fn project(
                 && p.collider2 == plane.collider2
                 && p.part1 == plane.part1
                 && p.part2 == plane.part2
+                && (p.normal - plane.normal).length_squared() <= 1e-12
         }) {
+            applied.point = applied
+                .point
+                .lerp(contact_point, impulse / (applied.impulse + impulse));
             applied.impulse += impulse;
         } else {
             contacts.impulses.push(ContinuousContactImpulse {
                 collider1: plane.collider1,
                 collider2: plane.collider2,
+                body1: plane.body1,
+                body2: plane.body2,
                 part1: plane.part1,
                 part2: plane.part2,
+                point: contact_point,
+                normal: plane.normal,
                 impulse,
             });
         }
@@ -2438,6 +2467,51 @@ mod tests {
     use avian3d::math::SymmetricMatrix;
 
     #[test]
+    fn continuous_contact_load_survives_hold_and_excludes_sensors() {
+        let mut world = World::new();
+        world.insert_resource(ContactGraph::default());
+        world.insert_resource(Time::<Physics>::default());
+        let body = world
+            .spawn((RigidBody::Dynamic, GlobalTransform::default()))
+            .id();
+        let collider = world
+            .spawn((
+                Collider::sphere(1.0),
+                GlobalTransform::default(),
+                ColliderOf { body },
+            ))
+            .id();
+        let ground = world.spawn(Collider::cuboid(10.0, 1.0, 10.0)).id();
+        world.flush();
+        world.insert_resource(ContinuousContacts {
+            impulses: vec![ContinuousContactImpulse {
+                collider1: collider,
+                collider2: ground,
+                body1: body,
+                body2: ground,
+                part1: 3,
+                part2: 0,
+                point: DVec3::ZERO,
+                normal: -DVec3::Y,
+                impulse: lunco_core_runtime::SECS_PER_TICK * 100.0,
+            }],
+            ..default()
+        });
+        // A collider-backed body owns the same sample as its leaf. The native
+        // clock has zero delta during a hold; the completed load remains 100 N.
+        for entity in [body, collider, ground] {
+            let (touching, force) = crate::contact_from_world(&world, entity);
+            assert!(touching, "missing contact on {entity:?}");
+            assert!((force - 100.0).abs() < 1e-4, "{force}");
+        }
+        world.entity_mut(ground).insert(Sensor);
+        assert_eq!(crate::contact_from_world(&world, body), (false, 0.0));
+        world.entity_mut(ground).remove::<Sensor>();
+        world.insert_resource(ContinuousContacts::default());
+        assert_eq!(crate::contact_from_world(&world, body), (false, 0.0));
+    }
+
+    #[test]
     fn continuous_pair_order_covers_every_ccd_subset_once() {
         for count in 0..=8 {
             for subset in 0..1usize << count {
@@ -2689,7 +2763,7 @@ mod tests {
                 DVec3::new(10.0, 0.5, 10.0),
             ],
             vec![[0, 1, 2], [2, 1, 3]],
-            avian3d::parry::shape::TriMeshFlags::FIX_INTERNAL_EDGES,
+            TrimeshFlags::FIX_INTERNAL_EDGES,
         )
         .unwrap();
         let mesh_planes = endpoint_contact_planes(&a, &b, &m1, &m2, 1e-6).unwrap();
