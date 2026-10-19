@@ -170,6 +170,16 @@ because a presentation component received an equal-value write. Preserve hook
 generation, source lifetime, caller identity and derived vessel invalidation.
 The default communication period is one physics tick; longer periods must be
 authored explicitly.
+Physical celestial sampling uses `CelestialClock::epoch_at_tick`, with
+`celestial_physical_inputs` at interval start before environment computation and
+`celestial_physical_endpoint` after native writeback. The component's tick is
+the admitted cycle, and the sampler owns its phase. Presentation's angular
+error gate never chooses physical inputs. Directions, gravity and solar
+visibility share `SimulationPoseQuery`; do not restore raw hierarchy readers
+for moving probes. Reuse the ephemeris provider's exact-epoch cache. Attribute
+sampling separately from native physics and from the rendered celestial chain;
+its cost must not be hidden inside a physics-only timing number.
+
 For deliberately frozen captures use `StepSimulation` and presentation-timed
 sequencing. Manual demand uses the same fixed runner as paced execution and
 still respects preparation and solver barriers. A native hold gates the entire

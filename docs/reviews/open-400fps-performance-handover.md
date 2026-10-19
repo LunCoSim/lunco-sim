@@ -1,5 +1,58 @@
 # High-quality realtime performance handover
 
+## Physical celestial communication boundaries — 2026-10-19
+
+`lunco-time::CelestialClock` evaluates the existing tick-rooted affine domain
+at an explicit boundary, without using accumulated durations or a per-frame
+resolved snapshot. `lunco-celestial-spatial` publishes interval-start inputs
+before environment computation and endpoint poses after native writeback.
+Initialization uses the current boundary. Its generic prescribed-pose fact is
+owned by the analytical provider, stamped with the admitted cycle and active
+frame, and consumed through the existing shared simulation-pose reader. Native
+and prescribed ownership cannot coexist on one entity. Pending, stale, invalid
+or differently framed samples remain unavailable. Removal retires ownership;
+entity teardown retires the fact. Continuous frame math and phase/readiness
+invariants belong to these engine owners, without a scenario policy hook.
+
+Physical directions, gravity and solar visibility now use the same reader.
+The visibility owner also converts probe origins and terrain rays through it.
+Shared semantic axes cancel analytically, avoiding epoch-dependent roundoff in
+local fields. The ephemeris provider retains its exact-epoch cache; rendered
+body placement and illuminance retain their angular-error cadence. Physical
+irradiance has one communication-boundary writer. No dependency source changes
+or new integrator are involved.
+
+The boundary seam passes at 100,000x with deliberately unrelated render poses,
+including start/end epochs, exact local-frame cancellation, unchanged sample
+publication and invalid clock withdrawal. Seven shared pose tests pass.
+Regular `cargo run -j 4 -- --help` succeeds without compiler warnings. Production
+initialization/pause/rate/multirate acceptance passes 43 checks at 120 Hz host
+pacing. Solar visibility passes eight checks, and its negative admission gate
+exits successfully on the declared terminal `solar-sample-unavailable` fault.
+
+Fresh headless and GPU windowless Griffin missions pass 16 checks each with
+clear readiness, zero runtime errors and clean API exits. The inspected image
+retains rover, terrain and cast shadow. They use the frozen Twin `bbc0e77b`, the
+same DEM as below, and binary SHA-256
+`30e131970373f50534e610eac11d864e60bc610ff4445898ba5f6901c87dedb4`.
+Through tick 5459, all 2,365 captured empty-input records match. Of 49,131
+compared communication records, the first remaining difference is FLIP at step
+3082, shortly after release at tick 3079; Lander differs from step 5428.
+Completion is 5459 versus 5462. This removes the prior step-1441 divergence,
+but does not qualify complete native-state replay. Full-sample investigation
+of the release interval identifies differing native position, yaw/yaw-rate and
+wheel-speed inputs, together with the resulting mount direction; the first
+difference is not isolated to irradiance. Mechanical release/pose admission
+requires investigation. Hash equality alone is not state proof.
+
+Performance also remains open: the recent full-cycle medians are approximately
+11.01 ms headless and 6.80 ms rendered, with authored-verdict spikes included
+in the tails. These are diagnostic cohorts, with concurrent build activity;
+they are neither native-physics service nor clean FPS acceptance. Evidence is
+retained under `.cache/codex-evidence/celestial-sampling/`. The 200 FPS, sub-1 ms
+native physics, complete presentation isolation and broader FMI qualification
+requirements are not closed by this repair.
+
 ## Shared native mount and gravity owner — 2026-10-19
 
 `SimulationPoseQuery` and immutable API reads share one bounded ownership
@@ -37,14 +90,7 @@ throughout that interval. Equal completion does not qualify full replay;
 neither does hash equality establish complete native-state equality. These
 diagnostic runs do not establish 200 FPS or native physics below 1 ms.
 
-The next repair belongs at celestial/environment sampling: resolve physical
-provider facts from the authoritative tick and its bound celestial domain,
-reuse the semantic f64 frame/ephemeris math, and make physical point/ray
-conversion consume native mount poses. Presentation's angular-error cadence
-must not select a physical sample. The current `PreUpdate` celestial cluster
-and raw hierarchy direction resolver still leave that boundary open. Forcing
-the complete rendering cluster to solve every tick would not establish the
-required authority separation.
+The physical sampling cutover and current evidence are recorded above.
 
 ## Mounted environment input divergence — 2026-10-19
 

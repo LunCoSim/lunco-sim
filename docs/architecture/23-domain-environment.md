@@ -153,19 +153,27 @@ receive a bearing to the Sun, Earth, Moon, a spacecraft, or another vehicle by
 changing only its USD wire.
 
 The environment publisher reads source demand from composed USD connections,
-resolves each probe-to-target displacement through the shared BigSpace f64
-coordinate helpers, normalizes it once into `UnitDirection3`, then writes the
+resolves each probe-to-target displacement through `SimulationPoseQuery`,
+normalizes it once into `UnitDirection3`, then writes the
 three `double` values to that probe's `SimComponent` before
 `CosimSet::Propagate`. A missing, coincident, ambiguous, or unresolvable target
 removes the sample and emits a structured `RuntimeDiagnostic`; no local-body
 projection cache or guessed direction feeds Modelica.
+
+Celestial point providers publish `PrescribedSimulationPose` in the active
+physics frame, with the admitted cycle tick. Pending, stale, conflicting native
+and prescribed ownership, invalid rotation, or a different frame makes a pose
+unavailable. The publisher withdraws unavailable samples. Native bodies and
+mounted probes retain the same shared reader. Solar occlusion resolves its probe
+origin, direction and terrain conversion through that reader too.
 
 Static directional lights use the same resolver as explicit framed rays. The
 render light consumes the resolved `sun` ray or target for presentation,
 `SunRenderState` records its finalized render direction for shadows, and
 Modelica reads the probe outputs through ordinary USD connections. A celestial
 scene gets finite body positions from the ephemeris driven by the one
-`CelestialTime` child of `WorldTime`; static scenes get their fixed direction
+`CelestialClock` projection of the same celestial child at each physical
+communication boundary; static scenes get their fixed direction
 from one authored `DistantLight`. Neither choice adds another coordinate or
 time-conversion path.
 

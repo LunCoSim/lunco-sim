@@ -7,7 +7,6 @@
 use crate::oracle::DemHeightField;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
 use lunco_cosim_core::{
     SUN_IRRADIANCE_SOURCE_CONNECTOR, SUN_VISIBILITY_SOURCE_CONNECTOR, SimComponent, SimConnection,
 };
@@ -53,7 +52,6 @@ pub(crate) struct SolarGeometry<'w, 's> {
             Without<crate::ColliderTileOf>,
         ),
     >,
-    frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
 }
 
 /// Initialization samples wait for the physical providers' preparation.
@@ -77,9 +75,7 @@ pub(crate) fn publish_sun_visibility(
     rays: Option<Res<EnvironmentDirections>>,
     sun: Res<lunco_environment::SunState>,
     budget: Res<crate::SurfaceOcclusionBudget>,
-    parents: Query<&ChildOf>,
-    grids: Query<&Grid>,
-    spatial: Query<(Option<&CellCoord>, &Transform)>,
+    poses: lunco_physics::SimulationPoseQuery,
     targets: Query<(Entity, &DirectionTargetId)>,
     identities: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     terrains: Query<(Entity, &DemHeightField)>,
@@ -199,16 +195,9 @@ pub(crate) fn publish_sun_visibility(
                 if !irradiance.is_finite() || irradiance < 0.0 {
                     return Err("invalid physical solar irradiance".into());
                 }
-                let direction = resolve_direction_for_frame(
-                    &source,
-                    probe,
-                    rays.as_deref(),
-                    &targets,
-                    &parents,
-                    &grids,
-                    &spatial,
-                )
-                .map_err(|reason| format!("Sun direction unavailable: {reason:?}"))?;
+                let direction =
+                    resolve_direction_for_frame(&source, probe, rays.as_deref(), &targets, &poses)
+                        .map_err(|reason| format!("Sun direction unavailable: {reason:?}"))?;
                 geometry_sample.clone()?;
                 let mut occluders = Vec::with_capacity(occluder_paths.0.len());
                 for path in &occluder_paths.0 {
@@ -231,16 +220,12 @@ pub(crate) fn publish_sun_visibility(
                 {
                     return Err("solar probe requires 1..64 finite sampling points".into());
                 }
-                let frame = geometry
-                    .frame
-                    .as_ref()
-                    .ok_or("active physical frame unavailable")?
-                    .0;
                 let (physical_origin, physical_rotation) =
-                    lunco_spatial::coords::pose_in_grid(probe, frame, &parents, &grids, &spatial)
-                        .ok_or("probe physical pose unavailable")?;
-                let physical_direction = lunco_spatial::coords::unit_direction_between_frames(
-                    direction, probe, frame, &parents, &grids, &spatial,
+                    poses.pose(probe).ok_or("probe physical pose unavailable")?;
+                let physical_origin = physical_origin.0;
+                let physical_rotation = physical_rotation.0;
+                let physical_direction = lunco_spatial::coords::UnitDirection3::normalized(
+                    physical_rotation * direction.components(),
                 )
                 .ok_or("Sun physical frame unavailable")?
                 .components();
@@ -251,12 +236,15 @@ pub(crate) fn publish_sun_visibility(
                     .collect();
                 let mut keys = Vec::with_capacity(terrains.iter().len() * sampling.0.len());
                 for (terrain, field) in &terrains {
-                    let (origin, rotation) = lunco_spatial::coords::pose_in_grid(
-                        probe, terrain, &parents, &grids, &spatial,
-                    )
-                    .ok_or_else(|| format!("probe-to-terrain frame unavailable for {terrain:?}"))?;
-                    let direction = lunco_spatial::coords::unit_direction_between_frames(
-                        direction, probe, terrain, &parents, &grids, &spatial,
+                    let (terrain_origin, terrain_rotation) =
+                        poses.pose(terrain).ok_or_else(|| {
+                            format!("terrain physical pose unavailable for {terrain:?}")
+                        })?;
+                    let inverse = terrain_rotation.0.inverse();
+                    let origin = inverse * (physical_origin - terrain_origin.0);
+                    let rotation = (inverse * physical_rotation).normalize();
+                    let direction = lunco_spatial::coords::UnitDirection3::normalized(
+                        inverse * physical_direction,
                     )
                     .ok_or_else(|| format!("Sun-to-terrain frame unavailable for {terrain:?}"))?
                     .components();

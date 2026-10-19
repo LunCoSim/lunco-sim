@@ -12,7 +12,7 @@ use avian3d::prelude::{ConstantLinearAcceleration, Position, RigidBody, Rotation
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_physics::{PhysicsPoseSeeded, SimulationPoseQuery};
+use lunco_physics::{PhysicsPoseSeeded, PrescribedSimulationPose, SimulationPoseQuery};
 use lunco_spatial::coords::GridPos;
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
 // `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
@@ -245,6 +245,7 @@ pub fn compute_local_gravity(
     q_changed_providers: Query<(), Changed<GravityProvider>>,
     mut removed_providers: RemovedComponents<GravityProvider>,
     mut removed_body_links: RemovedComponents<GravityBody>,
+    mut removed_prescribed: RemovedComponents<PrescribedSimulationPose>,
     mut removed_poses: ParamSet<(
         RemovedComponents<PhysicsPoseSeeded>,
         RemovedComponents<RigidBody>,
@@ -271,6 +272,7 @@ pub fn compute_local_gravity(
             Changed<Position>,
             Changed<Rotation>,
             Changed<PhysicsPoseSeeded>,
+            Changed<PrescribedSimulationPose>,
             Changed<RigidBody>,
             Changed<Transform>,
             Changed<CellCoord>,
@@ -297,6 +299,7 @@ pub fn compute_local_gravity(
         transform_removed,
         removed_poses.p6().read().count() > 0,
         removed_poses.p7().read().count() > 0,
+        removed_prescribed.read().count() > 0,
     ]
     .into_iter()
     .any(|removed| removed);
@@ -626,9 +629,7 @@ fn on_set_environment_light(
     mut directions: ResMut<EnvironmentDirections>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     scene_mount: Option<Res<lunco_core::SceneMountState>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
+    poses: lunco_physics::SimulationPoseQuery<Without<DirectionalLight>>,
     q_direction_targets: Query<(Entity, &DirectionTargetId)>,
     q_source_classifications: Query<&CelestialSourceClassification>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
@@ -698,9 +699,7 @@ fn on_set_environment_light(
                 active_frame.0,
                 Some(&directions),
                 &q_direction_targets,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
+                &poses,
             ) {
                 Ok(direction) => direction,
                 Err(error) => {

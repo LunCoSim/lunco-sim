@@ -60,7 +60,9 @@ pub use joint_solver::{DeterministicJointSolverPlugin, PhysicsJointSolvePass};
 pub use order::{
     PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,
 };
-pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
+pub use pose::{
+    PhysicsPoseSeeded, PrescribedSimulationPose, SimulationPoseQuery, SimulationPoseReadState,
+};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{

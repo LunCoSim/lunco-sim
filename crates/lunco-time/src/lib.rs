@@ -6,10 +6,10 @@
 //! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
 //! derived causal [`WorldTime`] view, and the interpolated
 //! [`SimulationPresentationTime`] used by render-only consumers.
-//! Celestial state uses one explicit [`CelestialTime`] sample, an affine child
-//! of [`WorldTime`]. Ephemerides, body rotation, lighting, shadows, and
-//! environment inputs share it; physics and Modelica keep their fixed-step
-//! cadence and consume the resulting state at their normal communication points.
+//! The celestial domain is one affine child of the tick root. Physical
+//! providers evaluate [`CelestialClock`] at their communication boundary;
+//! rendering consumes its [`CelestialTime`] frame snapshot. Physics and Modelica
+//! retain their shared fixed-step cadence.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The
 //! calendar epoch is `epoch0 + (tick − tick0)/86400`, a pure function of the

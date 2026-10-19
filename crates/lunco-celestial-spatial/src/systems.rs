@@ -96,24 +96,9 @@ pub fn body_rotation_system(
     }
 }
 
-// NOTE: a `tile_rotation_sync_system` used to live here — an intentionally
-// EMPTY body ("tiles stay at identity rotation in the Grid frame") whose
-// `.after(TransformSystems::Propagate)` orderings were silently meaningless in
-// PreUpdate (those sets have no members there). Deleted 2026-07-11; tiles are
-// carried by their (rotating) grid, which is the correct scheme.
-
-/// Pure direction math for [`update_sun_light_system`]: the direction a
-/// `DirectionalLight` should EMIT along (its local `-Z` / forward) so sunlight
-/// travels from the Sun toward the scene, given heliocentric Sun and Moon
-/// positions (ecliptic J2000, AU). Returns `None` when degenerate (e.g. the
-/// no provider or coincident positions).
-/// The inputs are typed `EclipticAu` on purpose: this is the exact pipe that once carried
-/// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
-/// Shackleton. A raw `DVec3` can no longer be handed to it.
-/// Publish the calibrated solar irradiance from the current celestial epoch.
-/// Direction inputs are resolved independently from the actual tagged target
-/// entity by the generic environment probe path, so every probe gets its own
-/// BigSpace-relative bearing.
+/// Publish presentation illuminance at the cadence selected for rendered
+/// celestial transforms. Physical irradiance and directions are sampled by the
+/// communication-boundary publisher, independently of this render budget.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     celestial_time: Res<CelestialTime>,
@@ -125,7 +110,7 @@ pub fn update_sun_light_system(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let Some(ephemeris) = ephemeris else {
-        sun_state.clear();
+        sun_state.publish(None);
         return;
     };
 
@@ -143,7 +128,7 @@ pub fn update_sun_light_system(
         });
     }
     if !contract_findings.is_empty() {
-        sun_state.clear();
+        sun_state.publish(None);
         if let Some(mut diagnostics) = diagnostics {
             diagnostics.replace_producer("celestial-sun", contract_findings);
         }
@@ -158,7 +143,7 @@ pub fn update_sun_light_system(
         .map(|anchor| anchor.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
     else {
-        sun_state.clear();
+        sun_state.publish(None);
         return;
     };
 
@@ -170,7 +155,7 @@ pub fn update_sun_light_system(
             .provider
             .global_position(observer_body, celestial_time.epoch_jd),
     ) else {
-        sun_state.clear();
+        sun_state.publish(None);
         return;
     };
 
@@ -178,19 +163,13 @@ pub fn update_sun_light_system(
         // Orbital views without a site do not own a local ENU light frame.
         // Their authored DistantLight remains render-only; it is not a
         // substitute physical irradiance sample.
-        sun_state.clear();
+        sun_state.publish(None);
         return;
     }
     let irradiance = sun_cal.as_deref().and_then(|cal| {
         let r2 = (p_sun - p_observer).length_squared();
         (r2 > 1.0e-4).then_some((cal.illuminance_lux as f64 / r2) as f32)
     });
-    if let Err(error) = sun_state.publish_physical(sun_cal.as_deref().and_then(|cal| {
-        let r2 = (p_sun - p_observer).length_squared();
-        (r2 > 1.0e-4).then_some(cal.irradiance_w_m2 / r2)
-    })) {
-        warn!("[solar] {error}");
-    }
     sun_state.publish(irradiance);
 }
 

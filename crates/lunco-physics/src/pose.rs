@@ -3,8 +3,9 @@
 //! A physical body's pose has one owner: Avian's f64 [`Position`] and
 //! [`Rotation`]. Its cell-local [`Transform`] is only the render projection and
 //! necessarily rounds to f32. Mounted entities compose their local hierarchy
-//! with the nearest rigid body's native pose. Entities without a rigid-body
-//! ancestor use the composed BigSpace hierarchy.
+//! with the nearest rigid body's native pose. Analytical providers publish an
+//! explicit prescribed pose at communication boundaries. Entities without
+//! either kind of simulation owner use the composed BigSpace hierarchy.
 //!
 //! [`SimulationPoseQuery`] is the single read boundary that applies that rule.
 //! Callers never "prefer Position when present": an Avian body without
@@ -25,24 +26,72 @@ use lunco_spatial::coords::{
     GridPos, GridRot, MAX_SPATIAL_HIERARCHY_DEPTH, grid_relative_pose, pose_in_grid,
 };
 
+/// Pose prescribed by a non-integrating simulation provider, such as an
+/// ephemeris. The provider installs Pending when it takes ownership and
+/// publishes in the admitted physics frame at each communication boundary:
+/// interval-start state before integration, endpoint state after writeback.
+/// `tick` identifies the admitted cycle, not the source's integration time.
+/// Keeping readiness explicit prevents presentation state from standing in for
+/// an unavailable or stale analytical result. Entity teardown retires the fact.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub enum PrescribedSimulationPose {
+    #[default]
+    Pending,
+    Sample {
+        frame: Entity,
+        tick: lunco_core_runtime::SimTick,
+        position: GridPos,
+        rotation: GridRot,
+    },
+}
+
 /// Both ECS systems and immutable API readers use the same ownership walk.
 /// A body cuts off the presentation hierarchy: mounts inherit its native pose
 /// even before writeback, and an unseeded body makes its whole mount unavailable.
-fn simulation_pose(
+fn simulation_pose<F: bevy::ecs::query::QueryFilter>(
     entity: Entity,
     frame: Entity,
     bodies: &Query<(), With<RigidBody>>,
     physics: &Query<(&Position, &Rotation), (With<RigidBody>, With<PhysicsPoseSeeded>)>,
+    prescribed: &Query<&PrescribedSimulationPose>,
+    tick: Option<lunco_core_runtime::SimTick>,
     parents: &Query<&ChildOf>,
     grids: &Query<&Grid>,
-    spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(GridPos, GridRot)> {
     let mut ancestor = entity;
     for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
-        if bodies.contains(ancestor) {
+        let supplied = prescribed.get(ancestor).ok();
+        let native_body = bodies.contains(ancestor);
+        if native_body && supplied.is_some() {
+            return None;
+        }
+        let owned = if native_body {
             let (position, rotation) = physics.get(ancestor).ok()?;
+            Some((GridPos(position.0), GridRot(rotation.0)))
+        } else if let Some(supplied) = supplied {
+            match supplied {
+                PrescribedSimulationPose::Sample {
+                    frame: source_frame,
+                    tick: source_tick,
+                    position,
+                    rotation,
+                } if *source_frame == frame
+                    && Some(*source_tick) == tick
+                    && position.0.is_finite()
+                    && rotation.0.is_finite()
+                    && rotation.0.is_normalized() =>
+                {
+                    Some((*position, *rotation))
+                }
+                _ => return None,
+            }
+        } else {
+            None
+        };
+        if let Some((position, rotation)) = owned {
             if ancestor == entity {
-                return Some((GridPos(position.0), GridRot(rotation.0)));
+                return Some((position, rotation));
             }
             let (offset, axes) = grid_relative_pose(entity, ancestor, parents, grids, spatial)?;
             return Some((
@@ -73,6 +122,7 @@ pub struct SimulationPoseReadState {
         (&'static Position, &'static Rotation),
         (With<RigidBody>, With<PhysicsPoseSeeded>),
     >,
+    prescribed: QueryState<&'static PrescribedSimulationPose>,
     parents: QueryState<&'static ChildOf>,
     grids: QueryState<&'static Grid>,
     spatial: QueryState<(Option<&'static CellCoord>, &'static Transform)>,
@@ -84,6 +134,7 @@ impl SimulationPoseReadState {
         Some(Self {
             bodies: QueryState::try_new(world)?,
             physics: QueryState::try_new(world)?,
+            prescribed: QueryState::try_new(world)?,
             parents: QueryState::try_new(world)?,
             grids: QueryState::try_new(world)?,
             spatial: QueryState::try_new(world)?,
@@ -98,6 +149,8 @@ impl SimulationPoseReadState {
             frame,
             &self.bodies.query(world),
             &self.physics.query(world),
+            &self.prescribed.query(world),
+            world.get_resource::<lunco_core_runtime::SimTick>().copied(),
             &self.parents.query(world),
             &self.grids.query(world),
             &self.spatial.query(world),
@@ -119,11 +172,13 @@ pub struct PhysicsPoseSeeded;
 
 /// Read any entity in the active simulation frame from its authoritative owner.
 #[derive(SystemParam)]
-pub struct SimulationPoseQuery<'w, 's> {
+pub struct SimulationPoseQuery<'w, 's, F: bevy::ecs::query::QueryFilter + 'static = ()> {
     frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
+    tick: Option<Res<'w, lunco_core_runtime::SimTick>>,
+    prescribed: Query<'w, 's, &'static PrescribedSimulationPose>,
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
-    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform), F>,
     bodies: Query<'w, 's, (), With<RigidBody>>,
     physics: Query<
         'w,
@@ -133,17 +188,20 @@ pub struct SimulationPoseQuery<'w, 's> {
     >,
 }
 
-impl SimulationPoseQuery<'_, '_> {
+impl<F: bevy::ecs::query::QueryFilter + 'static> SimulationPoseQuery<'_, '_, F> {
     /// Resolve `entity` into the active simulation frame.
     ///
-    /// An unseeded physical body or its mount returns `None`; rounded render
-    /// state is never substituted for missing native state.
+    /// Unseeded native bodies, pending or stale prescribed sources, and their
+    /// mounts return `None`; missing simulation state is never replaced by a
+    /// rounded render pose.
     pub fn pose(&self, entity: Entity) -> Option<(GridPos, GridRot)> {
         simulation_pose(
             entity,
             self.frame.as_ref()?.0,
             &self.bodies,
             &self.physics,
+            &self.prescribed,
+            self.tick.as_deref().copied(),
             &self.parents,
             &self.grids,
             &self.spatial,
@@ -300,6 +358,8 @@ fn optional_u64(params: &ApiValue, name: &str, query: &str) -> Result<Option<u64
 
 /// Register active-frame spatial reads beside the physics gate.
 pub fn register_spatial_query_providers(app: &mut App) {
+    app.world_mut()
+        .register_component::<PrescribedSimulationPose>();
     app.init_resource::<ApiQueryRegistry>();
     let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
     registry.register(NearestProvider);
@@ -383,6 +443,61 @@ mod tests {
     }
 
     #[test]
+    fn prescribed_pose_requires_current_tick_frame_and_one_owner() {
+        let mut world = World::new();
+        let frame = world
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_core_runtime::SimTick(70));
+        let source = world
+            .spawn((
+                PrescribedSimulationPose::Pending,
+                Transform::from_xyz(100.0, 200.0, 300.0),
+                ChildOf(frame),
+            ))
+            .id();
+        let mount = world
+            .spawn((Transform::from_xyz(0.25, 0.5, -0.75), ChildOf(source)))
+            .id();
+        assert!(read(&mut world, source).is_none());
+        assert!(read(&mut world, mount).is_none());
+        let position = GridPos(DVec3::new(0.123_456_789_012, 9.0, -7.0));
+        let rotation = GridRot(DQuat::from_rotation_y(0.3));
+        world
+            .entity_mut(source)
+            .insert(PrescribedSimulationPose::Sample {
+                frame,
+                tick: lunco_core_runtime::SimTick(70),
+                position,
+                rotation,
+            });
+        assert_eq!(read(&mut world, source), Some((position, rotation)));
+        let mounted = read(&mut world, mount).unwrap();
+        assert_eq!(
+            mounted.0.0,
+            position.0 + rotation.0 * DVec3::new(0.25, 0.5, -0.75)
+        );
+        let mut state = SimulationPoseReadState::try_new(&world).unwrap();
+        assert_eq!(state.pose(&world, mount), Some(mounted));
+        world.resource_mut::<lunco_core_runtime::SimTick>().0 = 71;
+        assert!(read(&mut world, mount).is_none());
+        assert!(state.pose(&world, source).is_none());
+        world.resource_mut::<lunco_core_runtime::SimTick>().0 = 70;
+        let replacement = world
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(replacement));
+        assert!(read(&mut world, source).is_none());
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        world
+            .entity_mut(source)
+            .insert((RigidBody::Kinematic, PhysicsPoseSeeded));
+        assert!(read(&mut world, source).is_none());
+        assert!(state.pose(&world, mount).is_none());
+    }
+
+    #[test]
     fn unseeded_physical_body_has_no_reportable_pose() {
         let mut world = World::new();
         let frame = world
@@ -425,6 +540,7 @@ mod tests {
             .id();
         world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         world.register_component::<CellCoord>();
+        world.register_component::<PrescribedSimulationPose>();
         world.init_resource::<ApiEntityRegistry>();
         let exact = DVec3::new(12.123_456_789, -1_900.987_654_321, -4.0);
         let body = world

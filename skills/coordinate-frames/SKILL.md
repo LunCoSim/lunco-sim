@@ -79,7 +79,10 @@ boundary for physical consumers, including mounted probes; do not compose
 through the body's presentation `Transform`. An unseeded parent makes a mount
 unavailable. A cached mounted field must also invalidate on ancestor native
 motion, hierarchy edits and pose-readiness withdrawal, even when its own local
-transform is unchanged.
+transform is unchanged. Analytical providers use `PrescribedSimulationPose` in
+the active frame, stamped with the admitted cycle tick; pending, stale, invalid
+or mixed native/prescribed ownership must stay unavailable. Directions and
+physical solar visibility use this same reader for probe and provider poses.
 The shared
 `lunco-physics::avian_backend` contract owns numeric backend admission; the
 bridge owns lifecycle admission and raises the runtime fault when changed poses
@@ -105,11 +108,13 @@ introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
 Celestial body ephemerides are not ordinary USD animation: body frames,
-rotation, the semantic SunState, shadows, and the sky readout share one
-`lunco_time::CelestialTime` sample. It is a child of `WorldTime` and can be
-rate-scaled up to 100,000× without changing Avian's fixed physics cadence.
-Modelica reads celestial-derived environment inputs at its ordinary
-communication points.
+rotation, irradiance, shadows and the sky readout use the same celestial
+affine child of the tick root. Physical providers evaluate
+`CelestialClock::epoch_at_tick` at interval start before integration and at
+endpoint after native writeback; initialization uses the current boundary.
+Rendering consumes the `CelestialTime` snapshot under its angular error budget.
+The domain can be rate-scaled up to 100,000× without changing Avian's fixed
+physics cadence. Never let a presentation solve gate choose Modelica inputs.
 From a lunar surface, Earth stays near one sky position because the Moon is
 tidally locked; expect libration, while Earth's single body-fixed grid
 continues to rotate for the day/night cycle. At 100,000×, a lunar month takes
@@ -208,8 +213,8 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
 For physics and co-simulation, resolve a demanded direction target from its
-composed position into each `EnvironmentProbe` frame through the shared
-BigSpace f64 helpers. Normalize the displacement once into `UnitDirection3`;
+simulation pose into each `EnvironmentProbe` frame through the shared
+`SimulationPoseQuery`. Normalize the displacement once into `UnitDirection3`;
 frame rotations preserve that unit vector. The USD wire selects the source id,
 while the consumer model uses a generic target-direction input. `SunState`
 contains solar irradiance only. A static `DistantLight` contributes a framed

@@ -97,7 +97,10 @@ source of truth. Physical runtime reads use
 one bounded ownership walk: the nearest rigid body supplies its seeded native
 f64 pose, and a mounted descendant composes only its local chain below that
 body. An unseeded body makes its mounts unavailable too. Entities without a
-rigid-body ancestor use the BigSpace hierarchy. Spatial placement reads use
+native or prescribed ancestor use the BigSpace hierarchy. Analytical providers
+publish `PrescribedSimulationPose` at communication boundaries in the active
+frame; pending, stale, invalid or ambiguous ownership is unavailable. Spatial
+placement reads use
 `ActiveFramePoseQuery`, `grid_relative_pose`, or the typed frame conversion
 helpers. For a placement command whose
 semantic input is in one grid, use `pose_in_grid_to_parent_storage` for a new
@@ -107,8 +110,8 @@ Grid parent.
 
 Environment direction projections follow the same boundary. A source id names
 one finite target entity or one explicitly framed infinite ray; the resolver
-converts that source to each `EnvironmentProbe` frame through the shared f64
-BigSpace helpers and constructs a `UnitDirection3` once. It does not read
+converts that source to each `EnvironmentProbe` frame through the shared
+simulation-pose reader and constructs a `UnitDirection3` once. It does not read
 `GlobalTransform` for simulation inputs. Generic Modelica consumers expose
 `target_mount_x/y/z`; changing the source wire changes the target without
 changing the model or adding an Earth/Sun/Moon conversion path. Render
@@ -334,8 +337,10 @@ center to sweep across a lunar sky to show its day/night cycle.
 
 `CelestialTime` is an affine child of `WorldTime`, so pause and deterministic
 replay propagate through the one clock tree. Its rate scales the shared
-celestial sample used by body placement and rotation, solar irradiance,
-lighting and shadows, and celestial queries. Avian keeps its existing fixed
+celestial mapping. Physical provider poses and irradiance evaluate it at each
+communication boundary through `CelestialClock`; rendering samples it through
+`CelestialTime` for body placement, rotation, lighting and shadows. Avian keeps
+its existing fixed
 physics schedule; it does not run 100,000 catch-up steps. During ordinary
 `FixedUpdate`, the environment resolves demanded target ids into each probe's
 own mount frame and writes `<id>_mount_x/y/z` directly to that probe's
@@ -347,8 +352,8 @@ propagating an accumulator zero. No per-body direction cache, second model
 clock, or faster physics loop is involved.
 
 The shared celestial cadence commits the `CelestialTime` sample captured in
-`PreUpdate`. One epoch/revision cursor gates body placement, rotation, solar
-state, and dependent projections together; a newer sample is not marked solved
+`PreUpdate`. One epoch/revision cursor gates rendered body placement, rotation,
+illuminance and dependent projections together; a newer sample is not marked solved
 until those consumers process it.
 
 The ordinary render interpolation sample drives authored USD animation. A
