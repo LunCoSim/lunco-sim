@@ -6,9 +6,9 @@
 //   battery terminal voltage -> motor winding -> solved shaft torque
 //
 // The test never writes a motor command or asks Rust to stop an actuator. A
-// wheel may still exchange mechanical energy with a motor; the assertion is
-// therefore on battery-supplied power and positive shaft work, not on a
-// per-motor electrical sample that can be balanced by another physical path.
+// kinematic test chassis excludes gravitational settling as a mechanical
+// energy source. Back-driven regeneration is covered separately by the
+// model_physical_contracts experiment; this fixture isolates an unpowered rig.
 
 const PORT_WAIT_S = 30.0;
 const DRIVE_S = 3.0;

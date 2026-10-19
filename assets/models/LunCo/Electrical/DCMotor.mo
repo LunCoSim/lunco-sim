@@ -11,7 +11,7 @@ model DCMotor
   // in USD; this source default remains physically consistent when used alone.
   parameter Real stall_torque = 0.9 "Motor-shaft stall torque, N.m";
   parameter Real no_load_speed = 2400.0 "Motor-shaft no-load speed, rad/s";
-  parameter Real rated_power = 500.0 "Continuous electrical nameplate power, W";
+  parameter Real rated_power = 500.0 "Continuous electrical nameplate rating, W; not stall power";
   parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 
   input Real demand "Normalized motor demand, -1..1";
@@ -34,11 +34,16 @@ model DCMotor
   Real torque_constant(unit="N.m/A");
   Real back_emf_constant(unit="V.s/rad");
 equation
+  assert(stall_torque > 0.0 and no_load_speed > 0.0 and v_rated > 0.0
+    and rated_power > 0.0, "DCMotor requires positive nameplate parameters");
   // The nameplate derives the winding constants once. No battery or source is
   // named here: any authored electrical network determines p.v and p.i.
-  resistance = v_rated * v_rated / rated_power;
-  torque_constant = stall_torque / (rated_power / v_rated);
+  // In SI, the torque and back-EMF constants are equal by energy conservation.
+  // Stall torque and no-load speed determine the ideal winding resistance;
+  // a continuous thermal nameplate rating does not specify stall current.
   back_emf_constant = v_rated / no_load_speed;
+  torque_constant = back_emf_constant;
+  resistance = torque_constant * v_rated / stall_torque;
 
   shaft_speed = speed;
   winding_voltage = demand * p.v;

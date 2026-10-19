@@ -12,7 +12,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[Pin.mo](../assets/models/LunCo/Electrical/Pin.mo)**: Acausal electrical pin connector (`Real v; flow Real i;`, enforcing Kirchhoff's Current Law $\sum i = 0$).
 - **[Battery.mo](../assets/models/LunCo/Electrical/Battery.mo)**: Pack capacity, fixed authored initial state, bounded State-of-Charge integration, internal-resistance voltage sag ($V = V_{\text{nom}} + I R$ with the signed pin-current convention), and a 0.1% usable-storage reserve signal for the empty-boundary event.
 - **[SolarPanel.mo](../assets/models/LunCo/Electrical/SolarPanel.mo)**: Solar array generation from collecting area, efficiency, irradiance, and incidence; a finite nameplate rating caps output while the default infinite rating leaves generic arrays uncapped.
-- **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Electrical facet of a USD/Avian hub drive; demand-controlled bus current, electrical draw, and winding heat. The shaft torque, speed, reduction, and contact mechanics remain owned by the USD/Avian drivetrain.
+- **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Conservative electrical/thermal facet of a USD/Avian hub drive. Equal SI torque and back-EMF constants preserve shaft/electrical power balance; stall torque and no-load speed determine winding resistance. The continuous power rating is nameplate metadata, not stall power. USD/Avian owns physical shaft/contact motion.
 - **[PDU.mo](../assets/models/LunCo/Electrical/PDU.mo)**: EPS Power Distribution Unit, 28V regulated main bus, and under-voltage load shedding.
 - **[OnboardComputer.mo](../assets/models/LunCo/Electrical/OnboardComputer.mo)**: Flight computer baseline power draw ($P_{\text{base}} = 12\text{ W}$) + active GNC processing load ($P_{\text{gnc}} = 8\text{ W}$).
 - **[CameraPayload.mo](../assets/models/LunCo/Electrical/CameraPayload.mo)**: Active camera capture streaming power draw ($4.5\text{ W}$) and data output rate ($15\text{ Mbps}$).
@@ -23,12 +23,12 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[ThermalMass.mo](../assets/models/LunCo/Thermal/ThermalMass.mo)**: Structural lumped thermal capacity ($C_{\text{th}} \frac{dT}{dt} = \sum Q$).
 - **[Radiator.mo](../assets/models/LunCo/Thermal/Radiator.mo)**: Vacuum radiative heat rejection ($Q_{\text{rad}} = \sigma \epsilon A (T^4 - T_{\text{sink}}^4)$).
 - **[ThermalConductor.mo](../assets/models/LunCo/Thermal/ThermalConductor.mo)**: Linear thermal conduction ($Q = G (T_1 - T_2)$).
-- **[ThermostatHeater.mo](../assets/models/LunCo/Thermal/ThermostatHeater.mo)**: Thermo-electrical survival heater drawing EPS bus power to keep optics/batteries warm ($T < 263\text{ K}$).
+- **[ThermostatHeater.mo](../assets/models/LunCo/Thermal/ThermostatHeater.mo)**: Thermo-electrical survival heater converting actual terminal power to heat; an unpowered bus supplies no heat ($T < 263\text{ K}$).
 
 ### 1.3 Sensor & Instrument Subsystem (`LunCo.Sensors`)
 - **[IMUSensor.mo](../assets/models/LunCo/Sensors/IMUSensor.mo)**: 3-axis accelerometer bias ($\mathbf{b}_a$), gyro drift ($\mathbf{b}_\omega$), scale factor error, and health status flag.
-- **[ThermalSensor.mo](../assets/models/LunCo/Sensors/ThermalSensor.mo)**: RTD/thermocouple response lag ($\tau = 2\text{ s}$), calibration offset ($\Delta T_{\text{cal}}$), and 12-bit ADC counts ($0..4095$).
-- **[ElectricalSensor.mo](../assets/models/LunCo/Sensors/ElectricalSensor.mo)**: Voltage divider attenuation, Hall-effect current transducer sensitivity ($0.05\text{ V/A}$), and 12-bit ADC counts.
+- **[ThermalSensor.mo](../assets/models/LunCo/Sensors/ThermalSensor.mo)**: Non-loading thermal probe (`port.Q = 0`) with response lag ($\tau = 2\text{ s}$), calibration offset ($\Delta T_{\text{cal}}$), and 12-bit ADC counts ($0..4095$).
+- **[ElectricalSensor.mo](../assets/models/LunCo/Sensors/ElectricalSensor.mo)**: Ideal series bus monitor: connect upstream `p` and downstream `n`. Equal terminal voltage and conserved current measure the branch without absorbing power. Authored measurement ranges set the 12-bit ADC counts.
 - **[StarTracker.mo](../assets/models/LunCo/Sensors/StarTracker.mo)**: Boresight attitude determination, Sun exclusion mask angle ($\ge 30^\circ$), rate blinding, and attitude lock flag.
 - **[Altimeter.mo](../assets/models/LunCo/Sensors/Altimeter.mo)**: Altimeter radar/laser rangefinder, mount offset ($1.2\text{ m}$), max range mask ($2500\text{ m}$), and out-of-range flag.
 - **[EncoderSensor.mo](../assets/models/LunCo/Sensors/EncoderSensor.mo)**: Rotary encoder pulses per revolution (4096 PPR), zero-point offset, and digital telemetry output.
@@ -46,7 +46,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[ReactionWheel.mo](../assets/models/LunCo/Pointing/ReactionWheel.mo)**: Reaction wheel angular momentum storage ($h = I \omega$), reaction torque, and electrical power draw.
 
 ### 1.6 Storage Subsystem (`LunCo.Storage`)
-- **[CryoTank.mo](../assets/models/LunCo/Storage/CryoTank.mo)**: Cryogenic propellant storage tank (boil-off rate $\dot{m}_{\text{boil}} = \frac{Q_{\text{in}}}{h_{\text{fg}}}$ and mass output `mass_kg` driving dynamic CoM and inertia tensor shifts).
+- **[CryoTank.mo](../assets/models/LunCo/Storage/CryoTank.mo)**: Prescribed-temperature phase-change tank requiring an authored positive `saturation_temperature_k`; it does not predict pressure or saturation temperature. Boil-off rate $\dot{m}_{\text{boil}} = \frac{Q_{\text{in}}}{h_{\text{fg}}}$ and mass output `mass_kg` for downstream mass accounting.
 - **[MassMemory.mo](../assets/models/LunCo/Storage/MassMemory.mo)**: Solid-state flash science memory buffer (GB fill, write/read power draw).
 
 ### 1.7 Communications Subsystem (`LunCo.Comms`)

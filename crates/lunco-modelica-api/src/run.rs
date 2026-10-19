@@ -40,6 +40,8 @@ fn on_run_modelica_solve(
     mut pending: Option<ResMut<PendingHandles>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     settings: Res<lunco_experiments::ExperimentSettings>,
+    mut roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+    channels: Option<Res<lunco_modelica_runtime::ModelicaChannels>>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
     if request.doc_id.is_unassigned() {
@@ -83,7 +85,11 @@ fn on_run_modelica_solve(
             candidates.join(", ")
         )
     })?;
-    let source = document.source().to_owned();
+    let ast = document.strict_ast().ok_or_else(|| {
+        "RunModelicaSolve requires a current strict Modelica source snapshot".to_owned()
+    })?;
+    let dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
+    let source = lunco_modelica_source_roots::compile_overlay_source(document);
     let filename = document.origin().session_uri();
     let attribution = PinnedDocumentRuntimeOwner::for_document(
         request.doc_id,
@@ -132,6 +138,15 @@ fn on_run_modelica_solve(
     };
     lunco_modelica_core::sim_target::validate_run_bounds(&bounds)
         .map_err(|error| error.to_string())?;
+    if !dependency_roots.is_empty() {
+        let roots = roots
+            .as_deref_mut()
+            .ok_or_else(|| "Modelica source-root registry is not installed".to_owned())?;
+        let channels = channels
+            .as_deref()
+            .ok_or_else(|| "Modelica worker channel is not available".to_owned())?;
+        lunco_modelica_source_roots::admit_compile_roots(roots, dependency_roots, channels)?;
+    }
     let origin = ExperimentOrigin::LocalDocument(attribution);
     let experiment_id = sources.insert_new(
         &mut experiments,

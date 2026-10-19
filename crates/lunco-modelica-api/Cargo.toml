@@ -24,6 +24,8 @@ lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-source-roots = { path = "../lunco-modelica-source-roots" }
+rumoca-compile = { workspace = true }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 serde = { workspace = true }
 uuid = { workspace = true }

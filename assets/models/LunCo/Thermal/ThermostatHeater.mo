@@ -17,7 +17,7 @@ model ThermostatHeater
   LunCo.Electrical.Pin elec_port "Electrical power supply pin";
 equation
   heater_active = max(0.0, min(1.0, 0.5 + t_set_k - thermal_port.T));
-  heat_out_w = p_heater_w * eta_heat * heater_active;
+  heat_out_w = electrical_power_w * eta_heat;
   thermal_port.Q = -heat_out_w;
   elec_port.i = (p_heater_w * heater_active) / max(1.0, elec_port.v);
   electrical_power_w = elec_port.i * elec_port.v;
