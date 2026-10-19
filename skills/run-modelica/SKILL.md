@@ -167,6 +167,23 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application
   co-simulation backend owns their topology publication. Live sample changes
   must not invalidate resolved handles without a structural contract change.
 
+### Shared physical-model review
+
+Use `scripts/api/test_model_physics.py --output <directory>` for the authored
+44-check energy, PID, connector and allocation regression; repeat with
+`--headless` to exercise scratch documents and cold `RunModelicaSolve` package
+admission without the workbench. Provide `LUNCOSIM_BIN` explicitly. The gate
+uses the existing source-root owner and queries a bounded, named trajectory;
+constant columns must retain the same final sample row as time.
+
+Compile controllers with their required inputs and acausal components inside
+closed networks. An open current source, torque source or heat source need not
+initialize alone. Inspect compiler and solver diagnostics separately. The
+`ModelPhysicalContracts` fixture also closes the pump/chamber, series electrical
+sensor, non-loading thermal sensor and prescribed-temperature phase-change
+boundaries. Supply `CryoTank.saturation_temperature_k` from the operating point;
+connect both `ElectricalSensor.p` and `.n` across the measured branch.
+
 ### No-API alternative
 The standalone runner is owned by `lunco-modelica-execution`, not
 `lunco-modelica-core`. For a one-shot current-source compile and fixed-step

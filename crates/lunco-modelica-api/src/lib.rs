@@ -1022,22 +1022,10 @@ impl ApiQueryProvider for GetExperimentResultProvider {
         let total = result.times.len();
         // Strided downsample: stride 1 when uncapped or already small.
         let stride = match max_points {
-            Some(cap) if total > cap => total.div_ceil(cap),
+            Some(cap) if total > cap => (total - 1).div_ceil(cap - 1),
             _ => 1,
         };
-        let sample = |v: &[f64]| -> Vec<f64> {
-            if stride <= 1 {
-                return v.to_vec();
-            }
-            let mut out: Vec<f64> = v.iter().step_by(stride).copied().collect();
-            // Always keep the final sample so the horizon endpoint shows.
-            if let (Some(&last), Some(&got)) = (v.last(), out.last()) {
-                if last != got {
-                    out.push(last);
-                }
-            }
-            out
-        };
+        let sample = |v: &[f64]| trajectory_stride_samples(v, stride);
 
         let times = sample(&result.times);
         let mut series = Vec::<(String, ApiValue)>::new();
@@ -1805,6 +1793,37 @@ fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
 }
 
 // ─── Provider helpers ──────────────────────────────────────────────────
+
+fn trajectory_stride_samples(values: &[f64], stride: usize) -> Vec<f64> {
+    if stride <= 1 {
+        return values.to_vec();
+    }
+    let mut samples: Vec<f64> = values.iter().step_by(stride).copied().collect();
+    // Endpoint identity is its index, even when a constant or periodic signal
+    // has the same value as an earlier sample. All columns retain the time row.
+    if !values.is_empty() && (values.len() - 1) % stride != 0 {
+        samples.push(values[values.len() - 1]);
+    }
+    samples
+}
+
+#[cfg(test)]
+mod trajectory_tests {
+    use super::trajectory_stride_samples;
+
+    #[test]
+    fn strided_trajectory_retains_equal_valued_final_rows() {
+        let times = trajectory_stride_samples(&[0., 1., 2., 3., 4., 5.], 4);
+        assert_eq!(times, [0., 4., 5.]);
+        assert_eq!(trajectory_stride_samples(&[7.; 6], 4), [7., 7., 7.]);
+        assert_eq!(
+            trajectory_stride_samples(&[0., 1., 2., 3., 4., 4.], 4),
+            [0., 4., 4.]
+        );
+        assert_eq!(trajectory_stride_samples(&[7.; 5], 4), [7., 7.]);
+        assert!(trajectory_stride_samples(&[], 4).is_empty());
+    }
+}
 
 fn parse_doc_id(params: &ApiValue, field: &str) -> Option<DocumentId> {
     api_param_u64(params, field)

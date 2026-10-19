@@ -23,7 +23,8 @@ model PIDAxis
   output Real command "Saturated PID command";
   output Real integral "Bounded integral state";
 
-  Real integral_state(start = 0.0) "Internal integral state";
+  Real integral_state(start = 0.0, fixed = true) "Internal integral state";
+  Real integral_rate "Error and output-saturation back-calculation";
   Real raw_command "Unsaturated PID command";
   Real saturated_command "Bounded command used by the controller";
   Real rate_error "Desired rate minus measured rate";
@@ -37,11 +38,17 @@ equation
   // without replacing the model or asking Rhai to perform control work.
   // The command and anti-windup equations are the complete PID contract; the
   // unsaturated expression is intentionally not a separate public signal.
-  raw_command = kp * error + ki * integral_state + kd * rate_error;
+  raw_command = kp * error + ki * integral + kd * rate_error;
   saturated_command = max(-output_limit, min(output_limit, raw_command));
   command = saturated_command;
-  der(integral_state) = error
+  integral_rate = error
     + anti_windup_gain * (saturated_command - raw_command);
+  // Integrate inward at either bound, but do not accumulate hidden windup
+  // while the bounded integral contribution is already at its limit.
+  der(integral_state) = noEvent(if integral_state >= max(0.0, integral_limit)
+    then min(0.0, integral_rate)
+    else if integral_state <= -max(0.0, integral_limit)
+    then max(0.0, integral_rate) else integral_rate);
   integral = max(-max(0.0, integral_limit),
     min(max(0.0, integral_limit), integral_state));
 end PIDAxis;

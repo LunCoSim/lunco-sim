@@ -118,7 +118,13 @@ scene tests and non-UI hosts.
 `RunModelicaSolve` starts the existing asynchronous experiment runner against
 an explicit document id, parsed class, and source generation. It returns an
 experiment id immediately; callers poll `RunStatus` and read finite `f64`
-series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
+series through `GetExperimentResult`. Required package roots come from
+Rumoca's strict document AST and enter through the same
+`admit_compile_roots` owner as workbench experiments before dispatch.
+Read-only source-library documents use that owner's compile overlay contract.
+Downsampled trajectories retain the final row by sample index across all
+columns, including constant and periodic values, while honoring the point cap.
+`CloseScratchModelicaDocument` removes
 only untitled generated documents and their run records. It cancels live
 experiments and delegates document and linked execution-entity retirement to
 the shared `CloseDocument` owner.

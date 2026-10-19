@@ -17,6 +17,9 @@ model ThermalSensor
   output Real temp_sensor_c "Sensed temperature in Celsius, °C";
   output Real adc_counts "12-bit ADC telemetry count, 0..4095";
 equation
+  // Ideal non-loading probe: response lag is an instrument state, not an
+  // unconstrained heat source on the measured physical node.
+  port.Q = 0.0;
   der(t_sensed_k) = (port.T - t_sensed_k) / max(0.1, tau_sec);
   temp_sensor_k = t_sensed_k + cal_offset_k;
   temp_sensor_c = temp_sensor_k - 273.15;
