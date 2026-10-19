@@ -38,6 +38,7 @@ struct ProvisioningRow {
     status: String,
     action: String,
     action_label: String,
+    scope: String,
 }
 
 #[derive(Clone, Debug)]
@@ -56,13 +57,6 @@ struct ProvisioningView {
     scope_label: String,
     rows: Vec<ProvisioningRow>,
     actions: Vec<ProvisioningAction>,
-}
-
-fn scope_id(scope: &DatasetScope) -> String {
-    match scope {
-        DatasetScope::Engine => "engine".to_owned(),
-        DatasetScope::Twin { name, .. } => format!("twin:{name}"),
-    }
 }
 
 fn scope_kind(scope: &DatasetScope) -> &'static str {
@@ -210,6 +204,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                     "status",
                     "action",
                     "action_label",
+                    "scope",
                 ],
                 &context,
             )?;
@@ -220,6 +215,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                 status: string_field(fields, "status", &context)?,
                 action: string_field(fields, "action", &context)?,
                 action_label: string_field(fields, "action_label", &context)?,
+                scope: string_field(fields, "scope", &context)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -252,9 +248,12 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
         if !row_ids.insert(&row.id) {
             return Err(format!("assets.provision rows repeat id `{}`", row.id));
         }
-        if row.action.trim().is_empty() || row.action_label.trim().is_empty() {
+        if row.action.trim().is_empty()
+            || row.action_label.trim().is_empty()
+            || row.scope.trim().is_empty()
+        {
             return Err(format!(
-                "assets.provision row `{}` requires an action and action label",
+                "assets.provision row `{}` requires an action, action label, and scope",
                 row.id
             ));
         }
@@ -286,21 +285,27 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
 }
 
 fn state_value(state: &DatasetState) -> HookValue {
-    let kind = match state {
-        DatasetState::Missing => "missing",
-        DatasetState::Downloading { .. } => "downloading",
-        DatasetState::Processing { .. } => "processing",
-        DatasetState::Cancelling => "cancelling",
-        DatasetState::Installed => "installed",
-        DatasetState::Cancelled => "cancelled",
-        DatasetState::Failed(_) => "failed",
-    };
     HookValue::map([
-        ("kind", HookValue::str(kind)),
+        ("kind", HookValue::str(state.kind())),
         (
             "detail",
             match state {
                 DatasetState::Failed(error) => HookValue::str(error.clone()),
+                DatasetState::Processing { kind } => HookValue::str(kind.clone()),
+                _ => HookValue::Unit,
+            },
+        ),
+        (
+            "bytes_done",
+            match state {
+                DatasetState::Downloading { bytes_done, .. } => HookValue::UInt(*bytes_done),
+                _ => HookValue::Unit,
+            },
+        ),
+        (
+            "bytes_total",
+            match state {
+                DatasetState::Downloading { bytes_total, .. } => HookValue::UInt(*bytes_total),
                 _ => HookValue::Unit,
             },
         ),
@@ -332,7 +337,7 @@ fn invoke_policy(
         .collect();
     let facts = HookValue::map([
         ("scope", HookValue::str(scope_kind(scope))),
-        ("scope_id", HookValue::str(scope_id(scope))),
+        ("scope_id", HookValue::str(scope.id())),
         ("owner", HookValue::str(scope.label())),
         ("interactive", HookValue::Bool(interactive)),
         ("show_on_start", HookValue::Bool(!suppressed)),
@@ -362,6 +367,7 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
                             ("status".to_owned(), row.status.clone().into()),
                             ("action".to_owned(), row.action.clone().into()),
                             ("action_label".to_owned(), row.action_label.clone().into()),
+                            ("scope".to_owned(), row.scope.clone().into()),
                         ])
                     })
                     .collect(),
@@ -423,7 +429,7 @@ fn advance_active(state: &mut DatasetProvisioningState, registry: &DatasetRegist
         return;
     }
     while let Some(scope) = state.pending.pop() {
-        let id = scope_id(&scope);
+        let id = scope.id();
         if !state.dismissed.contains(&id) && recommended_missing(registry, &scope) {
             state.active = Some(scope);
             return;
@@ -481,7 +487,7 @@ fn scope_from_id(state: &DatasetProvisioningState, id: &str) -> Option<DatasetSc
         .active
         .iter()
         .chain(state.pending.iter())
-        .find(|scope| scope_id(scope) == id)
+        .find(|scope| scope.id() == id)
         .cloned()
 }
 
@@ -492,16 +498,16 @@ fn on_dismiss_dataset_provisioning(
 ) {
     let requested = trigger.event().scope.as_str();
     let id = if requested.is_empty() {
-        state.active.as_ref().map(scope_id).unwrap_or_default()
+        state
+            .active
+            .as_ref()
+            .map(DatasetScope::id)
+            .unwrap_or_default()
     } else {
         requested.to_owned()
     };
     state.dismissed.insert(id.to_owned());
-    if state
-        .active
-        .as_ref()
-        .is_some_and(|scope| scope_id(scope) == id)
-    {
+    if state.active.as_ref().is_some_and(|scope| scope.id() == id) {
         state.active = None;
     }
 }
@@ -528,7 +534,7 @@ fn on_suppress_dataset_provisioning(
     if state
         .active
         .as_ref()
-        .is_some_and(|active| scope_id(active) == id)
+        .is_some_and(|active| active.id() == id)
     {
         state.active = None;
     }
@@ -641,7 +647,7 @@ pub(crate) fn on_dataset_scope_removed(
     {
         state.active = None;
     }
-    state.dismissed.remove(&scope_id(scope));
+    state.dismissed.remove(&scope.id());
 }
 
 pub(crate) fn install(app: &mut App) {

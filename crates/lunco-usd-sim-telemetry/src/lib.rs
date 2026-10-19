@@ -7,8 +7,8 @@
 //! fixed simulation clock; it is never inferred from a rover or component name.
 
 use avian3d::prelude::{
-    AngularVelocity, Collider, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass,
-    ContactGraph, LinearVelocity, Physics, PhysicsSystems, Position, RigidBody, Rotation,
+    AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph,
+    LinearVelocity, Physics, PhysicsSystems, Position, RigidBody, Rotation,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -103,7 +103,7 @@ fn retain_physics_telemetry(
             Option<&ComputedMass>,
             Option<&ComputedCenterOfMass>,
             Option<&ComputedAngularInertia>,
-            Option<&Collider>,
+            Option<&avian3d::prelude::RigidBodyColliders>,
         ),
         With<RigidBody>,
     >,
@@ -243,7 +243,7 @@ fn retain_physics_telemetry(
             state.metadata_group_paths.insert(entity, prim.path.clone());
         }
 
-        let Ok((position, rotation, mass, center_of_mass, inertia, collider)) =
+        let Ok((position, rotation, mass, center_of_mass, inertia, colliders)) =
             body_state.get(entity)
         else {
             continue;
@@ -476,12 +476,19 @@ fn retain_physics_telemetry(
                 ),
             ]);
         }
-        if let Some(graph) = contact_graph.as_deref().filter(|_| collider.is_some()) {
+        if let Some(graph) = contact_graph
+            .as_deref()
+            .filter(|_| colliders.is_some_and(|colliders| !colliders.is_empty()))
+        {
             let physics_dt = physics_time
                 .as_deref()
                 .map(Time::delta_secs_f64)
                 .unwrap_or(0.0);
-            let (contact, contact_force) = lunco_physics::contact_of(graph, physics_dt, entity);
+            let (contact, contact_force) = lunco_physics::contact_of(
+                graph,
+                physics_dt,
+                colliders.into_iter().flat_map(|colliders| colliders.iter()),
+            );
             samples.extend([
                 PhysicsSample::scalar(
                     "contact",

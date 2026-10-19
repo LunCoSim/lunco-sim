@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**265 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**267 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -91,6 +91,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-core-runtime`](#lunco-core-runtime) (1 command)
 - [`lunco-core-session`](#lunco-core-session) (6 commands)
 - [`lunco-cosim-core`](#lunco-cosim-core) (4 commands)
+- [`lunco-fmi`](#lunco-fmi) (2 commands)
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (1 command)
@@ -2169,6 +2170,35 @@ actually call, with the fields the deserializer actually accepts. See the
 | `batches` | `Vec < PortInputBatch >` |  Every target whose ownership is required by the host authority gate. |
 | `producer_id` | `Option < u64 >` |  Stable producer identity for external producers admitted to session inputs. |
 
+### `lunco-fmi` <a id="lunco-fmi"></a>
+
+#### `LoadFmu`
+
+ External FMU admission. Initial values use FMU starts unless explicitly
+ overridden. Communication is one physics tick by default, with intentional
+ subrates expressed as positive integer tick counts rather than another Hz clock.
+
+- *defined in:* `crates/lunco-fmi/src/runtime.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `String` |   |
+| `name` | `String` |   |
+| `communication_ticks` | `u32` |   |
+| `initial_inputs` | `Values` |   |
+| `parameters` | `Values` |   |
+
+#### `SetFmuPaused`
+
+ Pause one native participant's child clock without changing master transport.
+
+- *defined in:* `crates/lunco-fmi/src/runtime.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |   |
+| `paused` | `bool` |   |
+
 ### `lunco-input-ui` <a id="lunco-input-ui"></a>
 
 #### `ToggleInputOverlay`
@@ -4035,7 +4065,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 265 commands from the runtime schema; scanned 1010 .rs files for docs (0 parse failure(s) skipped).
+<!-- 267 commands from the runtime schema; scanned 1019 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

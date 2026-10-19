@@ -89,9 +89,11 @@ pub struct UsdModelicaSchedule {
 }
 
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
-    commands
-        .entity(entity)
-        .remove::<(lunco_cosim_core::SimComponent, UsdModelicaSchedule)>();
+    commands.entity(entity).remove::<(
+        lunco_cosim_core::SimComponent,
+        UsdModelicaSchedule,
+        lunco_port_core::ScalarPortContracts,
+    )>();
 }
 
 /// Generated documents are runtime projections, unlike authored documents
@@ -1412,7 +1414,7 @@ fn commit_domain_projection(
         .cloned()
         .collect::<Vec<_>>();
     let telemetry = telemetry_indexes.get_or_build(telemetry_scope, view, entity);
-    let signal_layout = match generated_signal_layout(
+    let (signal_layout, port_contracts) = match generated_signal_layout(
         view,
         root_path,
         &prim.path,
@@ -1422,8 +1424,12 @@ fn commit_domain_projection(
         &synthesized.units,
         telemetry,
         classes,
-    ) {
-        Ok(layout) => layout,
+    )
+    .and_then(|layout| {
+        let contracts = layout.port_contracts()?;
+        Ok((layout, contracts))
+    }) {
+        Ok(prepared) => prepared,
         Err(message) => {
             let message = format!("generated signal layout failed: {message}");
             model.is_stepping = false;
@@ -1435,6 +1441,7 @@ fn commit_domain_projection(
             });
             error!("[domain-projection] {} rejected: {message}", prim.path);
             retire_sim_interface(commands, entity);
+            commands.entity(entity).remove::<ModelicaSignalLayout>();
             commands
                 .entity(entity)
                 .try_insert((model, ModelicaVariables::default()));
@@ -1466,6 +1473,7 @@ fn commit_domain_projection(
         model,
         ModelicaVariables::default(),
         signal_layout,
+        port_contracts,
         UsdSourcedCosim,
         lunco_port_core::PortSurfacePending,
         UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),

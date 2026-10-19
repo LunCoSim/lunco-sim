@@ -161,11 +161,13 @@ owner's metadata contract.
 Port reads encode a unit as `()` when absent, or `{ id, definition }` when
 present. A unit definition is `()` for an unresolved identity; otherwise it
 contains the symbol, seven SI dimension exponents ordered length, mass, time,
-current, temperature, amount, luminous intensity, the scale and offset to SI,
-and scale exactness. `frame` is the stable frame identity string or `()`.
+current, temperature, amount, luminous intensity, the separate `angle_power`,
+`relative_quantity`, the scale and offset to SI, and scale exactness. `frame`
+is the stable frame identity string or `()`.
 `GetBrokenConnections` includes the port owner's rejection in each `failure`
 field, so a range or writability fault remains distinguishable from a missing
-port without parsing a log message.
+port without parsing a log message. `dropped_value` is optional: `()` (JSON
+`null` on the wire) means no numerical write was attempted.
 
 Data-returning queries use the same `POST /api/commands` envelope as commands.
 `ReadExposures` reads the generic runtime capability registry used by HTML/CSS

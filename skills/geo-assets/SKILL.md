@@ -48,6 +48,28 @@ successful asset postcondition. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
+The consent modal retains transfer/preparation progress and offers background
+work, cancellation, and retry with the failure detail. `ListDatasets` and
+`assets::request_recommended(scope)` use `engine` or `twin:<name>` from
+`DatasetScope::id()`. Recent Events records lifecycle transitions; live byte
+progress stays in the registry. A required missing DEM holds simulation while
+UI remains usable, then the existing terrain bridge automatically retries the
+pending prim when the dataset is installed. Do not add a full scene reload.
+For Griffin's polar NOBILE03 source, use the Twin's prepared release payload:
+downloading its raw TIF and label does not create `terrain/nobile03`.
+
+For download UI acceptance, use `scripts/api/test_dataset_provisioning.py`
+with `LUNCOSIM_BIN`, a free `--port`, a fresh `--output`, and exact prepared
+`--summer-zip`/`--griffin-zip` inputs. The driver extracts task-owned copies,
+serves paced local bytes, and exercises real window input for bulk download,
+cancel, checksum failure, and retry. Inspect its captures and provide observed
+logical coordinates at the driver prompts, or replay its recorded `--clicks`.
+Authored Rhai verdicts require held terrain ticks, automatic recovery without
+scene replacement, preserved pause, outgoing scope retirement, and advancing
+Modelica participants in both prepared Twins. It runs each package's own
+startup gate and verifies API Exit and port release. This Linux run does not
+certify an installed Intel macOS build.
+
 Downloads use the shared `download` section in the user settings file
 (`lunco-settings::DownloadSettings`): attempts include the first request,
 delays are exponential and capped, and a failed body read resumes from the

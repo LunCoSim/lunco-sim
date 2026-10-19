@@ -229,9 +229,15 @@ entering an owner. Joint admission readiness uses one disjunction across
 no candidate, idle updates skip the scene-projection and solver-endpoint checks.
 Candidate presence reruns that reconciliation before the admission commit, so
 the stable joint batch boundary is unchanged. Joint retirement uses the
-existing `PhysicsJointDetachRequested` component condition, so idle updates
-also skip the exclusive graph transaction and its world query while detach
-still completes before joint admission.
+existing `PhysicsJointDetachRequested` component condition at `PreUpdate` and
+`FixedPreUpdate`, so idle boundaries skip the exclusive graph transaction and
+its world query. Both call the same graph-safe owner outside native physics.
+`PreUpdate` services paused/preparation-time commands; `FixedPreUpdate` retires
+requests from a completed simulation tick before the next tick, independently
+of how many fixed cycles share a render frame. This is a topology-commit
+invariant, not a scenario policy hook. The authored `joint_detach_clock` and
+`joint_detach_paused` observers qualify the public command path through
+`scripts/api/test_joint_detach_clock.py`.
 
 Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
 `QueryState` for changed `SimComponent` owners. Each pass updates archetype

@@ -57,6 +57,16 @@ required state and uses the runner's expected-runtime-fault verdict for
 `modelica-variables-missing`; a stopped clock must not leave the test waiting
 for another tick. Buffered-result rejection remains a low-level lifecycle seam.
 
+When a gate must inspect state after a fault or a scene projection, run a
+retained presentation observer through `scripts/api/runtime.py`'s
+`run_authored_scenario`, or `wait_for_authored_verdict` when the fixture
+already admits its observer. Require its named verdict and exact assertion count;
+fault arrival alone does not prove the remaining assertions. The
+`connection_units` gate uses this path to verify the rejected connection and
+preserved native mass in both headless and windowed hosts.
+`connection_transaction` also verifies that a rejected live Modelica sample
+leaves its companion target unchanged and prevents native integration.
+
 ## Authoring workflow
 
 1. Split the behavior into the smallest independently verifiable component

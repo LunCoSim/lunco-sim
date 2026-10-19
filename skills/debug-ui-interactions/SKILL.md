@@ -49,8 +49,10 @@ windowed `luncosim` process with an explicit free API port, and wait for
 application event path after event creation. They bypass the OS device,
 compositor, and winit event-delivery path, so they cannot verify that a physical
 mouse reaches the app. egui, HUI, picking, focus, input bindings, and authored
-Rhai tools process the injected Bevy events. Injected events do not mutate the
-native window cursor. Bevy Picking's `PointerLocation` is the shared application
+Rhai tools process the injected Bevy events. The runtime UI adapter mirrors
+cursor events during Bevy UI focus and restores native Window state before
+winit synchronization. Injection does not warp the OS pointer.
+Bevy Picking's `PointerLocation` is the shared application
 cursor state; cursor-driven consumers such as the transform gizmo read it
 through `PrimaryMousePointer` in `lunco-interaction-core`.
 

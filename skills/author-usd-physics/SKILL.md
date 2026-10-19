@@ -85,8 +85,12 @@ limited to entities carrying `PhysicsJointLink`: an ordinary non-joint target
 uses the normal entity-removal path. A target carrying native or pending joint
 state is classified as a joint and must use the physics lifecycle marker. The
 command records any authored endpoint invalidation and never directly removes a
-native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker at its Update
-boundary and performs one transaction in this order:
+native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker
+through one retirement owner at `PreUpdate` and `FixedPreUpdate`. Both boundaries
+are outside native physics execution. `PreUpdate` services commands while paused
+or preparing; `FixedPreUpdate` guarantees that a simulation-originated request
+retires before the next physics tick even when several ticks share one frame.
+The owner performs one transaction in this order:
 
 1. retire the Avian `JointGraph` edge and its `PhysicsIslands` entry;
 2. remove the native or pending typed joint and `JointComponentId`;
@@ -94,7 +98,9 @@ boundary and performs one transaction in this order:
 4. despawn the now-disposable joint entity.
 
 The retirement owner only runs when a `PhysicsJointDetachRequested` marker is
-present. Idle updates skip its exclusive graph transaction and world query.
+present. Idle boundaries skip its exclusive graph transaction and world query.
+`scripts/api/test_joint_detach_clock.py` runs the authored batched-tick and
+paused-command observers against the existing joint fixture in either host.
 Joint admission readiness is also gated by one combined query over the existing
 `PendingUsdJoint` and `PendingJointAdmission` markers. The owner rechecks the
 scene projection and endpoint readiness before each pending batch is admitted,
@@ -554,20 +560,29 @@ directions — USD and avian agree:
 | what you author | what it becomes |
 |---|---|
 | collider with **no** body ancestor | standalone STATIC geometry |
-| collider under a body | a piece of that body's compound shape |
+| collider under a body | a native collider attached to that body through `ColliderOf` |
 | collider under a **nested** body | that nested body's piece — never the parent's |
 | a nested body | a SEPARATE body; a **joint** attaches it, or it falls off |
 
 The body prim may also carry `PhysicsCollisionAPI`. If it has a collision shape
 and descendants, both the body-root shape and every eligible descendant shape
-belong to the same compound. The root shape is identity-local to the body; its
+belong to the same body as separate source colliders. The root shape is identity-local to the body; its
 authored transform is applied by the body's ECS transform once, while child
 transforms are accumulated from the body frame. This remains true when the
 body arrives through a reference or a prepared runtime-instance projection.
-Eligible source prims are ordered by composed prim identity before compound
-cooking; native part indices and `collider_source_paths` use that same order.
-Native mass reduction stops at nested rigid bodies as collision collection
-does: their mass properties belong exclusively to their own body.
+Eligible source prims are ordered by composed prim identity before native
+admission. Each collider carries one `UsdColliderSource`; a decomposed mesh
+may contain multiple native subshapes without losing its owning source.
+`RigidBodyColliders` owns membership for contact queries, filtering and mass
+reduction. Geometry contributes once per attached collider to automatic mass,
+inertia and center fields. Native override preparation and co-simulation own
+explicit computed properties through `NoAuto*`; explicit mass rescales only
+automatic inertia. Nested bodies contribute
+exclusively to their own body.
+Native contact and constraint graphs register their public reset operations
+through `init_scene_resource_with`, after removal observers. Reload validation
+must include clearing the scene and checking that contact nodes and edges,
+colliders, bodies and joint edges are all gone.
 
 `physics:collisionEnabled=true` is an opt-in on an already-declared collider;
 it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
@@ -605,13 +620,13 @@ not an invitation for a runtime fallback.
 Hierarchy is namespace. **The joint is what attaches** — nesting a body without
 one is the motor bug (`nested-body-no-joint`), and nesting one *with* a joint is
 how a foot mounts on a leg and a wheel on a chassis. Both directions of that rule
-matter: fold a nested body's collider into its parent's compound and one shape has
-two owners, the compound holding it rigidly while its joint pulls it. They fight
+matter: attach a nested body's collider to its parent and one shape has
+two owners, the ancestor holding it rigidly while its joint pulls it. They fight
 every step until a body leaves the world.
 
 
 - An internal part (motor, gearbox, battery, panel, lamp) = mass + geometry, **no
-  body**. Its colliders fold into the host body's compound, its mass belongs to
+  body**. Its colliders attach to the host body, its mass belongs to
   the host.
 - A part that must move relative to its host = a body **and** a joint, authored
   together. That is what a mount (`AttachSpec`) writes, and it is why
@@ -631,7 +646,7 @@ use `PhysicsCollisionGroup` with `UsdCollectionAPI`. Do not infer a vehicle-wide
 self-exclusion: articulated mechanisms often need selected internal contacts.
 
 Filtering is symmetric, targets may name a body or a collider under that body,
-and invalid targets or same-compound pairs must remain visible diagnostics. The
+and invalid targets or same-body pairs must remain visible diagnostics. The
 filter is installed during `PhysicsSystems::Prepare`, before contact generation.
 Verify contact itself in a scene test such as `scenes/tests/filtered_pairs.usda`
 or `collision_groups.usda`, not only by checking subsequent motion.
@@ -789,7 +804,8 @@ continuous velocity projection. Unsupported kernels or a convergence failure fau
 block pose writeback in that same tick. See the continuous-contact contract in
 `docs/architecture/terrain-substrate.md`.
 
-Convex triangle starting contacts use Parry's native finite-feature search seed.
+Convex triangle contacts use one finite-feature search seed for every sample,
+including nonlinear sweep re-samples, through Parry's public seeded contact API.
 Fresh native GJK/EPA and nonlinear bisection retain geometry
 ownership. Incomplete unbounded queries and invalid native witnesses are owner
 faults, not clear-space results. Preserve these diagnostics when changing the
@@ -860,11 +876,11 @@ disjoint contact cache, and joined results commit in prepared order. The
 finite edges, offset pivots, large common translations and actual production
 landing/rover response; a kernel probe alone cannot qualify the vehicle.
 
-For a particular compound member, consume `parts[].source1`/`source2` and
-`normal_impulse`; admitted provenance resolves known part identities. Continuous
-contacts retain part indices. Stock discrete compound membership is unknown and
-its source is `()`; a non-compound collider has one owning source. A body's
-aggregate impulse cannot identify a compound member. Read
+For a particular collision source, consume `parts[].source1`/`source2` and
+`normal_impulse`; both discrete and continuous contacts resolve provenance from
+the actual native collider. Native mesh subshape indices are optional and do
+not determine USD source identity. A body's aggregate impulse cannot identify
+an individual collision source. Read
 `total_normal_impulse + continuous_normal_impulse` for normal response, retaining
 exact collider pair scope.
 

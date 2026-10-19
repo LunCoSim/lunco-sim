@@ -9,7 +9,7 @@ fn query(name, params) {
             #{ id: "engine/moon", processed: true, recommended: true, state: #{ kind: "missing" } },
             #{ id: "engine/earth", processed: true, recommended: true, state: #{ kind: "installed" } },
             #{ id: "engine/stars", processed: false, recommended: false, state: #{ kind: "missing" } },
-            #{ id: "engine/busy", processed: true, recommended: false, state: #{ kind: "processing" } },
+            #{ id: "engine/busy", processed: true, recommended: true, state: #{ kind: "processing" } },
         ]
     }
 }
@@ -20,7 +20,7 @@ fn cmd(name, params) {
 
 let checks = [];
 let listed = list("");
-checks.push(t_eq(listed.datasets.len(), 2, "assets.list returns all declared datasets"));
+checks.push(t_eq(listed.datasets.len(), 4, "assets.list returns all declared datasets"));
 checks.push(t_eq(find("engine/moon").dataset.id, "engine/moon",
     "assets.find returns the requested declaration"));
 checks.push(t_true(find("engine/mars").ok == false,
@@ -40,5 +40,5 @@ checks.push(t_eq(bake_scope("").bakes.len(), 2,
 checks.push(t_eq(cancel("engine/moon").command, "CancelDataset",
     "assets.cancel emits the typed cancel command"));
 checks.push(t_eq(request_recommended("").requested.len(), 1,
-    "assets.request_recommended skips installed recommendations"));
+    "assets.request_recommended skips installed and active recommendations"));
 t_report(checks);

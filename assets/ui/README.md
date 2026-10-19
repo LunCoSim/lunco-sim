@@ -55,8 +55,10 @@ Offline recording is Twin-owned. The `runtime.ui.recording` policy returns the
 stable surface IDs required for the current capture, and the recorder validates
 the selected IDs against visible retained surfaces before capture.
 
-Each exposed value is mirrored as a declared template property and as a CSS
-custom property named `--ui-<property-name>`. The registry stores typed text,
+Each exposed value is projected into its declared template property. A manifest
+binding with `css: true` also projects a CSS custom property named
+`--ui-<property-name>`; ordinary prose never enters the CSS token stream.
+The registry stores typed text,
 boolean, f64, array, and map values, not CSS or HUI types. A manifest binding
 may map exact rendered values such as `true`, `false`, or `301` into
 presentation values.
@@ -194,7 +196,11 @@ workflow.
 The shipped surfaces are the rover HUD, camera-status card, celestial view
 switcher, terrain progress card, asset-consent modal, and networking
 scenario-download card. The
-Settings ▸ HUD submenu is the user-facing view over the existing global HUD
+asset-consent view retains active download/preparation rows and explicit
+completion, using scoped actions and Rhai-formatted progress. Its contract is
+documented in [runtime-authored UI](../../docs/architecture/runtime-authored-ui.md).
+
+The Settings ▸ HUD submenu is the user-facing view over the existing global HUD
 owners and the active Twin's camera-status setting; it does not add a second
 visibility registry. Camera-status is gated by the active Twin's generic
 `ui.camera_status` setting and defaults on when that key is absent; set it to

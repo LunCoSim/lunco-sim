@@ -212,11 +212,19 @@ impl Plugin for JointAttachPlugin {
             .init_resource::<lunco_core::RuntimeFaults>()
             .configure_sets(Update, JointPreparation.before(JointAdmission))
             .add_observer(collision_filters::on_remove_joint_collision_pair);
+        // Both boundaries are outside native physics execution. PreUpdate
+        // services paused/preparation-time commands; FixedPreUpdate guarantees
+        // that a request from one simulation tick is retired before the next,
+        // including multiple fixed cycles within a single presentation frame.
         app.add_systems(
-            Update,
+            PreUpdate,
             retire_requested_joints
-                .run_if(any_with_component::<lunco_physics::PhysicsJointDetachRequested>)
-                .before(JointAdmission),
+                .run_if(any_with_component::<lunco_physics::PhysicsJointDetachRequested>),
+        );
+        app.add_systems(
+            FixedPreUpdate,
+            retire_requested_joints
+                .run_if(any_with_component::<lunco_physics::PhysicsJointDetachRequested>),
         );
         app.add_systems(
             Update,

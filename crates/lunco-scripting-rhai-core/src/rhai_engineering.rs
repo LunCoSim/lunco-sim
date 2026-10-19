@@ -65,6 +65,12 @@ fn engineering_unit_with_exactness(
     .map_err(|unit_error| runtime_error(unit_error.to_string()))
 }
 
+fn unit_angle_power(unit: Unit, exponent: rhai::INT) -> Result<Unit, Box<EvalAltResult>> {
+    let exponent = i32::try_from(exponent)
+        .map_err(|_| runtime_error("angular unit exponent is out of range"))?;
+    Ok(unit.with_angle_power(exponent))
+}
+
 fn exactness_value(exactness: UnitScaleExactness) -> Dynamic {
     match exactness {
         UnitScaleExactness::Exact => Dynamic::from_bool(true),
@@ -90,7 +96,7 @@ fn convert_or_none(value: f64, from: Unit, to: Unit) -> Dynamic {
 }
 
 fn unit_scale(unit: Unit) -> Dynamic {
-    if unit.offset_to_si() == 0.0 {
+    if unit.offset_to_si() == 0.0 || unit.relative_quantity() {
         Dynamic::from_float(unit.scale_to_si())
     } else {
         Dynamic::UNIT
@@ -158,6 +164,16 @@ pub fn register(engine: &mut Engine) {
             "engineering_unit_with_exactness",
             engineering_unit_with_exactness,
         )
+        .register_fn("with_angle_power", unit_angle_power)
+        .register_get("angle_power", |unit: &mut Unit| {
+            rhai::INT::from(unit.angle_power())
+        })
+        .register_fn("with_relative_quantity", |unit: Unit, relative: bool| {
+            unit.with_relative_quantity(relative)
+        })
+        .register_get("relative_quantity", |unit: &mut Unit| {
+            unit.relative_quantity()
+        })
         .register_fn("quantity", quantity)
         .register_fn("engineering_convert", convert)
         .register_fn("engineering_convert_or_none", convert_or_none)

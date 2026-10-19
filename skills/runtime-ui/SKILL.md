@@ -138,7 +138,7 @@ common publication. For scalar participant state, use the shared
 `SimulationProgress` owner and reason facts are projected into each authored
 runtime surface as typed `simulation_progress` data. Let the active Rhai policy
 turn those facts into user-facing labels such as `PHYSICS LOADING` or
-`TERRAIN LOADING`; the engine does not hardcode HUD wording. Progress changes
+`WAITING FOR TERRAIN`; the engine does not hardcode HUD wording. Progress changes
 invalidate the existing surface projection, so a readiness label does not poll
 the simulation. During preparation the built-in Rhai visibility policy
 temporarily shows an authored surface before possession, then returns to its
@@ -229,7 +229,9 @@ Declare every property that the bridge should write:
 </template>
 ```
 
-Each projected value is also available as `--ui-<property-name>` in CSS. Keep
+Only bindings with `"css": true` also project `--ui-<property-name>` into CSS.
+Use that flag for authored CSS values, never labels, descriptions, or error
+messages. An omitted bindings map projects text only. Keep
 the manifest-owned outer rectangle separate from CSS-owned internal layout:
 
 ```css
@@ -483,6 +485,16 @@ Useful diagnosis order:
 - slow frame → exposure revision/cadence, tree size, egui, physics, and GPU
   measurements separately. Do not infer that HTML is the bottleneck from FPS
   alone.
+
+For the dataset consent surface, trace `DatasetScope::id()` through
+`ListDatasets`, the row/action scope, and `assets::request_recommended`.
+Use `engine` or `twin:<name>`; never pass a display label as the selector.
+Retain downloading and processing rows, real byte progress, failure detail and
+retry/cancel actions. Dismissal means background work, and completion remains
+visible until dismissed. Run `test_download_policies.rhai` and the windowed
+`dataset_provisioning_surface.rhai` gate against a declared missing scope,
+including invalid-scope/request rejection. Check Recent Events for discrete
+dataset lifecycle transitions and verify Twin replacement retires the scope.
 
 ## Current non-goals
 

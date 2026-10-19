@@ -2276,8 +2276,8 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-/// Hook id for the authored view model used when an opened Twin declares
-/// datasets that are not installed. The engine supplies typed facts; Rhai
+/// Hook id for the authored dataset provisioning view. The engine supplies
+/// typed scope and lifecycle facts; Rhai
 /// returns the visible state, rows, and semantic actions. The policy never
 /// authorises network traffic itself.
 pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
@@ -2285,7 +2285,7 @@ pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
 lunco_hooks::declare_hook! {
     id: DATASET_PROVISION_HOOK,
     owner: "lunco-core-session",
-    description: "Author the typed view model and actions for missing declared datasets.",
+    description: "Author the typed provisioning progress view and actions for declared datasets.",
     signature: [ctx: Map],
     output: Map,
     deterministic: false,

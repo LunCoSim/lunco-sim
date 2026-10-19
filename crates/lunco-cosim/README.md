@@ -40,12 +40,49 @@ precedence over the wiring fabric. The authored layer survives authority
 release so autopilot guidance resumes naturally. Holds are iterated by borrowed names and matched once to compiled target
 indices, so the tick does not hash every target against the hold table.
 
+At admission, `SimConnection::resolved_transform` converts resolved compatible
+units before composing the authored gain and offset in target units, following
+SSP. An omitted base-unit definition keeps the raw value under FMI's unit rule.
+Incompatible unit contracts and unrepresentable coefficients reject the edge
+and hold physical execution. Dense slots cache these coefficients; steady
+exchange applies compiled arithmetic and retains the port registry's live
+write validation.
+
+Binding and solver initialization share `connected_initial_inputs`. All fan-in
+samples are captured before initial writes, in the same authoritative order as
+live exchange. Unbound contributions and missing samples wait without writing zero or a partial sum;
+explicit holds retain priority. The ordering includes input/output side and
+coefficient bits, so repeated sources with different transforms stay
+independent of ECS spawn order. A rejected initial value is a structured
+connection fault. `dropped_value` is optional in diagnostics: no attempted write
+means no numerical value.
+
+`python3 scripts/api/test_connection_units.py --port <free-port>` runs the
+authored native length/mass contract gate. Add `--windowed` to use the same
+observer in the visible production host. It requires the post-fault verdict,
+including the retained valid target value, rather than treating fault arrival
+alone as the test result.
+
+Initial handoff and live exchange use the registry's scoped `input_transaction`.
+Its immutable staging view keeps each live owner validation current through
+atomic commit under the same exclusive world borrow. Reusable staging storage
+retains capacity between exchanges. A rejected live value preserves every target
+in that batch and latches `cosim-input-write-rejected`, including after previous success. The
+shared failure owner pauses native physics immediately, before its scheduled
+integration, and retains the real rejected value and owner diagnostic.
+`python3 scripts/api/test_connection_transaction.py --port <free-port>`
+qualifies this through a Modelica source and native body; add `--windowed` for
+the same ten-check observer in the visible host.
+
 `PortRegistry::entity_port_infos` is the inspection projection used by the native
 Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live value
 as an optional sample: a declared output that has not produced a value stays
 unavailable instead of appearing as `0.0`. The projection adds scalar type,
 typed optional unit and frame, inclusive bounds, source, current authority, and
-manual-writability contract. Consumers do not reconstruct those facts from a
+manual-writability contract. Modelica and native FMI participants publish
+`ScalarPortContracts` at source admission; their shared backend reads that
+component for topology and write validation. Unit definitions retain the
+separate radian exponent and relative-quantity semantics. Consumers do not reconstruct those facts from a
 port name; writes go through typed `SetPorts` or `SetPortsBatch` commands.
 
 `SetPorts` validates every named input against its owner metadata, including

@@ -565,6 +565,7 @@ fn simulation_progress_facts(
             .blockers()
             .map(|blocker| {
                 let owner = match blocker.key.owner {
+                    lunco_core_runtime::SimulationProgressOwner::FmiExecution => "FmiExecution",
                     lunco_core_runtime::SimulationProgressOwner::SceneLifecycle => "SceneLifecycle",
                     lunco_core_runtime::SimulationProgressOwner::PhysicsIntegration => {
                         "PhysicsIntegration"
@@ -704,7 +705,7 @@ struct PublicTelemetryValue {
 
 /// What a generic driven-body surface needs, resolved at the bounded exposure
 /// cadence after authoritative inputs change.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct DrivenVessel {
     entity: Entity,
     label: String,
@@ -816,7 +817,7 @@ fn tilt_bands(min_mu: f64, half_track: f64, com_above_contact: f64) -> (f32, f32
 /// peer (falling back to the nearest severed one) matches how
 /// `inject_link_state_into_cosim` reduces a class to a single set of ports, so the
 /// HUD and the cosim ports never disagree about which peer is "the" link.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct LinkInfo {
     connected: bool,
     /// Peer prim name, or a GID fallback if the peer has no `Name`.

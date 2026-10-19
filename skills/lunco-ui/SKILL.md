@@ -417,9 +417,9 @@ removes the instance from the live dock and all cached perspective docks.
 Verify replacement while another perspective is active, then return to the
 Editor: retired source and Modelica views must be absent, including their tabs.
 
-For the missing-asset consent flow, the popup's unchecked negative checkbox
-means "show next time" and persists through `twin.toml [downloads]`; do not
-add a second global settings key for it.
+For dataset consent, use the Rhai-owned progress/action model documented in
+[runtime-ui](../runtime-ui/SKILL.md). Prompt suppression persists through
+`twin.toml [downloads]`; do not add a second global settings key for it.
 
 The Entities panel follows `SceneMountState::active_root` through the shared
 `UsdSceneRoot` ancestry helper. Membership follows scene hierarchy through

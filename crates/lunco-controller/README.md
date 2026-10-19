@@ -86,8 +86,9 @@ The controller delivers the event through both Bevy's aggregate
 `bevy_winit` delivery boundary. Picking, egui, focus, input bindings, and scene
 tools therefore see the same event path as hardware input.
 
-Injected pointer events do not mutate `Window::cursor_position()` or move the
-operating-system pointer. Bevy Picking's `PointerLocation` is the shared
+The runtime UI adapter mirrors cursor events around Bevy UI's focus phase and
+restores native Window state before winit synchronization. The operating-system
+pointer stays unchanged. Bevy Picking's `PointerLocation` is the shared
 application cursor state for native and injected events; cursor-driven tools
 read it through `lunco_interaction_core::PrimaryMousePointer`.
 

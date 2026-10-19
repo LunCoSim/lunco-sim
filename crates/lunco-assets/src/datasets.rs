@@ -15,10 +15,31 @@ use lunco_assets_datasets::AssetEntry;
 use lunco_assets_datasets::{
     CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry, DatasetScope,
     DatasetScopeRemoved, DatasetState, ProcessDataset, RequestDataset, dataset_failed,
+    dataset_state_changed,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use lunco_command_contracts::OpId;
 use lunco_core::{on_command, register_commands};
+
+/// Publish one phase to the diagnostic stream and the optional desktop status
+/// consumer. Errors already reach status through the shared telemetry bridge.
+fn report_phase(commands: &mut Commands, id: &str, name: &str, state: &DatasetState) {
+    let event = dataset_state_changed(id, name, state);
+    if !matches!(state, DatasetState::Failed(_)) {
+        let message = format!("{name} ({id}): {}", state.kind());
+        commands.queue(move |world: &mut World| {
+            if let Some(mut status) =
+                world.get_resource_mut::<lunco_status_core::status_bus::StatusBus>()
+            {
+                status.push(
+                    "datasets",
+                    lunco_status_core::status_bus::StatusLevel::Info,
+                    message,
+                );
+            }
+        });
+    }
+    commands.trigger(event);
+}
 
 /// Cross-thread slot for progress produced by one download worker.
 type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
@@ -154,15 +175,29 @@ fn on_request_dataset(
     mut registry: ResMut<DatasetRegistry>,
     settings: Res<lunco_settings::DownloadSettings>,
     mut runtime: ResMut<DatasetRuntime>,
-) {
+    mut commands: Commands,
+) -> Result<lunco_command_contracts::Ack, String> {
     let id = &trigger.event().id;
-    let Some(entry) = registry.entry(id).cloned() else {
-        return;
-    };
+    let entry = registry
+        .entry(id)
+        .cloned()
+        .ok_or_else(|| format!("dataset is not declared: {id}"))?;
     if !registry.request(id) {
-        return;
+        return Err(format!(
+            "dataset '{id}' is already installed or has an active operation"
+        ));
     }
+    report_phase(
+        &mut commands,
+        id,
+        &entry.name,
+        &DatasetState::Downloading {
+            bytes_done: 0,
+            bytes_total: 0,
+        },
+    );
     runtime.start(entry, settings.clone());
+    Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -171,6 +206,7 @@ fn on_process_dataset(
     trigger: On<ProcessDataset>,
     mut registry: ResMut<DatasetRegistry>,
     mut runtime: ResMut<DatasetRuntime>,
+    mut commands: Commands,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let id = &trigger.event().id;
     let entry = registry
@@ -190,6 +226,14 @@ fn on_process_dataset(
         "[datasets] processing '{}' ({}) — command-requested",
         process.kind, id
     );
+    report_phase(
+        &mut commands,
+        id,
+        &entry.name,
+        &DatasetState::Processing {
+            kind: process.kind.clone(),
+        },
+    );
     runtime.start_processing(entry, source);
     Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
@@ -207,10 +251,19 @@ fn on_cancel_dataset(
     trigger: On<CancelDataset>,
     mut registry: ResMut<DatasetRegistry>,
     runtime: Res<DatasetRuntime>,
-) {
-    if registry.cancel(&trigger.event().id) {
-        runtime.cancel(&trigger.event().id);
+    mut commands: Commands,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let id = &trigger.event().id;
+    let name = registry
+        .entry(id)
+        .map(|entry| entry.name.clone())
+        .ok_or_else(|| format!("dataset is not declared: {id}"))?;
+    if !registry.cancel(id) {
+        return Err(format!("dataset '{id}' has no cancellable operation"));
     }
+    runtime.cancel(id);
+    report_phase(&mut commands, id, &name, &DatasetState::Cancelling);
+    Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
 fn on_twin_closed(
@@ -424,12 +477,19 @@ fn apply_state(
     state: DatasetState,
     commands: &mut Commands,
 ) {
+    let changed_phase = registry
+        .state(id)
+        .is_some_and(|previous| previous.kind() != state.kind());
     if !registry.set_state(id, state.clone()) {
         return;
     }
     if let DatasetState::Failed(error) = &state {
         warn!("[datasets] '{id}' failed: {error}");
-        commands.trigger(dataset_failed(format!("dataset '{id}' failed: {error}")));
+    }
+    if changed_phase {
+        if let Some(entry) = registry.entry(id) {
+            report_phase(commands, id, &entry.name, &state);
+        }
     }
     if state.is_installed() {
         if let Some(entry) = registry.entry(id) {

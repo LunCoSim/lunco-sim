@@ -12,6 +12,14 @@ use crate::PhysicsHolds;
 #[reflect(Component)]
 pub struct PhysicsOrderKey(pub String);
 
+impl PhysicsOrderKey {
+    /// Stable source-collider identity, ordered with its owning body before
+    /// independently simulated descendants. `!` precedes the USD path separator.
+    pub fn collider_source(&self, source: &str) -> Self {
+        Self(format!("{}!collider:{source}", self.0))
+    }
+}
+
 /// Missing or duplicate identity in an order-sensitive physics operation.
 #[derive(Debug)]
 pub struct PhysicsOrderError {

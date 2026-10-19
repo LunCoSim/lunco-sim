@@ -1,5 +1,26 @@
 # High-quality realtime performance handover
 
+## Runtime-surface input admission — 2026-10-18
+
+The shared exposure preparation owner admits a new policy projection only when
+its complete typed source snapshot or caller identity changes. The contract is
+in [runtime UI architecture](../architecture/runtime-authored-ui.md). Six owner
+seam checks and the nine-check windowed production failure/recovery gate pass;
+regular `cargo run -j 4 -- --help` passes.
+
+The owned Griffin Tracy capture (`target/exposure-griffin.tracy`) has verified
+native framing and successful native CSV export. Its paused interval contains
+zero visibility/property policy evaluations; changing inputs after resume still
+produce projections. The earlier four-second paused interval contained 160 of
+each. Evidence is `target/exposure-griffin-tracy-policy-analysis.json`,
+`target/exposure-equal-facts-final-tests.log` and
+`target/exposure-ui-preparation-production.log`. Both owned sessions exit and
+release their API ports.
+
+The shared Twin's control-HUD source changed between FPS samples, and concurrent
+workloads were present. Those samples do not establish a before/after FPS gain.
+The 200 FPS and sub-millisecond physics targets remain unqualified.
+
 ## Scenario source admission before simulation startup — 2026-10-12
 
 On integrated normal artifact

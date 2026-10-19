@@ -1,9 +1,10 @@
 # Upstream-only physics integration review
 
-Status: regular `cargo run` compiles and launches against stock dependencies.
-Joint-drive and coupled/uncoupled differential gates pass. Griffin loads and
-advances; sustained contact and performance qualification remain incomplete.
-2026-10-16.
+Status: application integration uses public dependency APIs. The explicitly
+approved Parry 0.27 correction is published in the existing LunCoSim fork and
+pinned to `83494d280bda8615c812d919e6b7ab30f88a7750`. Its convex-query,
+application CCD, production contact and unattended Griffin mission gates pass.
+Sustained performance and full FMI qualification remain incomplete. 2026-10-18.
 
 The dependency source directories and local path patches are removed. Application
 composition uses maintained public physics APIs; the published gizmo frontend
@@ -17,7 +18,8 @@ explicitly approved `fix/native-pointer-input` branch at a pinned commit.
 
 ## Decision
 
-Use unmodified upstream dependencies. Keep application-specific clock,
+Use maintained upstream interfaces and narrowly reviewed dependency corrections
+where a reproduced defect belongs inside the dependency. Keep application-specific clock,
 composition, ordering, drive realization, ownership and presentation contracts
 at their existing LunCoSim owners. Reuse public native kernels and extension
 points. Do not copy the removed dependency implementations into a new module.
@@ -210,11 +212,12 @@ hard-closure and continuous-contact writeback tests in one bounded run
 `admitted_joint_detaches_without_solver_island_corruption` with the same plugin
 composition (`target/upstream-joint-detach-test.log`).
 
-Discrete manifold part identities are explicitly optional. Known continuous
-parts retain their indices; a non-compound's provenance identifies its one
-source. An unknown discrete compound member returns no source path, never a
-guessed part zero. The physics snapshot, provenance resolver and Rhai reader use
-this same contract.
+Each authored USD collision prim retains a native collider entity attached to
+its rigid body through Avian's public `ColliderOf` relationship. Source identity
+therefore comes from the participating collider for discrete and continuous
+response. Native mesh subshape indices remain optional and are never guessed.
+Body queries aggregate `RigidBodyColliders`; nested rigid bodies remain separate
+owners. No dependency contact-generation extension is required.
 
 `lunco-physics::joint::revolute_coordinate` measures the signed f64 coordinate
 from public local joint bases and the hinge axis. Co-simulation, mobility and
@@ -349,7 +352,9 @@ contracts; add a boundary-specific test if an aligned mask is actually persisted
 | Joint damping | Ordered substep owner; native solver-body and effective-inertia contracts | First determine whether the authored damping is a drive coefficient or passive joint damping. Drive damping uses the single drive realization. Any independent pair damping must conserve momentum, respect locked/kinematic axes and have one ordered application. Do not layer another damping pass over the native pass. |
 | Body mass ownership | USD-to-physics projection; native `MassProperties`, shape mass calculations and `NoAuto*` markers | Aggregate admitted collider membership up to the nearest body boundary, in source order. Publish mass/inertia/COM coherently through the supported explicit-mass path. Preserve USD overrides and density semantics. Invalidate on topology, geometry, density and body changes, not per frame. |
 | Collider insertion/scale | USD-Avian admission and fixed preparation; `ScalableCollider`, `ColliderTransform`, public scale preparation | Admit coherent physics-local geometry and scale together before native preparation. Establish an insertion transaction that cannot read a stale render `GlobalTransform`. Verify constructor scale, cooked shape, bounds and mass together, including headless operation. An after-the-fact visual repair is insufficient. |
-| Contact source identity | Physics diagnostics plus USD collider provenance; native manifold and application CCD facts | Keep collider/body identity authoritative. Use known CCD part identities. Upstream Avian 0.7 does not retain Parry subshape ids in its public manifold. Unknown native compound members must remain explicitly unavailable. Never label a guessed part zero. Exact native member evidence requires a supported contact-generation/backend extension or an upstream API enhancement. |
+| Contact source identity | Physics diagnostics plus USD collider provenance; native manifold and application CCD facts | Keep one native collider per authored USD collision prim, attached through public `ColliderOf`. Resolve source identity from the collider for both discrete and continuous contacts. Native mesh subshape indices remain optional; never guess a part zero. |
+| Native graph lifetime | Physics owner; shared scene-resource registry and public `ContactGraph::clear` / `ConstraintGraph::clear` | Register the native reset operations with `init_scene_resource_with`, after entity-removal observers. Full reload and ClearScene retire isolated graph nodes as well as contact edges. |
+| Triangle query initialization | `lunco-physics::ccd`; public finite-triangle projection and seeded GJK/EPA contact API | Use one finite-feature seed for initial contacts and every nonlinear re-sample. Native witnesses still determine depth and normals; missing enclosing-query geometry still refuses writeback. |
 | Transform interpolation | Physical presentation owner; public easing states and custom easing backend | Capture native endpoints once and consume `SimulationPresentationTime.interpolation`. Select one easing backend at plugin composition. No mutation of `Time<Fixed>` to satisfy presentation. Preserve the independent Interaction clock for UI/avatar easing. |
 | EPA allocation scratch | Native contact-query interface | Use the published six-argument contact entry point and remove the application EPA pool and threaded parameters. Keep parallel read-only geometry queries and prepared result order. Measure actual allocation cost before considering an upstream API request. |
 | Query skip certificates | Existing CCD owner; native supports, poses and bounding geometry | Remove dependency-only optimization calls. Retain only proofs whose bounds cover the actual upstream motion evaluation and contact criterion. Compare admitted contacts/trajectories before claiming a performance improvement. |
@@ -389,15 +394,32 @@ Upstream documents maintained GJK fixes in its
 That does not establish that every touching/EPA or projection case is fixed.
 Qualify each regression against the exact selected upstream version.
 
-Preferred resolution: obtain compatible upstream corrections, then consume an
-upstream release or explicitly reviewed unmodified upstream revision. Prepare
-minimal reproducers locally; publishing issues or patches needs explicit user
-authorization. A full collision backend replacement is a separate architectural
-decision with a substantial surface, not a small adapter cleanup.
+The selected compatible correction is Parry commit
+`83494d280bda8615c812d919e6b7ab30f88a7750`, published with explicit user approval
+as `fix/robust-convex-queries-0.27` in `LunCoSim/parry`. One exact Cargo patch
+supplies contacts, spatial queries and CCD; there is no vendored source or
+application copy of the kernel. The dependency's `PATCHES.md` identifies the
+upstream GJK/EPA corrections and the scoped projection/degeneracy fixes.
 
-Until qualified, retain the existing runtime-fault and same-tick writeback
-refusal boundary. It protects state but may stop a real mission. Neither that
-hold nor disabling a regression test counts as fixing the kernel defect.
+Four kernel regressions cover nested coincident cylinders, touching witnesses,
+nearest cylinder boundary and a large triangle/cylinder edge. A nearly flat
+support tetrahedron must be rejected at coordinate roundoff scale before its
+spurious origin containment can send EPA down an invalid expansion. Application
+tests validate genuine witness geometry and precision bounds rather than a
+particular non-unique touching normal or bit-exact translated arithmetic.
+
+Qualification passes four geometry regressions, 21 application CCD tests and
+12 production continuous-contact checks. The actual unattended Griffin mission
+also passes all 16 checks over 5,460 master ticks (91 simulation seconds),
+including landing, ramps and rover release. Evidence:
+`target/parry-027-convex-tests.log`, `target/parry-application-ccd-tests.log`,
+`target/parry-continuous-contacts-production.log` and
+`target/parry-griffin-mission-production.log`. The production processes exit 0
+and release their owned API ports. This establishes these collision and mission
+contracts, not realtime performance or arbitrary geometry correctness.
+
+Retain the runtime-fault and same-tick writeback refusal boundary for invalid
+native results. It protects state; it does not replace a kernel correction.
 
 ## Co-simulation, clocks and rendering
 
@@ -700,3 +722,36 @@ and reports zero chassis normal impulse. The complete finite-actuator course
 still reaches its four-wheel landing verdict. A headful avatar-following capture
 at about 38.4 m/s and 10.3 m height confirms four live ramp wheel contacts.
 These are authored study acceptance results, not manufacturer calibration.
+
+### Authored collider ownership and Griffin acceptance
+
+Each authored USD collision prim now owns one native collider, attached to its
+rigid body through `ColliderOf`. `UsdColliderSource` belongs to that collider,
+including internally decomposed meshes. Body contact queries, ports, telemetry
+and automatic mass reduction read native `RigidBodyColliders`; independent
+nested bodies retain their own geometry and mass. Explicit computed mass,
+inertia and center properties retain their native/co-simulation `NoAuto*` owner.
+
+Admission uses native collider disable/enable to reconcile proxy identity,
+attachment, body mode and enabled state without detaching geometry. Native
+contact and constraint graph resets register at the shared scene-resource
+boundary after entity-removal observers. Finite-triangle contact samples use
+one feature seed through the public native GJK/EPA interface, including nonlinear
+re-samples. Native geometry still determines witnesses, depth and normals;
+missing enclosing-query geometry remains a terminal writeback refusal.
+
+The unchanged Griffin rover gate passes 88/88 at its original solver settings:
+900 ticks, a 1006.957419 N s impulse attributed to
+`/Griffin1SurfaceOps/Lander/LegPX_BusMount/ShockBarrel/TubeCollider`, and maximum
+penetration 0.000063701206 m. The engine-off drop passes 9/9 through 1800 ticks;
+continuous contacts pass 12/12, GNC handoff 12/12, and filtered/unfiltered/group
+contact gates 5/5 each. The stale derived-primitive fixture retains its expected
+`usd-avian-collider-invalid` fault. Low-level checks cover mass reduction,
+proxy admission, dependency-resource reset ordering, and native query geometry.
+A windowed session passes two scene restarts with unchanged body/collider/joint
+populations; ClearScene leaves zero bodies, colliders, joints, joint edges,
+contact edges and contact nodes. The owned API port 4187 is released.
+Evidence is under `target/griffin-collider-proof/`, including
+`final-acceptance.json`, `seeded-query-tests.log`, `scene-lifecycle-test.log`,
+`reloads.json`, `cleared.json` and `sandbox_view.png`. No third-party source or
+solver tolerance changes are part of this repair.

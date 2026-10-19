@@ -3,7 +3,7 @@
 //!
 //! A *port* is a named scalar (`f64`) on a participant entity. Modelica variables,
 //! avian rigid-body state, joint angles, the SysML/hardware "nervous system"
-//! ports, and (in future) an imported FMU all present as ports, so that wires,
+//! ports, and imported FMUs all present as ports, so that wires,
 //! the API (`ListPorts` / `GetPort` / `SetPorts`), the UI inspector, and every
 //! scripting runtime (rhai/python) treat them uniformly — the FMI/SSP contract.
 //!
@@ -15,8 +15,8 @@
 //! backends downward and **consume** the registry, with nobody depending "up".
 //! This is what lets `lunco-scripting` reach ports even though `lunco-cosim`
 //! (which owns the avian/joint/Modelica backends) depends ON scripting: both
-//! depend down on this module. A future FMU-import or script-defined component is
-//! just one more registered backend the wire engine then honours.
+//! depend down on this module. FMUs reuse the map-backed backend; a script-defined component can
+//! register its owner through the same boundary.
 //!
 //! ## Value model
 //!
@@ -1414,7 +1414,7 @@ impl fmt::Display for PortWriteError {
 
 impl std::error::Error for PortWriteError {}
 
-/// A validated write awaiting application at the same exclusive world boundary.
+/// A validated input snapshot retained for a later, revalidated batch commit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedPortWrite {
     backend: usize,
@@ -1441,6 +1441,73 @@ impl PreparedPortWrite {
     /// Finite scalar value validated against the owner contract.
     pub fn value(&self) -> f64 {
         self.value
+    }
+}
+
+/// Reusable staging storage for one exclusively borrowed input transaction.
+/// It retains capacity, not permission to commit a write in a later world state.
+#[derive(Default)]
+pub struct InputWriteBuffer {
+    writes: Vec<PreparedPortWrite>,
+    unique: HashSet<(Entity, Arc<str>)>,
+}
+
+/// Input staging with an immutable view of the transaction's exclusive world.
+/// Return an error from the enclosing transaction to reject its entire batch.
+/// A failed staging call does not include that target, allowing the caller to
+/// exclude explicitly pending endpoints without changing other staged values.
+pub struct InputWriteTransaction<'a> {
+    registry: &'a PortRegistry,
+    world: &'a World,
+    buffer: &'a mut InputWriteBuffer,
+}
+
+impl InputWriteTransaction<'_> {
+    /// Read eligibility facts without permitting mutations before commit.
+    pub fn world(&self) -> &World {
+        self.world
+    }
+
+    /// Stage a named input through the live precedence-winning owner.
+    pub fn stage_input(
+        &mut self,
+        entity: Entity,
+        name: impl Into<Arc<str>>,
+        value: f64,
+    ) -> Result<(), PortWriteError> {
+        let write = self
+            .registry
+            .prepare_input_write(self.world, entity, name, value)?;
+        self.stage(write)
+    }
+
+    /// Stage a cached locator while validating its live owner and metadata.
+    pub fn stage_resolved(
+        &mut self,
+        entity: Entity,
+        locator: &ResolvedPort,
+        value: f64,
+    ) -> Result<(), PortWriteError> {
+        let write = self
+            .registry
+            .prepare_resolved_input_write(self.world, entity, locator, value)?;
+        self.stage(write)
+    }
+
+    fn stage(&mut self, write: PreparedPortWrite) -> Result<(), PortWriteError> {
+        if !self
+            .buffer
+            .unique
+            .insert((write.entity, Arc::clone(&write.name)))
+        {
+            return Err(PortWriteError {
+                port: write.name.to_string(),
+                owner: Some(write.metadata.source.to_string()),
+                kind: PortWriteErrorKind::DuplicateWrite,
+            });
+        }
+        self.buffer.writes.push(write);
+        Ok(())
     }
 }
 
@@ -2131,7 +2198,37 @@ impl PortRegistry {
         })
     }
 
-    /// Validate every prepared write before committing any of them.
+    /// Stage and commit inputs under one exclusive world borrow.
+    ///
+    /// The staging callback can only inspect this world. Each accepted target
+    /// receives the same live validation as a single write; no mutation can
+    /// invalidate it before the infallible commits. Returning `Err` applies
+    /// nothing. Unlike independently retained prepared writes, these writes
+    /// therefore need no second owner/metadata preflight at commit.
+    pub fn input_transaction<T, E>(
+        &self,
+        world: &mut World,
+        buffer: &mut InputWriteBuffer,
+        stage: impl FnOnce(&mut InputWriteTransaction<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        buffer.writes.clear();
+        buffer.unique.clear();
+        let result = stage(&mut InputWriteTransaction {
+            registry: self,
+            world,
+            buffer,
+        });
+        if result.is_ok() {
+            for write in &buffer.writes {
+                self.commit_validated_input_write(world, write);
+            }
+        }
+        buffer.writes.clear();
+        buffer.unique.clear();
+        result
+    }
+
+    /// Validate every independently prepared write before committing any of them.
     ///
     /// Commit callbacks are infallible and only mutate already-resolved values.
     /// Since the caller holds the exclusive `World`, no system can observe a
@@ -2160,8 +2257,9 @@ impl PortRegistry {
         Ok(())
     }
 
-    /// A single write is prepared and committed under one exclusive borrow;
-    /// unlike a retained batch, its world cannot change between these steps.
+    /// Single writes and scoped transactions retain the exclusive world borrow
+    /// from validation through commit. Independently retained batches instead
+    /// revalidate their snapshots before invoking these same owner callbacks.
     fn commit_validated_input_write(&self, world: &mut World, write: &PreparedPortWrite) {
         let commit = self.backends[write.backend]
             .write_slot
@@ -2352,6 +2450,22 @@ impl PortRegistry {
         r: &ResolvedPort,
         value: f64,
     ) -> Result<(), PortWriteError> {
+        let prepared = self.prepare_resolved_input_write(world, entity, r, value)?;
+        self.commit_validated_input_write(world, &prepared);
+        Ok(())
+    }
+
+    /// Validate a cached input locator without applying its value. Coupled
+    /// exchanges prepare every target before committing their shared batch.
+    /// Cached locators retain the same live-owner and metadata checks as named
+    /// writes; a stale locator is never rerouted to a different owner.
+    pub fn prepare_resolved_input_write(
+        &self,
+        world: &World,
+        entity: Entity,
+        r: &ResolvedPort,
+        value: f64,
+    ) -> Result<PreparedPortWrite, PortWriteError> {
         if r.side != ResolvedPortSide::Input {
             return Err(PortWriteError {
                 port: r.name.to_string(),
@@ -2386,8 +2500,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        self.commit_validated_input_write(world, &prepared);
-        Ok(())
+        Ok(prepared)
     }
 
     fn port_metadata_for_backend(
@@ -3182,6 +3295,51 @@ mod tests {
             })
         ));
         assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        world.get_mut::<Input>(other).unwrap().writable = true;
+        world
+            .resource::<MetadataReads>()
+            .0
+            .store(0, Ordering::Relaxed);
+        let mut buffer = super::InputWriteBuffer::default();
+        registry
+            .input_transaction(&mut world, &mut buffer, |transaction| {
+                transaction.stage_resolved(entity, &locator, 0.5)?;
+                transaction.stage_input(other, "signal", 0.0)
+            })
+            .unwrap();
+        assert_eq!(
+            world.resource::<MetadataReads>().0.load(Ordering::Relaxed),
+            2,
+            "one atomic exchange must validate each live owner once"
+        );
+        world.get_mut::<Input>(other).unwrap().writable = false;
+        assert!(
+            registry
+                .input_transaction(&mut world, &mut buffer, |transaction| {
+                    transaction.stage_input(entity, "signal", 0.75)?;
+                    transaction.stage_input(other, "signal", 0.25)
+                })
+                .is_err()
+        );
+        assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        assert_eq!(world.get::<Input>(other).unwrap().value, 0.0);
+        assert!(buffer.writes.is_empty() && buffer.unique.is_empty());
+        assert!(matches!(
+            registry.input_transaction(&mut world, &mut buffer, |transaction| {
+                transaction.stage_input(entity, "signal", 0.75)?;
+                transaction.stage_input(entity, "signal", 0.25)
+            }),
+            Err(super::PortWriteError {
+                kind: super::PortWriteErrorKind::DuplicateWrite,
+                ..
+            })
+        ));
+        assert_eq!(world.get::<Input>(entity).unwrap().value, 0.5);
+        registry
+            .input_transaction(&mut world, &mut buffer, |transaction| {
+                transaction.stage_input(entity, "signal", 0.5)
+            })
+            .unwrap();
         world.get_mut::<Input>(entity).unwrap().writable = false;
         assert!(matches!(
             registry.write_resolved(&mut world, entity, &locator, 0.75),

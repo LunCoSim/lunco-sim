@@ -26,12 +26,9 @@
 //!
 //! # Which entity is filtered
 //!
-//! The rel may name a body prim or a collider prim underneath one, and the two
-//! are not the same entity: a collider under a body folds into that body's
-//! compound shape, so the entity avian sees is the **body**. Both ends are
-//! therefore resolved to the nearest self-or-ancestor prim that carries a
-//! collider — the same ownership rule the loader applies when it builds the
-//! compound, and the same one that stops at a nested body.
+//! The rel may name a body prim or a collider prim underneath one. Body targets
+//! cover every attached collider; source targets resolve the native collider
+//! carrying that exact USD identity. Resolution is stage and instance scoped.
 //!
 //! Filtering is symmetric (the USD docs say so, and a one-sided contact filter is
 //! meaningless), so authoring it on either prim filters the pair.
@@ -178,15 +175,25 @@ pub fn on_remove_joint_collision_pair(
 /// see the current component value.
 pub fn enable_collision_hook(commands: &mut Commands, entity: Entity, hook: ActiveCollisionHooks) {
     commands.queue(move |world: &mut World| {
-        // Scene teardown can retire the collider before this queued hook applies.
-        let Ok(mut entity) = world.get_entity_mut(entity) else {
-            return;
-        };
-        let current = entity
-            .get::<ActiveCollisionHooks>()
-            .copied()
+        let children = world
+            .get::<RigidBodyColliders>(entity)
+            .map(|colliders| {
+                colliders
+                    .iter()
+                    .filter(|child| *child != entity)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        entity.insert(current | hook);
+        for target in std::iter::once(entity).chain(children) {
+            // Scene teardown can retire the owner before this command applies.
+            if let Ok(mut target) = world.get_entity_mut(target) {
+                let current = target
+                    .get::<ActiveCollisionHooks>()
+                    .copied()
+                    .unwrap_or_default();
+                target.insert(current | hook);
+            }
+        }
     });
 }
 
@@ -228,19 +235,18 @@ pub fn read_filtered_pairs(
     Some(PendingFilteredPairs { targets })
 }
 
-/// The entity that owns the collider for `path`: itself if it carries one, else
-/// the nearest ancestor that does.
-///
-/// A collider authored under a body is folded into that body's compound shape and
-/// has no collider of its own, so naming it in a rel must filter the **body**.
-/// The walk stops at the first collider it finds, which is exactly where the
-/// loader's own ownership walk stops — including at a nested body, whose collider
-/// is its own and never its parent's.
+/// Resolve a body or exact authored collider within the stage and instance.
+/// Non-physical descendants walk to the nearest physical ancestor.
 fn collider_owner(
     path: &str,
     stage_handle: &Handle<UsdStageAsset>,
     root: Option<u64>,
-    q_colliders: &Query<(Entity, &UsdPrimPath), With<Collider>>,
+    q_colliders: &Query<(Entity, &UsdPrimPath), Or<(With<Collider>, With<RigidBody>)>>,
+    q_parts: &Query<(
+        Entity,
+        &ColliderOf,
+        &lunco_usd_avian_contracts::UsdColliderSource,
+    )>,
     q_provenance: &Query<&lunco_core::Provenance>,
     q_gid: &Query<&lunco_core::GlobalEntityId>,
     q_instance_root: &Query<(), With<UsdInstanceRoot>>,
@@ -253,6 +259,15 @@ fn collider_owner(
                 && instance_key(*e, q_provenance, q_gid, q_instance_root) == root
         }) {
             return Some(e);
+        }
+        if let Some((collider, _, _)) = q_parts.iter().find(|(_, owner, source)| {
+            source.0 == p
+                && q_colliders.get(owner.body).is_ok_and(|(body, up)| {
+                    up.stage_handle == *stage_handle
+                        && instance_key(body, q_provenance, q_gid, q_instance_root) == root
+                })
+        }) {
+            return Some(collider);
         }
         candidate = p
             .rsplit_once('/')
@@ -273,9 +288,13 @@ fn collider_owner(
 pub fn resolve_filtered_pairs(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingFilteredPairs, &UsdPrimPath)>,
-    q_colliders: Query<(Entity, &UsdPrimPath), With<Collider>>,
+    q_colliders: Query<(Entity, &UsdPrimPath), Or<(With<Collider>, With<RigidBody>)>>,
+    q_parts: Query<(
+        Entity,
+        &ColliderOf,
+        &lunco_usd_avian_contracts::UsdColliderSource,
+    )>,
     q_filtered: Query<&FilteredPairs>,
-    q_hooks: Query<&ActiveCollisionHooks>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -301,6 +320,7 @@ pub fn resolve_filtered_pairs(
             &prim.stage_handle,
             root,
             &q_colliders,
+            &q_parts,
             &q_provenance,
             &q_gid,
             &q_instance_root,
@@ -326,6 +346,7 @@ pub fn resolve_filtered_pairs(
                 &prim.stage_handle,
                 root,
                 &q_colliders,
+                &q_parts,
                 &q_provenance,
                 &q_gid,
                 &q_instance_root,
@@ -336,8 +357,7 @@ pub fn resolve_filtered_pairs(
                     // not. Say so rather than resolving it silently.
                     warn!(
                         "[usd-avian] {}: filtered pair '{target}' resolves to the same \
-                         body — both are colliders of one compound shape, which never \
-                         collides with itself. The pair you meant is elsewhere.",
+                         physics endpoint, which never collides with itself.",
                         prim.path,
                     );
                 }
@@ -387,12 +407,8 @@ pub fn resolve_filtered_pairs(
             .map(|f| f.0.clone())
             .unwrap_or_default();
         set.extend(added);
-        let hooks =
-            q_hooks.get(entity).copied().unwrap_or_default() | ActiveCollisionHooks::FILTER_PAIRS;
-        commands
-            .entity(entity)
-            .try_insert(FilteredPairs(set))
-            .try_insert(hooks);
+        commands.entity(entity).try_insert(FilteredPairs(set));
+        enable_collision_hook(&mut commands, entity, ActiveCollisionHooks::FILTER_PAIRS);
     }
 }
 

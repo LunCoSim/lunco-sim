@@ -66,6 +66,7 @@ members = [
     "crates/lunco-modelica-runner",
     "crates/lunco-modelica-worker",
     "crates/lunco-modelica-execution",
+    "crates/lunco-fmi",
     "crates/lunco-modelica-document",
     "crates/lunco-modelica-solver",
     "crates/lunco-modelica-index",
@@ -246,6 +247,9 @@ default-members = [
 resolver = "2"
 
 [patch.crates-io]
+# Avian's contacts, spatial queries and CCD share this kernel. Keep them on the
+# same reviewed 0.27 revision with robust convex intersection and witness tests.
+parry3d-f64 = { git = "https://github.com/LunCoSim/parry", rev = "83494d280bda8615c812d919e6b7ab30f88a7750" }
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews,

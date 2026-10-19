@@ -4,8 +4,11 @@
 //! their own backends to [`ports::PortRegistry`], while shared endpoint and
 //! control-surface lifecycle components are defined in [`endpoints`].
 
+pub mod contracts;
 pub mod endpoints;
 pub mod ports;
+
+pub use contracts::{ScalarPortContract, ScalarPortContracts, ScalarPortContractsPlugin};
 
 pub use endpoints::{
     CausalStateSink, InputPorts, OutputPorts, Port, PortSurface, PortSurfacePending,

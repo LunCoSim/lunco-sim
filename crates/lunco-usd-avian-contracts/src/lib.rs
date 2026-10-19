@@ -12,23 +12,19 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use openusd_schemas::physics::CollisionApprox;
 
-/// Source prims actually cooked into this body's current collider. This is
-/// emitted with the collider admission, not reconstructed from authored USD.
+/// Composed USD prim actually cooked into this native collider. A rigid body
+/// owns its colliders through Avian's `ColliderOf` relationship; provenance is
+/// attached to the admitted collider, including internally decomposed meshes.
 #[derive(Component, Clone, Debug)]
-pub struct UsdColliderSources(pub Vec<String>);
+pub struct UsdColliderSource(pub String);
 
-/// Resolve available contact membership through admitted collider provenance.
-/// A non-compound collider's internal mesh triangles share one source. A
-/// compound requires a known part; unknown membership has no source identity.
-pub fn collider_part_source(world: &World, collider: Entity, part: Option<usize>) -> Option<&str> {
-    let sources = world.get::<UsdColliderSources>(collider)?;
-    let shape = world.get::<Collider>(collider)?;
-    let index = if shape.shape_scaled().as_compound().is_some() {
-        part?
-    } else {
-        0
-    };
-    sources.0.get(index).map(String::as_str)
+/// Read the source of the actual admitted contact collider. Internal mesh
+/// triangles and convex-decomposition hulls share their owning USD prim.
+pub fn collider_source(world: &World, collider: Entity) -> Option<&str> {
+    world.get::<Collider>(collider)?;
+    world
+        .get::<UsdColliderSource>(collider)
+        .map(|source| source.0.as_str())
 }
 
 /// Mesh approximation modes that the Avian adapter can cook from standard

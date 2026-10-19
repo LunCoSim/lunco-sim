@@ -511,6 +511,8 @@ pub enum SimulationProgressOwner {
     DocumentPreparation,
     /// Modelica source/interface preparation.
     ModelicaPreparation,
+    /// External FMI archive/instance preparation and communication transactions.
+    FmiExecution,
     /// Rhai parse/import preparation.
     ScriptPreparation,
     /// Authored scenario source and recursive asset-import loading, before

@@ -1,0 +1,48 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Cube "Target" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        bool physics:rigidBodyEnabled = true
+        bool physics:kinematicEnabled = true
+        float physics:mass = 5.0
+        custom double3 xformOp:translate = (3.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom double inputs:com_x = 0.02
+        double inputs:com_x.connect = </World/Source.outputs:comX>
+        custom double inputs:mass = 5.0
+        double inputs:mass.connect = </World/Source.outputs:mass>
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 60000.0
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/connection_transaction.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def Scope "Source" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/ConnectionWriteTransaction.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        custom double outputs:mass = 0.0
+        custom double outputs:comX = 0.0
+        custom double outputs:sampleTime = 0.0
+    }
+}

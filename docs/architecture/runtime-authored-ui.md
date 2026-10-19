@@ -76,12 +76,33 @@ same registry.
 Runtime surface facts include the ordered owner/reason pairs from
 `SimulationProgress`. The active Twin's Rhai properties policy chooses the
 visible status wording, while the typed producer remains domain-neutral.
-Changes to these holds invalidate surface properties through the existing
+The vessel status shows `WAITING FOR TERRAIN` while required ground is held,
+including while a download awaits user action. Changes to these holds
+invalidate surface properties through the existing
 exposure refresh path, so the built-in Rhai visibility policy can temporarily
 show an authored surface during scene, terrain, script, or Modelica preparation
 before possession and before the first physics step. Once preparation clears,
 the authored `possessed` or `always` mode controls visibility again; neither
 Rust exposure code nor the HUI template adds a second visibility rule.
+
+The application dataset surface uses the existing `assets.provision` hook,
+declared by `lunco-core-session` and installed by application/Twin policy.
+Its typed input map contains scope identity, prompt preferences, and registry
+dataset states, including unsigned byte counters and processing/failure detail.
+Its closed output map contains visibility, title, description, scoped rows,
+and semantic actions. `lunco-luncosim-ui` validates and publishes that view;
+Rhai owns labels, progress formatting, retry/cancel actions, and completion.
+The hook is optional at the host boundary: absence or an invalid result warns
+and publishes no consent view, while the native resource panel and registry
+remain available. It does not authorize network activity; user actions dispatch
+the typed dataset commands.
+
+An accepted download stays visible through transfer and preparation. The user
+can dismiss the surface to continue in the background; completion remains
+explicit until dismissal. Suppression persists through the Twin manifest.
+`TwinClosed` retires the scope and queued presentation. The production Rhai
+gates are `test_download_policies.rhai` for policy states and
+`dataset_provisioning_surface.rhai` for live scope/action and dismissal behavior.
 
 The same rule applies to engine health. The core runtime publishes the latest
 frame and physics facts once as typed `EngineHealthSnapshot` and
@@ -185,7 +206,7 @@ The fields are:
 | `id` | Stable manifest identity; unique within the manifest. |
 | `template`, `stylesheet` | Asset paths under the normal Bevy asset root. |
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
-| `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values such as `true` or `301` into CSS values. |
+| `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values. `css: true` explicitly projects a binding into a CSS custom property; prose stays in template text. |
 | `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host; other identifiers become the typed `runtime.ui.action` event for Rhai policy. |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
@@ -440,7 +461,8 @@ surface subset includes:
 
 Keep the outer rectangle in the manifest and use CSS for the contents of that
 rectangle. For a value that changes at runtime, expose a property and consume
-its mirrored `--ui-<property-name>` custom property:
+its explicitly selected `--ui-<property-name>` custom property (`"css": true`
+on the manifest binding):
 
 ```css
 #status-root {
@@ -456,9 +478,18 @@ its mirrored `--ui-<property-name>` custom property:
 }
 ```
 
-The bridge projects each bound value both to the HUI template property and to a
-CSS variable named `--ui-<property-name>` (underscores become hyphens). Mapping
+The bridge projects bound values to HUI template properties. A binding with
+`css: true` additionally writes a CSS variable named `--ui-<property-name>`
+(underscores become hyphens). Text-only bindings and implicit same-name
+bindings never enter the CSS token stream. Mapping
 values can themselves be CSS values, for example `var(--accent-color)`.
+
+The runtime retains HUI's compiler style context outside its active style
+system. Property updates restore that context for the public HUI compiler,
+flush dynamic text/tags/actions, and retire it before style application.
+Flair remains the only rendered style owner; collection controls therefore
+update their semantic action with their label, including Cancel and Retry.
+The context is an entity-owned component and retires with its presentation tree.
 
 Authored HUI nodes use stable `id` attributes and `#id` selectors. Flair also
 supports class selectors, but HUI 0.7 does not create a `ClassList` from an
@@ -480,8 +511,15 @@ ui.property("state_color", "var(--ok-color)");
 The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
-20 Hz); discrete lifecycle facts should use an event observer. Camera status
-is the latter. `EngineExposures.revision` advances only when a complete surface
+20 Hz); discrete lifecycle facts should use an event observer. The preparation
+owner compares the complete typed facts, telemetry, derived vessel data and
+caller identity before admitting work. Equal snapshots retain their published
+view; advancing the caller's time sample or sequence alone does not rerun a
+data projection. Clocked animation belongs to the presentation owner. Policy
+generation, source lifetime, caller route/phase/clock/producer and changed
+inputs still admit a fresh projection. The immutable admitted snapshot is
+shared with its worker and is retired with its surface or scene.
+Camera status uses event observers. `EngineExposures.revision` advances only when a complete surface
 changes (including its preparation state) or is retired; it is not a frame counter.
 
 `lunco-luncosim-exposures` captures immutable facts and typed caller context,

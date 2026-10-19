@@ -76,9 +76,13 @@ fn request_recommended(scope) {
     if result.ok == false { return result; }
     let requests = [];
     for dataset in result.datasets {
-        if dataset.recommended && dataset.state.kind != "installed" {
+        let kind = dataset.state.kind;
+        if dataset.recommended && (kind == "missing" || kind == "failed" || kind == "cancelled") {
             requests.push(request(dataset.id));
         }
+    }
+    if requests.len() == 0 {
+        return #{ok: false, error: "No idle recommended datasets to download in scope: " + scope};
     }
     #{ ok: true, requested: requests }
 }

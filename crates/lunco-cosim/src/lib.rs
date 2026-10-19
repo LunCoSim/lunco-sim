@@ -44,6 +44,7 @@ use bevy::prelude::*;
 pub mod avian;
 pub mod avian_queries;
 pub mod binding;
+mod failure;
 pub mod joint;
 pub mod ports;
 pub mod systems;
@@ -301,7 +302,11 @@ impl Plugin for CoSimPlugin {
         // port spawn and its generated Modelica contract.
         app.add_systems(
             PostUpdate,
-            binding::bind_connections.run_if(binding::binding_requested),
+            (
+                binding::observe_port_topology,
+                binding::bind_connections.run_if(binding::binding_requested),
+            )
+                .chain(),
         );
         {
             let mut registry = app
@@ -1200,7 +1205,7 @@ mod binding_lifecycle_tests {
                 global_id: None,
                 port: "drive_left".into(),
                 has_port_surface: true,
-                dropped_value: 1.0,
+                dropped_value: Some(1.0),
                 failure: None,
             };
             diagnostics.record_fault(broken.clone());
@@ -1888,7 +1893,7 @@ fn validate_port_input_writes(
                                 global_id,
                                 port: Arc::from(port.as_str()),
                                 has_port_surface: true,
-                                dropped_value: *value,
+                                dropped_value: Some(*value),
                                 failure: Some(error.to_string()),
                             });
                     if inserted {

@@ -426,6 +426,7 @@ fn reset_standalone_modelica_projection(
                 DeclaredOutputPorts,
                 UsdModelicaSchedule,
                 ModelicaSignalLayout,
+                lunco_port_core::ScalarPortContracts,
             )>();
         }
     }
@@ -1763,13 +1764,17 @@ fn publish_loaded_modelica_interfaces(
             &mut SimComponent,
             Option<&DeclaredOutputPorts>,
             Option<&ModelicaSignalLayout>,
+            Option<&lunco_port_core::ScalarPortContracts>,
             Option<&UsdModelicaPortContract>,
         ),
         With<lunco_port_core::PortSurfacePending>,
     >,
     sources: Res<Assets<ModelicaSource>>,
+    mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
 ) {
-    for (entity, pending, mut component, declared, current_layout, contract) in &mut pending {
+    for (entity, pending, mut component, declared, current_layout, current_contracts, contract) in
+        &mut pending
+    {
         let Some(source) = sources.get(&pending.handle) else {
             continue;
         };
@@ -1798,6 +1803,16 @@ fn publish_loaded_modelica_interfaces(
             .iter()
             .map(|(name, metadata)| (name.clone(), metadata.clone()))
             .collect();
+        let port_contracts = match layout.port_contracts() {
+            Ok(contracts) => contracts,
+            Err(error) => {
+                reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
+                continue;
+            }
+        };
+        if current_contracts != Some(&port_contracts) {
+            commands.entity(entity).try_insert(port_contracts);
+        }
         if current_layout.is_none_or(|current| current.metadata != layout.metadata) {
             commands.entity(entity).try_insert(layout);
         }
@@ -1818,6 +1833,9 @@ fn reject_modelica_source(
     error: String,
 ) {
     component.status = SimStatus::Error(error.clone());
+    commands
+        .entity(entity)
+        .try_remove::<(lunco_port_core::ScalarPortContracts, ModelicaSignalLayout)>();
     commands.entity(entity).try_remove::<ModelicaModel>();
     commands
         .entity(entity)

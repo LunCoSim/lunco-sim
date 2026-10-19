@@ -574,9 +574,12 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
 
     for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
         if !world.resource::<lunco_core::RuntimeFaults>().active()
-            && world
+            && (world
                 .get_resource::<lunco_core_runtime::SimulationBarrier>()
                 .is_some_and(|barrier| barrier.held)
+                || world
+                    .get_resource::<lunco_core_runtime::SimulationProgress>()
+                    .is_some_and(lunco_core_runtime::SimulationProgress::is_held))
         {
             let fixed = world.resource::<Time<Fixed>>();
             if world.resource::<SimulationStepControl>().remaining() > 0
@@ -1308,19 +1311,29 @@ mod tests {
             ready: bool,
             admitted: u32,
             fail: bool,
+            progress_hold: bool,
         }
         fn submit(
             mut runs: ResMut<FixedRunCount>,
             mut receipt: ResMut<Receipt>,
             mut barrier: ResMut<lunco_core_runtime::SimulationBarrier>,
+            mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
         ) {
             runs.0 += 1;
             receipt.ready = true;
-            barrier.held = true;
+            if receipt.progress_hold {
+                progress.acquire(
+                    lunco_core_runtime::SimulationProgressKey::scene_interaction(),
+                    "test receipt",
+                );
+            } else {
+                barrier.held = true;
+            }
         }
         fn complete(
             mut receipt: ResMut<Receipt>,
             mut barrier: ResMut<lunco_core_runtime::SimulationBarrier>,
+            mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
             mut faults: ResMut<lunco_core::RuntimeFaults>,
         ) {
             if receipt.ready {
@@ -1336,16 +1349,20 @@ mod tests {
                 }
                 receipt.admitted += 1;
                 barrier.held = false;
+                progress.release(lunco_core_runtime::SimulationProgressKey::scene_interaction());
             }
         }
-        for manual in [false, true] {
+        for (manual, progress_hold) in [(false, false), (true, false), (false, true), (true, true)]
+        {
             let mut app = App::new();
             app.add_plugins((bevy::time::TimePlugin, TimePlugin))
                 .init_resource::<FixedRunCount>()
                 .init_resource::<Receipt>()
+                .init_resource::<lunco_core_runtime::SimulationProgress>()
                 .init_resource::<lunco_core_runtime::SimulationBarrier>()
                 .add_systems(FixedUpdate, submit)
                 .add_systems(lunco_core_runtime::SimulationCompletions, complete);
+            app.world_mut().resource_mut::<Receipt>().progress_hold = progress_hold;
             app.update();
             let quantum = app.world().resource::<Time<Fixed>>().timestep();
             if manual {

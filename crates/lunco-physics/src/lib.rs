@@ -26,6 +26,7 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 pub mod assembly;
+pub mod body_mass;
 pub mod ccd;
 pub mod drive;
 pub use ccd::{
@@ -326,6 +327,29 @@ pub struct ContactPartDebugSnapshot {
     pub continuous: bool,
 }
 
+/// Native colliders currently attached to a body, or the selected standalone
+/// collider. Avian's relationship is authoritative and excludes nested bodies.
+pub fn collider_entities(world: &World, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
+    std::iter::once(entity)
+        .filter(move |candidate| {
+            world
+                .get::<avian3d::prelude::Collider>(*candidate)
+                .is_some()
+        })
+        .chain(
+            world
+                .get::<avian3d::prelude::RigidBodyColliders>(entity)
+                .into_iter()
+                .flat_map(|colliders| colliders.iter())
+                .filter(move |candidate| {
+                    *candidate != entity
+                        && world
+                            .get::<avian3d::prelude::Collider>(*candidate)
+                            .is_some()
+                }),
+        )
+}
+
 pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDebugSnapshot> {
     contact_debug_snapshot_filtered(world, entity, None)
 }
@@ -359,7 +383,9 @@ fn contact_debug_snapshot_filtered(
 
     let graph = world.get_resource::<ContactGraph>()?;
     let mut snapshot = ContactDebugSnapshot::default();
-    for pair in graph.contact_pairs_with(entity) {
+    for pair in
+        collider_entities(world, entity).flat_map(|collider| graph.contact_pairs_with(collider))
+    {
         if other.is_some_and(|root| {
             ![pair.collider1, pair.collider2]
                 .into_iter()
@@ -416,7 +442,13 @@ fn contact_debug_snapshot_filtered(
     }
     if let Some(impulses) = ccd::continuous_contact_impulses(world) {
         for applied in impulses {
-            if applied.collider1 != entity && applied.collider2 != entity {
+            let owned = |collider| {
+                collider == entity
+                    || world
+                        .get::<avian3d::prelude::ColliderOf>(collider)
+                        .is_some_and(|owner| owner.body == entity)
+            };
+            if !owned(applied.collider1) && !owned(applied.collider2) {
                 continue;
             }
             if other.is_some_and(|root| {
@@ -577,8 +609,12 @@ pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
 /// only pairs for which Avian reports `is_touching()` contribute to the result.
 /// The force conversion uses the master physics interval and the one shared
 /// Avian solver-phase contract in [`contact_force_from_impulse`].
-pub fn contact_of(graph: &ContactGraph, physics_dt: f64, entity: Entity) -> (bool, f64) {
-    contact_of_filtered(graph, physics_dt, entity, |_| false)
+pub fn contact_of(
+    graph: &ContactGraph,
+    physics_dt: f64,
+    colliders: impl IntoIterator<Item = Entity>,
+) -> (bool, f64) {
+    contact_of_filtered(graph, physics_dt, colliders, |_| false)
 }
 
 /// Read contact while excluding explicitly authored overlap-only colliders.
@@ -587,18 +623,16 @@ pub fn contact_of(graph: &ContactGraph, physics_dt: f64, entity: Entity) -> (boo
 fn contact_of_filtered(
     graph: &ContactGraph,
     physics_dt: f64,
-    entity: Entity,
+    colliders: impl IntoIterator<Item = Entity>,
     is_sensor: impl Fn(Entity) -> bool,
 ) -> (bool, f64) {
     let mut normal_impulse = 0.0;
     let mut touching = false;
-    for pair in graph.contact_pairs_with(entity) {
-        let other = if pair.collider1 == entity {
-            pair.collider2
-        } else {
-            pair.collider1
-        };
-        if is_sensor(entity) || is_sensor(other) || !pair.is_touching() {
+    for pair in colliders
+        .into_iter()
+        .flat_map(|collider| graph.contact_pairs_with(collider))
+    {
+        if is_sensor(pair.collider1) || is_sensor(pair.collider2) || !pair.is_touching() {
             continue;
         }
         touching = true;
@@ -628,7 +662,7 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
         .get_resource::<Time<Physics>>()
         .map(|time| time.delta_secs_f64())
         .unwrap_or(0.0);
-    contact_of_filtered(graph, dt, entity, |candidate| {
+    contact_of_filtered(graph, dt, collider_entities(world, entity), |candidate| {
         world.get::<Sensor>(candidate).is_some()
     })
 }
@@ -1062,6 +1096,10 @@ impl Plugin for PhysicsGatePlugin {
             .init_resource::<PhysicsComputeProfile>()
             .init_scene_resource::<PhysicsHolds>()
             .init_scene_resource::<joint_solver::JointSolverOrder>()
+            .init_scene_resource_with::<ContactGraph>(ContactGraph::clear)
+            .init_scene_resource_with::<avian3d::dynamics::solver::constraint_graph::ConstraintGraph>(
+                avian3d::dynamics::solver::constraint_graph::ConstraintGraph::clear,
+            )
             .init_resource::<PhysicsInitializationExternalValidator>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<lunco_core::RuntimeDiagnostics>()

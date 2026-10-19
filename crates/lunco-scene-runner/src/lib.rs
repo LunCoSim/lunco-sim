@@ -1210,7 +1210,7 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
 ///
 /// A fixture scene can be deliberately malformed — `lint_selftest` authors wires that
 /// target ports no program declares, because that malformation is the thing the lint
-/// policy is being tested against. Without a way to say so, the never-landed gate reads a
+/// policy is being tested against. Without a way to say so, the terminal connection gate reads a
 /// fixture exactly like a broken rover.
 ///
 /// This is a two-way assertion, not a mute: an expected fault that never occurs fails the
@@ -2681,26 +2681,9 @@ pub fn run() -> u8 {
         );
     }
 
-    // A PASS cannot stand while the engine is still reporting broken wires.
-    //
-    // `CosimDiagnostics.faults` is the substrate's OWN account of which
-    // connections failed to write, recorded when it happened rather than
-    // sampled now. `broken` is the wrong field for a gate: propagation is
-    // CHANGE-DRIVEN, so a wire that dropped its value at load is not retried
-    // on a quiet tick and the live set reads empty long before the verdict.
-    // Only genuine missing-port faults are recorded (`has_port_surface`), so a
-    // structural endpoint or an algebraic-loop topology diagnostic never
-    // reaches here.
-    // Nothing is inferred and no log is scraped; the harness reads the
-    // diagnostic the propagation master already publishes.
-    //
-    // This exists because a dropped wire is invisible in every way that
-    // matters. `rocker_bogie` passes 9/9 while its antenna yaw joint never
-    // attaches, so `inputs:angle` lands nowhere and the dish never tracks
-    // Earth. The Modelica drive law drops `drive_left`/`drive_right` and the
-    // vessel is simply never actuated. Both emit one `warn!` into a log no
-    // test reads. A wire that does not land is an authoring error, and an
-    // authoring error must fail the gate that is supposed to be watching.
+    // The owner retains terminal input rejections until a successful commit
+    // or endpoint retirement. A scene verdict must account for those failures,
+    // including ones that followed a previously successful exchange.
     let expected = app.world().resource::<ExpectedFaults>().0.clone();
     let faults: Vec<(String, String)> = app
         .world()
@@ -2721,7 +2704,6 @@ pub fn run() -> u8 {
         })
         .unwrap_or_default();
 
-    // Undeclared faults fail the scene. Declared ones are the fixture working.
     let broken: Vec<String> = faults
         .iter()
         // A self-coupled plant (Avian state → Modelica → Avian force) is a
@@ -2888,7 +2870,7 @@ pub fn run() -> u8 {
                 cli.scene
             );
             println!(
-                "  the scenario reported PASS, but {} connection(s) never landed: {}",
+                "  the scenario reported PASS, but {} unresolved terminal connection rejection(s): {}",
                 broken.len(),
                 broken.join(", ")
             );
@@ -2900,7 +2882,7 @@ pub fn run() -> u8 {
                 1,
                 SceneTestProcessStatus::RunnerError,
                 Some(format!(
-                    "The scenario reported PASS, but {} connection(s) never landed: {}.",
+                    "The scenario reported PASS, but {} unresolved terminal connection rejection(s): {}.",
                     broken.len(),
                     broken.join(", ")
                 )),

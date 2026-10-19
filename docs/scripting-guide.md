@@ -60,7 +60,10 @@ The same path drives egui, picking, focus, key bindings, and authored tools.
 Use `input_pointer_move`, `input_pointer_press`/`release`, and `input_scroll`
 for drag and viewport workflows. Coordinates are logical primary-window pixels;
 Rhai owns the gesture sequence and `InjectWindowInput` owns only typed event
-validation and delivery. Bevy Picking's `PointerLocation` is the shared cursor
+validation and delivery. The runtime UI adapter mirrors cursor events during
+Bevy UI focus and restores Window state before winit synchronization, without
+warping the OS pointer.
+Bevy Picking's `PointerLocation` is the shared cursor
 position for native and injected events; cursor-driven tools must read that
 state instead of writing an injected position into `Window`.
 
@@ -722,6 +725,10 @@ The shared `assets` library reads declarations through `ListDatasets`.
 `assets::bake_scope(scope)` queues all idle processing declarations in one
 scope. The native worker owns source resolution, cancellation, bake keys, and
 atomic publication; query `ListDatasets` to read each operation's live state.
+Scope selectors use `DatasetScope::id()`: `engine` or `twin:<name>`, matching
+the query's returned `scope` field. Unknown scopes reject explicitly. Use
+`assets::request_recommended(scope)` for idle recommendations; active and
+installed entries are excluded, and an empty request selection reports an error.
 
 ### One editing contract across formats
 

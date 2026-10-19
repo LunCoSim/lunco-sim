@@ -1,8 +1,8 @@
 //! Connection propagation — the co-simulation master's exchange step.
 //!
 //! Implements the FMI-CS "read outputs → write inputs" exchange over every
-//! [`lunco_cosim_core::SimConnection`]. The propagated value is the SSP affine transform
-//! `source * scale + offset`; multiple wires into one input **sum** (a
+//! [`lunco_cosim_core::SimConnection`]. SSP unit conversion precedes the authored
+//! gain and offset. Multiple wires into one input **sum** (a
 //! signal-flow junction — convenient for force accumulation, a deliberate
 //! extension beyond FMI's 1:1 connections).
 //!
@@ -107,10 +107,6 @@ struct CompiledWire {
     /// Read the source's input side — see [`SimConnection::start_is_input`].
     src_is_input: bool,
     src_resolved: Option<ResolvedPort>,
-    /// The source's network-stable identity ([`lunco_core::GlobalEntityId`]), or
-    /// `None` for a purely local entity. The **sort key** that makes summation
-    /// order peer-independent — see [`CompiledWiring::rebuild`] (P10).
-    src_gid: Option<u64>,
     /// Index into [`CompiledWiring::targets`] — the accumulator slot.
     dst_index: usize,
     scale: f64,
@@ -124,17 +120,7 @@ struct CompiledTarget {
     name: Arc<str>,
     resolved: Option<ResolvedPort>,
     has_port_surface: bool,
-}
-
-/// Identify a warning by the endpoint that owns the failed port, not by the
-/// port spelling alone. Global ids remain stable across network peers; the
-/// entity bits are the only available identity for purely local scaffolding.
-fn target_report_key(world: &World, target: &CompiledTarget) -> String {
-    let identity = world
-        .get::<lunco_core::GlobalEntityId>(target.entity)
-        .map(|id| format!("gid:{}", id.get()))
-        .unwrap_or_else(|| format!("entity:{}", target.entity.to_bits()));
-    format!("target:{identity}:{}", target.name)
+    waiting_for_binding: bool,
 }
 
 /// One force-producing feedback cycle found at compile time, spanning at least
@@ -167,6 +153,7 @@ pub struct CompiledWiring {
     target_indices: HashMap<Entity, HashMap<Arc<str>, usize>>,
     /// Algebraic loops in this fabric, recomputed on every rebuild.
     loops: Vec<DetectedLoop>,
+    contract_rejected: bool,
 }
 
 /// Shared propagation state for every schedule that replays the co-simulation
@@ -183,11 +170,14 @@ pub struct PropagationCache {
 #[derive(Default)]
 struct PropagationScratch {
     accumulator: Vec<f64>,
+    unavailable: Vec<bool>,
     held_values: Vec<Option<f64>>,
     held_revision: Option<u64>,
     broken: Vec<BrokenConnection>,
     pending: Vec<BrokenConnection>,
     landed_targets: Vec<usize>,
+    writes: lunco_port_core::ports::InputWriteBuffer,
+    write_targets: Vec<usize>,
     /// Acknowledgements of successful ledger publication in this compiled fabric.
     /// These never admit a write or decide whether a failure is already landed.
     landing_published: Vec<bool>,
@@ -199,6 +189,7 @@ impl CompiledWiring {
     /// changes. Resolves every eligible endpoint to its [`ResolvedPort`] handle
     /// here, so the per-tick loop does not repeat name resolution.
     fn rebuild(&mut self, world: &mut World) {
+        self.contract_rejected = false;
         self.wires.clear();
         self.targets.clear();
         self.target_indices.clear();
@@ -206,13 +197,27 @@ impl CompiledWiring {
         // Share the registry snapshot so resolution below borrows `world`
         // immutably alongside the collected connections.
         let registry = world.resource::<PortRegistry>().clone();
-        let mut q = world.query_filtered::<&SimConnection, With<BoundConnection>>();
-        let conns: Vec<SimConnection> = q.iter(world).cloned().collect();
+        let mut q = world.query_filtered::<(Entity, &SimConnection), With<BoundConnection>>();
+        let mut conns: Vec<_> = q
+            .iter(world)
+            .map(|(entity, spec)| (entity, spec.clone()))
+            .collect();
+        conns.sort_by(|a, b| a.1.compare_authoritative(&b.1, world));
 
-        for c in &conns {
+        for (edge, c) in &conns {
             if c.start_element == Entity::PLACEHOLDER || c.end_element == Entity::PLACEHOLDER {
                 continue;
             }
+            let (scale, offset) = match c.resolved_transform(&registry, world) {
+                Ok(transform) => transform,
+                Err(detail) => {
+                    crate::binding::reject_connection_contract(world, *edge, c, detail, None);
+                    self.contract_rejected = true;
+                    // No target receives a partial fabric when a changed port
+                    // contract invalidates an already bound connection.
+                    return;
+                }
+            };
             let dst_index = self
                 .target_indices
                 .get(&c.end_element)
@@ -230,6 +235,7 @@ impl CompiledWiring {
                         name: Arc::clone(&name),
                         resolved,
                         has_port_surface,
+                        waiting_for_binding: false,
                     });
                     self.target_indices
                         .entry(c.end_element)
@@ -250,42 +256,27 @@ impl CompiledWiring {
                 src_port: c.start_connector.clone(),
                 src_is_input: c.start_is_input,
                 src_resolved,
-                src_gid: world
-                    .get::<lunco_core::GlobalEntityId>(c.start_element)
-                    .map(|g| g.get()),
                 dst_index,
-                scale: c.scale,
-                offset: c.offset,
+                scale,
+                offset,
             });
         }
 
-        // P10 — **the summation order must not be archetype order.**
-        //
-        // Wires fanning into one input SUM (`acc[dst_index] += …`), and f64
-        // addition is not associative: reorder the terms and you get a different
-        // last bit. The wires above were collected in ECS iteration order, which
-        // depends on the order `SimConnection` entities were spawned — and host
-        // and client reach the same wiring through DIFFERENT paths (local USD
-        // load vs replicated spawn). Same wires, different order, different
-        // rounding: a bit-level divergence at the root of the force path, on the
-        // very bodies the client predicts.
-        //
-        // Sorting on a network-stable key removes the dependency entirely. One
-        // sort per wiring change; ZERO per-tick cost.
-        //
-        // Key: (dst slot, source's GlobalEntityId, source port). `src_gid` is the
-        // identity both peers agree on; local-only sources (`None`) sort first
-        // among themselves and are, by construction, not replicated — so they
-        // cannot be the thing that differs across peers. The `src_entity` tail is
-        // a total-order tiebreak (two wires from the same source port into the
-        // same input are numerically interchangeable anyway).
-        self.wires.sort_by(|a, b| {
-            a.dst_index
-                .cmp(&b.dst_index)
-                .then_with(|| a.src_gid.cmp(&b.src_gid))
-                .then_with(|| a.src_port.cmp(&b.src_port))
-                .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
-        });
+        // An admitted source cannot stand in for another authored contribution
+        // whose interface is still binding. Its target must retain the whole
+        // previous input, just as it does for an unavailable bound sample.
+        let mut pending = world.query_filtered::<&SimConnection, Without<BoundConnection>>();
+        for wire in pending.iter(world) {
+            if let Some(index) = self
+                .target_indices
+                .get(&wire.end_element)
+                .and_then(|ports| ports.get(wire.end_connector.as_str()))
+            {
+                self.targets[*index].waiting_for_binding = true;
+            }
+        }
+        // Source and target order was admitted through the shared connection
+        // comparator before assigning dense slots. The tick does no sorting.
         self.detect_force_feedback_loops(world);
     }
 
@@ -542,17 +533,18 @@ fn propagate_connections_with_cache(
         rewired = true;
         compiled.rebuild(world)
     });
+    if compiled.contract_rejected {
+        return;
+    }
     if rewired {
         scratch.landing_published.clear();
         scratch
             .landing_published
             .resize(compiled.targets.len(), false);
-        // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
-        // so a gate can ask "did anything never land", `landed` so a wire that
-        // once worked is never re-reported. Topology loops are kept in their
-        // own current-fabric collection. The diagnostics resource is reset at
-        // `SceneTeardown`, while the liveness pass below retires endpoints that
-        // are removed by an ordinary edit without a scene replacement.
+        // Retained diagnostics and successful publication acknowledgements
+        // share endpoint lifetimes. Topology loops have their own collection.
+        // Scene teardown clears all three; ordinary endpoint retirement clears
+        // only that endpoint's retained records.
         //
         // Despawn is the exact retirement condition, and a rewire is when it is
         // cheap to notice: prim despawn is one of the two things that rebuild the
@@ -630,22 +622,14 @@ fn propagate_connections_with_cache(
                 && loop_info.requires_realtime_safe
                 && !loop_info.realtime_safe
             {
-                let raised = world
-                    .get_resource_mut::<lunco_core::RuntimeFaults>()
-                    .is_some_and(|mut faults| {
-                        faults.raise(
-                            "cosim-unsafe-force-loop",
-                            Some(loop_info.entity),
-                            "co-simulation wiring",
-                            loop_info.detail.clone(),
-                        )
-                    });
-                if raised {
-                    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>()
-                    {
-                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                    }
-                }
+                crate::failure::stop(
+                    world,
+                    "cosim-unsafe-force-loop",
+                    Some(loop_info.entity),
+                    "co-simulation wiring",
+                    loop_info.detail.clone(),
+                );
+                return;
             }
         }
     }
@@ -665,6 +649,13 @@ fn propagate_connections_with_cache(
     let accumulate_span = bevy::log::info_span!("cosim_exchange_accumulate").entered();
     scratch.accumulator.clear();
     scratch.accumulator.resize(compiled.targets.len(), 0.0);
+    scratch.unavailable.clear();
+    scratch.unavailable.extend(
+        compiled
+            .targets
+            .iter()
+            .map(|target| target.waiting_for_binding),
+    );
 
     // Phase 3: accumulate. Use a resolved handle whenever the winning backend
     // supports slots. Port-surface revisions recompile the handles before this
@@ -684,19 +675,19 @@ fn propagate_connections_with_cache(
             None => read_src(w),
         };
         let Some(src) = src else {
+            scratch.unavailable[w.dst_index] = true;
             if !w.src_is_input
                 && world
                     .get::<lunco_cosim_core::RequiredOutputSamples>(w.src_entity)
                     .is_some_and(|required| required.0.iter().any(|name| name == &w.src_port))
             {
-                if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
-                    faults.raise(
-                        "cosim-required-sample-unavailable",
-                        Some(w.src_entity),
-                        "co-simulation exchange",
-                        format!("required output '{}' has no physical sample", w.src_port),
-                    );
-                }
+                crate::failure::stop(
+                    world,
+                    "cosim-required-sample-unavailable",
+                    Some(w.src_entity),
+                    "co-simulation exchange",
+                    format!("required output '{}' has no physical sample", w.src_port),
+                );
                 return;
             }
             continue;
@@ -705,7 +696,7 @@ fn propagate_connections_with_cache(
     }
     drop(accumulate_span);
 
-    // Phase 4: write each target once, by resolved handle where available.
+    // Phase 4: preflight every eligible target before applying the input batch.
     // Gated per target (see `peer_simulates`), never by process role.
     // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
     // current fabric (see `CosimDiagnostics`).
@@ -739,124 +730,107 @@ fn propagate_connections_with_cache(
     }
     drop(holds_span);
     let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
-    for (i, t) in compiled.targets.iter().enumerate() {
-        if !peer_simulates(world, t.entity) {
-            continue;
-        }
-        // A HELD port is not driven by its wire. Without this, a `SetPorts` write on a
-        // wired input is overwritten by the next propagation tick — the write
-        // "succeeds" and nothing happens, which is indistinguishable from a
-        // broken port to whoever sent it.
-        let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
-        let failure = match &t.resolved {
-            Some(resolved) => registry
-                .write_resolved(world, t.entity, resolved, value)
-                .err(),
-            None => registry.write_port(world, t.entity, &t.name, value).err(),
-        };
-        let written = failure.is_none();
-        // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
-        // dangling wire, and reporting it as one buried the real diagnostic:
-        //
-        // * mechanical-network members are compiled into their containing
-        //   Modelica participant. Their internal wires are consumed by that
-        //   participant; only its declared boundary ports enter this fabric.
-        // * `throttle`, `drive_left`, `drive_right` DO belong to real backends —
-        //   the OBC's command inputs, a `.mo` model's declared inputs — but those
-        //   backends only claim the entity once the model asset finishes loading
-        //   or the control binding lands. Warning during that window described a
-        //   load order, not a fault.
-        //
-        // An entity that exposes ports but not THIS name is a genuine case only
-        // once its interface is terminal. A compiling model may expose a partial
-        // surface while its generated contract is still landing.
-        if written {
-            if !scratch.landing_published[i] {
-                scratch.landed_targets.push(i);
+    scratch.write_targets.clear();
+    let committed = registry.input_transaction(world, &mut scratch.writes, |transaction| {
+        for (i, t) in compiled.targets.iter().enumerate() {
+            if !peer_simulates(transaction.world(), t.entity) {
+                continue;
             }
-            continue;
-        }
-        let unresolved = BrokenConnection {
-            entity: t.entity,
-            global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
-            port: Arc::clone(&t.name),
-            has_port_surface: t.has_port_surface,
-            dropped_value: scratch.accumulator[i],
-            failure: failure.map(|error| error.to_string()),
-        };
-        let model_status = world
-            .get::<SimComponent>(t.entity)
-            .map(|component| &component.status);
-        let compiling = matches!(model_status, Some(SimStatus::Compiling));
-        // Only an explicitly published pending marker or a compiling Modelica
-        // component is assembly progress. Structural Motor/Gearbox edges are
-        // filtered during USD wire derivation, so a bare endpoint with no
-        // surface is a terminal authoring fault rather than a forever-pending
-        // wire.
-        let surface_pending = world
-            .get::<lunco_port_core::PortSurfacePending>(t.entity)
-            .is_some();
-        if compiling || surface_pending {
-            scratch.pending.push(unresolved);
-            continue;
-        }
-
-        scratch.broken.push(unresolved.clone());
-        // Insertions are the failure event. They occur once per endpoint, not on
-        // every propagation tick, and are what produces the warning.
-        let already_landed = world
-            .resource::<CosimDiagnostics>()
-            .has_landed(unresolved.entity, &unresolved.port);
-        if !already_landed {
-            let inserted = world
-                .resource_mut::<CosimDiagnostics>()
-                .record_fault(unresolved.clone());
-            let should_report = inserted && {
-                let report_key = target_report_key(world, t);
-                world
-                    .resource_mut::<CosimDiagnostics>()
-                    .report_once(report_key)
+            if scratch.unavailable[i] && scratch.held_values[i].is_none() {
+                scratch.pending.push(BrokenConnection {
+                    entity: t.entity,
+                    global_id: transaction
+                        .world()
+                        .get::<lunco_core::GlobalEntityId>(t.entity)
+                        .copied(),
+                    port: Arc::clone(&t.name),
+                    has_port_surface: t.has_port_surface,
+                    dropped_value: None,
+                    failure: Some("connected source sample unavailable".into()),
+                });
+                continue;
+            }
+            // A HELD port is not driven by its wire. Without this, a `SetPorts` write on a
+            // wired input is overwritten by the next propagation tick — the write
+            // "succeeds" and nothing happens, which is indistinguishable from a
+            // broken port to whoever sent it.
+            let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
+            let prepared = match &t.resolved {
+                Some(resolved) => transaction.stage_resolved(t.entity, resolved, value),
+                None => transaction.stage_input(t.entity, Arc::clone(&t.name), value),
             };
-            if should_report {
-                let label = world
-                    .get::<Name>(t.entity)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| format!("{:?}", t.entity));
-                warn!(
-                    "[cosim] connection input '{}' on {} ({:?}) rejected value {}: {}",
-                    t.name,
-                    label,
-                    t.entity,
-                    unresolved.dropped_value,
-                    unresolved
-                        .failure
-                        .as_deref()
-                        .unwrap_or("input write rejected")
-                );
+            let failure = match prepared {
+                Ok(()) => {
+                    scratch.write_targets.push(i);
+                    continue;
+                }
+                Err(error) => error,
+            };
+            let unresolved = BrokenConnection {
+                entity: t.entity,
+                global_id: transaction
+                    .world()
+                    .get::<lunco_core::GlobalEntityId>(t.entity)
+                    .copied(),
+                port: Arc::clone(&t.name),
+                has_port_surface: t.has_port_surface,
+                dropped_value: Some(value),
+                failure: Some(failure.to_string()),
+            };
+            let model_status = transaction
+                .world()
+                .get::<SimComponent>(t.entity)
+                .map(|component| &component.status);
+            let compiling = matches!(model_status, Some(SimStatus::Compiling));
+            // Only an explicitly published pending marker or a compiling Modelica
+            // component is assembly progress. Structural Motor/Gearbox edges are
+            // filtered during USD wire derivation, so a bare endpoint with no
+            // surface is a terminal authoring fault rather than a forever-pending
+            // wire.
+            let surface_pending = transaction
+                .world()
+                .get::<lunco_port_core::PortSurfacePending>(t.entity)
+                .is_some();
+            if compiling || surface_pending {
+                scratch.pending.push(unresolved);
+                continue;
             }
+
+            return Err((i, value, failure.to_string()));
+        }
+        Ok(())
+    });
+    match committed {
+        Ok(()) => {
+            for index in scratch.write_targets.iter().copied() {
+                if !scratch.landing_published[index] {
+                    scratch.landed_targets.push(index);
+                }
+            }
+        }
+        Err((index, value, failure)) => {
+            let target = &compiled.targets[index];
+            scratch.landing_published[index] = false;
+            scratch.broken.push(crate::failure::reject_input(
+                world,
+                "cosim-input-write-rejected",
+                target.entity,
+                Arc::clone(&target.name),
+                Some(value),
+                failure,
+            ));
         }
     }
     drop(write_span);
 
-    // Publish the tick's report. Overwrites last tick's (the set is "what is broken
-    // now"), so a wire that resolves once its model loads clears itself.
-    //
-    // `faults` remembers endpoints that have never accepted a write, including
-    // transient failures no longer present in the current fabric. The publication
-    // cursor suppresses only repeated successful ledger notifications; failed
-    // writes still consult the live ledger on every attempt.
-    //
-    // A wire that DOES land retracts its fault and is never reported again: the
-    // first write may well arrive late (a joint's `angle` port exists only once
-    // avian admits both bodies), and that window is load order, not an authoring
-    // error. Only a wire that never lands at all survives here.
+    // Publish only committed successes. A failed preflight or commit cannot
+    // acknowledge another target from the same rejected communication point.
     let _span = bevy::log::info_span!("cosim_exchange_diagnostics").entered();
     let mut diag = world.resource_mut::<CosimDiagnostics>();
     for index in scratch.landed_targets.drain(..) {
         let target = &compiled.targets[index];
-        if diag.mark_landed_shared(target.entity, &target.name) {
-            diag.remove_fault(target.entity, &target.name);
-        }
+        diag.mark_landed_shared(target.entity, &target.name);
+        diag.remove_fault(target.entity, &target.name);
         scratch.landing_published[index] = true;
     }
     std::mem::swap(&mut diag.pending, &mut scratch.pending);
@@ -949,9 +923,9 @@ mod wire_order_tests {
                 .iter()
                 .all(|published| *published)
         );
-        let missing = world.spawn_empty().id();
-        let source = world.spawn_empty().id();
-        wire(&mut world, source, "absent", missing, "absent");
+        let missing = world.spawn(lunco_port_core::Port { value: 7.0 }).id();
+        let source = world.spawn(participant(&[], &["out"])).id();
+        wire(&mut world, source, "out", missing, "value");
         propagate_connections(&mut world);
         let published = &world
             .resource::<PropagationCache>()
@@ -965,7 +939,9 @@ mod wire_order_tests {
         assert!(
             world
                 .resource::<CosimDiagnostics>()
-                .has_fault(missing, "absent")
+                .pending
+                .iter()
+                .any(|item| item.entity == missing && item.dropped_value.is_none())
         );
         // The real teardown boundary also runs before the scene's entities are reclaimed.
         world.run_system_once(crate::reset_scene_state).unwrap();
@@ -985,7 +961,9 @@ mod wire_order_tests {
         assert!(
             world
                 .resource::<CosimDiagnostics>()
-                .has_fault(missing, "absent")
+                .pending
+                .iter()
+                .any(|item| item.entity == missing && item.dropped_value.is_none())
         );
     }
 
@@ -1003,14 +981,22 @@ mod wire_order_tests {
         fn compile(spawn_order: &[u64]) -> Vec<(Option<u64>, String)> {
             let mut world = World::new();
             world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-            world.init_resource::<PortRegistry>();
+            init_builtin_ports(&mut world);
 
             // Three distinct sources with stable network ids 10/20/30.
             let mut src = std::collections::HashMap::new();
             for gid in [10_u64, 20, 30] {
-                src.insert(gid, world.spawn(GlobalEntityId::from_raw(gid)).id());
+                src.insert(
+                    gid,
+                    world
+                        .spawn((
+                            GlobalEntityId::from_raw(gid),
+                            participant(&[], &[&format!("out_{gid}")]),
+                        ))
+                        .id(),
+                );
             }
-            let sink = world.spawn_empty().id();
+            let sink = world.spawn(participant(&["force_y"], &[])).id();
 
             for gid in spawn_order {
                 world.spawn((
@@ -1032,7 +1018,12 @@ mod wire_order_tests {
             compiled
                 .wires
                 .iter()
-                .map(|w| (w.src_gid, w.src_port.clone()))
+                .map(|w| {
+                    (
+                        world.get::<GlobalEntityId>(w.src_entity).map(|id| id.get()),
+                        w.src_port.clone(),
+                    )
+                })
                 .collect()
         }
 
@@ -1251,235 +1242,126 @@ mod wire_order_tests {
         );
     }
 
-    /// A target without a runtime port surface and without an explicit pending
-    /// marker is a terminal dangling-wire fault.
     #[test]
-    fn broken_wire_populates_diagnostics() {
-        use bevy::ecs::system::RunSystemOnce;
-
+    fn incomplete_fanin_preserves_the_input_until_all_sources_publish() {
         let mut world = World::new();
-        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<PortRegistry>();
-        world.init_resource::<PropagationCache>();
+        init_builtin_ports(&mut world);
+        world.init_resource::<PortHolds>();
         world.init_resource::<CosimDiagnostics>();
-
-        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
-        // Sink has an id but no port backend of any kind.
-        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn((
-            SimConnection {
-                start_element: src,
-                start_connector: "out".into(),
-                start_is_input: false,
-                end_element: sink,
-                end_connector: "nonexistent_port".into(),
-                scale: 1.0,
-                offset: 0.0,
-            },
-            BoundConnection,
-        ));
-
-        world.run_system_once(propagate_connections).unwrap();
-
-        let diag = world.resource::<CosimDiagnostics>();
-        assert_eq!(diag.broken.len(), 1, "the unresolved target is terminal");
-        let b = &diag.broken[0];
-        assert_eq!(b.port.as_ref(), "nonexistent_port");
-        assert_eq!(b.global_id, Some(GlobalEntityId::from_raw(20)));
-        assert!(
-            !b.has_port_surface,
-            "empty registry ⇒ sink exposes no ports, so the wire is genuinely dangling"
-        );
-
-        // And it self-clears: give the sink nothing new, but drop the wire, and the
-        // report empties on the next tick (the set is "what is broken NOW").
-        let conns: Vec<Entity> = {
-            let mut q = world.query_filtered::<Entity, With<SimConnection>>();
-            q.iter(&world).collect()
-        };
-        for e in conns {
-            world.entity_mut(e).despawn();
-        }
-        world.run_system_once(propagate_connections).unwrap();
-        assert!(
-            world.resource::<CosimDiagnostics>().broken.is_empty(),
-            "no wires ⇒ report clears"
-        );
-        assert!(
-            world.resource::<CosimDiagnostics>().pending.is_empty(),
-            "no wires also clears assembly progress"
-        );
-    }
-
-    /// An endpoint that explicitly publishes `PortSurfacePending` is assembly
-    /// progress, not an authoring error, so it must never reach `faults`.
-    #[test]
-    fn an_endpoint_with_no_port_surface_is_not_recorded_as_a_fault() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<PortRegistry>();
-        world.init_resource::<PropagationCache>();
-        world.init_resource::<CosimDiagnostics>();
-
-        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let sink = world
-            .spawn((
-                GlobalEntityId::from_raw(20),
-                lunco_port_core::PortSurfacePending,
-            ))
-            .id();
-        world.spawn((
-            SimConnection {
-                start_element: src,
-                start_connector: "out".into(),
-                start_is_input: false,
-                end_element: sink,
-                end_connector: "not_yet_loaded".into(),
-                scale: 1.0,
-                offset: 0.0,
-            },
-            BoundConnection,
-        ));
-
-        world.run_system_once(propagate_connections).unwrap();
-
-        let diag = world.resource::<CosimDiagnostics>();
-        assert_eq!(diag.pending.len(), 1, "still visible as assembly progress");
-        assert!(
-            diag.faults.is_empty(),
-            "an explicit pending marker keeps load progress out of the fault gate"
-        );
-    }
-
-    /// A generated model's partial interface is expected while it compiles. Once
-    /// the same contract reaches `Running`, a missing declared input is terminal
-    /// and enters the fault ledger exactly once.
-    #[test]
-    fn compiling_model_waits_before_unknown_port_becomes_a_fault() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<CosimDiagnostics>();
-        world.init_resource::<PropagationCache>();
-        let mut registry = PortRegistry::default();
-        crate::ports::register_builtin_port_backends(&mut registry);
-        world.insert_resource(registry);
-
-        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let sink = world
-            .spawn((
-                GlobalEntityId::from_raw(20),
-                SimComponent {
-                    model_name: "GeneratedNetworkIsland".into(),
-                    // The generated model publishes part of its interface while
-                    // compiling.  That makes the missing `drive_left` name a
-                    // terminal contract fault once the model reaches Running,
-                    // rather than an entity that has not exposed any port
-                    // surface yet.
-                    inputs: std::collections::HashMap::from([("existing".into(), 0.0)]).into(),
-                    status: SimStatus::Compiling,
-                    ..Default::default()
-                },
-            ))
-            .id();
-        world.spawn((
-            SimConnection {
-                start_element: src,
-                start_connector: "out".into(),
-                start_is_input: false,
-                end_element: sink,
-                end_connector: "drive_left".into(),
-                scale: 1.0,
-                offset: 0.0,
-            },
-            BoundConnection,
-        ));
-
-        world.run_system_once(propagate_connections).unwrap();
-        let diag = world.resource::<CosimDiagnostics>();
-        assert_eq!(diag.pending.len(), 1);
-        assert!(diag.broken.is_empty());
-        assert!(
-            diag.faults.is_empty(),
-            "unexpected faults: {:?}",
-            diag.faults
-        );
-
-        world.get_mut::<SimComponent>(sink).unwrap().status = SimStatus::Running;
-        world.run_system_once(propagate_connections).unwrap();
-        let diag = world.resource::<CosimDiagnostics>();
-        assert!(diag.pending.is_empty());
-        assert_eq!(diag.broken.len(), 1);
-        assert_eq!(diag.fault_count(), 1);
-    }
-
-    /// A wire proven to have carried a value can never be re-reported as a fault.
-    ///
-    /// This is the rule that a permanent-fault-log version of this got wrong. A
-    /// joint's `angle` port exists only once avian has admitted both its bodies
-    /// into the island graph — a documented multi-frame window every jointed
-    /// mechanism passes through — so recording that first dropped write forever
-    /// failed `rocker_bogie` on the very antenna its own scenario measured
-    /// working. Landing is monotone: once wired, always wired.
-    #[test]
-    fn a_wire_that_has_landed_is_never_re_reported_as_a_fault() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<PortRegistry>();
-        world.init_resource::<PropagationCache>();
-        world.init_resource::<CosimDiagnostics>();
-
-        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
-        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
-        world.spawn((
-            SimConnection {
-                start_element: src,
-                start_connector: "out".into(),
-                start_is_input: false,
-                end_element: sink,
-                end_connector: "angle".into(),
-                scale: 1.0,
-                offset: 0.0,
-            },
-            BoundConnection,
-        ));
-
-        // Stand in for "this wire wrote successfully on an earlier tick", which
-        // is all `landed` records. Reaching a real port backend would need a
-        // registered provider and would test that provider, not this rule.
+        let pending = world.spawn(participant(&[], &["out"])).id();
+        let mut ready = SimComponent::default();
+        ready.outputs.insert("out".into(), 3.0);
+        let ready = world.spawn(ready).id();
+        let target = world.spawn(participant(&["demand"], &[])).id();
         world
-            .resource_mut::<CosimDiagnostics>()
-            .mark_landed(sink, "angle");
-
-        world.run_system_once(propagate_connections).unwrap();
-
-        assert!(
-            world.resource::<CosimDiagnostics>().faults.is_empty(),
-            "a wire already proven to have landed must not be re-reported"
+            .get_mut::<SimComponent>(target)
+            .unwrap()
+            .inputs
+            .set("demand", 7.0);
+        let pending_edge = wire(&mut world, pending, "out", target, "demand");
+        wire(&mut world, ready, "out", target, "demand");
+        propagate_connections(&mut world);
+        assert_eq!(
+            world
+                .get::<SimComponent>(target)
+                .unwrap()
+                .inputs
+                .get("demand"),
+            Some(&7.0)
         );
+        assert_eq!(world.resource::<CosimDiagnostics>().pending.len(), 1);
+        assert!(
+            world.resource::<CosimDiagnostics>().pending[0]
+                .dropped_value
+                .is_none()
+        );
+        world
+            .resource_mut::<PortHolds>()
+            .hold(target, "demand", 11.0);
+        propagate_connections(&mut world);
+        assert_eq!(
+            world
+                .get::<SimComponent>(target)
+                .unwrap()
+                .inputs
+                .get("demand"),
+            Some(&11.0),
+            "holds={:?}, cached={:?}, pending={:?}, broken={:?}",
+            world.resource::<PortHolds>().snapshot(),
+            world.resource::<PropagationCache>().scratch.held_values,
+            world.resource::<CosimDiagnostics>().pending,
+            world.resource::<CosimDiagnostics>().broken
+        );
+        world.resource_mut::<PortHolds>().release(target, "demand");
+        world
+            .get_mut::<SimComponent>(pending)
+            .unwrap()
+            .outputs
+            .insert("out".into(), 2.0);
+        world.entity_mut(pending_edge).remove::<BoundConnection>();
+        world
+            .resource_mut::<lunco_port_core::ports::PortTopologyRevision>()
+            .bump();
+        propagate_connections(&mut world);
+        assert_eq!(
+            world
+                .get::<SimComponent>(target)
+                .unwrap()
+                .inputs
+                .get("demand"),
+            Some(&11.0),
+            "a source outside the bound fabric cannot be replaced by a partial fan-in"
+        );
+        world.entity_mut(pending_edge).insert(BoundConnection);
+        world
+            .resource_mut::<lunco_port_core::ports::PortTopologyRevision>()
+            .bump();
+        propagate_connections(&mut world);
+        assert_eq!(
+            world
+                .get::<SimComponent>(target)
+                .unwrap()
+                .inputs
+                .get("demand"),
+            Some(&5.0)
+        );
+        assert!(world.resource::<CosimDiagnostics>().pending.is_empty());
     }
 
-    fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) {
-        world.spawn((
-            SimConnection {
-                start_element: src,
-                start_connector: out.into(),
-                start_is_input: false,
-                end_element: dst,
-                end_connector: inp.into(),
-                scale: 1.0,
-                offset: 0.0,
+    fn participant(
+        inputs: &[&str],
+        outputs: &[&str],
+    ) -> (SimComponent, lunco_cosim_core::DeclaredOutputPorts) {
+        (
+            SimComponent {
+                inputs: inputs.iter().map(|name| (name.to_string(), 0.0)).collect(),
+                ..Default::default()
             },
-            BoundConnection,
-        ));
+            lunco_cosim_core::DeclaredOutputPorts {
+                names: outputs.iter().map(|name| name.to_string()).collect(),
+            },
+        )
+    }
+
+    fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) -> Entity {
+        world
+            .spawn((
+                SimConnection {
+                    start_element: src,
+                    start_connector: out.into(),
+                    start_is_input: false,
+                    end_element: dst,
+                    end_connector: inp.into(),
+                    scale: 1.0,
+                    offset: 0.0,
+                },
+                BoundConnection,
+            ))
+            .id()
     }
 
     fn init_builtin_ports(world: &mut World) {
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<PropagationCache>();
         let mut registry = PortRegistry::default();
         crate::ports::register_builtin_port_backends(&mut registry);
@@ -1510,13 +1392,19 @@ mod wire_order_tests {
         let a = world
             .spawn((
                 GlobalEntityId::from_raw(10),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         let b = world
             .spawn((
                 GlobalEntityId::from_raw(20),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         wire(&mut world, a, "out", b, "in");
@@ -1567,6 +1455,9 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("in".into(), 0.0)]).into(),
                     ..default()
                 },
+                lunco_cosim_core::DeclaredOutputPorts {
+                    names: ["out".into(), "force".into()].into(),
+                },
                 RealtimeSafe,
                 avian3d::prelude::RigidBody::Dynamic,
             ))
@@ -1577,6 +1468,9 @@ mod wire_order_tests {
                 SimComponent {
                     inputs: std::collections::HashMap::from([("in".into(), 0.0)]).into(),
                     ..default()
+                },
+                lunco_cosim_core::DeclaredOutputPorts {
+                    names: ["out".into()].into(),
                 },
                 RealtimeSafe,
             ))
@@ -1622,10 +1516,13 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
+                lunco_cosim_core::DeclaredOutputPorts {
+                    names: ["netForce".into()].into(),
+                },
                 RealtimeSafe,
             ))
             .id();
-        wire(&mut world, body, "height", program, "height");
+        wire(&mut world, body, "position_y", program, "height");
         wire(&mut world, program, "netForce", body, "force_y");
 
         world.run_system_once(propagate_connections).unwrap();
@@ -1665,9 +1562,12 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
+                lunco_cosim_core::DeclaredOutputPorts {
+                    names: ["netForce".into()].into(),
+                },
             ))
             .id();
-        wire(&mut unsafe_world, body, "height", program, "height");
+        wire(&mut unsafe_world, body, "position_y", program, "height");
         wire(&mut unsafe_world, program, "netForce", body, "force_y");
 
         unsafe_world.run_system_once(propagate_connections).unwrap();
@@ -1713,9 +1613,12 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
+                lunco_cosim_core::DeclaredOutputPorts {
+                    names: ["netForce".into()].into(),
+                },
             ))
             .id();
-        wire(&mut world, body, "height", program, "height");
+        wire(&mut world, body, "position_y", program, "height");
         wire(&mut world, program, "netForce", body, "force_y");
 
         world.run_system_once(propagate_connections).unwrap();
@@ -1746,14 +1649,17 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut world);
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
 
         let balloon = world
             .spawn((
                 GlobalEntityId::from_raw(10),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         wire(&mut world, balloon, "netForce", balloon, "force_y");
@@ -1774,26 +1680,35 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
-        world.init_resource::<PortRegistry>();
+        init_builtin_ports(&mut world);
         world.init_resource::<PropagationCache>();
         world.init_resource::<CosimDiagnostics>();
 
         let a = world
             .spawn((
                 GlobalEntityId::from_raw(10),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         let b = world
             .spawn((
                 GlobalEntityId::from_raw(20),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         let c = world
             .spawn((
                 GlobalEntityId::from_raw(30),
-                lunco_port_core::PortSurfacePending,
+                participant(
+                    &["in", "bias", "force_y", "height"],
+                    &["out", "netForce", "height"],
+                ),
             ))
             .id();
         wire(&mut world, a, "out", b, "in");
