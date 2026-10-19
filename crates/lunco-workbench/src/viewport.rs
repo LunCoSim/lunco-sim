@@ -691,6 +691,57 @@ pub(crate) fn track_egui_focus(
 /// Sub-plugin auto-added by `WorkbenchPlugin`. Wires the egui host,
 /// the panel-rect tracking, the `Camera::viewport` sync, and the
 /// invariant sentinels.
+fn filter_context_action_events(
+    input: &mut egui::RawInput,
+    keys: &[egui::Key],
+    route_to_scene: bool,
+) {
+    if route_to_scene {
+        input.events.retain(|event| {
+            !matches!(event,
+            egui::Event::Key { key, physical_key, .. }
+                if keys.contains(&physical_key.unwrap_or(*key)))
+        });
+    }
+}
+
+/// Route authored context-action keys to the possessed scene before egui can
+/// use the same key for focus traversal. Bevy's physical input remains intact;
+/// an actual focused UI editor retains its complete keyboard stream.
+fn reserve_scene_context_actions(
+    settings: Res<lunco_input_core::InputBindingsSettings>,
+    controllers: Query<
+        (),
+        (
+            With<lunco_control_core::ControlLink>,
+            With<lunco_control_core::IntentState>,
+        ),
+    >,
+    mut contexts: Query<
+        (&mut bevy_egui::EguiInput, &mut bevy_egui::EguiContext),
+        With<PrimaryEguiContext>,
+    >,
+) {
+    if controllers.is_empty() {
+        return;
+    }
+    // The existing input-bindings status owner reports invalid settings. An
+    // invalid map has no scene actions to reserve from the UI.
+    let Ok(bindings) = settings.key_bindings() else {
+        return;
+    };
+    let keys = bindings
+        .iter()
+        .filter(|(intent, _)| lunco_control_core::UserIntent::CONTEXT_ACTIONS.contains(intent))
+        .flat_map(|(_, keys)| keys.iter())
+        .filter_map(bevy_egui::helpers::bevy_to_egui_physical_key)
+        .collect::<Vec<_>>();
+    for (mut input, mut context) in &mut contexts {
+        let route = !context.get_mut().egui_wants_keyboard_input();
+        filter_context_action_events(&mut input.0, &keys, route);
+    }
+}
+
 pub struct WorkbenchViewportPlugin;
 
 fn apply_viewport_panel_measurement(
@@ -719,6 +770,12 @@ impl Plugin for WorkbenchViewportPlugin {
             .init_resource::<InputBindingsStatus>()
             .add_observer(apply_viewport_panel_measurement)
             .add_systems(Startup, ensure_egui_host)
+            .add_systems(
+                PreUpdate,
+                reserve_scene_context_actions
+                    .after(bevy_egui::EguiInputSet::WriteEguiEvents)
+                    .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+            )
             .add_systems(Update, report_input_bindings_status)
             // Clear the pick gate's per-frame inputs. `First` — NOT the egui pass —
             // because this must happen even on frames where the egui pass is
@@ -774,6 +831,41 @@ impl Plugin for WorkbenchViewportPlugin {
 mod tests {
     use super::*;
     use bevy::camera::CameraOutputMode;
+
+    #[test]
+    fn context_action_keys_do_not_move_ui_focus_while_driving() {
+        let event = |key| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut input = egui::RawInput {
+            events: vec![event(egui::Key::Tab), event(egui::Key::Space)],
+            ..Default::default()
+        };
+        let mut editing = input.clone();
+        filter_context_action_events(&mut editing, &[egui::Key::Tab], false);
+        assert_eq!(
+            editing.events.len(),
+            2,
+            "text entry keeps normal keyboard traversal"
+        );
+        filter_context_action_events(&mut input, &[egui::Key::Tab], true);
+        assert_eq!(
+            input.events.len(),
+            1,
+            "a viewport action must not also navigate UI focus"
+        );
+        assert!(matches!(
+            input.events[0],
+            egui::Event::Key {
+                key: egui::Key::Space,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn egui_host_camera_uses_the_shared_scene_target_contract() {

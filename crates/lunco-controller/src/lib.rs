@@ -153,8 +153,10 @@ impl PhysicalIntentFrame {
                 frame.held |= physical_intent_mask(*intent);
             }
         }
-        if action_state.pressed(&UserIntent::Action) {
-            frame.held |= physical_intent_mask(UserIntent::Action);
+        for intent in UserIntent::CONTEXT_ACTIONS {
+            if action_state.pressed(&intent) {
+                frame.held |= physical_intent_mask(intent);
+            }
         }
         frame
     }
@@ -249,6 +251,7 @@ fn physical_intent_mask(intent: UserIntent) -> u128 {
         UserIntent::Auxiliary2 => 18,
         UserIntent::Auxiliary3 => 19,
         UserIntent::Auxiliary4 => 20,
+        UserIntent::SecondaryAction => 21,
     };
     1_u128 << index
 }
@@ -2007,15 +2010,16 @@ fn intent_held(
 }
 
 /// Whether the user has an active semantic control intent for this target.
-/// `Action` is included because authored programs may use it as a control
-/// action even when the vessel has no matching command port.
+/// Context actions participate even when the vessel has no matching port.
 fn has_active_control_intent(
     vessel: Entity,
     binding: &ControlBinding,
     physical: &PhysicalIntentFrame,
     sim_intents: Option<&SimulatedIntents>,
 ) -> bool {
-    intent_held(vessel, UserIntent::Action, physical, sim_intents)
+    UserIntent::CONTEXT_ACTIONS
+        .into_iter()
+        .any(|intent| intent_held(vessel, intent, physical, sim_intents))
         || binding
             .binds
             .iter()
@@ -2034,30 +2038,13 @@ fn emit_intent_edges(
     previous: &mut std::collections::HashMap<(Entity, UserIntent), bool>,
     commands: &mut Commands,
 ) {
-    // `Action` is a semantic interaction edge, not a port write. It must be
-    // observed even when a control surface has no authored port named
-    // `action`; scene programs consume the edge and decide what it means.
-    let mut seen = vec![UserIntent::Action];
-    let active = intent_held(target, UserIntent::Action, physical, sim_intents);
-    let prior = previous
-        .insert((target, UserIntent::Action), active)
-        .unwrap_or(false);
-    if active != prior {
-        commands.trigger(lunco_control_core::SemanticIntentEdge {
-            target,
-            intent: UserIntent::Action,
-            kind: if active {
-                lunco_control_core::SemanticIntentEdgeKind::Pressed
-            } else {
-                lunco_control_core::SemanticIntentEdgeKind::Released
-            },
-            correlation_id: OpId::new().0,
-            origin: None,
-            producer_id: None,
-            admission: None,
-        });
-    }
-    for (intent, _, _) in &binding.binds {
+    // Contextual actions emit edges without dummy actuator ports. Bound
+    // intents follow in authored order and are deduplicated against them.
+    let mut seen = Vec::new();
+    for intent in UserIntent::CONTEXT_ACTIONS
+        .iter()
+        .chain(binding.binds.iter().map(|(intent, _, _)| intent))
+    {
         if seen.contains(intent) {
             continue;
         }
@@ -2641,6 +2628,58 @@ mod tests {
         if matches!(trigger.event().name.as_str(), "intent.edge" | "intent.hold") {
             observed.telemetry.push((**trigger.event()).clone());
         }
+    }
+
+    #[test]
+    fn secondary_action_edges_do_not_require_an_actuator_port() {
+        let mut app = App::new();
+        app.init_resource::<SemanticEdgeObserved>()
+            .add_observer(observe_semantic_edge);
+        let target = app.world_mut().spawn_empty().id();
+        let binding = ControlBinding { binds: Vec::new() };
+        let intent = lunco_control_core::parse_user_intent("secondary_action").unwrap();
+        let mut state = ActionState::<UserIntent>::default();
+        let mut previous = std::collections::HashMap::new();
+        for active in [true, true, false] {
+            if active {
+                state.press(&intent);
+            } else {
+                state.release(&intent);
+            }
+            let frame = PhysicalIntentFrame::capture(&binding, &state, false);
+            assert_eq!(frame.is_held(intent), active);
+            assert_eq!(
+                has_active_control_intent(target, &binding, &frame, None),
+                active
+            );
+            assert!(!PhysicalIntentFrame::capture(&binding, &state, true).is_held(intent));
+            emit_intent_edges(
+                target,
+                &binding,
+                &frame,
+                None,
+                &mut previous,
+                &mut app.world_mut().commands(),
+            );
+            app.world_mut().flush();
+        }
+        let observed = &app.world().resource::<SemanticEdgeObserved>().typed;
+        assert_eq!(
+            observed.len(),
+            2,
+            "holding an action must not repeat its press"
+        );
+        assert_eq!(observed[0].target, target);
+        assert_eq!(observed[0].intent, intent);
+        assert_eq!(
+            observed[0].kind,
+            lunco_control_core::SemanticIntentEdgeKind::Pressed
+        );
+        assert_eq!(
+            observed[1].kind,
+            lunco_control_core::SemanticIntentEdgeKind::Released
+        );
+        assert_eq!(binding.ports().count(), 0);
     }
 
     #[test]

@@ -102,6 +102,8 @@ pub enum UserIntent {
     /// Delete the current editor selection. This is an editor intent so the
     /// shortcut is rebindable and panels do not inspect raw keyboard state.
     DeleteSelection,
+    /// Context-sensitive secondary interaction, independent of held actuator ports.
+    SecondaryAction,
 }
 
 impl std::fmt::Display for UserIntent {
@@ -117,6 +119,7 @@ impl std::fmt::Display for UserIntent {
             Self::Look => "Look",
             Self::Zoom => "Zoom",
             Self::Action => "Primary action",
+            Self::SecondaryAction => "Secondary action",
             Self::Thrust => "Vehicle thrust",
             Self::Brake => "Vehicle brake",
             Self::Release => "Release coupling",
@@ -134,8 +137,11 @@ impl std::fmt::Display for UserIntent {
 }
 
 impl UserIntent {
+    /// Context interactions emit edges even without held actuator ports.
+    pub const CONTEXT_ACTIONS: [Self; 2] = [Self::Action, Self::SecondaryAction];
+
     /// Every semantic intent in stable enum vocabulary order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::MoveForward,
         Self::MoveBackward,
         Self::MoveLeft,
@@ -157,6 +163,7 @@ impl UserIntent {
         Self::Auxiliary2,
         Self::Auxiliary3,
         Self::Auxiliary4,
+        Self::SecondaryAction,
     ];
 
     /// Canonical lower-case name used by authored bindings and event payloads.
@@ -172,6 +179,7 @@ impl UserIntent {
             Self::Look => "look",
             Self::Zoom => "zoom",
             Self::Action => "action",
+            Self::SecondaryAction => "secondary_action",
             Self::Thrust => "thrust",
             Self::Brake => "brake",
             Self::Release => "release",
@@ -481,6 +489,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "yaw_left" => Some(UserIntent::MoveDown),
         "speed_boost" => Some(UserIntent::SpeedBoost),
         "action" => Some(UserIntent::Action),
+        "secondary_action" => Some(UserIntent::SecondaryAction),
         "thrust" => Some(UserIntent::Thrust),
         "brake" => Some(UserIntent::Brake),
         "release" => Some(UserIntent::Release),
@@ -768,6 +777,14 @@ mod tests {
         }
         assert!(parse_user_intent("auxiliary_0").is_none());
         assert!(parse_user_intent("auxiliary_5").is_none());
+    }
+
+    #[test]
+    fn secondary_action_is_a_distinct_canonical_intent() {
+        let intent = parse_user_intent("secondary_action").expect("secondary action must parse");
+        assert_eq!(intent.canonical_name(), "secondary_action");
+        assert_ne!(intent, UserIntent::Action);
+        assert!(UserIntent::ALL.contains(&intent));
     }
 
     /// Intent parsing accepts exactly the authored control vocabulary and rejects
