@@ -51,22 +51,13 @@ pub fn camera_decay_alpha(rate: f32, damping: f32, dt: f32) -> f64 {
     f64::from(1.0 - (-camera_decay_rate(rate, damping) * dt).exp())
 }
 
-/// Resolve a camera arm length, easing only when an obstacle is present.
+/// Retract immediately to a collision boundary; ease only the outward recovery.
 #[inline]
-pub fn resolve_camera_arm_length(
-    current_len: f64,
-    target_len: f64,
-    obstacle_present: bool,
-    position_rate: f32,
-    damping: f32,
-    dt: f32,
-) -> f64 {
-    if !obstacle_present || current_len < 1e-3 {
+pub fn resolve_camera_arm_length(current_len: f64, target_len: f64, recovery_alpha: f64) -> f64 {
+    if current_len >= target_len || current_len < 1e-3 {
         return target_len;
     }
-
-    let alpha = camera_decay_alpha(position_rate, damping, dt);
-    current_len + (target_len - current_len) * alpha
+    current_len + (target_len - current_len) * recovery_alpha
 }
 
 /// Convert normalized scroll input into a bounded multiplicative zoom factor.
@@ -196,16 +187,17 @@ mod tests {
     }
 
     #[test]
-    fn clear_follow_ray_keeps_requested_distance_when_target_moves() {
-        let final_len = resolve_camera_arm_length(47.0, 50.0, false, 30.0, 0.1, 1.0 / 60.0);
-        assert_eq!(final_len, 50.0);
+    fn clear_follow_ray_eases_outward_recovery() {
+        let final_len =
+            resolve_camera_arm_length(47.0, 50.0, camera_decay_alpha(30.0, 0.1, 1.0 / 60.0));
+        assert!(final_len > 47.0 && final_len < 50.0);
     }
 
     #[test]
-    fn obstructed_follow_ray_eases_arm_length() {
-        let final_len = resolve_camera_arm_length(50.0, 20.0, true, 30.0, 0.1, 1.0 / 60.0);
-        assert!(final_len < 50.0);
-        assert!(final_len > 20.0);
+    fn obstruction_retracts_before_the_camera_enters_geometry() {
+        let final_len =
+            resolve_camera_arm_length(50.0, 20.0, camera_decay_alpha(30.0, 0.1, 1.0 / 60.0));
+        assert_eq!(final_len, 20.0);
     }
 
     #[test]

@@ -263,6 +263,9 @@ pub(crate) fn avatar_global_hotkeys(
     mut commands: Commands,
 ) {
     for intent_state in q_avatar.iter() {
+        if intent_state.just_pressed(&UserIntent::SwitchMode) {
+            commands.trigger(lunco_camera_core::CycleCamera);
+        }
         if intent_state.just_pressed(&UserIntent::Pause) {
             if let Some(transport) = transport.as_deref() {
                 commands.trigger(SetTimeTransport {

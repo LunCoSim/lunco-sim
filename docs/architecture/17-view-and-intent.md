@@ -322,6 +322,11 @@ until that interaction step and drained there beside movement. They must not be
 applied directly from `Update`, or movement and orientation acquire different
 cadences and can diverge when the simulation clock is paused or rate-scaled.
 
+Live vessel follow settings, the `camera.follow` Rhai decision seam, native
+obstruction safety, and semantic camera cycling are specified in
+[camera follow policy](camera-follow-policy.md). The rig is editable without
+releasing control or advancing paused physics.
+
 ### 6.6 Scriptable camera composition
 
 The camera architecture is intended to let Rhai compose many camera styles
