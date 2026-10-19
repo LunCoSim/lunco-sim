@@ -192,6 +192,14 @@ deferral with a known migration path, not the absence of a standard.
 
 ## Gotchas
 
+- **A custom additive shader must return integrated emission.** Bevy's Add
+  material shares `BLEND_PREMULTIPLIED_ALPHA` with premultiplied blending.
+  For the plume's additive hot core, return premultiplied RGB and zero alpha;
+  its ordinary alpha-blended outer volume returns straight RGB and coverage.
+  Dividing the additive RGB by coverage leaves a bright hard edge as density
+  approaches zero. Check both material modes in a windowed burn and shutdown,
+  including an oblique view and a small RCS nozzle.
+
 - **DECLARE A DRIVEN PARAMETER ON THE SHADER PRIM, not only in the WGSL.** This is
   the one that silently kills a wire. The authoring pass decides what counts as a
   shader drive by intersecting the gprim's connected `inputs:` against the

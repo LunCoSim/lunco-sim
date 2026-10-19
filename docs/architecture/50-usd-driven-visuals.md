@@ -250,6 +250,20 @@ FIXED bounding volume and a WGSL shader draws inside it, taking the live value o
 `inputs:<name>.connect` wire like any other port sink. `assets/shaders/plume.wgsl` is the
 worked example: the cone never moves, and `throttle` shapes what is drawn in it.
 
+The combustion shader clips a camera ray to the unit envelope and integrates
+emission and extinction inside it, using its authored sample count. The proxy
+surface contributes no colour; soft radial and axial density falloffs hide its
+edges. Ray entry is analytic rather than the rasterized surface position, and
+face selection accounts for a camera inside the envelope. Noise is advected
+downstream as a render detail, without adding simulation state.
+
+Alpha blending returns straight colour and coverage. The hot core's additive
+material uses Bevy's `BLEND_PREMULTIPLIED_ALPHA` pipeline: return integrated
+emission with zero output alpha so the background remains visible. Dividing
+emission by coverage in that pipeline cancels the fade and exposes the proxy
+edge. Keep nozzle-class colour and density choices in USD materials; neither
+blend convention changes delivered thrust, propellant flow or light ownership.
+
 `LunCo.Propulsion.computePlumePhotometry` owns the stateless plume equations.
 Its fixed-size result follows the named `PlumePhotometry` output declaration
 order. The model exposes those ports for USD connections; `RCSJet` calls the
