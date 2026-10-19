@@ -491,6 +491,15 @@ Flair remains the only rendered style owner; collection controls therefore
 update their semantic action with their label, including Cancel and Retry.
 The context is an entity-owned component and retires with its presentation tree.
 
+The Update-phase style handoff follows HUI Build, exposure compilation, surface
+interactions and collection reconciliation, then precedes HUI Style. It assigns
+selector names and caches/removes runtime `HtmlStyle` before HUI can apply its
+inline defaults to retained nodes. Flair prepares and applies CSS in PostUpdate;
+an Update ordering edge to a Flair set does not order that later schedule.
+Non-runtime HUI templates retain their inline styles. The low-level
+`hui_rebuild_preserves_retained_runtime_styles_only` regression exercises the
+real HUI style system and the shared production handoff configuration.
+
 Authored HUI nodes use stable `id` attributes and `#id` selectors. Flair also
 supports class selectors, but HUI 0.7 does not create a `ClassList` from an
 HTML `class` attribute; it parses that attribute as an unknown style property

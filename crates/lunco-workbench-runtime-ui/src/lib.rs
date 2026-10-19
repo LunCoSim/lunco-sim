@@ -618,13 +618,6 @@ impl Plugin for RuntimeUiPlugin {
                     .after(sync_runtime_ui_manifest)
                     .before(bevy_hui::HuiSystems::Build),
                 bind_runtime_ui_to_camera.after(sync_runtime_ui_manifest),
-                attach_runtime_ui_names
-                    .after(sync_runtime_ui_manifest)
-                    .before(bevy_flair::style::StyleSystems::Prepare),
-                hand_runtime_ui_styling_to_flair
-                    .after(bevy_hui::HuiSystems::Style)
-                    .after(sync_runtime_ui_manifest)
-                    .before(bevy_flair::style::StyleSystems::Prepare),
                 apply_runtime_ui_exposures
                     .after(sync_runtime_ui_manifest)
                     .after(bevy_hui::HuiSystems::Build)
@@ -657,8 +650,23 @@ impl Plugin for RuntimeUiPlugin {
             )
                 .in_set(lunco_core::RuntimeCycleSet::Ui),
         );
+        install_runtime_ui_style_handoff(app);
         install_runtime_ui_render_readiness(app);
     }
+}
+
+fn install_runtime_ui_style_handoff(app: &mut App) {
+    app.add_systems(
+        Update,
+        (attach_runtime_ui_names, hand_runtime_ui_styling_to_flair)
+            .after(sync_runtime_ui_manifest)
+            .after(bevy_hui::HuiSystems::Build)
+            .after(apply_runtime_ui_exposures)
+            .after(apply_runtime_ui_surface_interactions)
+            .after(reconcile_runtime_ui_collections)
+            .before(bevy_hui::HuiSystems::Style)
+            .in_set(lunco_core::RuntimeCycleSet::Ui),
+    );
 }
 
 #[derive(Resource, Default)]
@@ -2752,6 +2760,52 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hui_rebuild_preserves_retained_runtime_styles_only() {
+        use super::*;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy_hui::HuiPlugin));
+        app.init_asset::<TextureAtlasLayout>();
+        install_runtime_ui_style_handoff(&mut app);
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+            "id":"retained", "namespace":"retained", "template":"ui/a.html",
+            "stylesheet":"ui/a.css", "placement":{"mode":"viewport"}
+        }"#,
+        )
+        .unwrap();
+        let root = app
+            .world_mut()
+            .spawn(
+                RuntimeUiSurface::from_definition(
+                    &definition,
+                    Handle::default(),
+                    Handle::default(),
+                    None,
+                )
+                .unwrap(),
+            )
+            .id();
+        let styled = Node {
+            width: Val::Px(321.0),
+            ..default()
+        };
+        let runtime = app
+            .world_mut()
+            .spawn((styled.clone(), HtmlStyle::default(), ChildOf(root)))
+            .id();
+        let unrelated = app.world_mut().spawn((styled, HtmlStyle::default())).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(runtime).unwrap().width,
+            Val::Px(321.0)
+        );
+        assert!(app.world().get::<RuntimeUiTemplateStyle>(runtime).is_some());
+        assert!(app.world().get::<HtmlStyle>(runtime).is_none());
+        assert_eq!(app.world().get::<Node>(unrelated).unwrap().width, Val::Auto);
+        assert!(app.world().get::<HtmlStyle>(unrelated).is_some());
+    }
+
     #[test]
     fn deferred_action_scope_preserves_an_explicitly_empty_workspace() {
         let scope = super::RuntimeUiActionScope::capture(None, None);

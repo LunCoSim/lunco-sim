@@ -834,3 +834,28 @@ native chassis mass and Ctrl+P pause/resume pass. The final speed is below
 2 m/s; all eleven verdicts pass. The Twin's `results/keyboard-course.json`
 records binary identity, key transitions, observations and screenshots. Manual
 admission bounds observation latency; it does not qualify realtime pacing.
+
+## Runtime style ownership — 2026-10-19
+
+The generic runtime UI composition hands HUI style context to Flair before HUI
+Style, after tree construction and property/collection compilation. A focused
+test with the real HUI plugin reproduced an authored width of 321 px becoming
+Auto before the correction. The shared production configuration now preserves
+that width and compiler context while unrelated HUI inline styling still runs.
+No dependency source or Twin-specific Rust styling is added.
+
+The visible Roadster HUD retains its card layout through three marked template
+reloads, stylesheet recovery and two scene restarts. A deliberately narrowed
+speed card fails the same pixel gate. These seven visual checks and screenshots
+are recorded in the Twin's `results/hud-reload.json`. Ordinary live reloads did
+not reproduce the original whole-HUD screenshot before the correction; this
+evidence proves the ownership repair and bounded reload behavior. It does not
+establish every possible intermittent reload path.
+
+The production preparation scenario also reports `TESTS_OK 9` and its named
+`RUNTIME_UI_PREPARATION` PASS, including invalid-policy rejection and recovery.
+Its Python harness returns failure because the shared launch scene separately
+fails the authored ground-height assertion (one of fourteen runtime-contract
+checks). That broader launch is not reported green. Transient missing CSS
+variable diagnostics also occur during stylesheet/restart transitions; the
+captured settled HUD recovers. These remain separate qualification limits.

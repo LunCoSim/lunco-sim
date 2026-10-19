@@ -445,6 +445,15 @@ nested component template reload may require reloading the top-level template
 again. Never manually write Bevy styling components under the surface from Rust;
 HUI/Flair owns those components.
 
+The runtime style handoff must follow HUI Build and all exposure/collection
+compilation, and precede HUI Style in Update. It caches/removes runtime
+`HtmlStyle` before inline defaults can overwrite retained CSS layout; selector
+names are attached at the same boundary. Flair's Prepare set runs in PostUpdate,
+so an Update edge to that set cannot enforce this handoff. Preserve unrelated
+HUI templates' styles. Use the focused
+`hui_rebuild_preserves_retained_runtime_styles_only` test, then inspect native
+template/stylesheet reload and scene-restart screenshots.
+
 Use a single `<node>` as the root of every template, including collection-row
 templates. Keep `<button>` and `<text>` elements below that root because HUI
 reuses the scope entity during hot reload and Flair retains its selector type
