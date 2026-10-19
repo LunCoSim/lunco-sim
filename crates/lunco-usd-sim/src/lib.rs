@@ -3584,6 +3584,7 @@ fn setup_physical_wheel(
         RigidBody::Kinematic,
         ShouldBeDynamic,
         collider,
+        lunco_usd_avian_contracts::UsdColliderSource(prim_path.path.clone()),
         // The shared tire model owns tangential wheel-ground force. The Avian
         // collision hook removes its generic tangent impulse for this body;
         // Avian still owns the normal contact constraint and the wheel joint.

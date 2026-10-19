@@ -117,7 +117,7 @@ fn applied_schemas(reader: &StageView<'_>, prim: &SdfPath) -> Vec<String> {
 /// else's body rather than to `root`'s.
 ///
 /// OWNERSHIP STOPS AT A BODY BOUNDARY, and it is the same rule the loader applies
-/// when it folds child colliders into a compound shape. A foot mounted on a leg is
+/// when it attaches native colliders to a body. A foot mounted on a leg is
 /// the leg's neighbour, not the leg's geometry: counting it as the leg's would
 /// make a leg look like it reaches as low as its own foot, which is exactly the
 /// question `sprung-foot-not-lowest` asks.
@@ -305,7 +305,7 @@ fn nearest_path_in_set(candidates: &HashSet<String>, path: &SdfPath) -> Option<S
     None
 }
 
-/// Whether the runtime compound reader sees a proxy description for body.
+/// Whether the runtime body-collider reader sees a proxy description for body.
 /// The walk stops at nested bodies, exactly as collider ownership does, so a
 /// child wheel or articulated link cannot make its host body's render mesh
 /// look intentionally excluded from collision.
@@ -664,9 +664,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
     // Authored never-collide pairs. The rel is a promise the loader keeps at
     // RUNTIME, where a target that never spawns is a warning 10 seconds into a
     // run; here it is decidable from the stage alone. `owner` is the body each
-    // end resolves to, because a collider under a body folds into that body's
-    // compound and the pair is between BODIES — which is also how a pair that
-    // names two shapes of one body comes to be inert.
+    // end belongs to. Native collider endpoints retain source identity, while two
+    // surfaces attached to the same body cannot collide with one another.
     let known: HashSet<String> = paths.iter().map(|p| p.to_string()).collect();
     let mut filtered_pairs: Vec<H> = Vec::new();
     for p in &paths {

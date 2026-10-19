@@ -660,7 +660,7 @@ fn runtime_binding_api_value(world: &World, entity: Option<Entity>) -> ApiValue 
         "visual_sync_error": visual_sync_failed.map(|error| error.0.clone()),
         "awaiting_stage": awaiting_stage,
         "rigid_body": world.get::<avian3d::prelude::RigidBody>(entity).is_some(),
-        "collider": world.get::<avian3d::prelude::Collider>(entity).is_some(),
+        "collider": lunco_physics::collider_entities(world, entity).next().is_some(),
         "pending_joint": world
             .get::<lunco_usd_avian_contracts::PendingUsdJoint>(entity)
             .is_some(),

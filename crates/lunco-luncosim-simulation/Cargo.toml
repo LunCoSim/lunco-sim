@@ -36,6 +36,7 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-execution = { path = "../lunco-modelica-execution" }
+lunco-fmi = { path = "../lunco-fmi" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 serde_json = { workspace = true }

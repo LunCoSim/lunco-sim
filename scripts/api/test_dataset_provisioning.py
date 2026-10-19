@@ -22,7 +22,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import zipfile
 
-from runtime import BINARY, ROOT, ProductionSession, assert_render_log_clean, get_json
+from runtime import (BINARY, ROOT, ProductionSession, assert_render_log_clean, get_json,
+                     run_authored_scenario)
 
 
 class Transfer:
@@ -182,22 +183,11 @@ def main():
                 verdicts.append({"code": code, "stdout": result})
                 (output / "verdicts.json").write_text(json.dumps(verdicts, indent=2))
 
-            def scenario_gate(source, title):
-                offset = log.stat().st_size
-                execute(session, "RunScenarioAsset", source_asset=source)
-
-                def terminal():
-                    with log.open() as stream:
-                        stream.seek(offset)
-                        text = stream.read()
-                    return text if title + ": PASS" in text or title + ": FAIL" in text else None
-
-                result = wait_for(terminal, title)
-                if title + ": FAIL" in result:
-                    raise RuntimeError(result)
-                verdicts.append({"scenario": source, "title": title, "verdict": "PASS"})
+            def scenario_gate(source, title, check_count):
+                run_authored_scenario(session, source, title=title, check_count=check_count)
+                verdicts.append({"scenario": source, "title": title, "verdict": "PASS",
+                                 "check_count": check_count})
                 (output / "verdicts.json").write_text(json.dumps(verdicts, indent=2))
-                print(title + ": PASS", flush=True)
 
             def datasets(scope):
                 return execute(session, "ListDatasets", scope=scope)["datasets"]
@@ -269,7 +259,7 @@ def main():
                 wait_for(lambda: int(run('print(clock_snapshot().sim_tick);').strip()) > tick + 60, "simulation ticks after installation")
                 verdict(f'certify_resumed({tick}, "/Traverse/Rover", {rover});')
                 verdict('certify_modelica(["/Traverse/Rover", "/Traverse/Rover/Electrical", "/Traverse/Rover/Antenna/YawHead/DishGimbal/DishHead/LinkAperture"]);')
-                scenario_gate("twin://" + cold_scope.removeprefix("twin:") + "/sim/scenarios/tests/modelica_startup.rhai", "SUMMER MODELICA STARTUP")
+                scenario_gate("twin://" + cold_scope.removeprefix("twin:") + "/sim/scenarios/tests/modelica_startup.rhai", "SUMMER MODELICA STARTUP", 6)
                 capture("terrain-ready")
                 execute(session, "DismissDatasetProvisioning", scope=cold_scope)
                 click("terrain-recent-events-open")
@@ -333,9 +323,9 @@ def main():
                 wait_for(lambda: float(run('print(clock_snapshot().world_sim_s);').strip()) > 2.0, name + " simulation time")
                 verdict("certify_modelica(" + json.dumps(paths) + ");")
                 if name == "space-school-twin":
-                    scenario_gate("twin://" + scope.removeprefix("twin:") + "/sim/scenarios/tests/modelica_startup.rhai", "SUMMER MODELICA STARTUP")
+                    scenario_gate("twin://" + scope.removeprefix("twin:") + "/sim/scenarios/tests/modelica_startup.rhai", "SUMMER MODELICA STARTUP", 6)
                 else:
-                    scenario_gate("twin://" + scope.removeprefix("twin:") + "/scenarios/tests/rumoca_startup.rhai", "GRIFFIN RUMOCA STARTUP")
+                    scenario_gate("twin://" + scope.removeprefix("twin:") + "/scenarios/tests/rumoca_startup.rhai", "GRIFFIN RUMOCA STARTUP", 3)
                 capture(name + "-ready")
                 (output / (name + "-terrain.json")).write_text(json.dumps(execute(session, "TerrainLodStatus"), indent=2))
             assert_render_log_clean(log)

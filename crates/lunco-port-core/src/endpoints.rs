@@ -26,9 +26,9 @@ pub fn register_endpoint_types(app: &mut App) {
 /// One port type carries every signal in the simulation — commands from the
 /// control surface, actuator setpoints consumed by the physics solvers, sensor
 /// readings, and the values a Modelica co-simulation exchanges. Values are
-/// `f64` in whatever unit the signal is authored in; a
-/// `lunco_cosim_core::SimConnection` applies factor/offset when two ports are
-/// expressed in different units.
+/// `f64` in the owning port's declared unit. A
+/// `lunco_cosim_core::SimConnection` converts compatible resolved units before
+/// applying its authored factor/offset in target units.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
 pub struct Port {

@@ -862,7 +862,11 @@ consumer; neither the solver nor communication schedule changes.
 Standalone Modelica port topology publication excludes entities with
 `SimComponent`, matching its port backend. The co-simulation port owner
 publishes those entities' topology instead. Live input values do not invalidate
-either contract; input membership and signal metadata do.
+either contract; input membership and signal metadata do. Modelica source
+admission projects live engineering facts into the backend-neutral
+`ScalarPortContracts` component. The port backend reads that component;
+`ModelicaSignalLayout` retains source addressing and provenance. Both are
+admitted and retired with the same source surface.
 
 The render/update-side engine synchronizer is separately revision-gated: the
 document registry advances one monotonic revision for document membership or

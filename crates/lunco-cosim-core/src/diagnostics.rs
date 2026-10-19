@@ -41,8 +41,9 @@ pub struct BrokenConnection {
     /// Whether the entity exposes any port surface. `true` = genuine fault (has
     /// ports, not this one); `false` = structural/still-loading endpoint.
     pub has_port_surface: bool,
-    /// The accumulated value that was dropped (what the source(s) resolved to).
-    pub dropped_value: f64,
+    /// The rejected accumulated value. `None` means admission failed before
+    /// a numerical write was attempted (for example, incompatible units).
+    pub dropped_value: Option<f64>,
     /// Owner-supplied rejection reason, including range and writability details.
     pub failure: Option<String>,
 }
@@ -76,8 +77,8 @@ pub struct AlgebraicLoopDiagnostic {
 /// query (registered in `lunco-usd-sim-cosim-api`).
 ///
 /// [`broken`](Self::broken) reports rejected writes in the current propagation
-/// tick. [`faults`](Self::faults) retains terminal failures for endpoints that
-/// have never accepted a write, including endpoints removed from the fabric.
+/// tick. [`faults`](Self::faults) retains terminal failures until a subsequent accepted
+/// write or endpoint retirement, including endpoints removed from the fabric.
 /// A successful write retracts its endpoint's fault and records that success
 /// in [`landed`](Self::landed). The production scene gate reads this ledger.
 #[derive(Resource, Debug, Default)]
@@ -92,37 +93,20 @@ pub struct CosimDiagnostics {
     /// causal cycles are valid dynamic feedback and are not included. These
     /// entries are not missing ports and therefore never enter [`Self::faults`].
     pub algebraic_loops: Vec<AlgebraicLoopDiagnostic>,
-    /// Wires that have NEVER successfully written, indexed by entity then port
-    /// name so a wire that drops on a thousand ticks is one entry and successful
-    /// ticks can look up borrowed names without allocating tuple keys.
+    /// Terminal input failures, indexed by entity and public port name. A
+    /// failure after an earlier successful exchange is still a failure.
+    /// Explicitly pending endpoints do not enter this ledger. A successful
+    /// committed write retracts its endpoint's record; retirement and scene
+    /// teardown release the retained names.
     ///
-    /// Only terminal targets are recorded. A compiling model or an explicitly
-    /// pending endpoint remains pending during assembly; a missing surface
-    /// without a pending marker is a terminal wiring fault.
-    ///
-    /// **A wire that later lands RETRACTS its entry**, and once landed it can
-    /// never be re-reported (see [`landed`](Self::landed)). Dropping a write
-    /// before the endpoint is ready is not an authoring error, it is load order:
-    /// a joint's `angle` port exists only once avian has admitted both its bodies
-    /// into the island graph, which is a documented multi-frame window every
-    /// jointed mechanism passes through. Recording those permanently made every
-    /// antenna in the project look broken while `rocker_bogie`'s own scenario
-    /// measured the joint working.
-    ///
-    /// What survives is the wire that never landed at all — the Modelica drive
-    /// law writing a port no rover declares, the antenna joint that never
-    /// attaches. That is the authoring error, and it is what a gate must fail on.
-    ///
-    /// Another entry source shares this ledger: `SetPorts` writes to a name the
-    /// target's port surface doesn't declare (M12) — the same `(entity, port)`
-    /// key and landed-retraction rules as wires. Causal feedback cycles are not
-    /// ledger entries: they are valid explicit co-simulation topology, while
-    /// acausal islands require a typed backend partition before stepping.
+    /// Rejected `SetPorts` requests for unknown input names share this ledger.
+    /// Live exchange failures additionally latch the runtime fault and native
+    /// safety hold. Causal feedback topology uses `algebraic_loops` separately.
     pub faults: HashMap<Entity, HashMap<Arc<str>, BrokenConnection>>,
     /// `(entity, port)` pairs proven wired by at least one successful write.
     ///
-    /// Success ratchets for an endpoint during its scene lifetime. Later rejected
-    /// writes remain visible in `broken` without creating a never-landed fault.
+    /// Successful publication is acknowledged once per fabric revision. It
+    /// does not suppress subsequent failures from the same endpoint.
     /// Entity retirement removes its entries; scene teardown clears the ledger.
     pub landed: HashMap<Entity, HashSet<Arc<str>>>,
     /// Runtime warning keys for the current scene. This is deliberately owned
@@ -238,7 +222,7 @@ mod tests {
             global_id: None,
             port: Arc::from("demand"),
             has_port_surface: true,
-            dropped_value: 3.5,
+            dropped_value: Some(3.5),
             failure: Some("value must be ≤ 1".into()),
         };
 

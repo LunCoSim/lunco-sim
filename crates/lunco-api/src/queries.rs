@@ -257,7 +257,7 @@ pub(crate) const MAX_PORT_READ_NAMES: usize = 128;
 pub(crate) const MAX_PORT_READ_ROWS: usize = 128;
 
 pub(super) fn port_unit_api_schema() -> &'static str {
-    "{ id, definition: { symbol, dimension_si: [i8; 7], scale_to_si, offset_to_si, scale_exactness } | () } | ()"
+    "{ id, definition: { symbol, dimension_si: [i8; 7], angle_power: i32, relative_quantity: bool, scale_to_si, offset_to_si, scale_exactness } | () } | ()"
 }
 
 pub(super) fn port_metadata_api_schema() -> String {
@@ -287,6 +287,11 @@ pub(super) fn unit_definition_to_api_value(unit: &Unit) -> ApiValue {
                     .map(IntoApiValue::into_api_value)
                     .collect(),
             ),
+        ),
+        ("angle_power", unit.angle_power().into_api_value()),
+        (
+            "relative_quantity",
+            unit.relative_quantity().into_api_value(),
         ),
         ("scale_to_si", unit.scale_to_si().into_api_value()),
         ("offset_to_si", unit.offset_to_si().into_api_value()),

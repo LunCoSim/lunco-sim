@@ -8124,8 +8124,8 @@ mod tests {
 }
 
 fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnapshot) -> Dynamic {
-    let source = |collider: Entity, part: Option<usize>| {
-        lunco_usd_avian_contracts::collider_part_source(world, collider, part)
+    let source = |collider: Entity| {
+        lunco_usd_avian_contracts::collider_source(world, collider)
             .map_or(Dynamic::UNIT, |path| Dynamic::from(path.to_owned()))
     };
     let mut map = Map::new();
@@ -8137,8 +8137,8 @@ fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnaps
                 .into_iter()
                 .map(|part| {
                     let mut item = Map::new();
-                    item.insert("source1".into(), source(part.collider1, part.part1));
-                    item.insert("source2".into(), source(part.collider2, part.part2));
+                    item.insert("source1".into(), source(part.collider1));
+                    item.insert("source2".into(), source(part.collider2));
                     item.insert(
                         "normal_impulse".into(),
                         Dynamic::from_float(part.normal_impulse),

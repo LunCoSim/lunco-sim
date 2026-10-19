@@ -35,6 +35,17 @@ pub fn binding_requested(revision: Res<BindingRevision>) -> bool {
     revision.pending()
 }
 
+/// A metadata revision can change unit compatibility without changing names.
+/// Reconcile it while paused as well as before the next physical exchange.
+pub fn observe_port_topology(
+    topology: Res<lunco_port_core::ports::PortTopologyRevision>,
+    mut revision: ResMut<BindingRevision>,
+) {
+    if topology.is_changed() {
+        revision.request();
+    }
+}
+
 /// Lifecycle observers call this after publishing a new endpoint state.
 pub fn request_binding(mut revision: ResMut<BindingRevision>) {
     revision.request();
@@ -54,27 +65,117 @@ pub fn request_binding(mut revision: ResMut<BindingRevision>) {
 /// A missing source sample is deliberately a no-op.  Declared output ports are
 /// allowed to bind before their first sample; normal propagation will deliver
 /// the first value when the producer publishes it.
-fn seed_bound_connection(world: &mut World, registry: &PortRegistry, spec: &SimConnection) -> bool {
-    // The initial handoff is a write just like the fixed-step propagation. Use
-    // the same per-target ownership classifier so a client never seeds a
-    // replicated snapshot proxy before the live propagation gate gets a say.
-    // The next propagation tick will seed it if this entity later becomes
-    // locally simulated (for example, after possession is granted).
-    if !crate::systems::propagate::peer_simulates(world, spec.end_element) {
-        return false;
+fn seed_bound_inputs(world: &mut World, registry: &PortRegistry, epoch: u64) {
+    let specs: Vec<_> = world
+        .query::<(Entity, &SimConnection, &ConnectionBinding)>()
+        .iter(world)
+        .map(|(edge, spec, state)| (edge, spec.clone(), state.clone()))
+        .collect();
+    let mut targets = std::collections::BTreeMap::<(Entity, String), Vec<Entity>>::new();
+    for (edge, spec, state) in &specs {
+        if *state == ConnectionBinding::Bound {
+            targets
+                .entry((spec.end_element, spec.end_connector.clone()))
+                .or_default()
+                .push(*edge);
+        }
     }
-    let source = if spec.start_is_input {
-        registry.read_input_port(world, spec.start_element, &spec.start_connector)
-    } else {
-        registry.read_output_port(world, spec.start_element, &spec.start_connector)
-    };
-    let Some(source) = source else {
-        return false;
-    };
-    let value = source * spec.scale + spec.offset;
-    registry
-        .write_port(world, spec.end_element, &spec.end_connector, value)
-        .is_ok()
+    let mut samples = Vec::new();
+    for ((target, name), edges) in targets {
+        if !crate::systems::propagate::peer_simulates(world, target)
+            || edges.iter().all(|edge| {
+                world.get::<InitialSampledEpoch>(*edge).copied() == Some(InitialSampledEpoch(epoch))
+            })
+        {
+            continue;
+        }
+        if specs.iter().any(|(_, spec, state)| {
+            spec.end_element == target
+                && spec.end_connector == name
+                && *state != ConnectionBinding::Bound
+        }) {
+            continue;
+        }
+        let names = [name.clone()].into();
+        match lunco_cosim_core::initialization::connected_initial_inputs(world, target, &names) {
+            Ok(Some(values)) => samples.push((target, name, edges, values)),
+            Ok(None) => {}
+            Err(detail) => {
+                let edge = edges[0];
+                let spec = world
+                    .get::<SimConnection>(edge)
+                    .expect("admitted edge snapshot")
+                    .clone();
+                reject_connection_contract(world, edge, &spec, detail, None);
+                return;
+            }
+        }
+    }
+    // Resolve and validate the complete initial handoff before any target
+    // changes. Port owners commit this same batch mechanism during live exchange.
+    let mut writes = Vec::new();
+    let mut sampled_edges = Vec::new();
+    for (target, name, edges, values) in samples {
+        for (_, value) in values {
+            match registry.prepare_input_write(world, target, name.as_str(), value) {
+                Ok(write) => writes.push(write),
+                Err(detail) => {
+                    let edge = edges[0];
+                    let spec = world
+                        .get::<SimConnection>(edge)
+                        .expect("admitted edge snapshot")
+                        .clone();
+                    reject_connection_contract(
+                        world,
+                        edge,
+                        &spec,
+                        format!("initial connection sample rejected: {detail}"),
+                        Some(value),
+                    );
+                    return;
+                }
+            }
+        }
+        sampled_edges.extend(edges);
+    }
+    if let Err(detail) = registry.apply_prepared_input_writes(world, &writes) {
+        crate::failure::stop(
+            world,
+            "cosim-connection-contract-invalid",
+            None,
+            "initial input batch",
+            detail.to_string(),
+        );
+        return;
+    }
+    for edge in sampled_edges {
+        world.entity_mut(edge).insert(InitialSampledEpoch(epoch));
+    }
+}
+
+/// Invalid declared contracts or initial values cannot enter a physical transaction.
+/// The binding owner records the endpoint diagnostic and holds the host through
+/// the same runtime-fault boundary used for unsafe force-producing topology.
+pub(crate) fn reject_connection_contract(
+    world: &mut World,
+    edge: Entity,
+    spec: &SimConnection,
+    detail: String,
+    dropped_value: Option<f64>,
+) {
+    crate::failure::reject_input(
+        world,
+        "cosim-connection-contract-invalid",
+        spec.end_element,
+        Arc::from(spec.end_connector.as_str()),
+        dropped_value,
+        detail,
+    );
+    world
+        .entity_mut(edge)
+        .insert(ConnectionBinding::Failed)
+        .remove::<BoundConnection>()
+        .remove::<InitialSampledEpoch>();
 }
 
 /// Every producer, including tests and runtime-created wheel edges, enters the
@@ -128,11 +229,12 @@ pub fn bind_connections(world: &mut World) {
         (revision.sealed, revision.epoch())
     };
     let registry = world.resource::<PortRegistry>().clone();
-    let specs: Vec<(Entity, SimConnection)> = world
+    let mut specs: Vec<(Entity, SimConnection)> = world
         .query::<(Entity, &SimConnection)>()
         .iter(world)
         .map(|(e, spec)| (e, spec.clone()))
         .collect();
+    specs.sort_by(|a, b| a.1.compare_authoritative(&b.1, world));
     for (edge, spec) in specs {
         let src = world.get::<EndpointLifecycle>(spec.start_element);
         let dst = world.get::<EndpointLifecycle>(spec.end_element);
@@ -192,14 +294,16 @@ pub fn bind_connections(world: &mut World) {
         // immediately; unresolved async endpoints still remain pending while the
         // epoch is open below.
         if !endpoints_failed && !endpoints_pending && !surface_pending && source_ok && target_ok {
+            match spec.resolved_transform(&registry, world) {
+                Ok(_) => {}
+                Err(detail) => {
+                    reject_connection_contract(world, edge, &spec, detail, None);
+                    continue;
+                }
+            };
             world
                 .entity_mut(edge)
                 .insert((ConnectionBinding::Bound, BoundConnection));
-            if world.get::<InitialSampledEpoch>(edge).copied() != Some(InitialSampledEpoch(epoch))
-                && seed_bound_connection(world, &registry, &spec)
-            {
-                world.entity_mut(edge).insert(InitialSampledEpoch(epoch));
-            }
             continue;
         }
         // A declared async participant remains pending even when the current USD
@@ -234,7 +338,7 @@ pub fn bind_connections(world: &mut World) {
             global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
             port: Arc::from(port.as_str()),
             has_port_surface: !registry.entity_port_owners(world, entity).is_empty(),
-            dropped_value: 0.0,
+            dropped_value: None,
             failure: Some(if !target_ok {
                 format!(
                     "connection target input `{}` is not declared",
@@ -270,6 +374,7 @@ pub fn bind_connections(world: &mut World) {
             .insert(ConnectionBinding::Failed)
             .remove::<BoundConnection>();
     }
+    seed_bound_inputs(world, &registry, epoch);
 }
 
 #[cfg(test)]
@@ -342,6 +447,7 @@ mod tests {
     fn synchronous_hardware_port_binds_without_lifecycle_marker() {
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         world.init_resource::<BindingRevision>();
         world.init_resource::<CosimDiagnostics>();
         {
@@ -349,14 +455,14 @@ mod tests {
             crate::ports::register_builtin_port_backends(&mut registry);
         }
         let source = world.spawn(lunco_port_core::Port { value: 0.75 }).id();
-        let target = world.spawn(InputPorts::new(&["drive_left"])).id();
+        let target = world.spawn(lunco_port_core::Port { value: 0.0 }).id();
         let edge = world
             .spawn(SimConnection {
                 start_element: source,
                 start_connector: lunco_cosim_core::PORT_NAME.into(),
                 start_is_input: false,
                 end_element: target,
-                end_connector: "drive_left".into(),
+                end_connector: lunco_cosim_core::PORT_NAME.into(),
                 scale: 1.0,
                 offset: 0.0,
             })
@@ -367,6 +473,10 @@ mod tests {
 
         assert!(world.get::<BoundConnection>(edge).is_some());
         assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
+        assert_eq!(
+            world.get::<lunco_port_core::Port>(target).unwrap().value,
+            0.75
+        );
     }
 
     #[test]
@@ -454,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn early_binding_waits_for_sealed_epoch_before_initial_sample() {
+    fn binding_samples_live_source_and_resamples_when_epoch_seals() {
         let (mut world, source, target) = world_with_ports("target");
         world
             .get_mut::<InputPorts>(source)

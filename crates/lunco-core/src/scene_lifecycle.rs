@@ -38,23 +38,43 @@ impl<M: Message> SceneResource for Messages<M> {
 /// Register scene state at its owner, without a separate cleanup registration.
 pub trait AppSceneExt {
     fn init_scene_resource<R: SceneResource>(&mut self) -> &mut Self;
+    /// Register a dependency-owned resource with its public reset operation.
+    /// Entity-removal observers finish before this reset runs.
+    fn init_scene_resource_with<R: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(
+        &mut self,
+        clear: fn(&mut R),
+    ) -> &mut Self;
 }
 
-struct SceneResourcePlugin<R>(std::marker::PhantomData<R>);
+struct SceneResourcePlugin<R> {
+    clear: fn(&mut R),
+}
 
-impl<R: SceneResource> Plugin for SceneResourcePlugin<R> {
+impl<R: Resource<Mutability = bevy::ecs::component::Mutable> + Default> Plugin
+    for SceneResourcePlugin<R>
+{
     fn build(&self, app: &mut App) {
+        let clear = self.clear;
         app.init_resource::<R>()
-            .add_systems(SceneResourceTeardown, |mut resource: ResMut<R>| {
-                resource.clear_scene()
+            .add_systems(SceneResourceTeardown, move |mut resource: ResMut<R>| {
+                clear(&mut resource)
             });
     }
 }
 
 impl AppSceneExt for App {
     fn init_scene_resource<R: SceneResource>(&mut self) -> &mut Self {
+        self.init_scene_resource_with::<R>(R::clear_scene)
+    }
+
+    fn init_scene_resource_with<
+        R: Resource<Mutability = bevy::ecs::component::Mutable> + Default,
+    >(
+        &mut self,
+        clear: fn(&mut R),
+    ) -> &mut Self {
         if !self.is_plugin_added::<SceneResourcePlugin<R>>() {
-            self.add_plugins(SceneResourcePlugin::<R>(std::marker::PhantomData));
+            self.add_plugins(SceneResourcePlugin::<R> { clear });
         }
         self
     }
@@ -212,6 +232,35 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct DefaultSceneState(Vec<u32>);
+
+    #[derive(Resource, Default)]
+    struct DependencyState {
+        values: Vec<u32>,
+        resets: u32,
+    }
+
+    #[test]
+    fn dependency_resource_reset_waits_for_entity_removal() {
+        let mut app = App::new();
+        // The dependency resource needs no application trait implementation.
+        app.init_scene_resource_with::<DependencyState>(|state| {
+            state.values.clear();
+            state.resets += 1;
+        })
+        .init_scene_resource_with::<DependencyState>(|_| panic!("duplicate registration"));
+        app.add_observer(
+            |_: On<Remove, PublishesOnRemoval>, mut commands: Commands| {
+                commands.queue(|world: &mut World| {
+                    world.resource_mut::<DependencyState>().values.push(200);
+                });
+            },
+        );
+        let entity = app.world_mut().spawn(PublishesOnRemoval).id();
+        run_scene_teardown_with_entities(app.world_mut(), [entity]);
+        let state = app.world().resource::<DependencyState>();
+        assert!(state.values.is_empty());
+        assert_eq!(state.resets, 1);
+    }
 
     impl SceneResource for DefaultSceneState {}
 

@@ -20,6 +20,25 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+Native external FMI 3 Co-Simulation import belongs to
+[`lunco-fmi`](../../crates/lunco-fmi/README.md), installed by the shared
+headless/windowed simulation composition. `LoadFmu` admits bounded archives
+as scene-owned participants on one native worker. Scalar Float64 samples use
+the existing `SimComponent` backend. Integer communication ticks consume the
+same master admission as physics and Modelica; native timestamps and Event
+Mode/early-return transactions are validated before publication through
+`SimulationCompletions`. Inputs are held over each explicit communication
+interval. Output dependencies and declared state-restoration capabilities are
+retained as facts; they do not constitute an implicit algebraic-loop solver.
+Modelica and external FMUs publish engineering facts through
+`lunco-port-core::ScalarPortContracts`. Source admission owns conversion into
+that immutable live contract; Modelica provenance remains in
+`ModelicaSignalLayout`. The shared backend reads units, bounds and frame from
+one component. Topology fingerprints include complete unit definitions and
+bounds, update at contract mutation, and exclude changing scalar samples.
+FMI unit lowering retains the separate radian exponent and relative-quantity
+semantics as required by the [FMI unit contract](https://fmi-standard.org/docs/3.0.2/#_unit_definitions).
+
 Native host pacing uses core runtime `SimulationCompletionSources`, registering
 each worker's typed result channel and retaining a worker-lifetime lease. The
 readiness service never receives results or chooses commit order. Only the
@@ -27,6 +46,50 @@ existing `SimulationCompletions` owner systems consume and validate receipts.
 At complete fixed-cycle boundaries the runner admits ready receipts for both
 the native coupling barrier and owner-neutral progress holds, so another frame
 is unnecessary when a ready worker can release the next tick.
+
+Connection arithmetic belongs to `SimConnection::resolved_transform`. It reads
+the precedence-winning input/output metadata, checks the declared contracts,
+converts compatible resolved base units, then composes the authored SSP gain and
+offset in target units. When either base-unit definition is omitted, FMI's raw
+value rule applies; unit spellings are never parsed or guessed. Incompatible
+dimensions, radian exponents, relative-quantity flags or unrepresentable
+coefficients fail at binding through `cosim-connection-contract-invalid` and the
+physical safety hold. The compiled fabric caches the result between structural
+revisions; ordinary samples do not repeat conversion setup. The port registry
+still validates each write against its live owner contract.
+
+`SimConnection::compare_authoritative` orders targets, source identities,
+input/output side and authored coefficient bits for binding, initial sampling
+and dense-slot compilation. Distinct transforms of the same source cannot use
+ECS spawn order as a floating-point summation tie-break. Initial binding samples
+all complete fan-ins before writing any target. Solver preparation consumes the
+same `connected_initial_inputs` sampler, and asynchronous initialization
+certificates fence the effective connection transforms as well as authored
+wiring. A target with an unbound or unavailable source retains its previous
+input until all contributions are available; explicit holds retain priority. Diagnostics
+use an absent `dropped_value` when no numerical write was attempted.
+
+Initial handoff and live exchange preflight their complete eligible input batch
+through `PortRegistry::prepare_input_write` /
+`prepare_resolved_input_write`, then use `apply_prepared_input_writes` for the
+all-or-none commit. No target or successful-publication acknowledgement changes
+when another target rejects the communication point. Cached locators keep the
+same live-owner and metadata validation as named writes.
+
+A rejected live input latches `cosim-input-write-rejected` even after earlier
+successful exchanges. The co-simulation failure owner retains the actual value
+and reason, raises the shared runtime fault and safety hold, and pauses/zeros
+native physics time immediately. Exchange runs after `FixedPreUpdate`; deferring
+that projection until the next admission pass would integrate a failed point.
+Binding contract failures, required-sample loss and rejected prediction loops
+use the same stop boundary. The runtime fault remains terminal until scene
+retirement. Ordinary rejected user commands keep their command-result contract.
+
+`python3 scripts/api/test_connection_transaction.py --port <free-port>` runs the
+ten-check authored Modelica-to-native failure gate; `--windowed` runs that same
+observer in the visible host. It warms up with valid samples, then verifies
+mass/centre-of-mass preservation, stopped native integration and stopped
+Modelica advancement at the rejected communication point.
 
 Joint measurements consume the completed native solve: prismatic `force` (N)
 and revolute `torque` (N m) are signed on body2 along the positive coordinate
@@ -114,7 +177,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   changed; hint maintenance does not. Modelica's reflected variable map and the
   completion-admission publication boundary remain the source contract.
   Structural publication uses `PortTopologyState::observe_if_changed` for
-  auxiliary declarations and Modelica unit contracts. Their fingerprints are
+  auxiliary declarations and backend-neutral `ScalarPortContracts`. Their fingerprints are
   derived on first observation, their own component changes, and participant
   re-admission; ordinary sample changes reuse the recorded facts. Removal
   observers retire each component's recorded key. Backend reads still derive
@@ -432,7 +495,7 @@ time fail before input admission.
 
 The contract above is deliberately an **FMI-CS-shaped master algorithm**, not a
 claim that the current Modelica worker is already an FMI implementation. The
-current code has the right master-side invariants for a future FMU backend:
+native Modelica and FMI 3 Co-Simulation backends share these master invariants:
 
 * one authoritative simulation time and explicit communication points;
 * input snapshots at a communication point;
@@ -442,24 +505,20 @@ current code has the right master-side invariants for a future FMU backend:
 * explicit faulting instead of releasing a failed coupled step as if it had
   completed.
 
-An FMU importer still has to be implemented at the participant boundary. It
-must load and validate `modelDescription.xml`, preserve FMI value references
-and declared types/units, perform the FMI 2.0 or 3.0 lifecycle, call the
-version-appropriate co-simulation step function, and handle every returned
-status and early-return/event request. FMI 3.0 specifically permits
-`fmi3DoStep` to return before the requested communication point and adds Event
-Mode and Intermediate Update Mode; an importer that ignores those results is
-not robust FMI support. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
+`lunco-fmi` loads and validates `modelDescription.xml`, preserves value
+references and scalar engineering contracts, and runs the FMI 3 Co-Simulation
+lifecycle on its native worker. `fmi3DoStep` can return before the requested
+communication point; early returns and Event Mode iteration remain private
+until the interval has completed. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
 
-The FMU adapter must be a backend participant, not a second clock or a second
-wire fabric. It maps FMI variables to the existing port/connection boundary,
-marks a state-writing endpoint with `CausalStateSink` when appropriate, and
-uses the same conservative scheduler. FMI for Model Exchange is a separate
-integration: the FMU does not own the solver step, so it cannot be treated as
-an FMI-CS participant. The current generic port currency is scalar `f64`, so
-the first adapter scope is FMI Real ports; Boolean, integer, enumeration,
-string, arrays, clocks, and typed units require an explicit typed FMI boundary
-before claiming broad FMI compatibility.
+The FMU adapter uses the existing port/connection boundary and conservative
+scheduler. FMI Model Exchange requires a separate solver integration and is
+not admitted as an FMI-CS participant. The native profile supports scalar
+Float64 ports. Other types, arrays, Scheduled Execution clocks and externally
+hosted FMUs are rejected with owner diagnostics. Unit/range projection is
+implemented, and the shared connection fabric compiles compatible unit
+conversions. External FMU-to-FMU unit conversion, implicit coupling and broad
+FMI conformance require separate qualification.
 
 ## Where the master loop fits
 

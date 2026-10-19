@@ -233,6 +233,7 @@ fn prepare_pairs<H: CollisionHooks>(
         With<RigidBody>,
     >,
     physics_time: Res<Time<Physics>>,
+    collider_bounds: Query<(&ColliderAabb, &avian3d::collision::collider::EnlargedAabb)>,
     constraint_graph: Res<ConstraintGraph>,
     contact_graph: Res<ContactGraph>,
     hooks: StaticSystemParam<H>,
@@ -303,6 +304,15 @@ fn prepare_pairs<H: CollisionHooks>(
             .collect::<Vec<_>>();
         bevy::log::debug!(target: "lunco_physics::order_audit",
             "PHYSICS_ORDER_COLLIDERS time={:?} colliders={colliders:?}", physics_time.elapsed_secs_f64());
+        for (entity, _, _, _, _, _, _, _) in &all {
+            bevy::log::debug!(target: "lunco_physics::order_audit",
+                "PHYSICS_ORDER_BOUNDS time={:?} entity={entity:?} bounds={:?}",
+                physics_time.elapsed_secs_f64(), collider_bounds.get(*entity));
+        }
+        for pair in contact_graph.iter_active() {
+            bevy::log::debug!(target: "lunco_physics::order_audit",
+                "PHYSICS_ORDER_PAIR time={:?} pair={pair:?}", physics_time.elapsed_secs_f64());
+        }
         for (entity, collider, _, _, _, _, _, key) in &all {
             if let Some(compound) = collider.shape_scaled().as_compound() {
                 let parts = compound
@@ -1007,16 +1017,7 @@ fn certified_native_interval(
     let [sphere1, sphere2] = interval.spheres;
     let center1 = m1.start * sphere1.center;
     let center2 = m2.start * sphere2.center;
-    // Native finite-triangle projection supplies a cheap candidate edge axis.
-    // Only the full-shape whole-arc support bound can certify separation.
-    use avian3d::parry::query::PointQuery;
-    let axis = if let Some(triangle) = s1.as_triangle() {
-        center2 - triangle.project_point(&m1.start, center2, true).point
-    } else if let Some(triangle) = s2.as_triangle() {
-        triangle.project_point(&m2.start, center1, true).point - center1
-    } else {
-        center2 - center1
-    };
+    let axis = contact_seed_axis(&m1.start, s1, center1, &m2.start, s2, center2);
     // A cylinder's radial feature supplies a second candidate independent of
     // cap displacement. The occupied shape, not an enclosing sphere or an
     // assumed closest point, still certifies the complete arc on that axis.
@@ -1090,6 +1091,80 @@ fn native_contact_axis_clear(
     Ok((initial - contact.dist).abs() <= tolerance && lower >= initial.min(0.0) - tolerance)
 }
 
+/// A finite-feature seed for native GJK/EPA, expressed in the shared pose frame.
+/// It initializes the query only; native witnesses determine the contact normal.
+fn contact_seed_axis(
+    pose1: &Pose,
+    shape1: &dyn avian3d::parry::shape::Shape,
+    center1: DVec3,
+    pose2: &Pose,
+    shape2: &dyn avian3d::parry::shape::Shape,
+    center2: DVec3,
+) -> DVec3 {
+    use avian3d::parry::query::PointQuery;
+    if let Some(triangle) = shape1.as_triangle() {
+        center2 - triangle.project_point(pose1, center2, true).point
+    } else if let Some(triangle) = shape2.as_triangle() {
+        triangle.project_point(pose2, center1, true).point - center1
+    } else {
+        center2 - center1
+    }
+}
+
+/// The native support-map contact query with an explicit optional seed.
+/// Both witnesses are returned in their own shape's local frame.
+fn seeded_support_contact(
+    relative: &Pose,
+    s1: &dyn avian3d::parry::shape::Shape,
+    s2: &dyn avian3d::parry::shape::Shape,
+    prediction: f64,
+    direction: Option<DVec3>,
+) -> Result<Option<avian3d::parry::query::Contact>, avian3d::parry::query::Unsupported> {
+    use avian3d::parry::query::{
+        Contact, Unsupported,
+        details::contact_support_map_support_map_with_params,
+        gjk::{GJKResult, VoronoiSimplex},
+    };
+    let (Some(support1), Some(support2)) = (s1.as_support_map(), s2.as_support_map()) else {
+        return Err(Unsupported);
+    };
+    // Specialize native primitives without virtual support calls per iteration.
+    macro_rules! native_contact {
+        ($first:expr, $second:expr) => {
+            contact_support_map_support_map_with_params(
+                relative,
+                $first,
+                $second,
+                prediction,
+                &mut VoronoiSimplex::new(),
+                direction,
+            )
+        };
+    }
+    let result = if let (Some(a), Some(b)) = (s1.as_triangle(), s2.as_cylinder()) {
+        native_contact!(a, b)
+    } else if let (Some(a), Some(b)) = (s1.as_cylinder(), s2.as_triangle()) {
+        native_contact!(a, b)
+    } else if let (Some(a), Some(b)) = (s1.as_triangle(), s2.as_cuboid()) {
+        native_contact!(a, b)
+    } else if let (Some(a), Some(b)) = (s1.as_cuboid(), s2.as_triangle()) {
+        native_contact!(a, b)
+    } else {
+        native_contact!(support1, support2)
+    };
+    match result {
+        GJKResult::ClosestPoints(point1, point2_1, normal1) => Ok(Some(Contact::new(
+            point1,
+            relative.inverse_transform_point(point2_1),
+            normal1,
+            relative.rotation.inverse() * -normal1,
+            (point2_1 - point1).dot(normal1),
+        ))),
+        GJKResult::NoIntersection(_) => Ok(None),
+        _ => Err(Unsupported),
+    }
+}
+
 /// Seed Parry's native triangle/support-map query with the finite-feature axis
 /// already computed for this geometry. GJK/EPA still owns the contact depth;
 /// the seed supplies no constraint or assumed infinite-plane penetration.
@@ -1104,11 +1179,6 @@ fn initial_native_contact(
     axis: DVec3,
 ) -> Result<avian3d::parry::query::Contact, String> {
     let _span = bevy::log::debug_span!("ccd_initial_native_contact", shape1=?s1.shape_type(), shape2=?s2.shape_type()).entered();
-    use avian3d::parry::query::{
-        Contact,
-        details::contact_support_map_support_map_with_params,
-        gjk::{GJKResult, VoronoiSimplex},
-    };
     let missing_geometry = |result: &str| {
         format!(
             "native continuous initial contact did not return contact geometry for its enclosing prediction: result={result}, prediction={prediction:?}, axis={axis:?}, types={:?}/{:?}, pose1={:?}, pose2={:?}, triangle1={:?}, triangle2={:?}, ball1={:?}, ball2={:?}, cylinder1={:?}, cylinder2={:?}, cuboid1={:?}, cuboid2={:?}",
@@ -1131,51 +1201,17 @@ fn initial_native_contact(
     let contact = if (s1.as_triangle().is_some() || s2.as_triangle().is_some())
         && s1.as_ball().is_none()
         && s2.as_ball().is_none()
-        && let (Some(support1), Some(support2)) = (s1.as_support_map(), s2.as_support_map())
+        && s1.as_support_map().is_some()
+        && s2.as_support_map().is_some()
     {
         let relative = m1.start.inv_mul(&m2.start);
         let direction = (axis.is_finite() && axis.length_squared() > 0.0)
             .then(|| m1.start.rotation.inverse() * axis.normalize());
-        // Native primitive references let Rust specialize the same GJK/EPA
-        // kernel without virtual support calls inside every iteration.
-        macro_rules! native_contact {
-            ($first:expr, $second:expr) => {
-                contact_support_map_support_map_with_params(
-                    &relative,
-                    $first,
-                    $second,
-                    prediction,
-                    &mut VoronoiSimplex::new(),
-                    direction,
-                )
-            };
-        }
-        let result = if let (Some(a), Some(b)) = (s1.as_triangle(), s2.as_cylinder()) {
-            native_contact!(a, b)
-        } else if let (Some(a), Some(b)) = (s1.as_cylinder(), s2.as_triangle()) {
-            native_contact!(a, b)
-        } else if let (Some(a), Some(b)) = (s1.as_triangle(), s2.as_cuboid()) {
-            native_contact!(a, b)
-        } else if let (Some(a), Some(b)) = (s1.as_cuboid(), s2.as_triangle()) {
-            native_contact!(a, b)
-        } else {
-            native_contact!(support1, support2)
-        };
-        match result {
-            GJKResult::ClosestPoints(point1, point2_1, normal1) => {
-                let distance = (point2_1 - point1).dot(normal1);
-                let mut contact = Contact::new(
-                    point1,
-                    relative.inverse_transform_point(point2_1),
-                    normal1,
-                    relative.rotation.inverse() * -normal1,
-                    distance,
-                );
-                contact.transform_by_mut(&m1.start, &m2.start);
-                contact
-            }
-            result => return Err(missing_geometry(&format!("{result:?}"))),
-        }
+        let mut contact = seeded_support_contact(&relative, s1, s2, prediction, direction)
+            .map_err(|error| missing_geometry(&format!("{error:?}")))?
+            .ok_or_else(|| missing_geometry("native GJK/EPA returned no contact"))?;
+        contact.transform_by_mut(&m1.start, &m2.start);
+        contact
     } else {
         avian3d::parry::query::contact(&m1.start, s1, &m2.start, s2, prediction)
             .map_err(|error| format!("unsupported continuous initial contact: {error:?}"))?
@@ -1250,15 +1286,31 @@ impl avian3d::parry::query::QueryDispatcher for CheckedNativeQueries {
         self.contact_queries
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let _span = bevy::log::debug_span!("ccd_cast_native_contact", shape1=?a.shape_type(), shape2=?b.shape_type()).entered();
-        let contact = avian3d::parry::query::DefaultQueryDispatcher
-            .contact(p, a, b, prediction)
-            .map_err(|error| self.reject(format!("unsupported continuous contact: {error:?}")))?;
+        // Triangle vertices need not be centered on their local origin. Seed
+        // every sample from its finite feature, including nonlinear re-samples.
+        let contact = if (a.as_triangle().is_some() || b.as_triangle().is_some())
+            && a.as_ball().is_none()
+            && b.as_ball().is_none()
+        {
+            let center1 = a.compute_local_bounding_sphere().center;
+            let center2 = p * b.compute_local_bounding_sphere().center;
+            let axis = contact_seed_axis(&Pose::IDENTITY, a, center1, p, b, center2);
+            let direction =
+                (axis.is_finite() && axis.length_squared() > 0.0).then(|| axis.normalize());
+            seeded_support_contact(p, a, b, prediction, direction)
+        } else {
+            avian3d::parry::query::DefaultQueryDispatcher.contact(p, a, b, prediction)
+        }
+        .map_err(|error| self.reject(format!("unsupported continuous contact: {error:?}")))?;
         if let Some(contact) = &contact {
             validate_native_contact(contact).map_err(|error| self.reject(error))?;
         }
         if prediction == f64::MAX && contact.is_none() {
-            return Err(self
-                .reject("continuous unbounded native contact query returned no geometry".into()));
+            return Err(self.reject(format!(
+                "continuous unbounded native contact query returned no geometry: pose12={p:?}, types={:?}/{:?}, triangle1={:?}, triangle2={:?}, cylinder1={:?}, cylinder2={:?}, cuboid1={:?}, cuboid2={:?}",
+                a.shape_type(), b.shape_type(), a.as_triangle(), b.as_triangle(),
+                a.as_cylinder(), b.as_cylinder(), a.as_cuboid(), b.as_cuboid(),
+            )));
         }
         Ok(contact)
     }
@@ -2963,6 +3015,56 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn continuous_queries_seed_offset_triangle_features() {
+        use avian3d::parry::{
+            query::QueryDispatcher,
+            shape::{Cylinder, Triangle},
+        };
+        // A nearly touching finite terrain triangle whose local origin is far
+        // from the contact feature. Every nonlinear re-sample needs a feature
+        // seed, with witnesses retained in each shape's own frame.
+        let triangle = Triangle::new(
+            DVec3::new(14.0, -1.22340751442872, -14.0),
+            DVec3::new(14.5, -1.2294075144287198, -14.0),
+            DVec3::new(14.5, -1.26440751442872, -14.5),
+        );
+        let cylinder = Cylinder::new(0.02, 0.34999997913837433);
+        let pose = Pose::from_parts(
+            DVec3::new(14.104314712558768, -1.2037191057296206, -14.083198354068372),
+            DQuat::from_xyzw(
+                -0.026920021362250367,
+                -0.9226774210591173,
+                0.03544966899621409,
+                0.38299479119906205,
+            ),
+        );
+        for swapped in [false, true] {
+            let (a, b, relative): (
+                &dyn avian3d::parry::shape::Shape,
+                &dyn avian3d::parry::shape::Shape,
+                Pose,
+            ) = if swapped {
+                (&cylinder, &triangle, pose.inverse())
+            } else {
+                (&triangle, &cylinder, pose)
+            };
+            let queries = CheckedNativeQueries::default();
+            let contact = queries
+                .contact(&relative, a, b, f64::MAX)
+                .unwrap()
+                .expect("an enclosing query must retain native contact geometry");
+            validate_native_contact(&contact).unwrap();
+            assert!(contact.dist.abs() < 1e-6, "{contact:?}");
+            assert!(
+                ((relative * contact.point2 - contact.point1).dot(contact.normal1) - contact.dist)
+                    .abs()
+                    < 1e-12
+            );
+            assert!(queries.failure.into_inner().unwrap().is_none());
+        }
     }
 
     #[test]

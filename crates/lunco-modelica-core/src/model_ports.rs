@@ -15,21 +15,14 @@ use std::hash::{Hash, Hasher};
 
 /// Register the workbench Modelica input owner and its topology lifecycle.
 pub(crate) fn install(app: &mut App) {
+    if !app.is_plugin_added::<lunco_port_core::ScalarPortContractsPlugin>() {
+        app.add_plugins(lunco_port_core::ScalarPortContractsPlugin);
+    }
     app.init_resource::<PortRegistry>()
         .init_resource::<PortTopologyRevision>()
         .init_resource::<PortTopologyState>()
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ModelicaModel>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ModelicaModel>)
-        .add_observer(
-            lunco_port_core::ports::bump_port_topology_on_add::<
-                lunco_modelica_runtime::ModelicaSignalLayout,
-            >,
-        )
-        .add_observer(
-            lunco_port_core::ports::bump_port_topology_on_remove::<
-                lunco_modelica_runtime::ModelicaSignalLayout,
-            >,
-        )
         .add_systems(Update, publish_modelica_input_topology);
     register_port_backend(&mut app.world_mut().resource_mut::<PortRegistry>());
 }
@@ -55,7 +48,7 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
         world.get::<ModelicaModel>(entity).map_or(0, |model| {
             modelica_input_topology_key(
                 model,
-                world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity),
+                world.get::<lunco_port_core::ScalarPortContracts>(entity),
             )
         })
     },
@@ -75,15 +68,19 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
         }
     },
     metadata: |world, entity, name, direction| {
-        let unit = match world.get::<lunco_modelica_runtime::ModelicaSignalLayout>(entity) {
-            Some(layout) => layout
-                .unit_reference(name)
-                .expect("Modelica unit metadata carries a non-empty authored identity"),
-            None => None,
-        };
+        let contract = world
+            .get::<lunco_port_core::ScalarPortContracts>(entity)
+            .and_then(|contracts| contracts.get(name));
+        if let Some(contract) = contract {
+            return contract.metadata(
+                direction,
+                "Modelica runtime input",
+                "Modelica runtime input",
+            );
+        }
         PortMetadata::scalar(
             direction,
-            unit,
+            None,
             None,
             None,
             "Modelica runtime input",
@@ -159,7 +156,7 @@ fn modelica_input_name_at_slot(model: &ModelicaModel, slot: u64) -> Option<&str>
 
 fn modelica_input_topology_key(
     model: &ModelicaModel,
-    signal_layout: Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
+    signal_layout: Option<&lunco_port_core::ScalarPortContracts>,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     model.model_name.hash(&mut hasher);
@@ -170,7 +167,7 @@ fn modelica_input_topology_key(
         name.hash(&mut hasher);
     }
     signal_layout
-        .map(|layout| layout.port_contract_topology_key())
+        .map(|layout| layout.topology_key())
         .hash(&mut hasher);
     hasher.finish()
 }
@@ -180,13 +177,13 @@ fn publish_modelica_input_topology(
         (
             Entity,
             &ModelicaModel,
-            Option<&lunco_modelica_runtime::ModelicaSignalLayout>,
+            Option<&lunco_port_core::ScalarPortContracts>,
         ),
         (
             Without<SimComponent>,
             Or<(
                 Changed<ModelicaModel>,
-                Changed<lunco_modelica_runtime::ModelicaSignalLayout>,
+                Changed<lunco_port_core::ScalarPortContracts>,
             )>,
         ),
     >,
@@ -197,10 +194,7 @@ fn publish_modelica_input_topology(
         let model_changed = state
             .changed::<ModelicaModel>(entity, modelica_input_topology_key(model, signal_layout));
         let signal_contract_changed = signal_layout.is_some_and(|layout| {
-            state.changed::<lunco_modelica_runtime::ModelicaSignalLayout>(
-                entity,
-                layout.port_contract_topology_key(),
-            )
+            state.changed::<lunco_port_core::ScalarPortContracts>(entity, layout.topology_key())
         });
         if model_changed || signal_contract_changed {
             revision.bump();

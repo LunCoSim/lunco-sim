@@ -132,6 +132,10 @@ Native headless readiness is shared through `SimulationCompletionSources` for
 participant workers. Its worker leases control registration lifetime;
 readiness does not consume a receipt. Windowed hosts never block on this wait.
 Complete-cycle continuation checks both coupling and generic progress holds.
+For runtime UI policy work, compare actual immutable input snapshots as well as
+producer change ticks. Equal facts must not schedule another projection merely
+because a presentation component received an equal-value write. Preserve hook
+generation, source lifetime, caller identity and derived vessel invalidation.
 The default communication period is one physics tick; longer periods must be
 authored explicitly.
 For deliberately frozen captures use `StepSimulation` and presentation-timed

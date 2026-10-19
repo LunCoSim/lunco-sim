@@ -144,6 +144,14 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             ));
         };
         let joint_graph_edges = joint_graph.graph().edge_count();
+        let contact_graph = world
+            .get_resource::<avian3d::prelude::ContactGraph>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "PhysicsPerformance: Avian contact graph is not installed",
+                )
+            })?;
         let continuous = world
             .get_resource::<lunco_physics::ContinuousCollisionDiagnostics>()
             .ok_or_else(|| {
@@ -172,6 +180,8 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "joints": joints,
             "joint_links": joint_links,
             "joint_graph_edges": joint_graph_edges,
+            "contact_graph_edges": contact_graph.edges.edge_count(),
+            "contact_graph_nodes": contact_graph.edges.node_count(),
             "pending_joints": pending_joints,
             "detach_requests": detach_requests,
             "detach_sets": detach_sets,
@@ -240,18 +250,66 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         let disabled = world
             .get::<avian3d::prelude::RigidBodyDisabled>(entity)
             .is_some();
-        let collider = world.get::<avian3d::prelude::Collider>(entity).is_some();
-        let collider_local_bounds = world
-            .get::<avian3d::prelude::Collider>(entity)
-            .map(|shape| {
-                let bounds = shape.aabb(bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY);
+        let colliders = lunco_physics::collider_entities(world, entity).collect::<Vec<_>>();
+        let collider = !colliders.is_empty();
+        let collider_source_paths = colliders
+            .iter()
+            .filter_map(|collider| lunco_usd_avian_contracts::collider_source(world, *collider))
+            .collect::<std::collections::BTreeSet<_>>();
+        let collider_local_bounds = colliders
+            .iter()
+            .filter_map(|collider| {
+                let shape = world.get::<avian3d::prelude::Collider>(*collider)?;
+                let transform = world.get::<avian3d::prelude::ColliderTransform>(*collider);
+                let (position, rotation) = if *collider == entity {
+                    (bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY)
+                } else {
+                    let transform = transform?;
+                    (transform.translation, transform.rotation.0)
+                };
+                Some(shape.aabb(position, rotation))
+            })
+            .reduce(|mut bounds, next| {
+                bounds.min = bounds.min.min(next.min);
+                bounds.max = bounds.max.max(next.max);
+                bounds
+            })
+            .map(|bounds| {
                 api_value!({
                     "frame": "body_local",
                     "min": api_value!([bounds.min.x, bounds.min.y, bounds.min.z]),
                     "max": api_value!([bounds.max.x, bounds.max.y, bounds.max.z]),
                 })
             });
-        let collider_disabled = world.get::<ColliderDisabled>(entity).is_some();
+        let collider_details = colliders.iter().map(|collider| {
+            let position = world.get::<avian3d::prelude::Position>(*collider);
+            let rotation = world.get::<avian3d::prelude::Rotation>(*collider);
+            let transform = world.get::<avian3d::prelude::ColliderTransform>(*collider);
+            let proxy = world.get::<avian3d::collider_tree::ColliderTreeProxyKey>(*collider)
+                .and_then(|key| world.get_resource::<avian3d::collider_tree::ColliderTrees>()?.get_proxy(*key));
+            let bounds = world.get::<avian3d::prelude::Collider>(*collider)
+                .map(|shape| shape.aabb(bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY));
+            api_value!({
+                "source_path": lunco_usd_avian_contracts::collider_source(world, *collider),
+                "physics_position_m": position.map(|p| api_value!([p.0.x, p.0.y, p.0.z])),
+                "physics_rotation_xyzw": rotation.map(|r| api_value!(r.0.to_array())),
+                "body_local_translation_m": transform.map(|t| api_value!([t.translation.x, t.translation.y, t.translation.z])),
+                "body_local_rotation_xyzw": transform.map(|t| api_value!(t.rotation.0.to_array())),
+                "scale": transform.map(|t| api_value!([t.scale.x, t.scale.y, t.scale.z])),
+                "disabled": world.get::<ColliderDisabled>(*collider).is_some(),
+                "broad_phase_present": proxy.is_some(),
+                "broad_phase_body_disabled": proxy.map(|proxy| proxy.flags.contains(avian3d::collider_tree::ColliderTreeProxyFlags::BODY_DISABLED)),
+                "shape_local_bounds": bounds.map(|bounds| api_value!({
+                    "frame": "collider_local",
+                    "min": api_value!(bounds.min.to_array()),
+                    "max": api_value!(bounds.max.to_array()),
+                })),
+            })
+        }).collect::<Vec<_>>();
+        let collider_disabled = collider
+            && colliders
+                .iter()
+                .all(|collider| world.get::<ColliderDisabled>(*collider).is_some());
         let authored_mass = world.get::<Mass>(entity);
         let authored_inertia = world.get::<AngularInertia>(entity);
         let authored_center_of_mass = world.get::<CenterOfMass>(entity);
@@ -418,8 +476,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
-            "collider_source_paths": if collider {world.get::<lunco_usd_avian_contracts::UsdColliderSources>(entity).map(|sources|sources.0.clone())} else {None},
+            "collider_source_paths": if collider {Some(collider_source_paths.into_iter().collect::<Vec<_>>())} else {None},
             "collider_local_bounds": collider_local_bounds,
+            "colliders": collider_details,
             "collider_disabled": collider_disabled,
             "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),
             "mass_override_active": world.get::<NoAutoMass>(entity).is_some(),

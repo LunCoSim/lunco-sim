@@ -97,7 +97,7 @@ depend on the full USD physics projector;
 `lunco-usd-avian-joints` owns native Avian joint construction, seating, solver
 admission, pair filtering, and graph-safe detach; `lunco-usd-avian` owns
 OpenUSD physics projection and translates authored joint facts into that generic
-boundary. `lunco-usd-avian-reader` collects compound geometry only from active
+boundary. `lunco-usd-avian-reader` collects body-owned collision sources only from active
 composed descendants, stopping at deactivated subtrees and nested rigid bodies.
 Inactive proxy geometry cannot suppress an active hull or contribute a collider;
 prepared and live readers obey this same contract;
@@ -788,12 +788,33 @@ full projected scene each Update.
 ### Compound collision ownership
 
 `UsdAvianPlugin` reads the composed stage, including referenced descendants, when
-it builds a rigid body's one Avian compound collider. A prim carrying both
+it realizes each authored collision prim as a native collider child of one rigid
+body. `ColliderOf` / `RigidBodyColliders` owns attachment, aggregation and linked
+teardown; derived entities carry `UsdColliderSource` without duplicating
+`UsdPrimPath` on the visual hierarchy. A prim carrying both
 `PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` contributes its own shape at
 identity in body space; collision-enabled descendants contribute their
 root-relative transforms. The body's ECS transform owns the root prim's scale,
 rotation, and placement exactly once. Nested rigid bodies remain separate
-ownership boundaries, and their shapes are not folded into the ancestor.
+ownership boundaries, and their shapes are not folded into the ancestor. The bridge
+reconciles every attached proxy through native `ColliderOf` admission before
+scale, mass and broad-phase preparation, including body-mode and readiness
+transitions. `BodyMassFromColliders` reduces the native collider mass properties
+in stable source order to fill automatic mass, inertia and center-of-mass fields.
+Native override preparation and co-simulation retain ownership of explicit
+computed properties through `NoAuto*`; an explicit mass rescales only automatic
+inertia. Nested bodies and visual descendants never add mass to that
+geometry reduction. Contact orientation uses the same stable physics identities.
+The native `MassPropertyHelper` traverses the complete entity hierarchy without
+a rigid-body boundary; USD mass ownership therefore reduces the native
+`ColliderMassProperties` through `RigidBodyColliders` and Parry's public f64
+mass-property math. Body-local transforms, reduction and computed results stay
+f64. Native preparation invalidates the computed properties when geometry,
+density or overrides change. That invalidation and membership changes wake the
+body reduction; unchanged bodies do not repeat it each tick.
+The physics owner registers native contact and constraint graph reset operations
+through `init_scene_resource_with`; these run after entity-removal observers,
+so full reload also releases isolated native contact nodes.
 
 This rule applies equally to the live composed reader and the instance-scoped
 view over the shared prepared plan used for runtime references. Consequently,
@@ -885,11 +906,12 @@ def Cube "Pad" ( prepend apiSchemas = [..., "PhysicsFilteredPairsAPI"] )
 ```
 
 Read by `lunco-usd-avian-filters::filtered_pairs`, which resolves each end to the entity
-that actually owns the collider — a collider under a body folds into that body's
-compound shape, so naming either resolves to the body — and hands the pair to
+that owns the named body or exact source collider and hands the pair to
 avian's one `CollisionHooks` slot (`UsdCollisionFilter`, installed by
 `PhysicsPlugins::with_collision_hooks` in `lunco-luncosim`). Filtering is
-symmetric: one opinion is the whole pair.
+symmetric: one opinion is the whole pair. A body endpoint filters every attached
+collider; a collider endpoint filters only that authored surface. Native hook
+flags propagate to the attached collider proxies before collision detection.
 
 Two properties worth knowing:
 
@@ -1328,15 +1350,14 @@ Primitive collision derivation uses `LunCoDerivedGeometryAPI` with the registere
 `lunco:derived:source` relationship. Cube and Cylinder proxies must be siblings
 with identical positive double dimensions, axes and active transform stacks.
 `lunco-usd-avian-reader` rejects stale derivations at the same cook boundary used
-by runtime and authoring queries. The runtime publishes `UsdColliderSources` with
-the admitted collider; `QueryPhysicsState.collider_source_paths` reports those
-facts. Contact diagnostics retain collider identity and available composite
-part evidence. Continuous contacts carry their known part indices; stock Avian
-discrete manifolds do not retain those indices. Admitted provenance maps known
-parts to `contact_debug(...).parts[].source1` and `source2`; unknown compound
-membership is `()`. Internal mesh triangles share their owning non-compound
-source. Each row carries its applied normal impulse. Composed source geometry is
-not substituted silently. NURBS mesh derivation
+by runtime and authoring queries. Each admitted collider publishes one
+`UsdColliderSource`; `QueryPhysicsState.collider_source_paths` and body-local
+bounds aggregate the body's native attached colliders, excluding nested bodies.
+Contact diagnostics aggregate the same native relationship and resolve
+`contact_debug(...).parts[].source1` and `source2` directly from the participating
+colliders. Each row carries its applied normal impulse. Internal mesh hulls or
+triangles share their authored collider source; native subshape indices remain
+optional facts. Composed source geometry is not substituted silently. NURBS mesh derivation
 uses the same API with its source cook fingerprint and refinement settings.
 
 `RemoveRelationship` removes only the selected authored layer's opinion, restores

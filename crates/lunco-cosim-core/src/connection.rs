@@ -4,8 +4,7 @@
 //! ports (SSP: Connection). The PORTS themselves are not declared by a component
 //! here — every participant's port surface is answered by
 //! [`lunco_port_core::ports::PortRegistry`], live, from whatever backend owns the
-//! value. (A `SimPort`/`SimPorts` metadata pair used to declare them alongside;
-//! nothing attached it and nothing read it once the registry landed.)
+//! value.
 //!
 //! `startElement.startConnector → endElement.endConnector`
 
@@ -38,11 +37,11 @@ use bevy::prelude::*;
 ///
 /// ## Affine transform (SSP `LinearTransformation`)
 ///
-/// The propagated value is `source * scale + offset`. `scale` is the SSP
-/// connection *factor* and `offset` the SSP *offset* — together they express
-/// unit conversions (Celsius↔Kelvin), sensor zero-points, and actuator gains
-/// (e.g. a normalized command port → physical units). `offset` defaults to
-/// `0.0` so pure-gain wires need not name it.
+/// Source values convert to the target's declared unit before applying
+/// `source_in_target_units * scale + offset`, following SSP. The authored gain
+/// and offset therefore use target units. Both resolved unit definitions must
+/// be compatible; when either side omits a base-unit definition, FMI specifies
+/// copying the raw value before applying the authored transform.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct SimConnection {
@@ -59,10 +58,7 @@ pub struct SimConnection {
     /// its measured angle are both `angle`), which is exactly why
     /// `PortRegistry::read_input_port` exists alongside `read_output_port`.
     ///
-    /// Default `false` keeps every existing wire reading outputs. Before this flag,
-    /// the wiring pass accepted an authored `inputs:` source and propagation then
-    /// read it with `read_output_port`, which input-only backends answer `None` to —
-    /// so the wire silently contributed nothing, forever, with no diagnostic.
+    /// `false` selects the output side; `true` selects the readable input side.
     pub start_is_input: bool,
     /// Entity owning the target port.
     pub end_element: Entity,
@@ -70,8 +66,89 @@ pub struct SimConnection {
     pub end_connector: String,
     /// Multiplicative factor applied during propagation (SSP factor).
     pub scale: f64,
-    /// Additive offset applied after scaling (SSP offset). `value = src*scale + offset`.
+    /// Additive offset in target units, applied after conversion and scaling.
     pub offset: f64,
+}
+
+impl SimConnection {
+    /// Total data-plane order, shared by initial admission and steady exchange.
+    /// Distinct transforms of one source are distinct contributions; their
+    /// coefficients must also break ties because f64 addition is not associative.
+    pub fn compare_authoritative(&self, other: &Self, world: &World) -> std::cmp::Ordering {
+        let gid = |entity| {
+            world
+                .get::<lunco_core::GlobalEntityId>(entity)
+                .map(|id| id.get())
+        };
+        gid(self.end_element)
+            .cmp(&gid(other.end_element))
+            .then_with(|| self.end_element.to_bits().cmp(&other.end_element.to_bits()))
+            .then_with(|| self.end_connector.cmp(&other.end_connector))
+            .then_with(|| gid(self.start_element).cmp(&gid(other.start_element)))
+            .then_with(|| self.start_connector.cmp(&other.start_connector))
+            .then_with(|| self.start_is_input.cmp(&other.start_is_input))
+            .then_with(|| {
+                self.start_element
+                    .to_bits()
+                    .cmp(&other.start_element.to_bits())
+            })
+            .then_with(|| self.scale.to_bits().cmp(&other.scale.to_bits()))
+            .then_with(|| self.offset.to_bits().cmp(&other.offset.to_bits()))
+    }
+
+    /// Resolve the complete SSP affine transform from the live port owners.
+    /// Binding, initialization and compiled propagation share this one reader.
+    /// The fixed-step fabric caches these coefficients until topology changes.
+    pub fn resolved_transform(
+        &self,
+        registry: &lunco_port_core::ports::PortRegistry,
+        world: &World,
+    ) -> Result<(f64, f64), String> {
+        if !self.scale.is_finite() || !self.offset.is_finite() {
+            return Err("connection gain and offset must be finite".into());
+        }
+        let source = if self.start_is_input {
+            registry.input_port_metadata(world, self.start_element, &self.start_connector)
+        } else {
+            registry.output_port_metadata(world, self.start_element, &self.start_connector)
+        }
+        .ok_or_else(|| {
+            format!(
+                "source port '{}' has no declared contract",
+                self.start_connector
+            )
+        })?;
+        let target = registry
+            .input_port_metadata(world, self.end_element, &self.end_connector)
+            .ok_or_else(|| {
+                format!(
+                    "target port '{}' has no declared input contract",
+                    self.end_connector
+                )
+            })?;
+        source
+            .validate_contract()
+            .map_err(|e| format!("invalid source contract: {e}"))?;
+        target
+            .validate_contract()
+            .map_err(|e| format!("invalid target contract: {e}"))?;
+        let source_unit = source.unit.as_ref().and_then(|unit| unit.definition());
+        let target_unit = target.unit.as_ref().and_then(|unit| unit.definition());
+        let (unit_scale, unit_offset) = match (source_unit, target_unit) {
+            (Some(source), Some(target)) => source
+                .conversion_to(target)
+                .map_err(|e| format!("connection unit conversion rejected: {e}"))?,
+            _ => (1.0, 0.0), // FMI: an omitted BaseUnit leaves the raw connection value unchanged.
+        };
+        let scale = unit_scale * self.scale;
+        let offset = unit_offset * self.scale + self.offset;
+        if !scale.is_finite() || !offset.is_finite() || (self.scale != 0.0 && scale == 0.0) {
+            return Err(
+                "connection unit conversion and authored transform cannot be represented".into(),
+            );
+        }
+        Ok((scale, offset))
+    }
 }
 
 impl Default for SimConnection {
@@ -280,8 +357,8 @@ impl PortHolds {
 }
 
 #[cfg(test)]
-mod port_hold_tests {
-    use super::PortHolds;
+mod tests {
+    use super::{PortHolds, SimConnection};
     use bevy::prelude::World;
 
     #[test]
@@ -331,6 +408,32 @@ mod port_hold_tests {
             vec![(entity, "throttle", 0.4)]
         );
         assert!(!holds.is_empty());
+    }
+    #[test]
+    fn connection_order_distinguishes_transforms_of_the_same_source() {
+        let mut world = World::new();
+        let source = world.spawn(lunco_core::GlobalEntityId::from_raw(10)).id();
+        let target = world.spawn(lunco_core::GlobalEntityId::from_raw(20)).id();
+        let order = |gains: [f64; 3]| {
+            let mut wires: Vec<_> = gains
+                .into_iter()
+                .map(|scale| SimConnection {
+                    start_element: source,
+                    end_element: target,
+                    start_connector: "out".into(),
+                    end_connector: "in".into(),
+                    scale,
+                    ..Default::default()
+                })
+                .collect();
+            wires.sort_by(|a, b| a.compare_authoritative(b, &world));
+            wires
+                .iter()
+                .map(|wire| wire.scale.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(order([1e16, -1e16, 1.0]), order([1.0, 1e16, -1e16]));
+        assert_eq!(order([1e16, -1e16, 1.0]), order([-1e16, 1.0, 1e16]));
     }
 }
 

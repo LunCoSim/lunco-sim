@@ -14,6 +14,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-engineering-values = { path = "../lunco-engineering-values" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }

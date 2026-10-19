@@ -511,8 +511,15 @@ ui.property("state_color", "var(--ok-color)");
 The actual producer should be scheduled with the engine and protected by
 Bevy change detection or a producer-owned fingerprint. Continuous inputs are
 coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
-20 Hz); discrete lifecycle facts should use an event observer. Camera status
-is the latter. `EngineExposures.revision` advances only when a complete surface
+20 Hz); discrete lifecycle facts should use an event observer. The preparation
+owner compares the complete typed facts, telemetry, derived vessel data and
+caller identity before admitting work. Equal snapshots retain their published
+view; advancing the caller's time sample or sequence alone does not rerun a
+data projection. Clocked animation belongs to the presentation owner. Policy
+generation, source lifetime, caller route/phase/clock/producer and changed
+inputs still admit a fresh projection. The immutable admitted snapshot is
+shared with its worker and is retired with its surface or scene.
+Camera status uses event observers. `EngineExposures.revision` advances only when a complete surface
 changes (including its preparation state) or is retired; it is not a frame counter.
 
 `lunco-luncosim-exposures` captures immutable facts and typed caller context,

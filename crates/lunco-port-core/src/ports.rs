@@ -3,7 +3,7 @@
 //!
 //! A *port* is a named scalar (`f64`) on a participant entity. Modelica variables,
 //! avian rigid-body state, joint angles, the SysML/hardware "nervous system"
-//! ports, and (in future) an imported FMU all present as ports, so that wires,
+//! ports, and imported FMUs all present as ports, so that wires,
 //! the API (`ListPorts` / `GetPort` / `SetPorts`), the UI inspector, and every
 //! scripting runtime (rhai/python) treat them uniformly — the FMI/SSP contract.
 //!
@@ -15,8 +15,8 @@
 //! backends downward and **consume** the registry, with nobody depending "up".
 //! This is what lets `lunco-scripting` reach ports even though `lunco-cosim`
 //! (which owns the avian/joint/Modelica backends) depends ON scripting: both
-//! depend down on this module. A future FMU-import or script-defined component is
-//! just one more registered backend the wire engine then honours.
+//! depend down on this module. FMUs reuse the map-backed backend; a script-defined component can
+//! register its owner through the same boundary.
 //!
 //! ## Value model
 //!
@@ -2352,6 +2352,22 @@ impl PortRegistry {
         r: &ResolvedPort,
         value: f64,
     ) -> Result<(), PortWriteError> {
+        let prepared = self.prepare_resolved_input_write(world, entity, r, value)?;
+        self.commit_validated_input_write(world, &prepared);
+        Ok(())
+    }
+
+    /// Validate a cached input locator without applying its value. Coupled
+    /// exchanges prepare every target before committing their shared batch.
+    /// Cached locators retain the same live-owner and metadata checks as named
+    /// writes; a stale locator is never rerouted to a different owner.
+    pub fn prepare_resolved_input_write(
+        &self,
+        world: &World,
+        entity: Entity,
+        r: &ResolvedPort,
+        value: f64,
+    ) -> Result<PreparedPortWrite, PortWriteError> {
         if r.side != ResolvedPortSide::Input {
             return Err(PortWriteError {
                 port: r.name.to_string(),
@@ -2386,8 +2402,7 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        self.commit_validated_input_write(world, &prepared);
-        Ok(())
+        Ok(prepared)
     }
 
     fn port_metadata_for_backend(

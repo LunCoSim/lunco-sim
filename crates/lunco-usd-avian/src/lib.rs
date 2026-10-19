@@ -11,14 +11,15 @@
 //!
 //! Our loader follows this standard:
 //! - **Parent with RigidBodyAPI** → ONE `RigidBody::Dynamic` + `SelectableRoot`
-//! - **Children with CollisionAPI** → `Collider` only (no independent `RigidBody`)
+//! - **CollisionAPI prims** → physics-only `Collider` children with source identity,
+//!   attached through `ColliderOf` (no independent `RigidBody`)
 //!
 //! ## Mapped Attributes
 //!
 //! | USD Attribute | Avian3D Component | Notes |
 //! |---|---|---|
 //! | `PhysicsRigidBodyAPI` (parent) | `RigidBody::Dynamic` | ONE per compound assembly |
-//! | `PhysicsCollisionAPI` (child) | `Collider` | Aggregated into parent compound |
+//! | `PhysicsCollisionAPI` | `Collider`, `ColliderOf`, `UsdColliderSource` | One native collider per collision prim |
 //! | `physics:mass` | `Mass` | On the rigid body root |
 //! | `physics:linearDamping` | `LinearDamping` | |
 //! | `physics:angularDamping` | `AngularDamping` | |
@@ -46,8 +47,6 @@ use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::schedule::common_conditions::any_with_component;
-#[cfg(test)]
-use bevy::math::DQuat;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_usd_avian_core::report_physics_runtime_fault;
@@ -73,7 +72,7 @@ use lunco_usd_avian_contracts::{
 use lunco_usd_avian_reader::{
     collider::{
         ColliderBuildOutcome, ColliderProjectionError, build_collider_from_usd,
-        collect_child_colliders_from_usd,
+        collect_body_colliders_from_usd,
     },
     joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
@@ -449,7 +448,12 @@ fn prepare_physics_teardown(
         )>();
         query
             .iter(world)
-            .filter(|entity| scene_entities.contains(entity))
+            .filter(|entity| {
+                scene_entities.contains(entity)
+                    || world
+                        .get::<ColliderOf>(*entity)
+                        .is_some_and(|owner| scene_entities.contains(&owner.body))
+            })
             .collect()
     };
 
@@ -507,6 +511,10 @@ impl Plugin for UsdAvianPlugin {
         // scene it would make a fresh `PhysicsScene` look like a conflicting
         // duplicate of a prim that no longer exists.
         app.init_resource::<CollisionGroupTables>();
+        app.add_systems(FixedPostUpdate,
+            lunco_physics::body_mass::update_body_mass_from_colliders
+                .after(avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems::UpdateComputedMassProperties)
+                .before(PhysicsSystems::StepSimulation));
         app.add_systems(
             lunco_core::SceneTeardown,
             |mut commands: Commands, mut groups: ResMut<CollisionGroupTables>| {
@@ -675,7 +683,10 @@ fn add_collider_from_usd(
                         .to_owned(),
                 });
             }
-            commands.entity(entity).try_insert(collider);
+            commands.entity(entity).try_insert((
+                collider,
+                lunco_usd_avian_contracts::UsdColliderSource(sdf_path.to_string()),
+            ));
         }
         ColliderBuildOutcome::UnsupportedGeometry { type_name }
             if reader.has_api_schema(sdf_path, ptok::PHYSICS_COLLISION_API) =>
@@ -813,6 +824,11 @@ fn build_terrain_mesh_colliders(
                     .entity(entity)
                     .try_insert(c)
                     .remove::<PendingTerrainCollider>();
+                if let Some(path) = prim_path {
+                    commands.entity(entity).try_insert(
+                        lunco_usd_avian_contracts::UsdColliderSource(path.path.clone()),
+                    );
+                }
             }
             None => {
                 warn!("[usd-avian] terrain mesh has no usable geometry — no collider built");
@@ -827,22 +843,11 @@ fn build_terrain_mesh_colliders(
 /// This system runs in the `Update` schedule and processes all `UsdPrimPath` entities
 /// that haven't been marked with `UsdPhysicsProjected` yet.
 ///
-/// # USD Compound Rigid Body Standard
-///
-/// Per OpenUSD spec, a prim with `PhysicsRigidBodyAPI` aggregates all descendant
-/// colliders into ONE compound rigid body. Children with only `PhysicsCollisionAPI`
-/// contribute collider shapes but are NOT independent bodies.
-///
-/// # Processing
-///
-/// **Compound body root (PhysicsRigidBodyAPI):**
-/// - Reads all child collider shapes from USD
-/// - Builds ONE `Collider::compound()` on the parent
-/// - Adds `RigidBody::Dynamic` + `SelectableRoot` + mass/damping/friction
-///
-/// **Collider children (PhysicsCollisionAPI only):**
-/// - Become pure visuals — no RigidBody, no Collider
-/// - Their shapes are included in the parent's compound collider
+/// Each `PhysicsRigidBodyAPI` prim owns one native body. Its authored collision
+/// prims are realized as physics-only collider children linked by `ColliderOf`.
+/// Source identity, material and filters belong to each collider; motion, mass
+/// overrides and joints belong to the body. USD visual entities keep their
+/// authored hierarchy without acquiring duplicate colliders.
 ///
 /// Observer: fires once per entity, the moment the USD structural projection
 /// translates the prim (signalled by inserting `UsdSceneProjected`). CPU visual
@@ -1235,7 +1240,10 @@ fn extract_avian_prim(
             match build_collider_from_usd(reader, sdf_path) {
                 Ok(ColliderBuildOutcome::Built(collider)) => {
                     if lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
-                        commands.entity(entity).try_insert(collider);
+                        commands.entity(entity).try_insert((
+                            collider,
+                            lunco_usd_avian_contracts::UsdColliderSource(sdf_path.to_string()),
+                        ));
                     } else {
                         reject_collider_projection(
                             commands,
@@ -1410,55 +1418,52 @@ fn extract_avian_prim(
             return;
         }
 
-        // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
-        let compound_shapes = {
+        // Prepare the complete body geometry before admitting any of its native
+        // colliders. Each USD source retains its own collider identity.
+        let body_colliders = {
             let _span = bevy::log::info_span!(
-                "usd_avian_compound_collider",
+                "usd_avian_body_colliders",
                 path = %sdf_path,
             )
             .entered();
-            collect_child_colliders_from_usd(reader, sdf_path)
+            collect_body_colliders_from_usd(reader, sdf_path)
         };
-        let compound_shapes = match compound_shapes {
+        let body_colliders = match body_colliders {
             Ok(shapes) => shapes,
             Err(error) => {
                 reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
                 return;
             }
         };
-        let sources = if compound_shapes.shapes.is_empty() {
-            vec![sdf_path.to_string()]
-        } else {
-            compound_shapes.source_paths
-        };
-        commands
-            .entity(entity)
-            .try_insert(lunco_usd_avian_contracts::UsdColliderSources(sources));
-        if !compound_shapes.shapes.is_empty() {
-            let collider = Collider::compound(compound_shapes.shapes);
-            if lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
-                commands.entity(entity).try_insert(collider);
-            } else {
-                reject_collider_projection(
-                    commands,
-                    entity,
-                    sdf_path,
-                    faults,
-                    holds,
-                    ColliderProjectionError::Backend {
-                        prim: sdf_path.to_string(),
-                        detail:
-                            "compound collider bounds are not finite, ordered, or f32-representable"
-                                .to_owned(),
-                    },
-                );
-                return;
-            }
-        } else {
-            if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
-                reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
-                return;
-            }
+        let mut prepared_colliders = Vec::with_capacity(body_colliders.len());
+        for part in body_colliders {
+            let source_path = SdfPath::new(&part.source_path)
+                .expect("collider source was validated by the composed reader");
+            let prepared = read_physics_material(reader, &source_path)
+                .map_err(|error| error.to_string())
+                .and_then(|material| {
+                    collider_density_from_usd(reader, &source_path, sdf_path)
+                        .map(|density| (material, density))
+                        .map_err(|()| "malformed collider density".to_owned())
+                });
+            let (material, density) = match prepared {
+                Ok(prepared) => prepared,
+                Err(detail) => {
+                    reject_collider_projection(
+                        commands,
+                        entity,
+                        sdf_path,
+                        faults,
+                        holds,
+                        ColliderProjectionError::Backend {
+                            prim: source_path.to_string(),
+                            detail,
+                        },
+                    );
+                    return;
+                }
+            };
+            prepared_colliders.push((part, source_path, material, density));
         }
         apply_collision_groups(commands, entity, groups, sdf_path);
         if ccd && simulated && !kinematic {
@@ -1485,9 +1490,47 @@ fn extract_avian_prim(
             ));
             (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
         };
-        commands
-            .entity(entity)
-            .try_insert((body, mobility, lunco_core::SelectableRoot));
+        commands.entity(entity).try_insert((
+            body,
+            mobility,
+            lunco_core::SelectableRoot,
+            lunco_physics::body_mass::BodyMassFromColliders,
+        ));
+        for (part, source_path, material, density) in prepared_colliders {
+            let mut collider = commands.spawn((
+                Name::new(format!("USD collider {}", part.source_path)),
+                Transform::from_translation(part.position.0.as_vec3())
+                    .with_rotation(part.rotation.0.as_quat()),
+                GlobalTransform::default(),
+                ChildOf(entity),
+                ColliderOf { body: entity },
+                ScenePhysicsOwned,
+                lunco_usd_avian_contracts::UsdColliderSource(part.source_path.clone()),
+            ));
+            let collider_entity = collider.id();
+            // All physics admission is applied in one command flush. The body's
+            // exact instance-scoped key has already been queued by its projector.
+            let source = part.source_path;
+            collider.queue(move |mut child: EntityWorldMut| {
+                let key = child
+                    .world()
+                    .get::<lunco_physics::PhysicsOrderKey>(entity)
+                    .map(|key| key.collider_source(&source));
+                let hooks = child.world().get::<ActiveCollisionHooks>(entity).copied();
+                if let Some(key) = key {
+                    child.insert(key);
+                }
+                if let Some(hooks) = hooks {
+                    child.insert(hooks);
+                }
+            });
+            if let Some(density) = density {
+                commands.entity(collider_entity).try_insert(density);
+            }
+            apply_collision_groups(commands, collider_entity, groups, &source_path);
+            insert_physics_material(commands, collider_entity, material);
+            commands.entity(collider_entity).try_insert(part.collider);
+        }
         if !simulated || kinematic {
             commands
                 .entity(entity)
@@ -1498,8 +1541,7 @@ fn extract_avian_prim(
     } else if has_collision_api {
         // ── COLLIDER PRIM, no body of its own ──
         // Per the USD physics spec, a collider belongs to the nearest ancestor
-        // carrying `PhysicsRigidBodyAPI`, which folds it into that body's compound
-        // shape (see the COMPOUND BODY ROOT arm above). Only when NO ancestor is a
+        // carrying `PhysicsRigidBodyAPI`, which owns its native collider child. Only when NO ancestor is a
         // rigid body does the collider stand alone — and then it is static geometry.
         //
         // Ancestry, not `is_root`, is the question: a ground plane authored one
@@ -2036,6 +2078,56 @@ fn build_usd_physics_joints(
     }
 }
 
+/// Resolve density from the nearest authored MassAPI within this body, then
+/// the source's inherited physics material. Stage length units are cubed once.
+fn collider_density_from_usd(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    source: &SdfPath,
+    body: &SdfPath,
+) -> Result<Option<ColliderDensity>, ()> {
+    let mut path = source.to_string();
+    let mut density = None;
+    loop {
+        let prim = SdfPath::new(&path).map_err(|_| ())?;
+        match read_authored_real(reader, &prim, ptok::PHYSICS_DENSITY)? {
+            None | Some(0.0) => {}
+            Some(value) if value.is_finite() && value > 0.0 => {
+                density = Some(value);
+                break;
+            }
+            Some(_) => return Err(()),
+        }
+        if path == body.as_str() {
+            break;
+        }
+        path = path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_owned())
+            .ok_or(())?;
+        if path.is_empty() {
+            return Err(());
+        }
+    }
+    if density.is_none() {
+        density = read_physics_material(reader, source)
+            .map_err(|_| ())?
+            .and_then(|material| material.density)
+            .filter(|density| *density > 0.0)
+            .map(f64::from);
+    }
+    let scale = lunco_usd_bevy_stage::stage_convention(reader)
+        .map_err(|_| ())?
+        .length(1.0);
+    let Some(density) = density else {
+        return Ok(None);
+    };
+    let density = density / scale.powi(3);
+    if !density.is_finite() || density <= 0.0 || density > f32::MAX as f64 {
+        return Err(());
+    }
+    Ok(Some(ColliderDensity(density as f32)))
+}
+
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
@@ -2043,13 +2135,9 @@ fn apply_rigid_body_mass_props(
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
-    // matching `NoAuto*` marker is present. Without it Avian recomputes the
-    // `Computed*` component from collider geometry and density and throws the
-    // authored value away — see `MassPropertyHelper::update_mass_properties`, where
-    // the authored component is read ONLY inside `if no_auto_*`. These markers were
-    // missing, so `physics:mass`, `physics:diagonalInertia` and `physics:centerOfMass`
-    // were all silently inert, as were the `lunco-cosim` mass-props write ports that
-    // set the same components.
+    // matching `NoAuto*` marker is present. Install each override and marker
+    // together before body admission. Co-simulation mass-property ports write
+    // the same components; the body-owned geometry reduction respects them.
     //
     // Note the interaction, which is why `NoAutoMass` alone fixes the common case:
     // with mass authored and inertia NOT authored, Avian runs
@@ -2239,7 +2327,18 @@ fn apply_physics_material(
     //
     // The pairwise combination remains Avian's responsibility. USD describes
     // each surface; it does not average the two surfaces at load time.
-    if let Some(pm) = read_physics_material(reader, sdf_path).map_err(|_| ())? {
+    let material = read_physics_material(reader, sdf_path).map_err(|_| ())?;
+    insert_physics_material(commands, entity, material);
+    Ok(())
+}
+
+/// Realize already validated material values before the next native physics step.
+fn insert_physics_material(
+    commands: &mut Commands,
+    entity: Entity,
+    material: Option<material::PhysicsMaterial>,
+) {
+    if let Some(pm) = material {
         if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
             let d = Friction::default();
             let friction = Friction {
@@ -2278,7 +2377,6 @@ fn apply_physics_material(
             });
         }
     }
-    Ok(())
 }
 
 /// Damping is **not** a UsdPhysics concept — the core spec has no damping
@@ -2377,7 +2475,8 @@ def Cube "Scaled" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 }
 def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 {
-    uniform token[] xformOpOrder = ["xformOp:scale:missing"]
+    double3 xformOp:scale:wide = (1e100, 1, 1)
+    uniform token[] xformOpOrder = ["xformOp:scale:wide"]
 }
 "#;
         let stage = stage_from_source(SOURCE);
@@ -2392,7 +2491,7 @@ def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
         assert_eq!(scaled.scale(), DVec3::new(2.0, 3.0, 4.0));
 
         let error = build_collider_from_usd(&view, &SdfPath::new("/Malformed").unwrap())
-            .expect_err("a transform that names a missing scale op must be rejected");
+            .expect_err("a scale outside the native collider representation must be rejected");
         assert!(error.to_string().contains("/Malformed"));
     }
 }
@@ -2459,7 +2558,13 @@ def Xform "World"
         path: &SdfPath,
     ) -> (Option<RigidBody>, Option<String>, Option<f32>, bool, bool) {
         let mut world = World::new();
-        let e = world.spawn_empty().id();
+        let e = world
+            .spawn((
+                lunco_physics::PhysicsOrderKey(path.to_string()),
+                Transform::IDENTITY,
+                GlobalTransform::default(),
+            ))
+            .id();
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
@@ -2476,7 +2581,10 @@ def Xform "World"
         queue.apply(&mut world);
         (
             world.get::<RigidBody>(e).copied(),
-            world.get::<Collider>(e).map(|c| format!("{c:?}")),
+            lunco_physics::collider_entities(&world, e)
+                .next()
+                .and_then(|collider| world.get::<Collider>(collider))
+                .map(|c| format!("{c:?}")),
             world.get::<Mass>(e).map(|m| m.0),
             world.get::<super::ShouldBeDynamic>(e).is_some(),
             world.get::<SweptCcd>(e).is_some(),
@@ -2492,11 +2600,11 @@ def Xform "World"
         let live = run_extract(&view, &rover);
 
         // The LIVE path actually produced a full dynamic body: Kinematic
-        // (settling to Dynamic via ShouldBeDynamic) + compound collider + mass.
+        // (settling to Dynamic via ShouldBeDynamic) + attached colliders + mass.
         assert_eq!(live.0, Some(RigidBody::Kinematic), "live: rigid body");
         assert!(
             live.1.is_some(),
-            "live: compound collider built off the stage"
+            "live: attached colliders built off the stage"
         );
         assert_eq!(
             live.2,
@@ -3363,20 +3471,21 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
     def Cube "Body" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {
         double size = 2
-        uniform token[] xformOpOrder = ["xformOp:unsupported"]
+        double3 xformOp:translate = (1e100, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }
 "#;
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
             .expect("build stage");
         let root = SdfPath::new("/Root").unwrap();
-        let error = collect_child_colliders_from_usd(&stage.view(), &root)
+        let error = collect_body_colliders_from_usd(&stage.view(), &root)
             .expect_err("malformed authored transform must reject compound discovery");
         assert!(error.to_string().contains("/Root/Body"));
     }
 
     #[test]
-    fn composite_compound_child_is_rejected_before_parry_compound_construction() {
+    fn decomposed_mesh_retains_one_authored_collider_identity() {
         let source = r#"#usda 1.0
 def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
 {
@@ -3393,20 +3502,14 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
             .expect("build stage");
         let view = stage.view();
         let root = SdfPath::new("/Root").unwrap();
-        let error = collect_child_colliders_from_usd(&view, &root)
-            .expect_err("a composite child cannot be passed to Parry's flat Compound");
-        assert!(error.to_string().contains("/Root/Proxy"));
-        assert!(error.to_string().contains("composite runtime shape"));
-
+        let parts = collect_body_colliders_from_usd(&view, &root)
+            .expect("each authored collider may retain its own cooked composite shape");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].source_path, "/Root/Proxy");
+        assert!(parts[0].collider.shape_scaled().as_compound().is_some());
         let (has_collider, body) = extract(&view, "/Root");
-        assert!(
-            !has_collider,
-            "invalid compound admission must not insert a collider"
-        );
-        assert_eq!(
-            body, None,
-            "invalid compound admission must not insert a body"
-        );
+        assert!(has_collider);
+        assert_eq!(body, Some(RigidBody::Kinematic));
     }
 
     #[test]
@@ -3424,7 +3527,7 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
             .expect("build stage");
         let root = SdfPath::new("/Root").unwrap();
-        let error = collect_child_colliders_from_usd(&stage.view(), &root)
+        let error = collect_body_colliders_from_usd(&stage.view(), &root)
             .expect_err("an invalid collisionEnabled must reject incomplete compound geometry");
         assert!(
             matches!(error, ColliderProjectionError::Backend { prim, detail }
@@ -3524,7 +3627,13 @@ def Xform "Mission"
         path: &str,
     ) -> (bool, Option<RigidBody>) {
         let mut world = World::new();
-        let entity = world.spawn_empty().id();
+        let entity = world
+            .spawn((
+                lunco_physics::PhysicsOrderKey(path.to_owned()),
+                Transform::IDENTITY,
+                GlobalTransform::default(),
+            ))
+            .id();
         let sdf = SdfPath::new(path).unwrap();
         {
             let mut commands = world.commands();
@@ -3540,7 +3649,9 @@ def Xform "Mission"
         }
         world.flush();
         (
-            world.get::<Collider>(entity).is_some(),
+            lunco_physics::collider_entities(&world, entity)
+                .next()
+                .is_some(),
             world.get::<RigidBody>(entity).copied(),
         )
     }
@@ -3594,9 +3705,7 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let leg = SdfPath::new("/Rig/Leg").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &leg)
-            .expect("valid transforms")
-            .shapes;
+        let pieces = collect_body_colliders_from_usd(&view, &leg).expect("valid transforms");
         assert_eq!(
             pieces.len(),
             1,
@@ -3647,15 +3756,15 @@ def Xform "Body" (prepend apiSchemas = "PhysicsRigidBodyAPI")
             &live as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
             asset.projection_plan.as_ref() as &dyn lunco_usd_bevy_stage::read::UsdReadObject,
         ] {
-            let shapes = collect_child_colliders_from_usd(reader, &root)
-                .unwrap()
-                .shapes;
+            let shapes = collect_body_colliders_from_usd(reader, &root).unwrap();
             assert_eq!(
                 shapes.len(),
                 1,
                 "inactive proxy must not suppress the live hull"
             );
-            let bounds = Collider::compound(shapes).aabb(DVec3::ZERO, DQuat::IDENTITY);
+            let bounds = shapes[0]
+                .collider
+                .aabb(shapes[0].position.0, shapes[0].rotation.0);
             assert_eq!(bounds.min, DVec3::splat(-1.0));
             assert_eq!(bounds.max, DVec3::splat(1.0));
         }
@@ -3698,9 +3807,7 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let hull = SdfPath::new("/Rig/Hull").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &hull)
-            .expect("valid transforms")
-            .shapes;
+        let pieces = collect_body_colliders_from_usd(&view, &hull).expect("valid transforms");
         assert_eq!(
             pieces.len(),
             1,
@@ -3727,7 +3834,7 @@ def Xform "Rig"
     }
 
     /// The other half of the rule: a collider UNDER a rigid body is a piece of that
-    /// body's compound shape, so it gets no collider and no body of its own.
+    /// body's native collider set; its visual entity receives neither component.
     #[test]
     fn collider_under_rigid_body_ancestor_stays_a_compound_piece() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
@@ -3735,29 +3842,22 @@ def Xform "Rig"
         let (has_collider, body) = extract(&cs.view(), "/Mission/CompoundLander/Hull");
         assert!(
             !has_collider,
-            "a collider child must not carry its own collider"
+            "a visual child must not duplicate its native collider"
         );
         assert_eq!(body, None, "nor its own rigid body");
     }
 
-    /// A rigid-body root with NO collider children falls back to its own geometry.
-    /// (It always did; asserted here so the compound arm can never quietly eat it.)
+    /// A collision-enabled rigid-body root contributes its own geometry.
     #[test]
     fn rigid_body_root_without_collider_children_uses_its_own_shape() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(
-            collect_child_colliders_from_usd(&view, &lander)
-                .expect("valid transforms")
-                .shapes
-                .is_empty()
-        );
-        assert!(matches!(
-            build_collider_from_usd(&view, &lander),
-            Ok(ColliderBuildOutcome::Built(_))
-        ));
+        let parts = collect_body_colliders_from_usd(&view, &lander).expect("valid transforms");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].source_path, "/Mission/BareLander");
+        assert_eq!(parts[0].position.0, DVec3::ZERO);
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
             has_collider,
@@ -3780,7 +3880,7 @@ def Xform "Rig"
         let (has_collider, body) = extract(&view, "/Mission/XformBody/Shell");
         assert!(
             !has_collider,
-            "a body's collider child must stay a compound piece"
+            "the visual collider prim must not acquire an independent body"
         );
         assert_eq!(body, None);
     }
@@ -3846,41 +3946,52 @@ def Cube "Part" (
         let assembly = SdfPath::new("/Scene/Assembly").unwrap();
         let live_view = live.view();
         assert!(live_view.has_prim(&SdfPath::new("/Scene/Assembly/EndCap").unwrap()));
-        let live_parts = collect_child_colliders_from_usd(&live_view, &assembly)
+        let live_parts = collect_body_colliders_from_usd(&live_view, &assembly)
             .expect("live composed reference has valid collision transforms");
         assert_eq!(
-            live_parts.source_paths,
+            live_parts
+                .iter()
+                .map(|part| part.source_path.as_str())
+                .collect::<Vec<_>>(),
             [
                 "/Scene/Assembly",
                 "/Scene/Assembly/BaseCap",
                 "/Scene/Assembly/EndCap"
             ]
         );
-        let live_shapes = live_parts.shapes;
+        let live_shapes = &live_parts;
         assert_eq!(
             live_shapes.len(),
             3,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
-        assert_eq!(live_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].position.0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].position.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(live_shapes[2].position.0, DVec3::new(0.0, 2.0, 0.0));
 
         let prepared =
             UsdStageAsset::from_recipe(recipe).expect("prepare composed referenced body");
-        let prepared_parts =
-            collect_child_colliders_from_usd(&*prepared.projection_plan, &assembly)
-                .expect("prepared reference has valid collision transforms");
-        assert_eq!(prepared_parts.source_paths, live_parts.source_paths);
-        let prepared_shapes = prepared_parts.shapes;
+        let prepared_parts = collect_body_colliders_from_usd(&*prepared.projection_plan, &assembly)
+            .expect("prepared reference has valid collision transforms");
+        assert_eq!(
+            prepared_parts
+                .iter()
+                .map(|part| &part.source_path)
+                .collect::<Vec<_>>(),
+            live_parts
+                .iter()
+                .map(|part| &part.source_path)
+                .collect::<Vec<_>>()
+        );
+        let prepared_shapes = &prepared_parts;
         assert_eq!(
             prepared_shapes.len(),
             3,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, -2.0, 0.0));
-        assert_eq!(prepared_shapes[2].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].position.0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].position.0, DVec3::new(0.0, -2.0, 0.0));
+        assert_eq!(prepared_shapes[2].position.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

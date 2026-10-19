@@ -35,8 +35,8 @@ fn ucum_unit(symbol) {
     if symbol == "J" { return _unit(symbol, _dimension(2, 1, -2, 0, 0, 0, 0), 1.0, 0.0, true); }
     if symbol == "W" { return _unit(symbol, _dimension(2, 1, -3, 0, 0, 0, 0), 1.0, 0.0, true); }
     if symbol == "Hz" { return _unit(symbol, _dimension(0, 0, -1, 0, 0, 0, 0), 1.0, 0.0, true); }
-    if symbol == "rad" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0, true); }
-    if symbol == "deg" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 0.017453292519943295, 0.0, false); }
+    if symbol == "rad" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0, true).with_angle_power(1); }
+    if symbol == "deg" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 0.017453292519943295, 0.0, false).with_angle_power(1); }
     ()
 }
 

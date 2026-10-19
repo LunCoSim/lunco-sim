@@ -47,6 +47,8 @@ pub enum AsyncWorkKind {
     ModelicaSourceParse,
     /// Prepare a Modelica source library.
     ModelicaLibraryPreparation,
+    /// Prepare an external FMI archive and native instance on its owning thread.
+    FmiPreparation,
     /// Synthesize and validate a Modelica network from an immutable USD snapshot.
     ModelicaNetworkSynthesis,
     /// Compile a Rhai scenario source revision.

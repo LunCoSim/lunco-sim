@@ -330,21 +330,25 @@ fn collider_geometry_parts(
     })
 }
 
-/// Geometry and provenance admitted together by the compound collider reader.
+/// One authored collider and its provenance, prepared before native body admission.
 #[derive(Debug)]
-pub struct AuthoredCompoundCollider {
-    pub shapes: Vec<(Position, Rotation, Collider)>,
-    pub source_paths: Vec<String>,
+pub struct AuthoredBodyCollider {
+    /// Composed USD collision prim that owns this cooked shape.
+    pub source_path: String,
+    /// Pose relative to the owning rigid body, with intermediate Xforms composed.
+    pub position: Position,
+    pub rotation: Rotation,
+    /// Geometry with descendant scale cooked into the shape.
+    pub collider: Collider,
 }
 
-/// Collect descendant collision shapes and their admitted source paths from
+/// Collect body-root and descendant collision shapes and their admitted source paths from
 /// the composed stage, stopping at independently owned rigid bodies.
-pub fn collect_child_colliders_from_usd(
+pub fn collect_body_colliders_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     parent_path: &SdfPath,
-) -> Result<AuthoredCompoundCollider, ColliderProjectionError> {
-    let mut shapes = Vec::new();
-    let mut source_paths = Vec::new();
+) -> Result<Vec<AuthoredBodyCollider>, ColliderProjectionError> {
+    let mut colliders = Vec::new();
     let convention = lunco_usd_bevy_stage::stage_convention(reader).map_err(|_| {
         ColliderProjectionError::Transform(TransformReadError {
             prim: parent_path.as_str().to_owned(),
@@ -355,18 +359,16 @@ pub fn collect_child_colliders_from_usd(
     // direct children — a collider under an intermediate grouping `Xform`
     // (`/Rover/Shapes/Hull`) is still this body's geometry. Descendant walk with
     // each prim's transform composed in the root's frame; recursion stops at a
-    // nested-body boundary (see `gather_compound_candidates`).
+    // nested-body boundary (see `gather_body_collider_candidates`).
     let mut candidates = Vec::new();
-    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
+    gather_body_collider_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
     // `PhysicsCollisionAPI` is valid on the rigid-body prim itself. When that
-    // body also has descendants, its own shape must become the identity member
-    // of the compound; otherwise the presence of any child silently discards
-    // part of the authored collision contract. Its local transform is already
-    // the ECS body's transform, so the shape is untransformed in body space.
-    if !candidates.is_empty() && reader.has_api_schema(parent_path, ptok::PHYSICS_COLLISION_API) {
+    // prim carries geometry, include it at identity in body space. Its local
+    // transform already belongs to the ECS body.
+    if reader.has_api_schema(parent_path, ptok::PHYSICS_COLLISION_API) {
         candidates.insert(0, (parent_path.clone(), Transform::IDENTITY));
     }
-    // Equivalent composed readers must produce the same native part indices
+    // Equivalent composed readers must produce the same collider admission
     // and mass-property reduction order. USD child presentation order does not
     // define physical assembly order; composed prim identity does.
     candidates.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
@@ -396,7 +398,7 @@ pub fn collect_child_colliders_from_usd(
 
     for (child_path, mut child_tf, purpose) in candidates {
         // A typed trigger zone owns an overlap sensor entity of its own.  It is
-        // deliberately not part of an ancestor body's compound collider: doing
+        // deliberately not part of an ancestor body's solid collider set: doing
         // both would create a second, solid copy attached to the rigid body and
         // the vehicle would be pushed by the touchdown volume before contact.
         // Applying LunCoTriggerZoneAPI is the sensor contract; its optional
@@ -418,7 +420,7 @@ pub fn collect_child_colliders_from_usd(
 
         // Only descendants that APPLY `PhysicsCollisionAPI` are colliders — same
         // rule the standalone arm uses. Bare geometry (a light housing, a decal
-        // plane) contributes nothing to the compound shape.
+        // plane) contributes nothing to the collider set.
         if !reader.has_api_schema(&child_path, ptok::PHYSICS_COLLISION_API) {
             continue;
         }
@@ -438,7 +440,7 @@ pub fn collect_child_colliders_from_usd(
                 return Err(ColliderProjectionError::Backend {
                     prim: child_path.to_string(),
                     detail: format!(
-                        "malformed {}; compound collider would otherwise be incomplete",
+                        "malformed {}; body collision geometry would otherwise be incomplete",
                         ptok::PHYSICS_COLLISION_ENABLED
                     ),
                 });
@@ -449,11 +451,11 @@ pub fn collect_child_colliders_from_usd(
         }
 
         // For axis-aligned primitive children, fold the authored axis into the
-        // child's compound-local rotation so the canonical collider lines
+        // child's body-local rotation so the canonical collider lines
         // up with the authored axis (mirrors what lunco-usd-bevy does
         // for the entity Transform — same canonical `usd_axis_to_quat`).
         // The body root is different: its axis is already on the ECS body
-        // transform, so applying it again inside the compound would rotate the
+        // transform, so applying it again on the child would rotate the
         // root shape twice.
         let is_body_shape = child_path.as_str() == parent_path.as_str();
         if !is_body_shape {
@@ -478,10 +480,8 @@ pub fn collect_child_colliders_from_usd(
             }
         }
 
-        // Build collider from the child's geometry. The candidate transform
-        // carries the complete scale from the body boundary to this prim;
-        // unlike a standalone collider, a compound child has no ECS entity on
-        // which Avian could propagate intermediate Xform scales.
+        // The candidate carries intermediate USD Xform scale. The native collider
+        // is attached directly to the body, so cook that descendant scale here.
         let scale = if is_body_shape {
             Vec3::ONE
         } else {
@@ -508,8 +508,9 @@ pub fn collect_child_colliders_from_usd(
             ColliderBuildOutcome::DeferredMeshAsset => {
                 return Err(ColliderProjectionError::Backend {
                     prim: child_path.to_string(),
-                    detail: "compound body collider geometry cannot be deferred while an external mesh loads"
-                        .to_owned(),
+                    detail:
+                        "body collider geometry cannot be deferred while an external mesh loads"
+                            .to_owned(),
                 });
             }
         };
@@ -529,43 +530,38 @@ pub fn collect_child_colliders_from_usd(
                         .to_owned(),
             });
         }
-        if !lunco_physics::avian_backend_collider_is_leaf(&collider) {
-            return Err(ColliderProjectionError::Backend {
-                prim: child_path.to_string(),
-                detail: format!(
-                    "collider child has composite runtime shape {}; Avian compound children must be leaf shapes",
-                    lunco_physics::avian_backend_collider_shape_kind(&collider)
-                ),
-            });
-        }
-        shapes.push((pos, rot, collider));
-        source_paths.push(child_path.to_string());
+        colliders.push(AuthoredBodyCollider {
+            source_path: child_path.to_string(),
+            position: pos,
+            rotation: rot,
+            // Avian applies the body hierarchy's scale through ColliderTransform.
+            // Bake only the descendant scale here so that native scaling cannot
+            // replace it or multiply it a second time.
+            collider: Collider::from(collider.shape_scaled().clone()),
+        });
     }
 
-    Ok(AuthoredCompoundCollider {
-        shapes,
-        source_paths,
-    })
+    Ok(colliders)
 }
 
-/// Walks every descendant of a compound body root, composing each prim's local
+/// Walks every descendant of a rigid-body root, composing each prim's local
 /// transform into the root's frame.
 ///
 /// Recursion stops at two boundaries:
 /// - A descendant that is its OWN rigid body is not a piece of this body's
-///   compound shape. It is a separate body, and if it is attached at all a
+///   collider set. It is a separate body, and if it is attached at all a
 ///   joint says so — which is how a foot mounts on a leg and a wheel on a
 ///   chassis. Folding its collider in as well gives one piece of geometry two
-///   owners: the compound holds it rigidly in the parent's frame while the
+///   owners: the ancestor body holds it rigidly in the parent's frame while the
 ///   joint tries to move it, and the two fight until a body leaves the world.
 ///   This is the same rule the loader already applies in the other direction
 ///   (a collider with no rigid-body ancestor is static geometry, never a
 ///   body): ownership stops at a body boundary, in both directions.
 /// - A wheel (`physxVehicleWheel:radius`) is independent dynamics handled by
 ///   `lunco-usd-sim` (raycast probe or physical wheel rigid body), NOT a
-///   collider piece of the chassis compound — matches the same skip in
+///   collider piece of the chassis — matches the same skip in
 ///   `process_usd_avian_prims`.
-fn gather_compound_candidates(
+fn gather_body_collider_candidates(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     acc: Transform,
@@ -600,7 +596,7 @@ fn gather_compound_candidates(
             .unwrap_or(Transform::IDENTITY);
         let tf = acc.mul_transform(local);
         out.push((child.clone(), tf));
-        gather_compound_candidates(reader, &child, tf, out)?;
+        gather_body_collider_candidates(reader, &child, tf, out)?;
     }
     Ok(())
 }
@@ -631,8 +627,8 @@ fn gather_compound_candidates(
 /// - **Sphere**: `double radius` (default 1.0).
 /// - **Cylinder**: `double radius`, `double height` (defaults 1, 2). Avian's
 ///   cylinder is Y-axial and its plane surface is +Y-normal; authored axes are
-///   honored by the entity transform or, for compound children, by
-///   `collect_child_colliders_from_usd`.
+///   honored by the entity transform or, for attached children, by
+///   `collect_body_colliders_from_usd`.
 ///
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
@@ -654,7 +650,7 @@ pub fn build_collider_from_usd(
 
 /// Build a collider with a scale already composed from the owning body frame to
 /// the geometry prim. Standalone colliders obtain this from their own local
-/// transform; compound children obtain it from [`gather_compound_candidates`],
+/// transform; attached children obtain it from [`gather_body_collider_candidates`],
 /// because intermediate USD Xforms have no corresponding Avian collider entity.
 pub fn build_collider_from_usd_at_scale(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
