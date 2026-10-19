@@ -2675,14 +2675,20 @@ fn live_runtime_port_exists(
         let Some(path) = entity.get::<lunco_usd_bevy_scene::UsdPrimPath>() else {
             continue;
         };
-        if path.stage_handle.id() != stage_id || path.path != prim.as_str() {
+        if path.stage_handle.id() != stage_id
+            || path.path != prim.as_str()
+            || lunco_usd_bevy_scene::is_preview_only_entity(world, entity.id())
+        {
             continue;
         }
-        return if direction == "output" {
+        let declared = if direction == "output" {
             registry.has_output_port(world, entity.id(), name)
         } else {
             registry.has_input_port(world, entity.id(), name)
         };
+        if declared {
+            return true;
+        }
     }
     false
 }

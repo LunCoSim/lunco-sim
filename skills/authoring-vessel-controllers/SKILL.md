@@ -103,6 +103,10 @@ end MyController;
 
 **Gotchas that will waste hours if you don't know them:**
 
+- Native physical outputs on a Modelica body are validated against the live
+  non-preview port owner. Do not declare a synthetic Modelica output to mirror
+  a native measurement: wire the registered native port directly, preserving its
+  type (for example native `position_y` is `double`).
 - External inputs retain qualified runtime slots and declaration defaults. Wire
   physical producers explicitly; use `SetModelInput` for an authored override.
   A filter belongs in Modelica only when its dynamics are part of the controller.
