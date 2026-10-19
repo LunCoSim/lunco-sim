@@ -193,6 +193,32 @@ fn shape_leaves(
     }
 }
 
+/// Enumerate each unordered pair with a CCD owner in stable collider order.
+/// `active` is the sorted subset produced by the ordered collider traversal.
+/// Walking its remaining suffix avoids both tree allocations and a quadratic
+/// scan of static terrain/scatter pairs, without pruning any eligible pair.
+fn continuous_pair_indices(
+    count: usize,
+    active: &[usize],
+) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut next_active = 0;
+    (0..count).flat_map(move |i| {
+        let owns_ccd = active.get(next_active) == Some(&i);
+        if owns_ccd {
+            next_active += 1;
+        }
+        (i + 1..count)
+            .take(if owns_ccd { count } else { 0 })
+            .chain(
+                active[next_active..]
+                    .iter()
+                    .copied()
+                    .take(if owns_ccd { 0 } else { count }),
+            )
+            .map(move |j| (i, j))
+    })
+}
+
 #[allow(clippy::type_complexity)]
 fn prepare_pairs<H: CollisionHooks>(
     shapes: Query<
@@ -409,27 +435,38 @@ fn prepare_pairs<H: CollisionHooks>(
         .prepared
         .extend(prepared.into_iter().map(|(_, plane)| plane));
     // Static terrain/scatter populations must not create a quadratic pair set.
-    // Generate pairs from CCD owners, then canonicalize their stable indices.
-    let active = all
+    // Only pairs with a CCD owner enter the stable candidate traversal.
+    // These are immutable facts from this step's body query. Resolve each
+    // collider's owner once instead of repeating ECS lookups for every pair.
+    let body_data = all
         .iter()
-        .enumerate()
-        .filter_map(|(i, (_, _, owner, _, _, _, _, _))| {
+        .map(|(_, _, owner, _, _, _, _, _)| {
             bodies
                 .get(owner.body)
                 .ok()
-                .and_then(|(_, _, _, _, ccd)| ccd.map(|_| i))
+                .map(|(kind, position, rotation, center, ccd)| {
+                    (kind, position.0 + rotation.0 * center.0, ccd)
+                })
         })
         .collect::<Vec<_>>();
-    let mut pair_indices = std::collections::BTreeSet::new();
-    for i in active {
-        for j in 0..all.len() {
-            if i != j {
-                pair_indices.insert((i.min(j), i.max(j)));
-            }
-        }
-    }
-    let mut shape_indices = HashMap::new();
-    for (i, j) in pair_indices {
+    let active = body_data
+        .iter()
+        .enumerate()
+        .filter_map(|(i, body)| body.and_then(|(_, _, ccd)| ccd.map(|_| i)))
+        .collect::<Vec<_>>();
+    // A collider rank and leaf ordinal already identify each prepared shape.
+    // Lazily fill these slots to preserve first-encounter shape ordering.
+    let mut leaf_count = 0;
+    let leaf_offsets = leaves
+        .iter()
+        .map(|leaves| {
+            let offset = leaf_count;
+            leaf_count += leaves.len();
+            offset
+        })
+        .collect::<Vec<_>>();
+    let mut shape_indices = vec![None; leaf_count];
+    for (i, j) in continuous_pair_indices(all.len(), &active) {
         let (e1, _, o1, _, _, l1, h1, _) = all[i];
         let (e2, _, o2, _, _, l2, h2, _) = all[j];
         if o1.body == o2.body
@@ -440,8 +477,7 @@ fn prepare_pairs<H: CollisionHooks>(
         {
             continue;
         }
-        let Ok([(k1, bp1, br1, com1, ccd1), (k2, bp2, br2, com2, ccd2)]) =
-            bodies.get_many([o1.body, o2.body])
+        let (Some((k1, center1, ccd1)), Some((k2, center2, ccd2))) = (body_data[i], body_data[j])
         else {
             continue;
         };
@@ -469,42 +505,48 @@ fn prepare_pairs<H: CollisionHooks>(
         };
         for (part1, (collider1, position1, rotation1)) in leaves[i].iter().enumerate() {
             for (part2, (collider2, position2, rotation2)) in leaves[j].iter().enumerate() {
-                let mut intern =
-                    |entity, part_index, body, collider: &Collider, position, rotation, center| {
-                        *shape_indices
-                            .entry((entity, part_index))
-                            .or_insert_with(|| {
-                                let index = contacts.shapes.len();
-                                contacts.shapes.push(Shape {
-                                    entity,
-                                    part_index,
-                                    body,
-                                    collider: collider.clone(),
-                                    position,
-                                    rotation,
-                                    center,
-                                });
-                                index
-                            })
-                    };
+                let mut intern = |slot: &mut Option<usize>,
+                                  entity,
+                                  part_index,
+                                  body,
+                                  collider: &Collider,
+                                  position,
+                                  rotation,
+                                  center| {
+                    *slot.get_or_insert_with(|| {
+                        let index = contacts.shapes.len();
+                        contacts.shapes.push(Shape {
+                            entity,
+                            part_index,
+                            body,
+                            collider: collider.clone(),
+                            position,
+                            rotation,
+                            center,
+                        });
+                        index
+                    })
+                };
                 let indices = [
                     intern(
+                        &mut shape_indices[leaf_offsets[i] + part1],
                         e1,
                         part1,
                         o1.body,
                         collider1,
                         *position1,
                         *rotation1,
-                        bp1.0 + br1.0 * com1.0,
+                        center1,
                     ),
                     intern(
+                        &mut shape_indices[leaf_offsets[j] + part2],
                         e2,
                         part2,
                         o2.body,
                         collider2,
                         *position2,
                         *rotation2,
-                        bp2.0 + br2.0 * com2.0,
+                        center2,
                     ),
                 ];
                 let ccd = [ccd1.copied(), ccd2.copied()];
@@ -2260,6 +2302,31 @@ fn solve_contacts(world: &mut World) {
 mod tests {
     use super::*;
     use avian3d::math::SymmetricMatrix;
+
+    #[test]
+    fn continuous_pair_order_covers_every_ccd_subset_once() {
+        for count in 0..=8 {
+            for subset in 0..1usize << count {
+                let active = (0..count)
+                    .filter(|i| subset & (1 << i) != 0)
+                    .collect::<Vec<_>>();
+                let expected = (0..count)
+                    .flat_map(|i| (i + 1..count).map(move |j| (i, j)))
+                    .filter(|(i, j)| subset & ((1 << i) | (1 << j)) != 0)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    continuous_pair_indices(count, &active).collect::<Vec<_>>(),
+                    expected,
+                    "colliders={count}, CCD subset={subset:b}"
+                );
+            }
+        }
+        // A large static population still visits only pairs with a CCD owner.
+        assert_eq!(
+            continuous_pair_indices(100_000, &[0, 99_999]).count(),
+            199_997
+        );
+    }
 
     #[test]
     fn continuous_initial_contact_uses_native_relative_pose_at_large_translation() {

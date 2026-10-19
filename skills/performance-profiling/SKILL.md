@@ -119,6 +119,16 @@ target is validated once. Returning an error rejects the staged batch. A
 retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
 
+For continuous-contact preparation, distinguish candidate enumeration from
+native geometry queries. The physics owner enumerates each unordered pair
+with a CCD owner once in stable collider order, without a candidate tree.
+Step-local body facts and dense collider/leaf slots avoid repeated owner lookups
+and identity hashing; lazy admission retains first-encounter shape order.
+Do not turn these per-step facts into a revision-only geometry/eligibility cache.
+Keep the sparse static-population bound, native body/layer/hook filtering and
+pair order when optimizing this path; current-pose AABBs cannot replace the
+whole solved-trajectory bounds used during each substep.
+
 For synchronous USD edit stalls, inspect compound operation count and native
 composition lifetime. The document owner's `UsdEditSession` shares one current
 authoring stage across an ordered sequence; direct layer changes invalidate it.

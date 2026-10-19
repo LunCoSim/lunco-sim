@@ -642,7 +642,15 @@ recasts the current motion independently of velocity-based broad-phase edges.
 Compound leaves are swept in their admitted native order and body frame. Contact
 by one leaf cannot hide a different leaf's new crossing through the same body.
 Pairs originate from CCD-enabled bodies, so static terrain/scatter populations
-do not generate a quadratic static pair set. Endpoint AABBs expanded by the
+do not generate a quadratic static pair set. The ordered collider traversal
+provides a sorted CCD-owner subset. Pair enumeration visits each eligible
+unordered pair once, in lexicographic collider order, without allocating a
+candidate tree; native body, layer and hook filters still admit each pair.
+Body query facts and COM centers are resolved once per collider for that step.
+Dense collider/leaf slots intern shapes lazily in first-encounter order; they
+are rebuilt at each preparation, independently of topology revisions. This
+avoids per-pair identity hashing without retaining stale geometry or permissions.
+Endpoint AABBs expanded by the
 rotational chord's Taylor remainder conservatively enclose the whole arc.
 For stationary composite shapes, that bound queries Parry's existing BVH in
 the composite frame. Native casts run on each selected part in stable part order;
