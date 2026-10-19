@@ -85,8 +85,12 @@ limited to entities carrying `PhysicsJointLink`: an ordinary non-joint target
 uses the normal entity-removal path. A target carrying native or pending joint
 state is classified as a joint and must use the physics lifecycle marker. The
 command records any authored endpoint invalidation and never directly removes a
-native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker at its Update
-boundary and performs one transaction in this order:
+native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker
+through one retirement owner at `PreUpdate` and `FixedPreUpdate`. Both boundaries
+are outside native physics execution. `PreUpdate` services commands while paused
+or preparing; `FixedPreUpdate` guarantees that a simulation-originated request
+retires before the next physics tick even when several ticks share one frame.
+The owner performs one transaction in this order:
 
 1. retire the Avian `JointGraph` edge and its `PhysicsIslands` entry;
 2. remove the native or pending typed joint and `JointComponentId`;
@@ -94,7 +98,9 @@ boundary and performs one transaction in this order:
 4. despawn the now-disposable joint entity.
 
 The retirement owner only runs when a `PhysicsJointDetachRequested` marker is
-present. Idle updates skip its exclusive graph transaction and world query.
+present. Idle boundaries skip its exclusive graph transaction and world query.
+`scripts/api/test_joint_detach_clock.py` runs the authored batched-tick and
+paused-command observers against the existing joint fixture in either host.
 Joint admission readiness is also gated by one combined query over the existing
 `PendingUsdJoint` and `PendingJointAdmission` markers. The owner rechecks the
 scene projection and endpoint readiness before each pending batch is admitted,

@@ -45,8 +45,9 @@ pub struct PhysicsJointLink {
 /// Scene/document commands must never despawn an Avian joint directly: a
 /// despawn removes several components in an unspecified order and can make the
 /// solver's joint graph and island counters disagree.  The command layer only
-/// writes this marker; [`lunco_usd_avian`] consumes it at its owned lifecycle
-/// boundary and performs one graph retirement transaction before despawning.
+/// writes this marker; `lunco-usd-avian-joints` consumes it at `PreUpdate` and
+/// `FixedPreUpdate`, outside native solver execution. Its single retirement
+/// transaction removes graph edges before despawning the joint.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PhysicsJointDetachRequested;
 
