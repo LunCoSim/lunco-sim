@@ -1,5 +1,24 @@
 # High-quality realtime performance handover
 
+## Combined committed-main assets — 2026-10-19
+
+`tutorials` merges main's committed plume-rendering change `e72a73146` through
+`2b34a8752`, preserving the renderer, CCD and diagnostic repairs. The source
+checkout's regular production binary loads the updated external shader assets;
+no Rust input changes in that merge. The fresh windowed Griffin mission passes
+all 16 checks with clear readiness, nine shared-clock participants, zero
+runtime errors and a clean Twin. Inspected touchdown and completed-mission
+images retain terrain, vehicle and cast shadow. The owned session exits and
+releases 4397. Evidence is `target/integrated-render-api-windowed-mission.*`.
+
+Its completion is tick 5463, versus 5221 in the earlier artifact. Recorded
+mission milestones through route start at 3094 match; generated coupled
+initialization source hashes differ. The comparison does not qualify exact
+replay or identify a clock/shader cause (`target/integrated-render-api-comparison.json`).
+Deterministic replay remains open alongside the performance/FMI scope below.
+Main still contains overlapping uncommitted physics-owner work, so its
+fast-forward is pending; that work has not been modified or incorporated.
+
 ## Non-finite exchange diagnostic closure — 2026-10-19
 
 Two finite Modelica sources reproduce an overflowing fan-in. The exchange
