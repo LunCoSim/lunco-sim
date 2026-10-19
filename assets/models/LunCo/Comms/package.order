@@ -2,3 +2,5 @@ DataPort
 Transmitter
 AntennaGain
 DataBuffer
+BoundedDataStore
+CommsLink

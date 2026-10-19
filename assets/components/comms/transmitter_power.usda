@@ -2,29 +2,31 @@
 (
     defaultPrim = "TransmitterPower"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Electrical facet of a radio transmitter.
-#
-# RF/link math remains on the feed aperture in `radio.usda`; this component
-# converts its authored transmit demand into a real load on an assembly's EPS
-# bus. Keeping the facet independent lets a radio remain valid without assuming
-# a particular battery, while a powered assembly connects `connectors:p`.
 def Scope "TransmitterPower" (
-    doc = "RF transmitter electrical load driven by a radio link's transmit-active output."
+    documentation = "Powered RF amplifier: electrical input equals duty-averaged RF output plus heat. Connect its available_rf_power_w to the radio aperture tx_power_w input; its available carrier is independent of transmit duty and drops to zero under UVLO."
     kind = "component"
     prepend apiSchemas = ["LunCoProgramAPI"]
 )
 {
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Comms/Transmitter.mo@
-
     float inputs:p_rf_w = 5.0
-    float inputs:eta_tx = 0.40
+    float inputs:eta_tx = 0.4000000059604645
     float inputs:p_idle_w = 1.5
     float inputs:tx_active = 0.0
     float outputs:power_draw_w
     float outputs:rf_power_out_w
     custom token connectors:p
+    custom double inputs:voltage_off_v = 18.0 (
+        documentation = "Undervoltage turn-off threshold in V; illustrative 28 V device assumption. Author from equipment specifications."
+    )
+    custom double inputs:voltage_on_v = 20.0 (
+        documentation = "Restart threshold in V, strictly above voltage_off_v. Converter state retains its prior value between thresholds."
+    )
+    custom double outputs:powered = 0.0
+    custom double outputs:available_rf_power_w = 0.0
+    custom double outputs:heat_w = 0.0
 }

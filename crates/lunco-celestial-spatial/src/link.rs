@@ -919,7 +919,7 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
 
 /// Publish each link node's working peer as `SimComponent` **outputs**
 /// [`LINK_RANGE_CONNECTOR`] / [`LINK_CONNECTED_CONNECTOR`], so an RF model
-/// (`assets/models/CommsLink.mo`) receives real geometry through an ordinary
+/// (`assets/models/LunCo/Comms/CommsLink.mo`) receives real geometry through an ordinary
 /// output→input wire.
 ///
 /// The gravity/solar-provider idiom (`lunco-environment`'s direct cosim projection):

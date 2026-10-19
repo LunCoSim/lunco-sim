@@ -28,6 +28,44 @@ imply forty times that) has no equation to catch the contradiction; nobody reads
 number, so nothing objects. Moving the value into a model turns a silent lie into a
 checkable claim. That is the whole reason the split exists — not tidiness.
 
+## Powered equipment and finite data service
+
+`LunCo.Electrical.RegulatedLoad` is the common ideal converter boundary for
+camera, computer, headlight, mass memory and transmitter loads. Its positive
+UVLO turn-off and higher restart threshold are explicit equipment parameters;
+the illustrative 18/20 V defaults describe a generic 28 V device. Modelica
+owns hysteresis through discrete converter state. Actual input power is
+`p.v*p.i`; the off converter draws zero current, including at zero or reverse
+voltage. Active capture, processing, memory service, lamp output and RF follow
+that powered state. This does not model converter capacitance, startup delay or
+current limiting. Mission load-shedding decisions remain Rhai policy.
+
+`Transmitter.available_rf_power_w` is the voltage-qualified on-state capability;
+wire it to the aperture model's `tx_power_w`. `rf_power_out_w` is duty-averaged
+radiated output, and `heat_w = power_draw_w - rf_power_out_w`. Separating
+capability from duty permits link acquisition from idle. Camera, computer and
+memory expose dissipated input as `heat_w`; an assembly routes these through
+`HeatLoad` into its actual thermal network. The photometric lamp does not assume
+an uncalibrated electrical-to-radiant efficiency.
+
+`LunCo.Comms.BoundedDataStore` is the single finite fluid-queue owner used by
+`DataBuffer`, `MassMemory` and `CommsLink`. It publishes accepted/delivered and
+rejected/unserved traffic at capacity and empty events. Callers account for
+rejected data explicitly; mass memory retains its contents during an outage.
+The queue is continuous traffic, not a packet or flash-transaction model.
+The reusable `radio.usda` binds `LunCo.Comms.CommsLink`: `rate_bps` is available
+capacity, `delivered_rate_bps` is actual service, and zero carrier power means
+zero capacity. Off-state dB values require `snr_valid=1` before interpretation.
+Hardware design and buffer capacity are Modelica parameters; range, geometry
+availability, offered traffic and available RF power are live inputs.
+
+Production verification is `scripts/api/test_storage_power.py` (67 authored
+Rhai checks, including invalid designs) and the powered equipment assembly scene.
+Physical boundary equations follow Modelica state-event and `pre` semantics;
+see the [Modelica specification](https://specification.modelica.org/maint/3.6/equations.html)
+and the standard library's
+[limited integrator](https://github.com/modelica/ModelicaStandardLibrary/blob/master/Modelica/Blocks/Continuous.mo).
+
 ## 2. USD assembles components; the runtime projects a composite model
 
 Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.

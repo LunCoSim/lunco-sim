@@ -201,6 +201,23 @@ shared-tire heat endpoint; a wire to that unsupported producer must fail visibly
 Keep numerical solver work separate from physical heat, and declare capacities,
 conductances and spatial ground averaging as study assumptions.
 
+Use `scripts/api/test_storage_power.py --output <directory>` (also
+`--headless`) for 67 storage, powered-equipment, RF and thermal checks, including
+eleven invalid configurations. `BoundedDataStore` owns finite queue state;
+observe accepted/delivered and rejected/unserved traffic, not only fill percent.
+`MassMemory` retains data while its electrical service is off. Regulated loads
+require device-authored `voltage_off_v` and `voltage_on_v` thresholds; 18/20 V
+are illustrative defaults, not equipment calibration. Connect the transmitter's
+`available_rf_power_w` to `LunCo.Comms.CommsLink.tx_power_w`, and route actual
+`heat_w` through `HeatLoad` when the assembly needs a thermal budget. The
+link's `rate_bps` is capacity; `delivered_rate_bps` is actual transmitted traffic.
+Require `snr_valid=1` before interpreting its dB values. The authored
+`scenes/tests/powered_equipment_assembly.usda` gate checks the generated network
+from reusable camera, transmitter and radio parts (12 checks):
+`python3 scripts/api/run_headless_scene_test.py --port <free-port> --log <log>
+--timeout 60 -- --scene scenes/tests/powered_equipment_assembly.usda
+--verdict-channel POWERED_EQUIPMENT --max-ticks 1200 --threads 1`.
+
 ### No-API alternative
 The standalone runner is owned by `lunco-modelica-execution`, not
 `lunco-modelica-core`. For a one-shot current-source compile and fixed-step

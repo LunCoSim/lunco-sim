@@ -1,22 +1,34 @@
 within LunCo.Comms;
-// Onboard telemetry data buffer dynamics: der(buffer_mb) = (rate_in_kbps - rate_out_kbps) / 8000
 model DataBuffer
+  "Drop-tail telemetry buffer; decimal MB and kbps"
   extends LunCo.Icons.DataBuffer;
   parameter Real capacity_mb = 1024.0 "Telemetry buffer capacity, MB";
-  parameter Real buffer_init_mb = 0.0 "Initial buffer fill at t=0, MB";
-
-  input Real rate_in_kbps "Payload data generation rate, kbps";
-  input Real rate_out_kbps "Downlink transmission data rate, kbps";
-
-  Real buffer_mb(start = buffer_init_mb) "Current buffer storage fill, MB";
-  output Real buffer_fill_pct "Buffer fill percentage, 0..100 %";
-  output Real buffer_full "Buffer overflow flag (1.0 = full, 0.0 = space available)";
-  output Real stored_data_mb(unit="MB") "Current buffered data volume";
-  output Real free_capacity_mb(unit="MB") "Remaining available buffer capacity";
+  parameter Real buffer_init_mb = 0.0 "Initial buffer fill, MB";
+  input Real rate_in_kbps "Offered payload traffic, kbps";
+  input Real rate_out_kbps "Requested outgoing traffic, kbps";
+  output Real buffer_mb "Retained data, MB";
+  output Real buffer_fill_pct "Buffer fill, percent";
+  output Real buffer_full "1 when capacity is reached";
+  output Real stored_data_mb(unit="MB");
+  output Real free_capacity_mb(unit="MB");
+  output Real accepted_rate_kbps "Incoming traffic retained or immediately forwarded";
+  output Real delivered_rate_kbps "Actual outgoing traffic";
+  output Real dropped_rate_kbps "Offered traffic rejected at capacity";
+  output Real unserved_rate_kbps "Requested outgoing traffic unavailable at empty";
+  LunCo.Comms.BoundedDataStore store(capacity_bits=capacity_mb*8.0e6,
+    initial_bits=buffer_init_mb*8.0e6,
+    offered_rate_bps=rate_in_kbps*1000.0,
+    requested_rate_bps=rate_out_kbps*1000.0);
 equation
-  der(buffer_mb) = max(-buffer_mb, (rate_in_kbps - rate_out_kbps) / 8000.0);
-  buffer_fill_pct = (buffer_mb / capacity_mb) * 100.0;
-  buffer_full = max(0.0, min(1.0, (buffer_mb - capacity_mb + 1.0)));
+  buffer_mb = store.stored_bits/8.0e6;
   stored_data_mb = buffer_mb;
-  free_capacity_mb = max(0.0, capacity_mb - buffer_mb);
+  free_capacity_mb = capacity_mb-buffer_mb;
+  // Invalid capacities are rejected by the store assertion. Keep presentation
+  // equations defined until the solver reports that diagnostic.
+  buffer_fill_pct = if capacity_mb > 0.0 then 100.0*buffer_mb/capacity_mb else 0.0;
+  buffer_full = if store.stored_bits >= store.capacity_bits then 1.0 else 0.0;
+  accepted_rate_kbps = store.accepted_rate_bps/1000.0;
+  delivered_rate_kbps = store.delivered_rate_bps/1000.0;
+  dropped_rate_kbps = store.rejected_rate_bps/1000.0;
+  unserved_rate_kbps = store.unserved_rate_bps/1000.0;
 end DataBuffer;

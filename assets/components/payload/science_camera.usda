@@ -2,17 +2,11 @@
 (
     defaultPrim = "ScienceCamera"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Electrically honest science camera/payload.
-#
-# The component owns its capture-to-data and capture-to-power equations. An
-# assembly decides what commands `inputs:active`, where
-# `outputs:data_rate_out_bps` is routed, and which electrical bus receives its
-# `connectors:p` pin.
 def Xform "ScienceCamera" (
-    doc = "Science camera payload with capture-controlled electrical load and data production."
+    documentation = "Science camera payload with capture-controlled electrical load and data production."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )
@@ -20,41 +14,42 @@ def Xform "ScienceCamera" (
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/CameraPayload.mo@
-
     float inputs:p_active_w = 4.5
-    float inputs:p_idle_w = 0.2
+    float inputs:p_idle_w = 0.20000000298023224
     float inputs:data_rate_mbps = 15.0
     float inputs:active = 0.0
     float outputs:power_draw_w
     float outputs:data_rate_out_mbps
     float outputs:data_rate_out_bps
     custom token connectors:p
-
     float physics:mass = 2.0
     double3 xformOp:scale = (0.28, 0.18, 0.22)
     uniform token[] xformOpOrder = ["xformOp:scale"]
-
+    custom double inputs:voltage_off_v = 18.0 (
+        documentation = "Undervoltage turn-off threshold in V; illustrative 28 V device assumption. Author from equipment specifications."
+    )
+    custom double inputs:voltage_on_v = 20.0 (
+        documentation = "Restart threshold in V, strictly above voltage_off_v. Converter state retains its prior value between thresholds."
+    )
+    custom double outputs:powered = 0.0
+    custom double outputs:capture_active = 0.0
+    custom double outputs:heat_w = 0.0
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
         bool physics:collisionEnabled = true
-        color3f[] primvars:displayColor = [(0.14, 0.16, 0.18)]
+        color3f[] primvars:displayColor = [(0.14000000059604645, 0.1599999964237213, 0.18000000715255737)]
     }
-
     def Cylinder "Lens"
     {
         double radius = 0.18
-        double height = 0.20
+        double height = 0.2
         uniform token axis = "Z"
-        double3 xformOp:translate = (0, 0, 0.58)
+        double3 xformOp:translate = (0.0, 0.0, 0.58)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        # The lens is a visual payload detail. The camera body's authored
-        # collision is the payload's physical representative; keeping the
-        # lens out of that body prevents a decorative child from becoming an
-        # independent collider when the component is mounted on a rover.
         bool physics:collisionEnabled = false
-        color3f[] primvars:displayColor = [(0.08, 0.16, 0.32)]
+        color3f[] primvars:displayColor = [(0.07999999821186066, 0.1599999964237213, 0.3199999928474426)]
     }
 }

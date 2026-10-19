@@ -1,21 +1,22 @@
 within LunCo.Electrical;
-// Navigation / Hazard / Science Camera Payload dynamics.
-// Converts active capture state into electrical power draw on EPS bus Pin and data generation rate.
 model CameraPayload
+  "Powered camera capture, electrical load and telemetry production"
   extends LunCo.Icons.Camera;
-  parameter Real p_active_w = 4.5 "Active camera streaming power draw, W";
-  parameter Real p_idle_w = 0.2 "Standby power draw, W";
-  parameter Real data_rate_mbps = 15.0 "Science/Nav image data output rate, Mbps";
-
-  input Real active "Camera active capture state (1.0 = streaming/capturing, 0.0 = standby)";
-  output Real power_draw_w "Electrical power draw, W";
-  output Real data_rate_out_mbps "Telemetry data output rate, Mbps";
-  output Real data_rate_out_bps "Telemetry data output rate, bits/s";
-
-  Pin p "Electrical bus pin";
+  extends RegulatedLoad;
+  parameter Real p_active_w = 4.5 "Active capture input power, W";
+  parameter Real p_idle_w = 0.2 "Powered standby draw, W";
+  parameter Real data_rate_mbps = 15.0 "Full capture data production, Mbps";
+  input Real active "Requested capture duty fraction, 0..1";
+  output Real capture_active "Effective powered capture duty fraction";
+  output Real data_rate_out_mbps "Actual generated telemetry, Mbps";
+  output Real data_rate_out_bps(unit="bit/s");
+  output Real heat_w(unit="W") "Electrical dissipation; outgoing data has no modeled energy flow";
 equation
-  power_draw_w = p_idle_w + (p_active_w - p_idle_w) * max(0.0, min(1.0, active));
-  data_rate_out_mbps = data_rate_mbps * max(0.0, min(1.0, active));
-  data_rate_out_bps = data_rate_out_mbps * 1000000.0;
-  p.i = power_draw_w / max(1.0, p.v);
+  assert(p_active_w >= p_idle_w and p_idle_w >= 0.0 and data_rate_mbps >= 0.0,
+    "CameraPayload requires p_active_w >= p_idle_w >= 0 and a nonnegative data rate");
+  capture_active = powered*max(0.0,min(1.0,active));
+  requested_power_w = p_idle_w+(p_active_w-p_idle_w)*max(0.0,min(1.0,active));
+  data_rate_out_mbps = data_rate_mbps*capture_active;
+  data_rate_out_bps = data_rate_out_mbps*1.0e6;
+  heat_w = power_draw_w;
 end CameraPayload;

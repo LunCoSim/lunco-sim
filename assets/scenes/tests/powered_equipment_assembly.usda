@@ -1,0 +1,105 @@
+#usda 1.0
+(
+    defaultPrim = "PoweredEquipmentTest"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "PoweredEquipmentTest" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461395.5
+    def Xform "Equipment" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        rel collection:components:includes = [</PoweredEquipmentTest/Equipment/Rail>, </PoweredEquipmentTest/Equipment/Camera>, </PoweredEquipmentTest/Equipment/Transmitter>, </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture>]
+        custom double outputs:voltage_v
+        double outputs:voltage_v.connect = </PoweredEquipmentTest/Equipment/Rail.outputs:terminal_voltage_v>
+        custom float outputs:camera_power_w
+        float outputs:camera_power_w.connect = </PoweredEquipmentTest/Equipment/Camera.outputs:power_draw_w>
+        custom float outputs:data_bps
+        float outputs:data_bps.connect = </PoweredEquipmentTest/Equipment/Camera.outputs:data_rate_out_bps>
+        custom double outputs:available_rf_w
+        double outputs:available_rf_w.connect = </PoweredEquipmentTest/Equipment/Transmitter.outputs:available_rf_power_w>
+        custom float outputs:rf_w
+        float outputs:rf_w.connect = </PoweredEquipmentTest/Equipment/Transmitter.outputs:rf_power_out_w>
+        custom double outputs:tx_heat_w
+        double outputs:tx_heat_w.connect = </PoweredEquipmentTest/Equipment/Transmitter.outputs:heat_w>
+        custom float outputs:tx_input_w
+        float outputs:tx_input_w.connect = </PoweredEquipmentTest/Equipment/Transmitter.outputs:power_draw_w>
+        custom float outputs:rate_bps
+        float outputs:rate_bps.connect = </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:rate_bps>
+        custom double outputs:delivered_bps
+        double outputs:delivered_bps.connect = </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:delivered_rate_bps>
+        custom float outputs:tx_active
+        float outputs:tx_active.connect = </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:tx_active>
+        custom double outputs:snr_valid
+        double outputs:snr_valid.connect = </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:snr_valid>
+        custom double outputs:source_power_w
+        double outputs:source_power_w.connect = </PoweredEquipmentTest/Equipment/Rail.outputs:terminal_power_w>
+        def Scope "Rail" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/IdealVoltageSource.mo@
+            custom token connectors:p = ""
+            custom double inputs:voltage = 28.0
+            custom double outputs:terminal_voltage_v = 0.0
+            custom double outputs:terminal_power_w = 0.0
+        }
+        def Xform "Camera" (
+            references = @lunco://components/payload/science_camera.usda@
+        )
+        {
+            float inputs:active = 1.0
+            custom token connectors:p
+            token connectors:p.connect = </PoweredEquipmentTest/Equipment/Rail.connectors:p>
+        }
+        def Scope "Transmitter" (
+            references = @lunco://components/comms/transmitter_power.usda@
+        )
+        {
+            custom token connectors:p
+            token connectors:p.connect = </PoweredEquipmentTest/Equipment/Rail.connectors:p>
+            float inputs:tx_active
+            float inputs:tx_active.connect = </PoweredEquipmentTest/Equipment/Radio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:tx_active>
+        }
+        def Xform "Radio" (
+            references = @lunco://components/comms/radio.usda@
+        )
+        {
+            over "YawHead"
+            {
+                over "DishGimbal"
+                {
+                    over "DishHead"
+                    {
+                        over "LinkAperture"
+                        {
+                            float inputs:data_in_bps
+                            float inputs:data_in_bps.connect = </PoweredEquipmentTest/Equipment/Camera.outputs:data_rate_out_bps>
+                            custom double inputs:tx_power_w
+                            double inputs:tx_power_w.connect = </PoweredEquipmentTest/Equipment/Transmitter.outputs:available_rf_power_w>
+                            float inputs:link_range_m = 100.0
+                            float inputs:link_range_m.connect = None
+                            float inputs:link_connected = 1.0
+                            float inputs:link_connected.connect = None
+                            custom double inputs:T_filter = 0.02
+                        }
+                    }
+                }
+            }
+        }
+    }
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/powered_equipment_assembly.rhai@
+    }
+}

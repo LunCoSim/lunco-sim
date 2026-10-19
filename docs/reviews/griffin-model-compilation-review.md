@@ -177,22 +177,53 @@ admitted interval and continuous-load ownership, hold retention, sensor exclusio
 and retirement. The settled windowed schema contains all 267 documented commands;
 the regenerated reference reports zero source parse failures.
 
-## Remaining non-compilation findings
+## Storage and powered equipment checkpoint
 
-These source-level defects remain open; successful compilation is not evidence
-that the entire component catalogue is physically qualified:
+`LunCo.Comms.BoundedDataStore` owns finite fluid-queue state and accepted,
+delivered, rejected and unserved rates. `DataBuffer`, `MassMemory` and
+`LunCo.Comms.CommsLink` compose that owner. Capacity events stop outward flow
+at full/empty; simultaneous service and immediate pass-through remain possible.
+No presentation clamp conceals lost data. Decimal MB/GB conversion uses eight
+bits per byte. Mass memory retains data through power loss and charges dynamic
+power only for accepted writes and delivered reads.
 
-- `LunCo.Comms.DataBuffer` and `LunCo.Storage.MassMemory` limit negative storage
-  rates but not the upper capacity. Constant net input of one storage unit per
-  second fills a one-unit device to 200% at two seconds. Capacity enforcement
-  needs explicit accepted/rejected or dropped data rates so upstream/downstream
-  flows do not silently disappear.
-- `LunCo.Comms.Transmitter` commands RF independently of actual terminal power.
-  With zero bus voltage and transmit enabled it still reports its nominal 5 W
-  RF output. Its regularized current law supplies zero electrical power in that
-  state. Payload/data-rate models likewise lack a qualified brownout lifecycle.
+`LunCo.Electrical.RegulatedLoad` owns the shared input-converter boundary.
+Camera, computer, lamp, memory and transmitter compose its explicit UVLO and
+restart hysteresis. Reported input power is terminal voltage times current;
+unpowered equipment supplies no modeled service or RF. The transmitter exposes
+available on-state carrier power separately from duty-averaged radiated power,
+and its heat is input power minus radiated power. Powered radio assemblies wire
+`available_rf_power_w` to `CommsLink.tx_power_w` so acquisition does not depend
+on an already-active transmitter. The Summer Lunar Shift scene now authors that
+connection through the production USD document API.
 
-This patch repairs the demonstrated compile, sensor/phase-change closure,
-controller, motor and heater defects and establishes their production regression.
-The storage/RF findings above remain separate plant-model work;
-no claim of full system energy or capacity qualification is made.
+The link's linear SNR and Shannon capacity remain finite at zero carrier power.
+`snr_valid=0` marks off-state dB outputs as undefined. Numeric domain guards use
+`noEvent` where event iteration can otherwise evaluate a zero logarithm or
+zero-capacity normalization. Physical UVLO and queue boundary events remain
+active. Invalid designs fail through model assertions, including dynamically
+negative traffic requests; guards keep rejected configurations defined long
+enough to report their owning assertion.
+
+The maintained `scripts/api/test_storage_power.py` passed 67 authored Rhai
+checks in both headless and windowed production sessions. It covers full/empty
+queues, pass-through, overflow accounting, nonvolatile retention, initial outage,
+restart hysteresis, low/reverse voltage, RF/data/processing/light availability,
+terminal-power balance, stored heat, and eleven invalid operating points.
+Evidence: `/tmp/model-storage-power-20261019/{headless-64,windowed}`. Owned
+sessions exited and released their API ports. The reusable powered-equipment
+USD network passed 12 production scene checks, and Griffin's route/braking/thermal
+gate passed its unchanged 25 checks (`assembly-ideal.log`, `flip-route.log` in
+the same evidence directory).
+
+These are system-level lumped models, not qualified equipment predictions.
+The 18/20 V thresholds are illustrative defaults for a 28 V device and must be
+authored from equipment specifications. Converter startup latency, capacitance,
+current limiting, packet protocols, flash wear and lamp spectral/thermal
+partition are outside this model. Queue bounds hold to solver precision.
+
+The Summer Lunar Shift full mission remains blocked before Modelica admission:
+the solar visibility owner reports `solar-sample-unavailable` /
+`Sun direction unavailable: FrameUnavailable`; initial pose validation also
+reports 0.45 m support penetration. Those scene/frame defects are separate from
+the repaired storage/RF equations; a full mission pass is not claimed.

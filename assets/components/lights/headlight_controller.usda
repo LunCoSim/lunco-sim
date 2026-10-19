@@ -2,34 +2,30 @@
 (
     defaultPrim = "HeadlightController"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Reusable no-geometry facet for a vehicle headlight. Mount it beside a
-# `components/lights/headlight.usda` visual lamp and connect its `light_intensity`
-# output to the lamp's `light_intensity` LunCo light port. The runtime maps that port to
-# standard USD `inputs:intensity`. The containing vehicle supplies the
-# enable command and electrical pin connection.
 def Xform "HeadlightController" (
-    doc = "Reusable Modelica headlight enable, photometry, and electrical-load facet."
+    documentation = "Reusable Modelica headlight enable, photometry, and electrical-load facet."
     kind = "component"
-    prepend apiSchemas = [
-        "LunCoCatalogAPI",
-        "LunCoProgramAPI",
-        "LunCoModelicaTopologyAPI",
-    ]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProgramAPI", "LunCoModelicaTopologyAPI"]
 )
 {
     uniform token lunco:modelica:topologyRole = "load"
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/HeadlightController.mo@
-
     float inputs:nominal_power_w = 24.0
     float inputs:luminous_intensity_lm = 120000.0
     float inputs:enable = 0.0
-
     float outputs:enabled
     float outputs:light_intensity
     float outputs:power_draw_w
     custom token connectors:p
+    custom double inputs:voltage_off_v = 18.0 (
+        documentation = "Undervoltage turn-off threshold in V; illustrative 28 V device assumption. Author from equipment specifications."
+    )
+    custom double inputs:voltage_on_v = 20.0 (
+        documentation = "Restart threshold in V, strictly above voltage_off_v. Converter state retains its prior value between thresholds."
+    )
+    custom double outputs:powered = 0.0
 }

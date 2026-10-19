@@ -2,60 +2,14 @@
 (
     defaultPrim = "CommsRadio"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Comms radio — an antenna that also KNOWS ITS LINK BUDGET.
-#
-# `antenna.usda` makes its feed aperture a connectivity endpoint: the link kernel pairs
-# it with every other node and publishes geometry — range, elevation, a connected verdict.
-# It says nothing about how fast the link is, on purpose (the kernel is geometry-only; RF
-# is a continuous lumped-parameter subsystem, so it is authored, not built in).
-#
-# This composes that antenna with `CommsLink.mo`, which turns the geometry into
-# bits/s: Friis → thermal noise → Shannon capacity → onboard buffer. Reference THIS
-# instead of `antenna.usda` when you want a radio whose throughput is simulated rather
-# than assumed.
-#
-# ── The RF design is authored, not baked ────────────────────────────────────────
-#
-# Every `inputs:` below is an UNCONNECTED port with a constant, and that is exactly
-# what makes it a model parameter ("has no wire is exactly what makes an input a
-# parameter" — `lunco-usd-sim-cosim/src/lib.rs`). It is the same convention UsdShade uses
-# for a shader's `inputs:`, so there is no `lunco:radio:*` vocabulary to learn: the
-# port names ARE the model's variable names, and the model is the spec.
-#
-# Override per instance — a DSN dish is not a rover whip:
-#
-#     def Xform "Dish" ( prepend references = @lunco://components/comms/radio.usda@ )
-#     {
-#         float inputs:gain_rx_db = 74.0   # 70 m antenna
-#         float inputs:tx_power_w = 20000.0
-#     }
-#
-# They are inputs rather than `parameter Real` for a second reason: SetPorts can turn
-# them on a LIVE link, so tx power is a knob, not a rebuild.
-#
-# ── The class wire is the one thing to check ────────────────────────────────────
-#
-# The bridge publishes one signal set per peer CLASS it can see (`link_relay_*`,
-# `link_earth_*`, …). The wires below say THIS radio works the RELAY, which is the
-# common rover case. A direct-to-Earth station overrides them:
-#
-#     float inputs:link_range_m.connect = </…/Dish/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_earth_range_m>
-#     float inputs:link_connected.connect = </…/Dish/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_earth_connected>
-#
-# Do NOT simply delete the wires: an unconnected `inputs:link_range_m` is not "no
-# link", it is a PARAMETER pinned at 0 — the model would solve a 1 m link at ~145 dB
-# SNR and report a healthy radio that does not exist.
 def Xform "CommsRadio" (
     prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     kind = "component"
 )
 {
-    # RF model and link state have the same owner: the feed aperture. This avoids a
-    # root-level proxy pose and lets every radio model read the geometry published for
-    # the actual transmitting point.
     over "YawHead"
     {
         over "DishGimbal"
@@ -64,35 +18,24 @@ def Xform "CommsRadio" (
             {
                 over "LinkAperture" (
                     prepend apiSchemas = ["LunCoProgramAPI"]
+                    documentation = "LunCo.Comms.CommsLink owns the Friis/noise/capacity budget and finite telemetry queue. Hardware configuration is fixed Modelica parameter data; geometry, offered traffic and available carrier power are live inputs."
                 )
                 {
                     uniform token info:implementationSource = "sourceAsset"
-                    uniform asset info:sourceAsset = @lunco://models/CommsLink.mo@
-
-                    # Geometry in, from the link kernel via the cosim bridge.
-                    float inputs:link_range_m.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_range_m>
-                    float inputs:link_connected.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_connected>
-
-                    # ── Radio design: a small S-band rover radio ────────────────
-                    float inputs:tx_power_w = 10.0
+                    uniform asset info:sourceAsset = @lunco://models/LunCo/Comms/CommsLink.mo@
                     float inputs:gain_tx_db = 3.0
                     float inputs:gain_rx_db = 30.0
-                    float inputs:freq_hz = 2200000000
-                    float inputs:bandwidth_hz = 2000000
+                    float inputs:freq_hz = 2200000000.0
+                    float inputs:bandwidth_hz = 2000000.0
                     float inputs:noise_temp_k = 150.0
                     float inputs:line_loss_db = 2.0
-                    float inputs:rate_efficiency = 0.6
+                    float inputs:rate_efficiency = 0.6000000238418579
                     float inputs:snr_required_db = 3.0
-
-                    # ── Traffic: what the vehicle generates, and what it can hold ─
-                    float inputs:data_in_bps = 500000
-                    float inputs:buffer_capacity_bits = 80000000
-                    # Public Modelica output surface. These declarations are
-                    # the USD contract available during async source loading;
-                    # the solver later supplies their live values. Keeping the
-                    # complete surface here lets telemetry and wires bind to a
-                    # real port from the first lifecycle phase.
-                    float outputs:rate_bps
+                    float inputs:data_in_bps = 500000.0
+                    float inputs:buffer_capacity_bits = 80000000.0
+                    float outputs:rate_bps (
+                        documentation = "Available link capacity in bits/s; delivered_rate_bps is actual transmitted traffic."
+                    )
                     float outputs:snr_db
                     float outputs:margin_db
                     float outputs:buffer_bits
@@ -100,6 +43,19 @@ def Xform "CommsRadio" (
                     float outputs:lost_bits
                     float outputs:up
                     float outputs:tx_active
+                    float inputs:link_range_m
+                    float inputs:link_range_m.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_range_m>
+                    float inputs:link_connected
+                    float inputs:link_connected.connect = </CommsRadio/YawHead/DishGimbal/DishHead/LinkAperture.outputs:link_relay_connected>
+                    custom double inputs:tx_power_w = 10.0 (
+                        documentation = "Available on-state carrier power in W. Powered assemblies connect Transmitter.available_rf_power_w; duty-averaged RF output is not a link-acquisition budget."
+                    )
+                    custom double outputs:delivered_rate_bps = 0.0
+                    custom double outputs:accepted_rate_bps = 0.0
+                    custom double outputs:dropped_rate_bps = 0.0
+                    custom double outputs:snr_valid = 0.0 (
+                        documentation = "1 when positive carrier power makes snr_db and margin_db valid; their off-state zero values are invalid placeholders."
+                    )
                 }
             }
         }

@@ -18,6 +18,8 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[CameraPayload.mo](../assets/models/LunCo/Electrical/CameraPayload.mo)**: Active camera capture streaming power draw ($4.5\text{ W}$) and data output rate ($15\text{ Mbps}$).
 - **[HeadlightController.mo](../assets/models/LunCo/Electrical/HeadlightController.mo)**: Rhai-commanded enable clamp, USD-facing luminous output, and solved electrical load for a reusable vehicle headlight.
 
+- **[RegulatedLoad.mo](../assets/models/LunCo/Electrical/RegulatedLoad.mo)**: Shared partial converter model with actual terminal power, UVLO and restart hysteresis. Device thresholds require authored specifications.
+
 ### 1.2 Thermal Control Subsystem (`LunCo.Thermal`)
 - **[HeatPort.mo](../assets/models/LunCo/Thermal/HeatPort.mo)**: Acausal thermal connector (`Real T; flow Real Q;`, enforcing $\sum Q = 0$).
 - **[ThermalMass.mo](../assets/models/LunCo/Thermal/ThermalMass.mo)**: Structural lumped thermal capacity ($C_{\text{th}} \frac{dT}{dt} = \sum Q$).
@@ -47,11 +49,14 @@ All physical equations, conservation laws, and component dynamics live in `asset
 
 ### 1.6 Storage Subsystem (`LunCo.Storage`)
 - **[CryoTank.mo](../assets/models/LunCo/Storage/CryoTank.mo)**: Prescribed-temperature phase-change tank requiring an authored positive `saturation_temperature_k`; it does not predict pressure or saturation temperature. Boil-off rate $\dot{m}_{\text{boil}} = \frac{Q_{\text{in}}}{h_{\text{fg}}}$ and mass output `mass_kg` for downstream mass accounting.
-- **[MassMemory.mo](../assets/models/LunCo/Storage/MassMemory.mo)**: Solid-state flash science memory buffer (GB fill, write/read power draw).
+- **[MassMemory.mo](../assets/models/LunCo/Storage/MassMemory.mo)**: Finite nonvolatile science queue with powered accepted-write/delivered-read service, explicit rejected/unserved requests, and dissipated power.
 
 ### 1.7 Communications Subsystem (`LunCo.Comms`)
-- **[Transmitter.mo](../assets/models/LunCo/Comms/Transmitter.mo)**: RF transmitter power draw on EPS bus & radiated RF output.
-- **[DataBuffer.mo](../assets/models/LunCo/Comms/DataBuffer.mo)**: Telemetry data storage buffer dynamics.
+- **[Transmitter.mo](../assets/models/LunCo/Comms/Transmitter.mo)**: Voltage-qualified on-state RF capability, duty-averaged radiated output, terminal input power and amplifier heat.
+- **[DataBuffer.mo](../assets/models/LunCo/Comms/DataBuffer.mo)**: Finite telemetry queue with accepted/delivered and dropped/unserved data accounting (decimal MB/kbps).
+
+- **[BoundedDataStore.mo](../assets/models/LunCo/Comms/BoundedDataStore.mo)**: Shared finite fluid queue in bits and bits/s.
+- **[CommsLink.mo](../assets/models/LunCo/Comms/CommsLink.mo)**: Friis/noise/Shannon capacity and bounded telemetry service; available carrier power is a live input.
 
 ---
 

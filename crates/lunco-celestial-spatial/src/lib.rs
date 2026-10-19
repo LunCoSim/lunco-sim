@@ -217,7 +217,7 @@ impl Plugin for CelestialPlugin {
                 .after(link::update_links),
         );
         // Expose the working peer's range + verdict as PORTS, so an authored RF model
-        // (`assets/models/CommsLink.mo`) can turn metres into bits/s off an ordinary
+        // (`assets/models/LunCo/Comms/CommsLink.mo`) can turn metres into bits/s off an ordinary
         // output→input wire.
         //
         // Registered as a backend rather than pushed into `SimComponent.outputs` by a

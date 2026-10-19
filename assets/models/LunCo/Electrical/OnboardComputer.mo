@@ -1,16 +1,17 @@
 within LunCo.Electrical;
-
-// On-Board Computer (OBC / Flight Computer) baseline power draw & processing load.
 model OnboardComputer
+  "Regulated flight computer load and powered processing availability"
   extends LunCo.Icons.ElectricalControl;
-  parameter Real p_baseline_w = 12.0 "Flight computer baseline power draw, W";
-  parameter Real p_gnc_w = 8.0 "Active GNC / hazard avoidance processing power draw, W";
-
-  input Real gnc_active "GNC / Autopilot processing active state, 0..1";
-  output Real power_draw_w "Total OBC electrical power draw, W";
-
-  Pin p "Electrical bus pin";
+  extends RegulatedLoad;
+  parameter Real p_baseline_w = 12.0 "Powered baseline draw, W";
+  parameter Real p_gnc_w = 8.0 "Additional full GNC processing draw, W";
+  input Real gnc_active "Requested processing duty fraction, 0..1";
+  output Real processing_active "Effective powered processing fraction";
+  output Real heat_w(unit="W");
 equation
-  power_draw_w = p_baseline_w + p_gnc_w * max(0.0, min(1.0, gnc_active));
-  p.i = power_draw_w / max(1.0, p.v);
+  assert(p_baseline_w >= 0.0 and p_gnc_w >= 0.0,
+    "OnboardComputer power coefficients must be nonnegative");
+  processing_active = powered*max(0.0,min(1.0,gnc_active));
+  requested_power_w = p_baseline_w+p_gnc_w*max(0.0,min(1.0,gnc_active));
+  heat_w = power_draw_w;
 end OnboardComputer;
