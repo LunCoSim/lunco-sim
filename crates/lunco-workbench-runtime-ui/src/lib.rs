@@ -266,6 +266,10 @@ pub struct RuntimeUiSurfaceDefinition {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeUiBindingDefinition {
     pub source: String,
+    /// Project this authored presentation value into a CSS custom property.
+    /// Text-only template values must not enter the CSS token stream.
+    #[serde(default)]
+    pub css: bool,
     #[serde(default)]
     pub map: HashMap<String, String>,
 }
@@ -593,6 +597,14 @@ impl Plugin for RuntimeUiPlugin {
         .init_resource::<RuntimeUiRecordingContract>()
         .init_resource::<RuntimeUiCaptureState>()
         .init_resource::<RuntimeUiGates>()
+        .init_resource::<RuntimeUiCursorMirror>()
+        .add_systems(
+            PreUpdate,
+            (
+                mirror_runtime_ui_cursor.before(bevy::ui::UiSystems::Focus),
+                restore_runtime_ui_cursor.after(bevy::ui::UiSystems::Focus),
+            ),
+        )
         // Manifest discovery is asynchronous after the move to the shared
         // TextAsset catalog, but the update systems still own the state from
         // their first scheduled frame. Initialize the lifecycle resource at
@@ -847,10 +859,10 @@ pub struct RuntimeUiSurface {
 
 impl RuntimeUiSurface {
     /// Whether this retained surface covers scene labels in its layout rectangle.
-    /// Viewport roots are transparent full-window containers; only their visible
-    /// controls cover labels, not the container itself.
+    /// Modal roots cover their viewport. Other viewport roots are transparent
+    /// containers; their visible controls cover labels individually.
     pub fn occludes_scene_labels(&self) -> bool {
-        !matches!(self.placement, RuntimeUiPlacement::Viewport)
+        self.modal || !matches!(self.placement, RuntimeUiPlacement::Viewport)
     }
     fn from_definition(
         definition: &RuntimeUiSurfaceDefinition,
@@ -939,6 +951,76 @@ struct RuntimeUiCollectionRow {
 
 #[derive(Component)]
 struct RuntimeUiCollectionHost;
+
+/// HUI's compiler requires its style context for dynamic attributes. Retain
+/// that context outside the active style system so Flair owns rendered styles.
+#[derive(Component)]
+struct RuntimeUiTemplateStyle(HtmlStyle);
+
+/// Bevy UI reads Window cursor state during focus. Keep this transient mirror
+/// within that phase so winit's Last-stage synchronization sees native state.
+#[derive(Resource, Default)]
+struct RuntimeUiCursorMirror(Option<(Entity, Option<bevy::math::DVec2>)>);
+
+fn mirror_runtime_ui_cursor(
+    mut events: MessageReader<bevy::window::CursorMoved>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    mut mirror: ResMut<RuntimeUiCursorMirror>,
+) {
+    let Ok((entity, mut window)) = windows.single_mut() else {
+        return;
+    };
+    let Some(event) = events.read().filter(|event| event.window == entity).last() else {
+        return;
+    };
+    mirror.0 = Some((
+        entity,
+        window
+            .physical_cursor_position()
+            .map(|position| position.as_dvec2()),
+    ));
+    window.set_cursor_position(Some(event.position));
+}
+
+fn restore_runtime_ui_cursor(
+    mut windows: Query<&mut Window>,
+    mut mirror: ResMut<RuntimeUiCursorMirror>,
+) {
+    if let Some((entity, position)) = mirror.0.take() {
+        if let Ok(mut window) = windows.get_mut(entity) {
+            window.set_physical_cursor_position(position);
+        }
+    }
+}
+
+fn compile_runtime_ui_context(world: &mut World, root: Entity) {
+    let mut nodes = vec![root];
+    let mut index = 0;
+    while index < nodes.len() {
+        if let Some(children) = world.get::<Children>(nodes[index]) {
+            nodes.extend(children.iter());
+        }
+        index += 1;
+    }
+    for entity in &nodes {
+        if world.get::<HtmlStyle>(*entity).is_none() {
+            if let Some(style) = world.get::<RuntimeUiTemplateStyle>(*entity) {
+                let style = style.0.clone();
+                world.entity_mut(*entity).insert(style);
+            }
+        }
+    }
+    world.trigger(CompileContextEvent { entity: root });
+    world.flush();
+    for entity in nodes {
+        if let Some(style) = world.get::<HtmlStyle>(entity).cloned() {
+            world
+                .entity_mut(entity)
+                .insert(RuntimeUiTemplateStyle(style))
+                .remove::<HtmlStyle>();
+        }
+    }
+}
 
 /// Resolve the active Twin's typed capture contract once per exposure/policy
 /// revision. A normal interactive session has no contract; when the recorder
@@ -1733,7 +1815,7 @@ fn hand_runtime_ui_styling_to_flair(
     nodes: Query<(Entity, &HtmlStyle), Or<(Added<HtmlStyle>, Changed<HtmlStyle>)>>,
     parents: Query<&ChildOf>,
 ) {
-    for (entity, _) in &nodes {
+    for (entity, style) in &nodes {
         let mut current = entity;
         let mut belongs_to_runtime_surface = false;
         loop {
@@ -1748,7 +1830,10 @@ fn hand_runtime_ui_styling_to_flair(
         }
 
         if belongs_to_runtime_surface {
-            commands.entity(entity).remove::<HtmlStyle>();
+            commands
+                .entity(entity)
+                .insert(RuntimeUiTemplateStyle(style.clone()))
+                .remove::<HtmlStyle>();
         }
     }
 }
@@ -1924,6 +2009,7 @@ fn apply_runtime_ui_exposures(
                     apply_runtime_ui_property(
                         name,
                         rendered,
+                        false,
                         &mut properties,
                         &mut style,
                         &mut properties_changed,
@@ -1950,6 +2036,7 @@ fn apply_runtime_ui_exposures(
                 apply_runtime_ui_property(
                     target,
                     rendered,
+                    binding.css,
                     &mut properties,
                     &mut style,
                     &mut properties_changed,
@@ -1962,7 +2049,7 @@ fn apply_runtime_ui_exposures(
             commands.entity(entity).try_insert(style);
         }
         if properties_changed {
-            commands.trigger(CompileContextEvent { entity });
+            commands.queue(move |world: &mut World| compile_runtime_ui_context(world, entity));
         }
         surface.applied_revision = exposures.revision;
     }
@@ -2076,7 +2163,9 @@ fn reconcile_runtime_ui_collections(
                             }
                         }
                         if changed {
-                            commands.trigger(CompileContextEvent { entity });
+                            commands.queue(move |world: &mut World| {
+                                compile_runtime_ui_context(world, entity)
+                            });
                         }
                     }
                     commands.entity(entity).insert(RuntimeUiCollectionRow {
@@ -2242,6 +2331,7 @@ fn apply_runtime_ui_placement_after_style(
 fn apply_runtime_ui_property(
     name: &str,
     rendered: String,
+    css: bool,
     properties: &mut TemplateProperties,
     style: &mut InlineStyle,
     properties_changed: &mut bool,
@@ -2258,8 +2348,9 @@ fn apply_runtime_ui_property(
         *properties_changed = true;
     }
     let css_name = format!("--ui-{}", name.replace('_', "-"));
-    if rendered.trim().is_empty() {
-        // Empty custom-property values are not a valid Flair token stream.
+    if !css || rendered.trim().is_empty() {
+        // Text-only bindings stay outside Flair's token stream. Empty authored
+        // CSS values also remove their override.
         // Keep the text property authoritative (an empty text value is valid),
         // but remove the inline CSS override so the authored stylesheet value
         // becomes effective again. This is an invariant at the presentation
@@ -3611,6 +3702,7 @@ mod tests {
         apply_runtime_ui_property(
             "value",
             String::new(),
+            true,
             &mut properties,
             &mut style,
             &mut properties_changed,

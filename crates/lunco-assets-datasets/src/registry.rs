@@ -37,6 +37,19 @@ pub enum DatasetState {
 }
 
 impl DatasetState {
+    /// Stable lifecycle phase shared by queries, policies, and diagnostics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Downloading { .. } => "downloading",
+            Self::Processing { .. } => "processing",
+            Self::Cancelling => "cancelling",
+            Self::Installed => "installed",
+            Self::Cancelled => "cancelled",
+            Self::Failed(_) => "failed",
+        }
+    }
+
     /// Whether the delivered artifact is available.
     pub fn is_installed(&self) -> bool {
         matches!(self, Self::Installed)
@@ -58,6 +71,14 @@ pub enum DatasetScope {
 }
 
 impl DatasetScope {
+    /// Stable command/query identity, distinct from the human-readable label.
+    pub fn id(&self) -> String {
+        match self {
+            Self::Engine => "engine".to_owned(),
+            Self::Twin { name, .. } => format!("twin:{name}"),
+        }
+    }
+
     /// Resolve the cache that owns a Twin's download.
     pub fn twin_cache_root(root: &Path, shared: bool) -> PathBuf {
         if shared {
@@ -259,6 +280,29 @@ pub fn dataset_failed(detail: impl Into<String>) -> lunco_telemetry_core::Teleme
         source: 0,
         severity: lunco_telemetry_core::Severity::Error,
         data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    }
+}
+
+/// Report a discrete provisioning phase through the shared diagnostic stream.
+/// Byte samples remain registry facts; they do not create one log row per chunk.
+pub fn dataset_state_changed(
+    id: &str,
+    name: &str,
+    state: &DatasetState,
+) -> lunco_telemetry_core::TelemetryEvent {
+    let detail = match state {
+        DatasetState::Failed(error) => return dataset_failed(format!("{name} ({id}): {error}")),
+        DatasetState::Processing { kind } => format!("{name} ({id}): processing {kind}"),
+        _ => format!("{name} ({id}): {}", state.kind()),
+    };
+    lunco_telemetry_core::TelemetryEvent {
+        name: format!("DATASET_{}", state.kind().to_ascii_uppercase()),
+        source: 0,
+        severity: lunco_telemetry_core::Severity::Info,
+        data: lunco_telemetry_core::TelemetryValue::String(detail),
         timestamp: 0.0,
         sim_secs: 0.0,
         sim_tick: 0,
@@ -719,6 +763,20 @@ impl DatasetRegistry {
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
             return false;
         };
+        if entry.state == state {
+            return false;
+        }
+        // Once cancellation is accepted, an already queued progress sample
+        // cannot make the operation look active again. Only its terminal
+        // worker result may complete this transition.
+        if entry.state == DatasetState::Cancelling
+            && matches!(
+                state,
+                DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+            )
+        {
+            return false;
+        }
         entry.state = state;
         true
     }
@@ -803,6 +861,15 @@ dest = "data/demo.csv"
         let entry = &registry.entries()[0];
         assert_eq!(entry.id, "engine/demo/demo_vectors");
         assert_eq!(entry.state, DatasetState::Missing);
+        assert_eq!(entry.scope.id(), "engine");
+        assert_eq!(
+            DatasetScope::Twin {
+                name: "named-fixture".into(),
+                root: PathBuf::from("/fixture"),
+            }
+            .id(),
+            "twin:named-fixture"
+        );
         assert_eq!(entry.artifact_uri(), "lunco://data/demo.csv");
     }
 
@@ -827,6 +894,15 @@ dest = "data/demo.csv"
             Some(DatasetState::Downloading { .. })
         ));
         assert!(registry.cancel(&id));
+        assert_eq!(registry.state(&id), Some(&DatasetState::Cancelling));
+        assert!(!registry.set_state(
+            &id,
+            DatasetState::Downloading {
+                bytes_done: 1,
+                bytes_total: 2,
+            }
+        ));
+        assert!(!registry.set_state(&id, DatasetState::Processing { kind: "dem".into() }));
         assert_eq!(registry.state(&id), Some(&DatasetState::Cancelling));
         assert!(registry.set_state(&id, DatasetState::Cancelled));
         assert!(registry.request(&id));

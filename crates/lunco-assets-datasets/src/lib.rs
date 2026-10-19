@@ -24,5 +24,5 @@ pub use plugin::{DatasetProvisioningActive, DatasetRegistryPlugin};
 pub use registry::{
     CancelDataset, DATASET_FAILED, DatasetEntry, DatasetInstalled, DatasetRegistry, DatasetScope,
     DatasetScopeReady, DatasetScopeRemoved, DatasetState, ProcessDataset, RequestDataset,
-    dataset_failed, dataset_id,
+    dataset_failed, dataset_id, dataset_state_changed,
 };

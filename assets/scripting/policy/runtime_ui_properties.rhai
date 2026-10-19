@@ -26,7 +26,7 @@ fn runtime_status_label(status, blockers) {
     if progress_owner_active(blockers, "ModelicaPreparation") || status == "compiling" {
         return "PHYSICS LOADING";
     }
-    if progress_owner_active(blockers, "TerrainPreparation") { return "TERRAIN LOADING"; }
+    if progress_owner_active(blockers, "TerrainPreparation") { return "WAITING FOR TERRAIN"; }
     if progress_owner_active(blockers, "SceneLifecycle")
         || progress_owner_active(blockers, "SceneReferences")
         || progress_owner_active(blockers, "DocumentPreparation") {

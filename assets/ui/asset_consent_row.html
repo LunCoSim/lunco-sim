@@ -5,12 +5,13 @@
   <property name="status">Not downloaded</property>
   <property name="action">request</property>
   <property name="action_label">Download</property>
+  <property name="scope">scope</property>
 
   <node id="asset-consent-row">
     <node id="asset-consent-row-copy">
       <text id="asset-consent-row-label">{label}</text>
       <text id="asset-consent-row-status">{status}</text>
     </node>
-    <button id="asset-consent-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}"><text>{action_label}</text></button>
+    <button id="asset-consent-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}"><text>{action_label}</text></button>
   </node>
 </template>

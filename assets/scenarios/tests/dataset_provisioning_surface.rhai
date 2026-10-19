@@ -3,7 +3,7 @@ const TEST_KIND = "editor";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ReadExposures"], required_inputs: [] }
+       query_reads: ["ReadExposures", "ListDatasets"], required_inputs: [] }
 }
 
 fn consent_surface() {
@@ -32,6 +32,19 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(surface.visible, "missing recommended data has a visible consent surface"));
         this.checks.push(t_true(surface.properties.rows.len() > 0, "policy rows remain published"));
         this.checks.push(t_true(surface.properties.actions.len() >= 2, "policy actions remain published"));
+        let scoped = query("ListDatasets", #{scope: this.scope});
+        this.checks.push(t_true(scoped.datasets.len() > 0,
+            "the consent action scope resolves actual declared datasets"));
+        for dataset in scoped.datasets {
+            this.checks.push(t_eq(dataset.scope, this.scope,
+                "dataset queries and consent use one canonical scope identity"));
+        }
+        let rejected = query("ListDatasets", #{scope: "twin:__absent_dataset_scope__"});
+        this.checks.push(t_true(rejected.ok == false && rejected.error.contains("scope"),
+            "an unknown scope is a diagnostic rather than a successful empty selection"));
+        let invalid_request = cmd("RequestDataset", #{id: "__absent_dataset__"});
+        this.checks.push(t_true(invalid_request.ok == false,
+            "an undeclared download request is rejected explicitly"));
         this.initial = surface;
         cmd("DismissDatasetProvisioning", #{scope: "__absent_provisioning_scope__"});
     } else if this.phase == 1 {

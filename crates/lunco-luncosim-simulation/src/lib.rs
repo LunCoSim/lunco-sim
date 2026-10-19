@@ -676,7 +676,14 @@ impl Plugin for LunCoSimSimulationPlugin {
 /// and UI schedules continue while the key is held.
 fn track_ground_collider_pending(
     building: Query<
-        (Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>),
+        (
+            Entity,
+            Option<Ref<lunco_usd_bevy_scene::UsdPrimPath>>,
+            Option<Ref<lunco_usd_terrain::DemDatasetPending>>,
+            Option<Ref<lunco_usd_terrain::DemDatasetScanPending>>,
+            Option<Ref<lunco_terrain_surface::DemTerrainRequest>>,
+            Option<Ref<lunco_terrain_surface::terrain::DemWorkerJob>>,
+        ),
         Or<(
             With<lunco_terrain_surface::DemTerrainRequest>,
             With<lunco_terrain_surface::terrain::DemWorkerJob>,
@@ -686,23 +693,66 @@ fn track_ground_collider_pending(
     >,
     parents: Query<&ChildOf>,
     preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    datasets: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
     mut pending: ResMut<lunco_usd_sim_core::GroundColliderPending>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut active: Local<BTreeSet<lunco_core_runtime::SimulationProgressKey>>,
 ) {
     active.clear();
-    for (entity, prim_path) in &building {
+    for (entity, prim_path, dataset_pending, scan_pending, request, worker) in &building {
         if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
             continue;
         }
         let key = lunco_core_runtime::SimulationProgressKey::terrain_preparation(entity);
         active.insert(key);
-        if !progress.contains(key) {
-            let label = prim_path.map_or_else(
-                || format!("entity {}", entity.to_bits()),
-                |path| path.path.clone(),
-            );
-            progress.acquire(key, format!("Preparing physics terrain for {label}"));
+        if progress.contains(key)
+            && !datasets.as_ref().is_some_and(|value| value.is_changed())
+            && !prim_path.as_ref().is_some_and(|value| value.is_changed())
+            && !dataset_pending
+                .as_ref()
+                .is_some_and(|value| value.is_changed())
+            && !scan_pending
+                .as_ref()
+                .is_some_and(|value| value.is_changed())
+            && !request.as_ref().is_some_and(|value| value.is_changed())
+            && !worker.as_ref().is_some_and(|value| value.is_changed())
+        {
+            continue;
+        }
+        let label = prim_path.map_or_else(
+            || format!("entity {}", entity.to_bits()),
+            |path| path.path.clone(),
+        );
+        let reason = if let Some(required) = dataset_pending {
+            let id = required.dataset_id();
+            let detail = match datasets.as_deref() {
+                None => "dataset registry unavailable".to_owned(),
+                Some(datasets) => match datasets.state(id) {
+                    None => "dataset declaration unavailable".to_owned(),
+                    Some(lunco_assets_datasets::DatasetState::Failed(error)) => {
+                        format!("failed: {error}")
+                    }
+                    Some(state) => state.kind().to_owned(),
+                },
+            };
+            format!("Simulation waiting for required terrain dataset {id}: {detail} ({label})")
+        } else if scan_pending.is_some() {
+            format!("Inspecting required terrain datasets for {label}")
+        } else {
+            format!("Preparing physics terrain for {label}")
+        };
+        let unchanged = progress
+            .blockers()
+            .find(|blocker| blocker.key == key)
+            .map(|blocker| blocker.reason == reason);
+        match unchanged {
+            Some(true) => {}
+            Some(false) => {
+                progress.update_reason(key, reason);
+            }
+            None => {
+                progress.acquire(key, reason);
+            }
         }
     }
     pending.0 = !active.is_empty();

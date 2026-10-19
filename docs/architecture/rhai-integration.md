@@ -695,11 +695,13 @@ input_key_release("AltLeft");
 
 The Rust mechanism emits the same aggregate `WindowEvent` and typed
 `KeyboardInput`/`CursorMoved`/`MouseButtonInput`/`MouseWheel` messages produced
-by the Bevy winit backend. It does not mutate the native `Window` cursor or move
-the operating-system pointer. Bevy Picking owns the current mouse location in
+by the Bevy winit backend. The runtime UI adapter mirrors absolute cursor events
+into Window state only during Bevy UI focus, then restores native state before
+winit synchronization. Injection does not warp the OS pointer.
+Bevy Picking owns mouse location in
 `PointerLocation`; cursor-driven tools read the shared
 `lunco_interaction_core::PrimaryMousePointer` system parameter, so native and
-injected events have one application-level position without cursor warping.
+injected events have one application-level position.
 That means egui, picking, focus, input bindings, and scene tools all observe
 one canonical path. Rhai owns sequences, chords, drag workflows, and retries;
 Rust owns only event validation and fan-out. The command accepts logical window

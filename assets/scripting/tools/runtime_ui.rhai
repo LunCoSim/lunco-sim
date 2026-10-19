@@ -13,10 +13,15 @@ fn on_action(ctx) {
     let action = ctx.action;
     let parameters = if ctx.parameters == () { #{} } else { ctx.parameters };
     if action == "request_all" {
-        return assets::request_recommended(parameters.scope);
+        let result = assets::request_recommended(parameters.scope);
+        if result.ok == false { throw result.error; }
+        return result;
     }
     if action == "request" {
         return assets::request(parameters.id);
+    }
+    if action == "cancel" {
+        return assets::cancel(parameters.id);
     }
     if action == "dismiss" {
         let scope = if parameters.scope == () { "" } else { parameters.scope };

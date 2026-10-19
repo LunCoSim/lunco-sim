@@ -14,7 +14,7 @@ use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 /// `ProcessDataset`, or `CancelDataset` according to the entry's `processed`
 /// flag and live state.
 ///
-/// params: `{ scope?: string }` where `scope` is the engine group or Twin name
+/// params: `{ scope?: string }` where `scope` is `engine` or `twin:<name>`
 /// · returns `{ datasets: [{ id, key, group, scope, name, state, processed,
 ///   recommended, artifact_uri, metadata }] }`
 pub struct ListDatasetsProvider;
@@ -41,10 +41,23 @@ impl ApiQueryProvider for ListDatasetsProvider {
                 "ListDatasets: dataset registry is not installed",
             ));
         };
+        if let Some(scope) = filter {
+            if !registry
+                .scanned_scopes()
+                .iter()
+                .chain(registry.entries().iter().map(|entry| &entry.scope))
+                .any(|known| known.id() == scope)
+            {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::CommandRejected,
+                    format!("ListDatasets: scope is not ready or declared: {scope}"),
+                ));
+            }
+        }
         let datasets = registry
             .entries()
             .iter()
-            .filter(|entry| filter.is_none_or(|value| entry.scope.label() == value))
+            .filter(|entry| filter.is_none_or(|value| entry.scope.id() == value))
             .map(|entry| {
                 let state = match &entry.state {
                     lunco_assets_datasets::DatasetState::Missing => {
@@ -79,7 +92,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     "id": entry.id.clone(),
                     "key": entry.key.clone(),
                     "group": entry.group.clone(),
-                    "scope": entry.scope.label(),
+                    "scope": entry.scope.id(),
                     "name": entry.name.clone(),
                     "state": state,
                     "processed": entry.spec.process.is_some(),

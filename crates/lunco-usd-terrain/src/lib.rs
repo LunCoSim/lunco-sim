@@ -306,6 +306,11 @@ impl DemDatasetScanPending {
 }
 
 impl DemDatasetPending {
+    /// Exact registry identity that must become installed before this DEM can build.
+    pub fn dataset_id(&self) -> &str {
+        &self.dataset_id
+    }
+
     /// Mark a composed DEM whose delivered artifact must be installed before
     /// the physics world can admit dynamic bodies.
     pub fn new(dataset_id: impl Into<String>) -> Self {

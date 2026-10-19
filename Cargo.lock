@@ -7313,6 +7313,7 @@ dependencies = [
  "lunco-core",
  "lunco-geotiff",
  "lunco-settings",
+ "lunco-status-core",
  "lunco-workspace",
  "tiff",
 ]

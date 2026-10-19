@@ -256,6 +256,37 @@ atomic publication still own the work. Rhai's `assets.bake(id)` and
 another dataset or changing its parameters is an `Assets.toml` edit. Rust changes
 are needed only when adding a new processing algorithm or owner.
 
+`DatasetScope::id()` owns the scope identity used by `ListDatasets` and download
+actions: `engine` or `twin:<name>`. Display labels are not query selectors.
+An unknown or undiscovered scope rejects explicitly; a discovered empty scope
+may return no entries. `RequestDataset` and `CancelDataset` return terminal
+command results for invalid identities or states.
+
+The provisioning worker reports discrete download, preparation, cancellation,
+completion, and failure transitions through shared telemetry. The worker also
+publishes routine phases to the optional renderer-independent `StatusBus` for
+Recent Events; failures use the shared error-telemetry bridge once. Ordinary
+informational simulation telemetry remains filtered from status history.
+This is generic operation diagnostics, with no Twin-specific selection policy.
+Byte progress stays in `DatasetRegistry`, so chunk arrivals do not flood
+the event log. Accepted cancellation cannot be overwritten by queued progress;
+the worker's terminal result retires the operation. Closing a Twin retains the
+same cancellation/commit barrier and rejects late publication.
+
+Required DEM datasets hold the existing `SimulationProgress` terrain key. Its
+reason identifies the required dataset and current phase or failure. UI and
+presentation continue while authoritative ticks wait. Once the delivered
+artifact is installed, the USD terrain bridge retries that exact pending prim
+and prepares its collider through the normal owner. This does not reload the
+scene, reset authored state, or resume an intentionally paused transport.
+
+Raw source downloads are not processed terrain. A portable Twin must include
+its required prepared artifacts or declare a supported processing pipeline for
+them. A source-only repository archive cannot promise offline readiness when
+its authored terrain is ignored by Git. Griffin's polar source requires the
+Twin's prepared release payload; its two raw download entries alone cannot
+produce the scene's terrain directory.
+
 The dataset registry rejects process outputs that overlap another process
 output or a declared download source, including file paths nested under a
 directory output. Directory processors such as `dem` atomically replace their

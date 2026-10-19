@@ -69,7 +69,7 @@
       "bindings": {
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
-        "status_color": { "source": "status_color" },
+        "status_color": { "source": "status_color", "css": true },
         "owner": { "source": "owner" },
         "speed": { "source": "speed" },
         "position": { "source": "position" },
@@ -95,7 +95,7 @@
       "bindings": {
         "vehicle": { "source": "vehicle" },
         "status": { "source": "status" },
-        "status_color": { "source": "status_color" },
+        "status_color": { "source": "status_color", "css": true },
         "owner": { "source": "owner" },
         "speed": { "source": "speed" },
         "position": { "source": "position" },
@@ -137,18 +137,18 @@
         "comms_range": { "source": "comms_range" },
         "comms_elevation": { "source": "comms_elevation" },
         "telemetry_summary": { "source": "telemetry_summary" },
-        "tilt_color": { "source": "tilt_color" },
-        "tilt_marker": { "source": "tilt_marker" },
-        "caution_width": { "source": "caution_width" },
-        "danger_start": { "source": "danger_start" },
-        "danger_width": { "source": "danger_width" },
-        "geo_display": { "source": "geo_display" },
-        "local_display": { "source": "local_display" },
-        "comms_display": { "source": "comms_display" },
-        "comms_los_display": { "source": "comms_los_display" },
-        "comms_color": { "source": "comms_color" },
-        "telemetry_display": { "source": "telemetry_display" },
-        "program_color": { "source": "program_color" }
+        "tilt_color": { "source": "tilt_color", "css": true },
+        "tilt_marker": { "source": "tilt_marker", "css": true },
+        "caution_width": { "source": "caution_width", "css": true },
+        "danger_start": { "source": "danger_start", "css": true },
+        "danger_width": { "source": "danger_width", "css": true },
+        "geo_display": { "source": "geo_display", "css": true },
+        "local_display": { "source": "local_display", "css": true },
+        "comms_display": { "source": "comms_display", "css": true },
+        "comms_los_display": { "source": "comms_los_display", "css": true },
+        "comms_color": { "source": "comms_color", "css": true },
+        "telemetry_display": { "source": "telemetry_display", "css": true },
+        "program_color": { "source": "program_color", "css": true }
       },
       "actions": [],
       "visible_in_perspective": "sandbox_view",
@@ -163,7 +163,7 @@
       "bindings": {
         "scope": { "source": "scope" },
         "program_count": { "source": "program_count" },
-        "program_empty_display": { "source": "program_empty_display", "map": { "true": "flex", "false": "none" } }
+        "program_empty_display": { "source": "program_empty_display", "css": true, "map": { "true": "flex", "false": "none" } }
       },
       "collections": [
         {
@@ -225,7 +225,7 @@
       "namespace": "celestial-view",
       "bindings": {
         "surface_background": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--accent-color)",
             "301": "var(--button-background)",
@@ -233,7 +233,7 @@
           }
         },
         "surface_color": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--active-text-color)",
             "301": "var(--muted-color)",
@@ -241,11 +241,11 @@
           }
         },
         "moon_display": {
-          "source": "body_moon_present",
+          "source": "body_moon_present", "css": true,
           "map": { "true": "flex", "false": "none" }
         },
         "moon_background": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--button-background)",
             "301": "var(--accent-color)",
@@ -253,7 +253,7 @@
           }
         },
         "moon_color": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--muted-color)",
             "301": "var(--active-text-color)",
@@ -261,11 +261,11 @@
           }
         },
         "earth_display": {
-          "source": "body_earth_present",
+          "source": "body_earth_present", "css": true,
           "map": { "true": "flex", "false": "none" }
         },
         "earth_background": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--button-background)",
             "301": "var(--button-background)",
@@ -273,7 +273,7 @@
           }
         },
         "earth_color": {
-          "source": "active_body_id",
+          "source": "active_body_id", "css": true,
           "map": {
             "0": "var(--muted-color)",
             "301": "var(--muted-color)",
@@ -281,20 +281,20 @@
           }
         },
         "mission_card_display": {
-          "source": "mission_view_available",
+          "source": "mission_view_available", "css": true,
           "map": { "true": "flex", "false": "none" }
         },
         "map_top": {
-          "source": "mission_view_available",
+          "source": "mission_view_available", "css": true,
           "map": { "true": "102px", "false": "62px" }
         },
-        "map_display": { "source": "map_display" },
+        "map_display": { "source": "map_display", "css": true },
         "map_status": { "source": "map_status" },
         "map_coordinates": { "source": "map_coordinates" },
         "map_altitude": { "source": "map_altitude" },
-        "map_marker_display": { "source": "map_marker_display" },
-        "map_marker_left": { "source": "map_marker_left" },
-        "map_marker_top": { "source": "map_marker_top" }
+        "map_marker_display": { "source": "map_marker_display", "css": true },
+        "map_marker_left": { "source": "map_marker_left", "css": true },
+        "map_marker_top": { "source": "map_marker_top", "css": true }
       },
       "actions": [
         { "callback": "runtime_view_surface", "action": "view.surface" },
@@ -318,6 +318,12 @@
       "template": "ui/terrain_progress.html",
       "stylesheet": "ui/terrain_progress.css",
       "namespace": "terrain-progress",
+      "bindings": {
+        "title": { "source": "title" },
+        "caption": { "source": "caption" },
+        "progress_width": { "source": "progress_width", "css": true },
+        "progress_text": { "source": "progress_text" }
+      },
       "actions": [
         {
           "callback": "runtime_terrain_dismiss",
@@ -368,6 +374,12 @@
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",
       "namespace": "scenario-download",
+      "bindings": {
+        "title": { "source": "title" },
+        "asset_count": { "source": "asset_count" },
+        "progress_width": { "source": "progress_width", "css": true },
+        "progress_text": { "source": "progress_text" }
+      },
       "draggable": true,
       "placement": {
         "mode": "window",
