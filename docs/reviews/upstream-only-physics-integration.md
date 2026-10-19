@@ -1,10 +1,11 @@
 # Upstream-only physics integration review
 
-Status: application integration uses public dependency APIs. The explicitly
-approved Parry 0.27 correction is published in the existing LunCoSim fork and
-pinned to `83494d280bda8615c812d919e6b7ab30f88a7750`. Its convex-query,
-application CCD, production contact and unattended Griffin mission gates pass.
-Sustained performance and full FMI qualification remain incomplete. 2026-10-18.
+Status: application integration uses public dependency APIs. The existing LunCoSim
+Parry 0.27 fork is pinned locally to `75b6acccdc42151995d0a653c576e65248164447`.
+The user approved the focused thin-simplex correction; publication is not yet
+authorized. The previous published baseline is `83494d280bda8615c812d919e6b7ab30f88a7750`.
+Current collision qualification is recorded below. Sustained performance and
+full FMI qualification remain incomplete. 2026-10-19.
 
 The dependency source directories and local path patches are removed. Application
 composition uses maintained public physics APIs; the published gizmo frontend
@@ -354,7 +355,7 @@ contracts; add a boundary-specific test if an aligned mask is actually persisted
 | Collider insertion/scale | USD-Avian admission and fixed preparation; `ScalableCollider`, `ColliderTransform`, public scale preparation | Admit coherent physics-local geometry and scale together before native preparation. Establish an insertion transaction that cannot read a stale render `GlobalTransform`. Verify constructor scale, cooked shape, bounds and mass together, including headless operation. An after-the-fact visual repair is insufficient. |
 | Contact source identity | Physics diagnostics plus USD collider provenance; native manifold and application CCD facts | Keep one native collider per authored USD collision prim, attached through public `ColliderOf`. Resolve source identity from the collider for both discrete and continuous contacts. Native mesh subshape indices remain optional; never guess a part zero. |
 | Native graph lifetime | Physics owner; shared scene-resource registry and public `ContactGraph::clear` / `ConstraintGraph::clear` | Register the native reset operations with `init_scene_resource_with`, after entity-removal observers. Full reload and ClearScene retire isolated graph nodes as well as contact edges. |
-| Triangle query initialization | `lunco-physics::ccd`; public finite-triangle projection and seeded GJK/EPA contact API | Use one finite-feature seed for initial contacts and every nonlinear re-sample. Native witnesses still determine depth and normals; missing enclosing-query geometry still refuses writeback. |
+| Native query geometry | `lunco-physics::ccd`; default Parry contact and manifold dispatchers | Native witnesses own initial, nonlinear and fresh rolling geometry. Mesh manifolds retain internal-edge constraints. Missing enclosing-query geometry still refuses writeback. |
 | Transform interpolation | Physical presentation owner; public easing states and custom easing backend | Capture native endpoints once and consume `SimulationPresentationTime.interpolation`. Select one easing backend at plugin composition. No mutation of `Time<Fixed>` to satisfy presentation. Preserve the independent Interaction clock for UI/avatar easing. |
 | EPA allocation scratch | Native contact-query interface | Use the published six-argument contact entry point and remove the application EPA pool and threaded parameters. Keep parallel read-only geometry queries and prepared result order. Measure actual allocation cost before considering an upstream API request. |
 | Query skip certificates | Existing CCD owner; native supports, poses and bounding geometry | Remove dependency-only optimization calls. Retain only proofs whose bounds cover the actual upstream motion evaluation and contact criterion. Compare admitted contacts/trajectories before claiming a performance improvement. |
@@ -736,8 +737,8 @@ Admission uses native collider disable/enable to reconcile proxy identity,
 attachment, body mode and enabled state without detaching geometry. Native
 contact and constraint graph resets register at the shared scene-resource
 boundary after entity-removal observers. Finite-triangle contact samples use
-one feature seed through the public native GJK/EPA interface, including nonlinear
-re-samples. Native geometry still determines witnesses, depth and normals;
+the default native GJK/EPA dispatcher, including nonlinear re-samples. Fresh
+endpoint manifolds preserve mesh normal constraints. Native geometry determines witnesses, depth and normals;
 missing enclosing-query geometry remains a terminal writeback refusal.
 
 The unchanged Griffin rover gate passes 88/88 at its original solver settings:
@@ -755,3 +756,43 @@ Evidence is under `target/griffin-collider-proof/`, including
 `final-acceptance.json`, `seeded-query-tests.log`, `scene-lifecycle-test.log`,
 `reloads.json`, `cleared.json` and `sandbox_view.png`. No third-party source or
 solver tolerance changes are part of this repair.
+
+
+## Roadster suspension/contact correction — 2026-10-19
+
+The approved Parry follow-up consists of local commits `e353239` and `75b6acc`.
+Thin tetrahedron reduction now retains exterior face witnesses, and tetrahedron
+admission bounds determinant roundoff before accepting an orientation. All six
+recorded triangle/cylinder poses, both shape orders, equivalent local frames,
+and 6,144 nearby queries pass, alongside 60 library tests and seven convex-query
+regressions. The f32 library compiles. These commits have not been published;
+a fresh checkout cannot fetch the new pin until publication is authorized.
+
+The application removes its feature-seeded contact adapter and consumes default
+native geometry. Fresh endpoint manifolds close rolling overlap on convex and
+mesh surfaces, including native internal-edge normal constraints. Additional
+continuous normal reactions supply a once-consumed native Coulomb budget using
+fresh levers and normals and the prepared collider pair's material policy.
+Hard-joint convergence measures existing geometric rows' actual residuals over
+the prepared topology. Ordinary motors and compliant channels still run once.
+Double-precision wheel-axis construction and validated unit compound rotations
+preserve native rigid-pose assumptions. No vehicle law or policy enters Rust;
+`drive.rs` is unchanged.
+
+The production binary passes four 20-second Roadster drop/side/finite-floor
+checks, with maximum wheel-ground penetration 0.4944 mm and bump/droop within
+0.5 mm of the authored stops. Generic continuous contacts pass 12 checks and
+the prismatic spring passes 26. The focused application subset passes 28 CCD
+and nine joint-projection tests. The pre-existing degenerate-triangle projection
+case and two native automatic-mass-helper assertions remain outside this passing
+subset; no full-suite pass is claimed.
+
+The ramp matrix retains two failures: the 11 m/s approach climbs beyond 30 m
+but drops below its minimum-speed gate; the 40 m/s case's largest one-tick loss
+is 0.750522 m/s against a 0.75 m/s limit. The 25 m/s fan-on and fan-off cases
+pass. None of these four runs faults in the geometry query or reports a chassis
+impact. Vehicle traction/control and seam performance therefore remain open;
+this is bounded collision qualification, not full-course acceptance.
+Evidence lives in the Roadster Twin's `results/contact-*.json` and
+`results/ramp-entry-matrix.json`; focused native/unit logs are retained under
+its ignored `.scratch/` and `/tmp/roadster-parry-final-certified.log`.

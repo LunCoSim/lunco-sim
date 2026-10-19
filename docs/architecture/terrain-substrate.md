@@ -748,11 +748,10 @@ contact. Only advisory separation directions survive; all pair caches expire
 when the next physics step rebuilds its admitted geometry. A cached
 minimum translation depth beyond tolerance rules out a clear separating axis at
 the initial pose, so closure need not repeat other separation-only axes.
-Convex triangle starting contacts seed Parry's native GJK/EPA with their finite
-feature axis. The native cast, bisection and fresh contact kernel own the geometry;
-the search direction supplies no assumed plane penetration. Native
-triangle/cylinder and triangle/cuboid references specialise that same entry
-point, retaining both pair orientations and the generic kernel's exact geometry.
+Initial contacts and nonlinear re-samples use Parry's default native dispatcher.
+The native GJK/EPA, cast and bisection kernels own contact geometry. Conservative
+finite-feature directions remain only in support-bound proofs; they do not seed
+or replace the native contact query.
 Native dispatcher witnesses retain their respective local frames until the initial
 contact owner transforms them to world space. Nonfinite witnesses, invalid
 normals, unsupported queries, or missing geometry from an unbounded cast query
@@ -784,7 +783,8 @@ overlap sampling; positive-time casts and zero-thickness shapes retain their
 native queries. Development builds explicitly optimise the workspace math and
 physics owners while retaining assertions and overflow checks.
 Contact projection alternates with the native hard-geometry joint schedule,
-restricted to the affected connected bodies. It does not reintegrate motors or
+over the complete prepared joint topology. Convergence measures actual hard-row
+position and angular residuals, not the size of the last correction. It does not reintegrate motors or
 repeat compliant channels. Its symmetric sweeps reverse both constraint kinds
 and identities, propagating corrections through the prepared topology in both
 directions. Multi-axis joint rows solve the coupled mass response in their
@@ -792,6 +792,13 @@ constrained subspace using the existing rank-aware response kernel; free axes
 receive no multiplier. The ordered native passes execute on one thread;
 closure acquires the body query once for all ten forward/reverse native passes
 and does not dispatch workers between sequential constraints.
+Fresh endpoint manifolds close initial rolling overlap, including when a whole-arc
+certificate omits a cast. Native composite manifold dispatch owns mesh traversal,
+internal-edge rules and local witness frames. Additional continuous normal
+reactions reuse the prepared collider pair's material policy and the public native
+Coulomb tangent kernel after native relaxation. Their impulse budget is consumed
+once, with fresh normals and lever arms; they do not alter an older normal
+warm-start accumulator. No vehicle-specific force or tire law belongs here.
 Native independent body preparation, integration, inertia refresh and writeback
 use Bevy's adaptive parallel-query batching with
 `SolverConfig.minimum_body_batch_size` (default 64). Populations at or below

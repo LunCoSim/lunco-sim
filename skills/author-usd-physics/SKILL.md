@@ -816,21 +816,30 @@ Swept normals consume the same native internal-edge and oriented-backface
 constraints as contact manifolds. Continuous contacts share the native substep's
 position solve and its existing position-only joint schedule. Sweeps use solved
 COM motion and bounds covering the entire rotational arc; corrected trajectories
-are re-evaluated until contacts and joint corrections converge. Motor integration
+are re-evaluated until contacts and actual hard-joint residuals converge. Motor integration
 runs once per substep. Native contact relaxation and friction follow joint and
 continuous velocity projection. Unsupported kernels or a convergence failure fault and
 block pose writeback in that same tick. See the continuous-contact contract in
 `docs/architecture/terrain-substrate.md`.
 
-Convex triangle contacts use one finite-feature search seed for every sample,
-including nonlinear sweep re-samples, through Parry's public seeded contact API.
-Fresh native GJK/EPA and nonlinear bisection retain geometry
-ownership. Incomplete unbounded queries and invalid native witnesses are owner
-faults, not clear-space results. Preserve these diagnostics when changing the
-native query adapter; verify finite edges, swapped local witness frames and the
-production contact/landing/rover gates. The pinned Parry owner includes native
-GJK stall classification and scalar enhanced determinism; preserve overlapping
-cylinder intersections when updating that dependency.
+Initial and nonlinear contact samples use Parry's default native dispatcher.
+Fresh endpoint manifolds supply rolling witnesses for both convex floors and
+meshes, preserving native internal-edge and backface constraints. Additional
+continuous normal reactions supply a Coulomb budget after native relaxation;
+Avian's public tangent kernel consumes that budget once with fresh lever arms
+and contact normals. Material policy comes from the prepared collider pair.
+These reactions never enter an obsolete normal warm-start cache.
+Incomplete unbounded queries and invalid native witnesses fault the owner;
+they are not clear-space results. Verify finite edges, swapped local witness
+frames and production contact/landing/rover gates. The pinned Parry owner
+includes native GJK stall classification, certified thin-tetrahedron admission
+and reduction, and scalar enhanced determinism. Preserve overlapping cylinder
+intersections when updating it.
+
+Physical wheels retain their continuous-collision profile when the CCD field is
+omitted; an explicit `physxRigidBody:enableCCD` boolean is honored. Collider-axis
+rotations use native double precision. A widened render quaternion is validated
+before conversion to a unit native rigid rotation; malformed input still faults.
 
 Generated primitive proxies carry `LunCoDerivedGeometryAPI` and exactly one
 `lunco:derived:source` targeting their sibling Cube or Cylinder. The shared

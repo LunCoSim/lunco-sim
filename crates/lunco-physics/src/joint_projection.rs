@@ -164,6 +164,14 @@ pub(crate) struct JointProjection {
     pub(crate) pending_reaction: Option<JointForces>,
 }
 
+struct GeometryError {
+    levers: [DVec3; 2],
+    position_error: Option<DVec3>,
+    angle_error: Option<DVec3>,
+    position_space: DMat3,
+    angle_space: DMat3,
+}
+
 impl JointProjection {
     pub(crate) fn prepare(
         &mut self,
@@ -316,6 +324,119 @@ impl JointProjection {
         Ok(())
     }
 
+    fn row_error(
+        &self,
+        row: GeometryRow,
+        bodies: [&SolverBody; 2],
+    ) -> Result<GeometryError, &'static str> {
+        let levers = [
+            bodies[0].delta_rotation * self.point.world_r1,
+            bodies[1].delta_rotation * self.point.world_r2,
+        ];
+        let separation = (bodies[1].delta_position - bodies[0].delta_position)
+            + (levers[1] - levers[0])
+            + self.point.center_difference;
+        let mut position_error = None;
+        let mut angle_error = None;
+        let mut position_space = DMat3::IDENTITY;
+        let mut angle_space = DMat3::IDENTITY;
+        match row {
+            GeometryRow::Anchors => position_error = Some(separation),
+            GeometryRow::Distance(limit) => {
+                let length = separation.length();
+                if length == 0.0 && limit.min > 0.0 {
+                    return Err("separated distance anchors have no resolved direction");
+                }
+                if length != 0.0 {
+                    position_space = outer(separation / length);
+                    position_error =
+                        Some(separation * ((length - length.clamp(limit.min, limit.max)) / length));
+                }
+            }
+            _ => {
+                let bases = self
+                    .bases
+                    .ok_or("angular joint projection requires prepared bases")?;
+                let frames = [
+                    bodies[0].delta_rotation.0 * bases[0],
+                    bodies[1].delta_rotation.0 * bases[1],
+                ];
+                match row {
+                    GeometryRow::Orientation => {
+                        angle_error =
+                            Some(crate::joint::rotation_displacement(frames[0], frames[1])?)
+                    }
+                    GeometryRow::SliderAlignment(axis) => {
+                        let axis = unit(frames[0] * axis)?;
+                        position_space = DMat3::IDENTITY - outer(axis);
+                        position_error = Some(separation - axis * separation.dot(axis));
+                    }
+                    GeometryRow::SliderLimit(axis, limit) => {
+                        position_space = outer(unit(frames[0] * axis)?);
+                        position_error = Some(
+                            -limit
+                                .compute_correction_along_axis(separation, unit(frames[0] * axis)?),
+                        )
+                    }
+                    GeometryRow::AlignedAxes(axis) => {
+                        angle_space = DMat3::IDENTITY - outer(unit(frames[0] * axis)?);
+                        angle_error = Some(axis_error(frames[0] * axis, frames[1] * axis, None)?)
+                    }
+                    GeometryRow::Angle(axis, limit) => {
+                        angle_space = outer(unit(frames[0] * axis)?);
+                        let perpendicular = axis.any_orthonormal_vector();
+                        angle_error = Some(angle_error_about(
+                            unit(frames[0] * axis)?,
+                            frames[0] * perpendicular,
+                            frames[1] * perpendicular,
+                            limit,
+                        )?);
+                    }
+                    GeometryRow::Swing(axis, limit) => {
+                        angle_error =
+                            Some(axis_error(frames[0] * axis, frames[1] * axis, Some(limit))?);
+                    }
+                    GeometryRow::Twist(axis, limit) => {
+                        let perpendicular = axis.any_orthonormal_vector();
+                        let normal = unit(frames[0] * axis + frames[1] * axis)?;
+                        angle_error = Some(angle_error_about(
+                            normal,
+                            frames[0] * perpendicular,
+                            frames[1] * perpendicular,
+                            limit,
+                        )?);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        Ok(GeometryError {
+            levers,
+            position_error,
+            angle_error,
+            position_space,
+            angle_space,
+        })
+    }
+
+    pub(crate) fn residual(&self, bodies: [&SolverBody; 2]) -> Result<(f64, f64), &'static str> {
+        if !self.prepared {
+            return Err("joint residual has no admitted geometry");
+        }
+        let mut residual = (0.0_f64, 0.0_f64);
+        for row in self.rows.into_iter().flatten() {
+            let error = self.row_error(row, bodies)?;
+            residual.0 = residual
+                .0
+                .max(error.position_error.map_or(0.0, DVec3::length));
+            residual.1 = residual.1.max(error.angle_error.map_or(0.0, DVec3::length));
+        }
+        if !residual.0.is_finite() || !residual.1.is_finite() {
+            return Err("joint residual is not finite");
+        }
+        Ok(residual)
+    }
+
     pub(crate) fn solve(
         &mut self,
         bodies: [&mut SolverBody; 2],
@@ -328,87 +449,13 @@ impl JointProjection {
         let [mut a, mut b] = [first.clone(), second.clone()];
         let [mut linear, mut angular] = [DVec3::ZERO; 2];
         for row in self.rows.into_iter().flatten() {
-            let levers = [
-                a.delta_rotation * self.point.world_r1,
-                b.delta_rotation * self.point.world_r2,
-            ];
-            let separation = (b.delta_position - a.delta_position)
-                + (levers[1] - levers[0])
-                + self.point.center_difference;
-            let mut position_error = None;
-            let mut angle_error = None;
-            let mut position_space = DMat3::IDENTITY;
-            let mut angle_space = DMat3::IDENTITY;
-            match row {
-                GeometryRow::Anchors => position_error = Some(separation),
-                GeometryRow::Distance(limit) => {
-                    let length = separation.length();
-                    if length == 0.0 && limit.min > 0.0 {
-                        return Err("separated distance anchors have no resolved direction");
-                    }
-                    if length != 0.0 {
-                        position_space = outer(separation / length);
-                        position_error = Some(
-                            separation * ((length - length.clamp(limit.min, limit.max)) / length),
-                        );
-                    }
-                }
-                _ => {
-                    let bases = self
-                        .bases
-                        .ok_or("angular joint projection requires prepared bases")?;
-                    let frames = [a.delta_rotation.0 * bases[0], b.delta_rotation.0 * bases[1]];
-                    match row {
-                        GeometryRow::Orientation => {
-                            angle_error =
-                                Some(crate::joint::rotation_displacement(frames[0], frames[1])?)
-                        }
-                        GeometryRow::SliderAlignment(axis) => {
-                            let axis = unit(frames[0] * axis)?;
-                            position_space = DMat3::IDENTITY - outer(axis);
-                            position_error = Some(separation - axis * separation.dot(axis));
-                        }
-                        GeometryRow::SliderLimit(axis, limit) => {
-                            position_space = outer(unit(frames[0] * axis)?);
-                            position_error =
-                                Some(-limit.compute_correction_along_axis(
-                                    separation,
-                                    unit(frames[0] * axis)?,
-                                ))
-                        }
-                        GeometryRow::AlignedAxes(axis) => {
-                            angle_space = DMat3::IDENTITY - outer(unit(frames[0] * axis)?);
-                            angle_error =
-                                Some(axis_error(frames[0] * axis, frames[1] * axis, None)?)
-                        }
-                        GeometryRow::Angle(axis, limit) => {
-                            angle_space = outer(unit(frames[0] * axis)?);
-                            let perpendicular = axis.any_orthonormal_vector();
-                            angle_error = Some(angle_error_about(
-                                unit(frames[0] * axis)?,
-                                frames[0] * perpendicular,
-                                frames[1] * perpendicular,
-                                limit,
-                            )?);
-                        }
-                        GeometryRow::Swing(axis, limit) => {
-                            angle_error =
-                                Some(axis_error(frames[0] * axis, frames[1] * axis, Some(limit))?);
-                        }
-                        GeometryRow::Twist(axis, limit) => {
-                            let perpendicular = axis.any_orthonormal_vector();
-                            let normal = unit(frames[0] * axis + frames[1] * axis)?;
-                            angle_error = Some(angle_error_about(
-                                normal,
-                                frames[0] * perpendicular,
-                                frames[1] * perpendicular,
-                                limit,
-                            )?);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
+            let GeometryError {
+                levers,
+                position_error,
+                angle_error,
+                position_space,
+                mut angle_space,
+            } = self.row_error(row, [&a, &b])?;
             if let Some(error) = position_error {
                 linear +=
                     project_position([&mut a, &mut b], inertias, levers, error, position_space)?;
@@ -623,6 +670,57 @@ mod tests {
 
     fn inertia() -> SolverBodyInertia {
         SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, LockedAxes::new(), 0, true)
+    }
+
+    #[test]
+    fn block_response_closes_rotated_nearly_repeated_eigenspaces() {
+        for i in 0..300 {
+            let q = DQuat::from_euler(
+                EulerRot::XYZ,
+                i as f64 * 0.013,
+                i as f64 * 0.027,
+                i as f64 * 0.043,
+            );
+            let r = DMat3::from_quat(q);
+            for delta in [0.0, 1e-12, 1e-8, 1e-4, 0.1] {
+                let response =
+                    r * DMat3::from_diagonal(DVec3::new(20.0, 20.0 + delta, 21.0)) * r.transpose();
+                for axis in [DVec3::X, q * DVec3::Y] {
+                    for space in [DMat3::IDENTITY, outer(axis), DMat3::IDENTITY - outer(axis)] {
+                        let error = space * DVec3::new(0.001, -0.002, 0.003);
+                        let impulse = block_correction_impulse(error, response, space).unwrap();
+                        assert!(
+                            (space * (response * impulse - error)).length() < 1e-9,
+                            "i={i}, delta={delta}, remaining={:?}",
+                            space * (response * impulse - error)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn residual_measures_hard_rows_and_preserves_free_slider_travel() {
+        let projection = prepared(
+            |a, b| {
+                PrismaticJoint::new(a, b)
+                    .with_slider_axis(DVec3::Y)
+                    .with_limits(-0.055, 0.065)
+            },
+            [DQuat::IDENTITY; 2],
+        );
+        let a = SolverBody::default();
+        let mut b = SolverBody {
+            delta_position: DVec3::Y * 0.04,
+            ..default()
+        };
+        assert_eq!(projection.residual([&a, &b]).unwrap(), (0.0, 0.0));
+        b.delta_position = DVec3::new(0.02, 0.08, 0.0);
+        let error = projection.residual([&a, &b]).unwrap();
+        assert!((error.0 - 0.02).abs() < 1e-12);
+        b.delta_rotation = Rotation(DQuat::from_rotation_z(0.01));
+        assert!((projection.residual([&a, &b]).unwrap().1 - 0.01).abs() < 1e-12);
     }
 
     #[test]

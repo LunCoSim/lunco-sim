@@ -13252,7 +13252,7 @@ dependencies = [
 [[package]]
 name = "parry3d-f64"
 version = "0.27.0"
-source = "git+https://github.com/LunCoSim/parry?rev=83494d280bda8615c812d919e6b7ab30f88a7750#83494d280bda8615c812d919e6b7ab30f88a7750"
+source = "git+https://github.com/LunCoSim/parry?rev=75b6acccdc42151995d0a653c576e65248164447#75b6acccdc42151995d0a653c576e65248164447"
 dependencies = [
  "approx 0.5.1",
  "arrayvec",

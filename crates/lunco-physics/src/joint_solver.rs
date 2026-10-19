@@ -71,11 +71,6 @@ impl JointSolverOrder {
     }
 }
 
-/// The optional affected body set restricts continuous closure to its topology.
-/// Ordinary hard sweeps use the entire prepared order.
-#[derive(Resource, Default)]
-pub(crate) struct PhysicsJointPositionScope(pub(crate) Option<std::collections::HashSet<Entity>>);
-
 trait OrderedJoint: Component + ProjectionJoint + XpbdConstraint<2> + Clone {
     fn drive(&self) -> Option<JointDrive> {
         None
@@ -220,7 +215,6 @@ impl Plugin for DeterministicJointSolverPlugin {
         );
         app.init_scene_resource::<PhysicsHolds>()
             .init_scene_resource::<JointSolverOrder>()
-            .init_scene_resource::<PhysicsJointPositionScope>()
             .add_systems(
                 PhysicsSchedule,
                 (
@@ -309,6 +303,39 @@ impl Plugin for DeterministicJointSolverPlugin {
             app.add_systems(SubstepSchedule, run_position_sweep.in_set(sweep));
         }
     }
+}
+
+/// Maximum actual hard-row error, independent of the correction size or mass ratio.
+pub(crate) fn joint_position_residual(world: &World) -> Result<(f64, f64, Option<Entity>), String> {
+    let order = world.resource::<JointSolverOrder>();
+    let dummy = SolverBody::default();
+    let mut residual = (0.0_f64, 0.0_f64, None);
+    macro_rules! measure {
+        ($kind:ty, $ids:expr) => {
+            for entity in $ids {
+                let joint = world
+                    .get::<$kind>(*entity)
+                    .ok_or("joint residual topology is stale")?;
+                let endpoints = joint.entities();
+                let projection = world
+                    .get::<JointProjection>(*entity)
+                    .ok_or("joint residual geometry is missing")?;
+                let error = projection
+                    .residual(endpoints.map(|e| world.get::<SolverBody>(e).unwrap_or(&dummy)))?;
+                residual.0 = residual.0.max(error.0);
+                if error.1 > residual.1 {
+                    residual.1 = error.1;
+                    residual.2 = Some(*entity);
+                }
+            }
+        };
+    }
+    measure!(FixedJoint, &order.fixed);
+    measure!(RevoluteJoint, &order.revolute);
+    measure!(SphericalJoint, &order.spherical);
+    measure!(PrismaticJoint, &order.prismatic);
+    measure!(DistanceJoint, &order.distance);
+    Ok(residual)
 }
 
 fn no_solver_fault(faults: Res<lunco_core::RuntimeFaults>) -> bool {
@@ -550,7 +577,6 @@ fn stable_solve_xpbd_joint<C, D>(
     mut projections: Query<&mut JointProjection>,
     order: Res<JointSolverOrder>,
     time: Res<Time>,
-    scope: Res<PhysicsJointPositionScope>,
     mut holds: ResMut<PhysicsHolds>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut physics_time: ResMut<Time<Physics>>,
@@ -568,7 +594,6 @@ fn stable_solve_xpbd_joint<C, D>(
         &order,
         time.delta_secs_f64(),
         JointPass::Ordinary,
-        &scope,
         &mut holds,
         faults.as_deref_mut(),
         &mut physics_time,
@@ -603,7 +628,6 @@ fn symmetric_joint_position_sweep(
     mut projections: Query<&mut JointProjection>,
     order: Res<JointSolverOrder>,
     time: Res<Time>,
-    scope: Res<PhysicsJointPositionScope>,
     mut holds: ResMut<PhysicsHolds>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut physics_time: ResMut<Time<Physics>>,
@@ -617,7 +641,6 @@ fn symmetric_joint_position_sweep(
                 &order,
                 time.delta_secs_f64(),
                 JointPass::Closure,
-                &scope,
                 &mut holds,
                 faults.as_deref_mut(),
                 &mut physics_time,
@@ -645,7 +668,6 @@ fn solve_ordered_joint<C, D, const REVERSE: bool>(
     order: &JointSolverOrder,
     delta_secs: f64,
     pass: JointPass,
-    scope: &PhysicsJointPositionScope,
     holds: &mut PhysicsHolds,
     mut faults: Option<&mut lunco_core::RuntimeFaults>,
     physics_time: &mut Time<Physics>,
@@ -695,14 +717,6 @@ where
                 "joint endpoints resolve to the same body",
             );
             return false;
-        }
-        if matches!(pass, JointPass::Closure)
-            && scope
-                .0
-                .as_ref()
-                .is_some_and(|bodies| !bodies.contains(&entity1) && !bodies.contains(&entity2))
-        {
-            continue;
         }
         let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
         let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
@@ -1202,5 +1216,3 @@ mod tests {
 }
 
 impl lunco_core::SceneResource for JointSolverOrder {}
-
-impl lunco_core::SceneResource for PhysicsJointPositionScope {}
