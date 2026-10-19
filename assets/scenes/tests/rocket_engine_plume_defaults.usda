@@ -13,12 +13,11 @@ def Xform "World"
     }
     def Xform "Engine" (
         prepend references = @lunco://components/propulsion/rocket_engine_visual.usda@</Engine>
-        prepend apiSchemas = "CollectionAPI:components"
+        prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
         custom rel collection:components:includes = </World/Engine/Photometry>
         token collection:components:expansionRule = "explicitOnly"
-        float inputs:throttle = 0.0
         float inputs:thrust_n = 0.0
         float inputs:propellant_flow_kgs = 0.0
         float inputs:exhaust_velocity_mps = 0.0
@@ -50,8 +49,107 @@ def Xform "World"
         float outputs:render_throttle.connect = </World/Engine/Photometry.outputs:render_throttle>
         custom float outputs:visual_length_fraction
         float outputs:visual_length_fraction.connect = </World/Engine/Photometry.outputs:visual_length_fraction>
+        custom float outputs:width
+        float outputs:width.connect = </World/Engine/Photometry.outputs:width>
+        custom float outputs:length
+        float outputs:length.connect = </World/Engine/Photometry.outputs:length>
+        custom float outputs:area
+        float outputs:area.connect = </World/Engine/Photometry.outputs:area>
+        custom float outputs:momentum_flux_n
+        float outputs:momentum_flux_n.connect = </World/Engine/Photometry.outputs:momentum_flux_n>
+        custom float outputs:exit_dynamic_pressure_pa
+        float outputs:exit_dynamic_pressure_pa.connect = </World/Engine/Photometry.outputs:exit_dynamic_pressure_pa>
+        custom float outputs:profile_radius_m_0
+        float outputs:profile_radius_m_0.connect = </World/Engine/Photometry.outputs:profile_radius_m_0>
+        custom float outputs:profile_radius_m_1
+        float outputs:profile_radius_m_1.connect = </World/Engine/Photometry.outputs:profile_radius_m_1>
+        custom float outputs:profile_radius_m_2
+        float outputs:profile_radius_m_2.connect = </World/Engine/Photometry.outputs:profile_radius_m_2>
+        custom float outputs:profile_radius_m_3
+        float outputs:profile_radius_m_3.connect = </World/Engine/Photometry.outputs:profile_radius_m_3>
+        custom float outputs:profile_radius_m_4
+        float outputs:profile_radius_m_4.connect = </World/Engine/Photometry.outputs:profile_radius_m_4>
+        custom float outputs:profile_temperature_k_0
+        float outputs:profile_temperature_k_0.connect = </World/Engine/Photometry.outputs:profile_temperature_k_0>
+        custom float outputs:profile_temperature_k_1
+        float outputs:profile_temperature_k_1.connect = </World/Engine/Photometry.outputs:profile_temperature_k_1>
+        custom float outputs:profile_temperature_k_2
+        float outputs:profile_temperature_k_2.connect = </World/Engine/Photometry.outputs:profile_temperature_k_2>
+        custom float outputs:profile_temperature_k_3
+        float outputs:profile_temperature_k_3.connect = </World/Engine/Photometry.outputs:profile_temperature_k_3>
+        custom float outputs:profile_temperature_k_4
+        float outputs:profile_temperature_k_4.connect = </World/Engine/Photometry.outputs:profile_temperature_k_4>
+        custom float outputs:profile_emission_w_m3_0
+        float outputs:profile_emission_w_m3_0.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_0>
+        custom float outputs:profile_emission_w_m3_1
+        float outputs:profile_emission_w_m3_1.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_1>
+        custom float outputs:profile_emission_w_m3_2
+        float outputs:profile_emission_w_m3_2.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_2>
+        custom float outputs:profile_emission_w_m3_3
+        float outputs:profile_emission_w_m3_3.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_3>
+        custom float outputs:profile_emission_w_m3_4
+        float outputs:profile_emission_w_m3_4.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_4>
+        custom float outputs:luminous_efficacy_out_lm_w
+        float outputs:luminous_efficacy_out_lm_w.connect = </World/Engine/Photometry.outputs:luminous_efficacy_out_lm_w>
+        custom float inputs:nozzle_exit_area_m2 = 0.0
+        custom float inputs:ambient_pressure_pa = 0.0
+        custom float inputs:geometry_capacity_m = 0.0
+        custom float inputs:mixture_ratio = 2.0
+        custom float inputs:stoichiometric_mixture_ratio = 2.0
+        custom double outputs:jet_power_w
+        double outputs:jet_power_w.connect = </World/Engine/Photometry.outputs:jet_power_w>
+        custom double outputs:radiant_power_w
+        double outputs:radiant_power_w.connect = </World/Engine/Photometry.outputs:radiant_power_w>
+        custom double outputs:mass_residual_kgs
+        double outputs:mass_residual_kgs.connect = </World/Engine/Photometry.outputs:mass_residual_kgs>
+        custom double outputs:energy_residual_w
+        double outputs:energy_residual_w.connect = </World/Engine/Photometry.outputs:energy_residual_w>
+        custom double outputs:thrust_residual_n
+        double outputs:thrust_residual_n.connect = </World/Engine/Photometry.outputs:thrust_residual_n>
+        custom double outputs:exit_pressure_pa
+        double outputs:exit_pressure_pa.connect = </World/Engine/Photometry.outputs:exit_pressure_pa>
+        custom double outputs:stagnation_temperature_k
+        double outputs:stagnation_temperature_k.connect = </World/Engine/Photometry.outputs:stagnation_temperature_k>
+        custom double outputs:total_specific_energy_j_kg
+        double outputs:total_specific_energy_j_kg.connect = </World/Engine/Photometry.outputs:total_specific_energy_j_kg>
+        custom double outputs:exit_speed_mps
+        double outputs:exit_speed_mps.connect = </World/Engine/Photometry.outputs:exit_speed_mps>
+        custom double outputs:exit_temperature_k
+        double outputs:exit_temperature_k.connect = </World/Engine/Photometry.outputs:exit_temperature_k>
+        custom double outputs:transported_distance_m
+        double outputs:transported_distance_m.connect = </World/Engine/Photometry.outputs:transported_distance_m>
+        custom double outputs:profile_density_kg_m3_0
+        double outputs:profile_density_kg_m3_0.connect = </World/Engine/Photometry.outputs:profile_density_kg_m3_0>
+        custom double outputs:profile_speed_mps_0
+        double outputs:profile_speed_mps_0.connect = </World/Engine/Photometry.outputs:profile_speed_mps_0>
+        custom double outputs:profile_density_kg_m3_1
+        double outputs:profile_density_kg_m3_1.connect = </World/Engine/Photometry.outputs:profile_density_kg_m3_1>
+        custom double outputs:profile_speed_mps_1
+        double outputs:profile_speed_mps_1.connect = </World/Engine/Photometry.outputs:profile_speed_mps_1>
+        custom double outputs:profile_density_kg_m3_2
+        double outputs:profile_density_kg_m3_2.connect = </World/Engine/Photometry.outputs:profile_density_kg_m3_2>
+        custom double outputs:profile_speed_mps_2
+        double outputs:profile_speed_mps_2.connect = </World/Engine/Photometry.outputs:profile_speed_mps_2>
+        custom double outputs:profile_density_kg_m3_3
+        double outputs:profile_density_kg_m3_3.connect = </World/Engine/Photometry.outputs:profile_density_kg_m3_3>
+        custom double outputs:profile_speed_mps_3
+        double outputs:profile_speed_mps_3.connect = </World/Engine/Photometry.outputs:profile_speed_mps_3>
+        custom double outputs:profile_density_kg_m3_4
+        double outputs:profile_density_kg_m3_4.connect = </World/Engine/Photometry.outputs:profile_density_kg_m3_4>
+        custom double outputs:profile_speed_mps_4
+        double outputs:profile_speed_mps_4.connect = </World/Engine/Photometry.outputs:profile_speed_mps_4>
+        custom float outputs:flow_phase_sin
+        float outputs:flow_phase_sin.connect = </World/Engine/Photometry.outputs:flow_phase_sin>
+        custom float outputs:flow_phase_cos
+        float outputs:flow_phase_cos.connect = </World/Engine/Photometry.outputs:flow_phase_cos>
+        custom double inputs:nozzle_exit_mach = 3.8
+        custom double inputs:gas_gamma = 1.2
+        custom double inputs:gas_constant_j_kg_k = 300.0
+        custom double inputs:radiative_fraction = 0.0002
+        custom double inputs:luminous_efficacy_lm_w = 200.0
+        custom double inputs:exit_lip_angle_rad = 0.08
         def Scope "Photometry" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -68,8 +166,6 @@ def Xform "World"
             float outputs:radius = 0.0
             float outputs:render_throttle = 0.0
             float outputs:visual_length_fraction = 0.0
-            custom float inputs:throttle
-            float inputs:throttle.connect = </World/Engine.inputs:throttle>
             custom float inputs:thrust_n
             float inputs:thrust_n.connect = </World/Engine.inputs:thrust_n>
             custom float inputs:propellant_flow_kgs
@@ -84,6 +180,72 @@ def Xform "World"
             float inputs:fuel_family.connect = </World/Engine.inputs:fuel_family>
             custom float inputs:mixture_mode
             float inputs:mixture_mode.connect = </World/Engine.inputs:mixture_mode>
+            custom float outputs:width = 0.0
+            custom float outputs:length = 0.0
+            custom float outputs:area = 0.0
+            custom float outputs:momentum_flux_n = 0.0
+            custom float outputs:exit_dynamic_pressure_pa = 0.0
+            custom float outputs:profile_radius_m_0 = 0.0
+            custom float outputs:profile_radius_m_1 = 0.0
+            custom float outputs:profile_radius_m_2 = 0.0
+            custom float outputs:profile_radius_m_3 = 0.0
+            custom float outputs:profile_radius_m_4 = 0.0
+            custom float outputs:profile_temperature_k_0 = 0.0
+            custom float outputs:profile_temperature_k_1 = 0.0
+            custom float outputs:profile_temperature_k_2 = 0.0
+            custom float outputs:profile_temperature_k_3 = 0.0
+            custom float outputs:profile_temperature_k_4 = 0.0
+            custom float outputs:profile_emission_w_m3_0 = 0.0
+            custom float outputs:profile_emission_w_m3_1 = 0.0
+            custom float outputs:profile_emission_w_m3_2 = 0.0
+            custom float outputs:profile_emission_w_m3_3 = 0.0
+            custom float outputs:profile_emission_w_m3_4 = 0.0
+            custom float outputs:luminous_efficacy_out_lm_w = 0.0
+            custom float inputs:nozzle_exit_area_m2
+            float inputs:nozzle_exit_area_m2.connect = </World/Engine.inputs:nozzle_exit_area_m2>
+            custom float inputs:ambient_pressure_pa
+            float inputs:ambient_pressure_pa.connect = </World/Engine.inputs:ambient_pressure_pa>
+            custom float inputs:geometry_capacity_m
+            float inputs:geometry_capacity_m.connect = </World/Engine.inputs:geometry_capacity_m>
+            custom float inputs:mixture_ratio
+            float inputs:mixture_ratio.connect = </World/Engine.inputs:mixture_ratio>
+            custom float inputs:stoichiometric_mixture_ratio
+            float inputs:stoichiometric_mixture_ratio.connect = </World/Engine.inputs:stoichiometric_mixture_ratio>
+            custom double outputs:jet_power_w = 0.0
+            custom double outputs:radiant_power_w = 0.0
+            custom double outputs:mass_residual_kgs = 0.0
+            custom double outputs:energy_residual_w = 0.0
+            custom double outputs:thrust_residual_n = 0.0
+            custom double outputs:exit_pressure_pa = 0.0
+            custom double outputs:stagnation_temperature_k = 0.0
+            custom double outputs:total_specific_energy_j_kg = 0.0
+            custom double outputs:exit_speed_mps = 0.0
+            custom double outputs:exit_temperature_k = 0.0
+            custom double outputs:transported_distance_m = 0.0
+            custom double outputs:profile_density_kg_m3_0 = 0.0
+            custom double outputs:profile_speed_mps_0 = 0.0
+            custom double outputs:profile_density_kg_m3_1 = 0.0
+            custom double outputs:profile_speed_mps_1 = 0.0
+            custom double outputs:profile_density_kg_m3_2 = 0.0
+            custom double outputs:profile_speed_mps_2 = 0.0
+            custom double outputs:profile_density_kg_m3_3 = 0.0
+            custom double outputs:profile_speed_mps_3 = 0.0
+            custom double outputs:profile_density_kg_m3_4 = 0.0
+            custom double outputs:profile_speed_mps_4 = 0.0
+            custom float outputs:flow_phase_sin = 0.0
+            custom float outputs:flow_phase_cos = 1.0
+            custom double inputs:nozzle_exit_mach
+            double inputs:nozzle_exit_mach.connect = </World/Engine.inputs:nozzle_exit_mach>
+            custom double inputs:gas_gamma
+            double inputs:gas_gamma.connect = </World/Engine.inputs:gas_gamma>
+            custom double inputs:gas_constant_j_kg_k
+            double inputs:gas_constant_j_kg_k.connect = </World/Engine.inputs:gas_constant_j_kg_k>
+            custom double inputs:radiative_fraction
+            double inputs:radiative_fraction.connect = </World/Engine.inputs:radiative_fraction>
+            custom double inputs:luminous_efficacy_lm_w
+            double inputs:luminous_efficacy_lm_w.connect = </World/Engine.inputs:luminous_efficacy_lm_w>
+            custom double inputs:exit_lip_angle_rad
+            double inputs:exit_lip_angle_rad.connect = </World/Engine.inputs:exit_lip_angle_rad>
         }
         def "Exhaust"
         {
@@ -107,6 +269,47 @@ def Xform "World"
                 float inputs:scale_y.connect = </World/Engine/Photometry.outputs:envelope_length_m>
                 custom float inputs:translation_y
                 float inputs:translation_y.connect = </World/Engine/Photometry.outputs:envelope_center_y_m>
+                bool lunco:surface:additive = true
+                custom float inputs:bound_radius_m
+                float inputs:bound_radius_m.connect = </World/Engine/Photometry.outputs:envelope_radius_m>
+                custom float inputs:profile_length_m
+                float inputs:profile_length_m.connect = </World/Engine/Photometry.outputs:envelope_length_m>
+                custom float inputs:luminous_efficacy_lm_w
+                float inputs:luminous_efficacy_lm_w.connect = </World/Engine/Photometry.outputs:luminous_efficacy_out_lm_w>
+                custom float inputs:radius_m_0
+                float inputs:radius_m_0.connect = </World/Engine/Photometry.outputs:profile_radius_m_0>
+                custom float inputs:radius_m_1
+                float inputs:radius_m_1.connect = </World/Engine/Photometry.outputs:profile_radius_m_1>
+                custom float inputs:radius_m_2
+                float inputs:radius_m_2.connect = </World/Engine/Photometry.outputs:profile_radius_m_2>
+                custom float inputs:radius_m_3
+                float inputs:radius_m_3.connect = </World/Engine/Photometry.outputs:profile_radius_m_3>
+                custom float inputs:radius_m_4
+                float inputs:radius_m_4.connect = </World/Engine/Photometry.outputs:profile_radius_m_4>
+                custom float inputs:temperature_k_0
+                float inputs:temperature_k_0.connect = </World/Engine/Photometry.outputs:profile_temperature_k_0>
+                custom float inputs:temperature_k_1
+                float inputs:temperature_k_1.connect = </World/Engine/Photometry.outputs:profile_temperature_k_1>
+                custom float inputs:temperature_k_2
+                float inputs:temperature_k_2.connect = </World/Engine/Photometry.outputs:profile_temperature_k_2>
+                custom float inputs:temperature_k_3
+                float inputs:temperature_k_3.connect = </World/Engine/Photometry.outputs:profile_temperature_k_3>
+                custom float inputs:temperature_k_4
+                float inputs:temperature_k_4.connect = </World/Engine/Photometry.outputs:profile_temperature_k_4>
+                custom float inputs:emission_w_m3_0
+                float inputs:emission_w_m3_0.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_0>
+                custom float inputs:emission_w_m3_1
+                float inputs:emission_w_m3_1.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_1>
+                custom float inputs:emission_w_m3_2
+                float inputs:emission_w_m3_2.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_2>
+                custom float inputs:emission_w_m3_3
+                float inputs:emission_w_m3_3.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_3>
+                custom float inputs:emission_w_m3_4
+                float inputs:emission_w_m3_4.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_4>
+                custom float inputs:flow_phase_sin
+                float inputs:flow_phase_sin.connect = </World/Engine/Photometry.outputs:flow_phase_sin>
+                custom float inputs:flow_phase_cos
+                float inputs:flow_phase_cos.connect = </World/Engine/Photometry.outputs:flow_phase_cos>
             }
             def "FlameCore"
             {
@@ -128,6 +331,47 @@ def Xform "World"
                 float inputs:scale_y.connect = </World/Engine/Photometry.outputs:envelope_length_m>
                 custom float inputs:translation_y
                 float inputs:translation_y.connect = </World/Engine/Photometry.outputs:envelope_center_y_m>
+                bool lunco:surface:additive = true
+                custom float inputs:bound_radius_m
+                float inputs:bound_radius_m.connect = </World/Engine/Photometry.outputs:envelope_radius_m>
+                custom float inputs:profile_length_m
+                float inputs:profile_length_m.connect = </World/Engine/Photometry.outputs:envelope_length_m>
+                custom float inputs:luminous_efficacy_lm_w
+                float inputs:luminous_efficacy_lm_w.connect = </World/Engine/Photometry.outputs:luminous_efficacy_out_lm_w>
+                custom float inputs:radius_m_0
+                float inputs:radius_m_0.connect = </World/Engine/Photometry.outputs:profile_radius_m_0>
+                custom float inputs:radius_m_1
+                float inputs:radius_m_1.connect = </World/Engine/Photometry.outputs:profile_radius_m_1>
+                custom float inputs:radius_m_2
+                float inputs:radius_m_2.connect = </World/Engine/Photometry.outputs:profile_radius_m_2>
+                custom float inputs:radius_m_3
+                float inputs:radius_m_3.connect = </World/Engine/Photometry.outputs:profile_radius_m_3>
+                custom float inputs:radius_m_4
+                float inputs:radius_m_4.connect = </World/Engine/Photometry.outputs:profile_radius_m_4>
+                custom float inputs:temperature_k_0
+                float inputs:temperature_k_0.connect = </World/Engine/Photometry.outputs:profile_temperature_k_0>
+                custom float inputs:temperature_k_1
+                float inputs:temperature_k_1.connect = </World/Engine/Photometry.outputs:profile_temperature_k_1>
+                custom float inputs:temperature_k_2
+                float inputs:temperature_k_2.connect = </World/Engine/Photometry.outputs:profile_temperature_k_2>
+                custom float inputs:temperature_k_3
+                float inputs:temperature_k_3.connect = </World/Engine/Photometry.outputs:profile_temperature_k_3>
+                custom float inputs:temperature_k_4
+                float inputs:temperature_k_4.connect = </World/Engine/Photometry.outputs:profile_temperature_k_4>
+                custom float inputs:emission_w_m3_0
+                float inputs:emission_w_m3_0.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_0>
+                custom float inputs:emission_w_m3_1
+                float inputs:emission_w_m3_1.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_1>
+                custom float inputs:emission_w_m3_2
+                float inputs:emission_w_m3_2.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_2>
+                custom float inputs:emission_w_m3_3
+                float inputs:emission_w_m3_3.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_3>
+                custom float inputs:emission_w_m3_4
+                float inputs:emission_w_m3_4.connect = </World/Engine/Photometry.outputs:profile_emission_w_m3_4>
+                custom float inputs:flow_phase_sin
+                float inputs:flow_phase_sin.connect = </World/Engine/Photometry.outputs:flow_phase_sin>
+                custom float inputs:flow_phase_cos
+                float inputs:flow_phase_cos.connect = </World/Engine/Photometry.outputs:flow_phase_cos>
                 def "PlumeLight"
                 {
                     custom float inputs:light_intensity
@@ -147,7 +391,7 @@ def Xform "World"
     def Scope "Scenario"
     {
         def Scope "Test" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"

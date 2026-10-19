@@ -53,6 +53,8 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   // plus pressure term (what the exit plane pushes on). Vacuum-corrected via
   // `p_ambient`, which is 0 here — that is exactly why a lunar lander wants a
   // big expansion ratio and why this bell flares as hard as it does.
+  output Real exit_lip_angle_rad "Exit wall tangent from the authored bell contour";
+  output Real gamma_out "Gas gamma at the nozzle boundary";
   output Real exit_mach "Supersonic exit Mach number from the area ratio";
   output Real exit_pressure_ratio "Exit static pressure / chamber stagnation pressure";
   output Real cf "Thrust coefficient (-)";
@@ -66,43 +68,10 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
     "Chamber pressure exposed to connected consumers (Pa)";
   output Real ambient_pressure_pa
     "Ambient pressure exposed to connected consumers (Pa)";
-protected
-  function supersonicExitMach
-    "Invert the isentropic area-Mach relation on its supersonic branch"
-    input Real area_ratio;
-    input Real gas_gamma;
-    output Real mach;
-  protected
-    Real lower;
-    Real upper;
-    Real midpoint;
-    Real midpoint_area;
-  algorithm
-    assert(gas_gamma > 1.0, "BellNozzle requires gamma > 1");
-    assert(area_ratio >= 1.0, "BellNozzle exit area must be at least throat area");
-    lower := 1.0;
-    upper := 64.0;
-    assert(area_ratio <= (2.0 / (gas_gamma + 1.0)
-      * (1.0 + (gas_gamma - 1.0) / 2.0 * upper ^ 2))
-      ^ ((gas_gamma + 1.0) / (2.0 * (gas_gamma - 1.0))) / upper,
-      "BellNozzle area ratio exceeds the supersonic solve bracket");
-    // Fixed 48 bisections give < 2.3e-13 Mach resolution on this bracket.
-    // Explicit branch selection avoids convergence to the subsonic root.
-    for iteration in 1:48 loop
-      midpoint := (lower + upper) / 2.0;
-      midpoint_area := (2.0 / (gas_gamma + 1.0)
-        * (1.0 + (gas_gamma - 1.0) / 2.0 * midpoint ^ 2))
-        ^ ((gas_gamma + 1.0) / (2.0 * (gas_gamma - 1.0))) / midpoint;
-      if midpoint_area < area_ratio then
-        lower := midpoint;
-      else
-        upper := midpoint;
-      end if;
-    end for;
-    mach := (lower + upper) / 2.0;
-  end supersonicExitMach;
 
 equation
+  gamma_out = gamma;
+  exit_lip_angle_rad = atan((exit_radius-throat_radius)*contour/length);
   throat_area = pi * throat_radius ^ 2;
   exit_area = pi * exit_radius ^ 2;
   exit_radius_m = exit_radius;

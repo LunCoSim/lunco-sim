@@ -14,7 +14,6 @@ model CombustionChamber
   parameter Real chamber_temperature_full_k = 3300.0;
   parameter Real minimum_flow_kgs = 1.0e-6;
   parameter Real minimum_throat_area_m2 = 1.0e-9;
-  parameter Real minimum_mixture_ratio = 1.0e-6;
   parameter Real fuel_energy_j_kg = 4.0e7;
   parameter Real reverse_flow_specific_enthalpy_j_kg = 0.0
     "Boundary enthalpy used only if chamber flow reverses";
@@ -40,12 +39,15 @@ model CombustionChamber
 
   output Real fuel_flow_kgs "Fuel mass flow read from the feed connector, kg/s";
   output Real oxidizer_flow_kgs "Oxidizer mass flow read from the feed connector, kg/s";
+  output Real reacting_fuel_flow_kgs "Fuel with sufficient oxidizer to react, kg/s";
   output Real fuel_specific_enthalpy_j_kg
     "Specific enthalpy arriving with the fuel stream, J/kg";
   output Real oxidizer_specific_enthalpy_j_kg
     "Specific enthalpy arriving with the oxidizer stream, J/kg";
 
 equation
+  assert(oxidizer_to_fuel_ratio > 0.0 and minimum_flow_kgs > 0.0,
+    "CombustionChamber requires a positive stoichiometric ratio and flow scale");
   fuel_flow_kgs = noEvent(max(0.0, fuel_in.mass_flow_kgs));
   oxidizer_flow_kgs = noEvent(max(0.0, oxidizer_in.mass_flow_kgs));
   fuel_specific_enthalpy_j_kg = inStream(fuel_in.specific_enthalpy_j_kg);
@@ -56,9 +58,13 @@ equation
   mixture_ratio = oxidizer_flow_kgs
     / noEvent(max(minimum_flow_kgs, fuel_flow_kgs));
   mixture_ratio_error = mixture_ratio - oxidizer_to_fuel_ratio;
-  mixture_efficiency = noEvent(max(0.0, min(1.0,
-    1.0 - abs(mixture_ratio_error)
-      / max(minimum_mixture_ratio, oxidizer_to_fuel_ratio))));
+  // Limiting-reactant mass balance, bounded before dividing by total flow.
+  // O/F is a diagnostic only: feeding its unbounded fuel-starvation ratio
+  // back into chamber pressure makes the acausal solve ill-conditioned.
+  reacting_fuel_flow_kgs = min(fuel_flow_kgs,
+    oxidizer_flow_kgs / oxidizer_to_fuel_ratio);
+  mixture_efficiency = (1.0 + oxidizer_to_fuel_ratio)*reacting_fuel_flow_kgs
+    / max(minimum_flow_kgs, propellant_flow);
   // Activity is combustion, not merely propellant passing through a feed.
   // A missing reactant makes mixture_efficiency and useful combustion zero.
   activity = noEvent(max(0.0, min(1.0, propellant_flow * mixture_efficiency
@@ -87,6 +93,6 @@ equation
   // in the propulsion model so consumers do not duplicate an engine constant.
   maximum_thrust_n = nominal_flow_kgs * effective_exhaust_velocity_mps
     * combustion_efficiency;
-  heat_release_w = fuel_flow_kgs * fuel_energy_j_kg
-    * combustion_efficiency * mixture_efficiency;
+  heat_release_w = reacting_fuel_flow_kgs * fuel_energy_j_kg
+    * combustion_efficiency;
 end CombustionChamber;

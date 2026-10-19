@@ -11,3 +11,6 @@ CombustionChamber
 PressureFedCombustionChamber
 PressureFedEngine
 PropellantStatus
+supersonicExitMach
+computeFreeJetProfile
+computePlumePhotometry
