@@ -2965,7 +2965,8 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             };
-            let Some(vehicle_mount) = vehicle_mount_transform(reader, &sdf_path) else {
+            let Some((vehicle_path, vehicle_mount)) = vehicle_mount_transform(reader, &sdf_path)
+            else {
                 error!(
                     "USD physical wheel {} has no resolved PhysxVehicleContextAPI owner — refusing to spawn",
                     sdf_path.as_str()
@@ -2973,6 +2974,37 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             };
+            let Some(control_entity) = usd_entity_for_path(
+                all_prims,
+                prim_path.stage_handle.id(),
+                vehicle_path.as_str(),
+                q_child_of,
+                q_preview_only,
+            ) else {
+                error!(
+                    "USD physical wheel {} has no unique vehicle command owner",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            };
+            let native_material =
+                match lunco_usd_avian::material::read_physics_material(reader, &sdf_path) {
+                    Ok(material) => material,
+                    Err(error) => {
+                        error!(
+                            "USD physical wheel {} has invalid bound material: {error}",
+                            prim_path.path
+                        );
+                        commands.entity(entity).try_insert(UsdSimProcessed);
+                        lunco_core::trigger_runtime_error(
+                            commands,
+                            "usd-wheel-material-invalid",
+                            format!("{}: {error}", prim_path.path),
+                        );
+                        return;
+                    }
+                };
             setup_physical_wheel(
                 commands,
                 entity,
@@ -3002,6 +3034,8 @@ fn process_usd_sim_prim_read(
                 p_drive,
                 p_speed,
                 authored_collider,
+                native_material,
+                control_entity,
             );
         } else {
             // Strict validation (doc 53 §4): a raycast wheel uses an
@@ -3138,18 +3172,21 @@ fn wheel_body_mount(
 fn vehicle_mount_transform(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
-) -> Option<Transform> {
+) -> Option<(SdfPath, Transform)> {
     let mut path = wheel_path.clone();
     loop {
         if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
             let wheel = lunco_usd_bevy_stage::world_transform(reader, wheel_path).ok()?;
             let vehicle = lunco_usd_bevy_stage::world_transform(reader, &path).ok()?;
             let inverse = vehicle.rotation.inverse();
-            return Some(Transform {
-                translation: inverse * (wheel.translation - vehicle.translation),
-                rotation: (inverse * wheel.rotation).normalize(),
-                scale: Vec3::ONE,
-            });
+            return Some((
+                path,
+                Transform {
+                    translation: inverse * (wheel.translation - vehicle.translation),
+                    rotation: (inverse * wheel.rotation).normalize(),
+                    scale: Vec3::ONE,
+                },
+            ));
         }
         path = path.parent()?;
     }
@@ -3499,6 +3536,8 @@ fn setup_physical_wheel(
     p_drive: Entity,
     p_speed: Entity,
     authored_collider: Collider,
+    native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
+    control_entity: Entity,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
@@ -3512,18 +3551,16 @@ fn setup_physical_wheel(
     // input. Using the motor/gearbox reduction keeps joint and raycast rovers
     // consistent. See `project_physical_rover_suspension`.
 
-    // The wheel body keeps **identity rotation**. USD's authored cylinder axis
-    // is the physical axle; Avian's primitive cylinder is conventionally +Y, so
-    // rotate only the collider/inertia frame onto that axis. This is also the
-    // exact axis passed to the revolute joint and tire torque law. The visible
-    // mesh already carries its UsdGeomCylinder axis in generated vertices and
-    // therefore keeps the authored prim rotation independently.
+    // The visual projector expresses an analytic cylinder's +Y mesh on its
+    // authored axis in Transform. Split that geometry basis from the authored
+    // rigid-body orientation: an already rotated vehicle still needs its real
+    // wheel bodies and their hinge axes in the same world frame.
     let axle_local = params.axle_axis.normalize_or_zero();
     let wheel_axis_rot = Quat::from_rotation_arc(Vec3::Y, axle_local.as_vec3());
-    let visual_axis_rot = existing_tf.rotation;
+    let visual_axis_rot = wheel_axis_rot;
     let wheel_tf = Transform {
         translation: existing_tf.translation,
-        rotation: Quat::IDENTITY,
+        rotation: existing_tf.rotation * wheel_axis_rot.inverse(),
         scale: existing_tf.scale,
     };
 
@@ -3585,11 +3622,7 @@ fn setup_physical_wheel(
         ShouldBeDynamic,
         collider,
         lunco_usd_avian_contracts::UsdColliderSource(prim_path.path.clone()),
-        // The shared tire model owns tangential wheel-ground force. The Avian
-        // collision hook removes its generic tangent impulse for this body;
-        // Avian still owns the normal contact constraint and the wheel joint.
         Friction::new(params.friction_mu),
-        SharedTireContact,
         // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
         // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast
         // wheel does not share: its spin integrator subtracts
@@ -3684,6 +3717,7 @@ fn setup_physical_wheel(
         JointTorqueActuator {
             port_entity: p_drive,
             speed_port_entity: p_speed,
+            control_entity,
             brake_torque: params.brake_torque_max,
             rotational_inertia: params.axle_inertia(),
             // The wheel hinge is authored about +X. Negative +X rotation is the
@@ -3695,20 +3729,23 @@ fn setup_physical_wheel(
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
     let joint_entity = joint_cmd.id();
-    // Project the complete authored tire contract onto the physical wheel.
-    // `lunco-mobility` consumes this in the same fixed-step force system as the
-    // raycast wheel; there is no physical-only lateral coefficient.
-    commands.entity(entity).try_insert(JointedWheelTire {
-        drive_joint: joint_entity,
-        radius: params.radius,
-        axle_inertia: params.axle_inertia(),
-        slip_stiffness: params.slip_stiffness,
-        lateral_stiffness_graph: params.lateral_stiffness_graph,
-        min_validated_speed: params.min_validated_speed,
-        friction_mu: params.friction_mu,
-        bearing_damping: params.bearing_damping,
-        heading_local: VehicleFrame::forward(GridRot(existing_tf.rotation.as_dquat())),
-    });
+    // A bound USD physics material owns rigid contact, including tangential
+    // friction. Install a slip-force layer only for the vehicle-tire realization
+    // without such a material, so the same contact is never solved twice.
+    if let Some(material) = native_material {
+        commands
+            .entity(entity)
+            .remove::<(SharedTireContact, JointedWheelTire)>();
+        lunco_usd_avian::insert_physics_material(commands, entity, Some(material));
+    } else {
+        commands.entity(entity).try_insert((
+            SharedTireContact,
+            params.jointed_tire(
+                joint_entity,
+                VehicleFrame::forward(GridRot(body_mount.local.rotation.as_dquat())),
+            ),
+        ));
+    }
 
     // The constraint itself goes through the ONE door every joint in the
     // workspace uses. `attach_joint` takes the two BODIES, so it — not this call

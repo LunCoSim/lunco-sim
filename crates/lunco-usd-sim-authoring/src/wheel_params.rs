@@ -487,6 +487,26 @@ impl WheelParams {
         })
     }
 
+    /// Project this same authored curve onto a collider-backed wheel when its
+    /// contact is owned by the vehicle tire law rather than a bound material.
+    pub fn jointed_tire(
+        &self,
+        drive_joint: Entity,
+        heading_local: DVec3,
+    ) -> lunco_mobility::JointedWheelTire {
+        lunco_mobility::JointedWheelTire {
+            drive_joint,
+            radius: self.radius,
+            axle_inertia: self.axle_inertia(),
+            slip_stiffness: self.slip_stiffness,
+            lateral_stiffness_graph: self.lateral_stiffness_graph,
+            min_validated_speed: self.min_validated_speed,
+            friction_mu: self.friction_mu,
+            bearing_damping: self.bearing_damping,
+            heading_local,
+        }
+    }
+
     /// The raycast realisation: a `WheelRaycast` carrying these numbers.
     pub fn to_wheel_raycast(
         &self,

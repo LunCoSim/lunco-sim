@@ -33,21 +33,22 @@ fn combine_mode(token: &str) -> Option<CoefficientCombine> {
 /// one number — as the old `physics:friction` did — throws away the distinction
 /// between "how hard is it to start sliding" and "how hard is it to keep
 /// sliding", which for a rover on regolith is exactly the interesting part.
-pub(super) struct PhysicsMaterial {
+#[derive(Clone, Debug)]
+pub struct PhysicsMaterial {
     /// `physics:dynamicFriction` — kinetic, while surfaces slide.
-    pub(super) dynamic_friction: Option<f32>,
+    pub(crate) dynamic_friction: Option<f32>,
     /// `physics:staticFriction` — resists the onset of sliding.
-    pub(super) static_friction: Option<f32>,
+    pub(crate) static_friction: Option<f32>,
     /// `physics:restitution` — bounciness.
-    pub(super) restitution: Option<f32>,
+    pub(crate) restitution: Option<f32>,
     /// `physics:density` — for bodies that author no mass of their own (stage
     /// units: mass per unit³).
-    pub(super) density: Option<f32>,
+    pub(crate) density: Option<f32>,
     /// `physxMaterial:frictionCombineMode` — how THIS surface's friction combines
     /// with whatever it touches.
-    pub(super) friction_combine: Option<CoefficientCombine>,
+    pub(crate) friction_combine: Option<CoefficientCombine>,
     /// `physxMaterial:restitutionCombineMode`.
-    pub(super) restitution_combine: Option<CoefficientCombine>,
+    pub(crate) restitution_combine: Option<CoefficientCombine>,
 }
 
 /// Resolve the physics material bound to `prim` and read its surface properties.
@@ -82,9 +83,9 @@ pub(super) struct PhysicsMaterial {
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PhysicsMaterialReadError {
+pub struct PhysicsMaterialReadError {
     /// Authored material attribute that failed strict decoding.
-    pub(super) attribute: String,
+    pub attribute: String,
 }
 
 impl PhysicsMaterialReadError {
@@ -103,7 +104,7 @@ impl std::fmt::Display for PhysicsMaterialReadError {
 
 impl std::error::Error for PhysicsMaterialReadError {}
 
-pub(super) fn read_physics_material(
+pub fn read_physics_material(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {

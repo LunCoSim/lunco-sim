@@ -45,6 +45,9 @@ pub struct JointTorqueActuator {
     pub port_entity: Entity,
     /// Runtime port receiving the measured joint-coordinate speed, rad/s.
     pub speed_port_entity: Entity,
+    /// Authored command-surface owner. Mechanical and transform ancestry may
+    /// differ, especially for bodies with a USD transform-stack reset.
+    pub control_entity: Entity,
     /// Passive opposing torque when the owning vessel's brake command is active.
     pub brake_torque: f64,
     /// Rotational inertia at the actuator boundary, kg m². It bounds the
@@ -60,6 +63,7 @@ impl Default for JointTorqueActuator {
         Self {
             port_entity: Entity::PLACEHOLDER,
             speed_port_entity: Entity::PLACEHOLDER,
+            control_entity: Entity::PLACEHOLDER,
             brake_torque: 0.0,
             rotational_inertia: 0.0,
             drive_sign: 1.0,
@@ -271,7 +275,7 @@ pub(crate) fn integrate_joint_damping(
     })
 }
 
-fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {
+pub(crate) fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {
     const RANK_TOLERANCE: f64 = 32.0 * f64::EPSILON;
     if !response.is_finite() || !change.is_finite() {
         return Err("joint damping point response is not representable");

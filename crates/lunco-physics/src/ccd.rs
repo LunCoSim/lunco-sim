@@ -1547,6 +1547,58 @@ fn sweep(
     diagnostics.sweep_time += begin.elapsed();
     result
 }
+/// Existing contact witnesses rotate with their bodies. Query current endpoint
+/// geometry when a cast starts touching, so a rolling surface can admit its new
+/// material contact instead of sinking until the next manifold preparation.
+fn endpoint_contact_plane(
+    a: &Shape,
+    b: &Shape,
+    m1: &NonlinearRigidMotion,
+    m2: &NonlinearRigidMotion,
+    tolerance: f64,
+) -> Result<Option<Plane>, String> {
+    let p1 = m1.position_at_time(1.0);
+    let p2 = m2.position_at_time(1.0);
+    use avian3d::parry::query::QueryDispatcher;
+    let Some(contact) = CheckedNativeQueries::default()
+        .contact(
+            &p1.inv_mul(&p2),
+            a.collider.shape_scaled().as_ref(),
+            b.collider.shape_scaled().as_ref(),
+            0.0,
+        )
+        .map_err(|e| format!("native endpoint contact query failed: {e:?}"))?
+    else {
+        return Ok(None);
+    };
+    if contact.dist >= -tolerance {
+        return Ok(None);
+    }
+    let normal = p1.rotation * contact.normal1;
+    if !normal.is_finite()
+        || (normal.length_squared() - 1.0).abs() > 1e-6
+        || !contact.point1.is_finite()
+        || !contact.point2.is_finite()
+    {
+        return Err("native endpoint contact has invalid witnesses".into());
+    }
+    Ok(Some(Plane {
+        collider1: a.entity,
+        collider2: b.entity,
+        part1: a.part_index,
+        part2: b.part_index,
+        body1: a.body,
+        body2: b.body,
+        center1: a.center,
+        center2: b.center,
+        point1: (a.position - a.center) + a.rotation * contact.point1,
+        point2: (b.position - b.center) + b.rotation * contact.point2,
+        normal,
+        offset: 0.0,
+        native_point: None,
+    }))
+}
+
 fn sweep_geometry(
     world: &World,
     contacts: &mut ContinuousContacts,
@@ -1579,7 +1631,7 @@ fn sweep_geometry(
         let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
         let e1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
         let e2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-        if minimum_gap(plane, s1, e1, s2, e2, tolerance)?.1 < -tolerance {
+        if contact_gap(plane, s1, e1, s2, e2, tolerance)?.1 < -tolerance {
             planes.push(plane.clone());
         }
     }
@@ -1664,10 +1716,18 @@ fn sweep_geometry(
         let a = &contacts.shapes[pair.shapes[0]];
         let b = &contacts.shapes[pair.shapes[1]];
         let (m1, _) = trajectories[pair.shapes[0]];
+        let (m2, _) = trajectories[pair.shapes[1]];
         for hit in hits {
             // Initial touching/overlap belongs to the native discrete solver. Its
             // cast witnesses are not impact geometry and must never become planes.
-            if hit.time_of_impact <= 0.0 || hit.time_of_impact >= 1.0 {
+            if hit.time_of_impact <= 0.0 {
+                diagnostics.sweep_queries += 1;
+                if let Some(plane) = endpoint_contact_plane(a, b, &m1, &m2, tolerance)? {
+                    planes.push(plane);
+                }
+                continue;
+            }
+            if hit.time_of_impact >= 1.0 {
                 continue;
             }
             if hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist {
@@ -1917,6 +1977,37 @@ fn minimum_gap(
     let (t, g) = best;
     Ok((t, lower.min(g) - baseline))
 }
+/// Swept constraints protect immutable initial overlap. Existing native
+/// contacts must also end separated, preventing numerical error accumulating.
+fn contact_gap(
+    p: &Plane,
+    s1: &SolverBody,
+    e1: &SolverBody,
+    s2: &SolverBody,
+    e2: &SolverBody,
+    tolerance: f64,
+) -> Result<(f64, f64), String> {
+    let swept = minimum_gap(p, s1, e1, s2, e2, tolerance)?;
+    if p.native_point.is_none() {
+        return Ok(swept);
+    }
+    let a = WitnessMotion::new(s1, e1, p.point1)?
+        .position_and_velocity(1.0)
+        .0;
+    let b = WitnessMotion::new(s2, e2, p.point2)?
+        .position_and_velocity(1.0)
+        .0;
+    let endpoint = ((p.center2 - p.center1) + (b - a)).dot(p.normal) + p.offset;
+    if !endpoint.is_finite() {
+        return Err("native contact endpoint gap is not finite".into());
+    }
+    Ok(if endpoint < swept.1 {
+        (1.0, endpoint)
+    } else {
+        swept
+    })
+}
+
 fn project(
     world: &mut World,
     plane: &Plane,
@@ -1947,8 +2038,8 @@ fn project(
     }
     let s1 = contacts.starts.get(&plane.body1).unwrap_or(&dummy);
     let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
-    let (t, gap) = minimum_gap(plane, s1, &b1, s2, &b2, tolerance)?;
-    if gap >= -tolerance {
+    let (t, gap) = contact_gap(plane, s1, &b1, s2, &b2, tolerance)?;
+    if gap >= 0.0 || (t == 0.0 && gap >= -tolerance) {
         return Ok(0.0);
     }
     let a1 = WitnessMotion::new(s1, &b1, plane.point1)?.gradient(t, plane.normal);
@@ -2082,7 +2173,7 @@ fn violated_planes(
         let start2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
         let end1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
         let end2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-        if minimum_gap(plane, start1, end1, start2, end2, tolerance)?.1 < -tolerance {
+        if contact_gap(plane, start1, end1, start2, end2, tolerance)?.1 < -tolerance {
             violated.push(plane.clone());
         }
     }
@@ -2142,7 +2233,7 @@ fn solve_contacts(world: &mut World) {
         let mut joint_rotation_change = 0.0f64;
         for _ in 0..settings.max_iterations {
             diagnostics.position_iterations += 1;
-            for plane in &planes {
+            for plane in &admitted {
                 project(world, plane, &mut contacts, settings.position_tolerance_m)?;
                 // Admit each material plane once; witness coordinates are in the
                 // step's fixed reference frame, shared by every substep.
@@ -2209,7 +2300,7 @@ fn solve_contacts(world: &mut World) {
             let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
             let e1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
             let e2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-            let (time, gap) = minimum_gap(plane, s1, e1, s2, e2, settings.position_tolerance_m)?;
+            let (time, gap) = contact_gap(plane, s1, e1, s2, e2, settings.position_tolerance_m)?;
             let first_motion = WitnessMotion::new(s1, e1, plane.point1)?;
             let second_motion = WitnessMotion::new(s2, e2, plane.point2)?;
             let separation = |time| {
@@ -2260,6 +2351,77 @@ fn solve_contacts(world: &mut World) {
 mod tests {
     use super::*;
     use avian3d::math::SymmetricMatrix;
+
+    #[test]
+    fn rolling_initial_contact_admits_fresh_endpoint_witness() {
+        let ground = Entity::from_bits(1);
+        let wheel = Entity::from_bits(2);
+        let a = Shape {
+            entity: ground,
+            part_index: 0,
+            body: ground,
+            collider: Collider::cuboid(20.0, 1.0, 20.0),
+            position: -DVec3::Y * 0.5,
+            rotation: DQuat::IDENTITY,
+            center: -DVec3::Y * 0.5,
+        };
+        let b = Shape {
+            entity: wheel,
+            part_index: 0,
+            body: wheel,
+            collider: Collider::cylinder(0.34, 0.25),
+            position: DVec3::Y * 0.34,
+            rotation: DQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
+            center: DVec3::Y * 0.34,
+        };
+        let start = SolverBody::default();
+        let end = SolverBody {
+            delta_position: -DVec3::Y * 0.01,
+            delta_rotation: Rotation(DQuat::from_rotation_x(0.2)),
+            ..default()
+        };
+        let m1 = motion(&a, &BodyMotion::new(&start, &start).unwrap());
+        let m2 = motion(&b, &BodyMotion::new(&start, &end).unwrap());
+        let plane = endpoint_contact_plane(&a, &b, &m1, &m2, 1e-6)
+            .unwrap()
+            .expect("new bottom witness");
+        assert!(plane.native_point.is_none());
+        assert!(
+            minimum_gap(&plane, &start, &start, &start, &end, 1e-6)
+                .unwrap()
+                .1
+                < -0.009
+        );
+    }
+
+    #[test]
+    fn native_contact_requires_separated_endpoint_after_initial_overlap() {
+        let a = SolverBody::default();
+        let b = SolverBody::default();
+        let entity = Entity::from_bits(1);
+        let mut plane = Plane {
+            collider1: entity,
+            collider2: entity,
+            part1: 0,
+            part2: 0,
+            body1: entity,
+            body2: entity,
+            center1: DVec3::ZERO,
+            center2: -DVec3::Y * 0.01,
+            point1: DVec3::ZERO,
+            point2: DVec3::ZERO,
+            normal: DVec3::Y,
+            offset: 0.0,
+            native_point: Some((0, 0, 0)),
+        };
+        assert_eq!(minimum_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap().1, 0.0);
+        assert_eq!(
+            contact_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap(),
+            (1.0, -0.01)
+        );
+        plane.native_point = None;
+        assert_eq!(contact_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap().1, 0.0);
+    }
 
     #[test]
     fn continuous_initial_contact_uses_native_relative_pose_at_large_translation() {

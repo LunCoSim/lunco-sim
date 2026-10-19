@@ -877,8 +877,12 @@ pub fn apply_physics_holds(
 ) {
     if let Some(progress) = progress.as_mut() {
         let key = lunco_core_runtime::SimulationProgressKey::physics_integration();
-        if holds.is_held() != progress.contains(key) {
-            if holds.is_held() {
+        let preparing = holds.is_held()
+            && !faults
+                .as_deref()
+                .is_some_and(lunco_core::RuntimeFaults::active);
+        if preparing != progress.contains(key) {
+            if preparing {
                 progress.acquire(key, "Native physics integration is held");
             } else {
                 progress.release(key);
@@ -1509,6 +1513,37 @@ mod tests {
                 .contains(independent)
         );
         assert!(!world.resource::<Time<Physics>>().is_paused());
+    }
+
+    #[test]
+    fn terminal_fault_retires_physics_loading_progress() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<PhysicsHolds>();
+        world.init_resource::<Time<Physics>>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::SAFETY_FAILURE, true);
+        let key = lunco_core_runtime::SimulationProgressKey::physics_integration();
+        world
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(key, "physics preparing");
+        world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+            "physics-continuous-contact-invalid",
+            None,
+            "contact solve",
+            "not converged",
+        );
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(world.resource::<Time<Physics>>().is_paused());
+        assert!(
+            !world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .contains(key),
+            "terminal faults must not masquerade as loading"
+        );
     }
 
     #[test]

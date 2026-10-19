@@ -61,6 +61,9 @@ pub(crate) fn claims_edit(
     if matches!(attr, "physics:dynamicFriction" | "physics:staticFriction") {
         return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
     }
+    if attr == "material:binding:physics" {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
+    }
     if matches!(
         attr,
         "physxVehicleWheelAttachment:wheel"
@@ -81,6 +84,7 @@ struct WheelUpdate {
     params: WheelParams,
     collider: Option<Collider>,
     visual_base_rotation: Quat,
+    native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
 }
 
 /// Re-derive every spawned wheel of `stage` from the live composed stage, in
@@ -197,12 +201,21 @@ pub(crate) fn resync_wheels_for_stage(
                     } else {
                         None
                     };
+                    let native_material =
+                        match lunco_usd_avian::material::read_physics_material(&view, &sp) {
+                            Ok(material) => material,
+                            Err(error) => {
+                                failures.push((Some(*entity), path.clone(), error.to_string()));
+                                continue;
+                            }
+                        };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
                         params,
                         collider,
                         visual_base_rotation,
+                        native_material,
                     });
                 }
                 Err(missing) => failures.push((
@@ -269,18 +282,21 @@ pub(crate) fn resync_wheels_for_stage(
         if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
             mass.0 = u.params.mass as f32;
         }
-        if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
-            friction.dynamic_coefficient = u.params.friction_mu;
-            friction.static_coefficient = u.params.friction_mu;
-        }
-        if let Some(mut tire) = world.get_mut::<JointedWheelTire>(u.entity) {
-            tire.radius = u.params.radius;
-            tire.axle_inertia = u.params.axle_inertia();
-            tire.slip_stiffness = u.params.slip_stiffness;
-            tire.lateral_stiffness_graph = u.params.lateral_stiffness_graph;
-            tire.min_validated_speed = u.params.min_validated_speed;
-            tire.friction_mu = u.params.friction_mu;
-            tire.bearing_damping = u.params.bearing_damping;
+        if let Some(material) = &u.native_material {
+            world.entity_mut(u.entity).remove::<(
+                JointedWheelTire,
+                lunco_usd_avian_filters::filtered_pairs::SharedTireContact,
+            )>();
+            lunco_usd_avian::insert_physics_material(
+                &mut world.commands(),
+                u.entity,
+                Some(material.clone()),
+            );
+        } else {
+            if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
+                friction.dynamic_coefficient = u.params.friction_mu;
+                friction.static_coefficient = u.params.friction_mu;
+            }
         }
         world.entity_mut(u.entity).insert((
             crate::physical_wheel_angular_inertia(&u.params, axis_rot),
@@ -305,6 +321,23 @@ pub(crate) fn resync_wheels_for_stage(
             }
         }
         let Some(je) = joint_entity else { continue };
+        if u.native_material.is_none() {
+            let Some(mount) = world.get::<lunco_mobility::WheelBodyMount>(u.entity) else {
+                lunco_core::trigger_runtime_error(
+                    &mut world.commands(),
+                    "usd-wheel-mount-invalid",
+                    "Physical wheel lost its authored body mount".to_owned(),
+                );
+                continue;
+            };
+            let heading_local =
+                crate::VehicleFrame::forward(crate::GridRot(mount.local.rotation.as_dquat()));
+            world.entity_mut(u.entity).insert((
+                lunco_usd_avian_filters::filtered_pairs::SharedTireContact,
+                u.params.jointed_tire(je, heading_local),
+            ));
+        }
+
         if let Some(mut actuator) = world.get_mut::<lunco_physics::joint::JointTorqueActuator>(je) {
             actuator.brake_torque = u.params.brake_torque_max;
             actuator.rotational_inertia = u.params.axle_inertia();
