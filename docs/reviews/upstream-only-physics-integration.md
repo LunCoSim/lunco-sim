@@ -787,12 +787,33 @@ and nine joint-projection tests. The pre-existing degenerate-triangle projection
 case and two native automatic-mass-helper assertions remain outside this passing
 subset; no full-suite pass is claimed.
 
-The ramp matrix retains two failures: the 11 m/s approach climbs beyond 30 m
-but drops below its minimum-speed gate; the 40 m/s case's largest one-tick loss
-is 0.750522 m/s against a 0.75 m/s limit. The 25 m/s fan-on and fan-off cases
-pass. None of these four runs faults in the geometry query or reports a chassis
-impact. Vehicle traction/control and seam performance therefore remain open;
-this is bounded collision qualification, not full-course acceptance.
+The corrected four-case ramp driver holds its target speed on approach and
+applies full throttle on entry, matching the authored course instructions.
+All four cases pass unchanged speed, impulse and height gates: 11/25/40 m/s
+with fans, and 25 m/s without fans. Maximum one-tick losses are respectively
+0.154489, 0.151282, 0.702104 and 0.148990 m/s. All retain native query geometry
+and report zero chassis contact impulse. The former minimum-speed failure came
+from retaining the low cruise target throughout the climb; no physical setting
+or acceptance threshold was changed for this driver correction.
+This is bounded collision qualification; full keyboard-course acceptance remains
+separate.
 Evidence lives in the Roadster Twin's `results/contact-*.json` and
 `results/ramp-entry-matrix.json`; focused native/unit logs are retained under
 its ignored `.scratch/` and `/tmp/roadster-parry-final-certified.log`.
+
+
+## Held-key input composition — 2026-10-19
+
+`LunCoControlPlugin` orders Leafwing's public reset phase before physical-input
+unification. The previous graph allowed store clearing after fresh input had
+been computed. No dependency source, raw-key latch, repeat pump or per-vehicle
+control rule is added. The composition regression fails the missing dependency
+before the fix and passes afterward, with one press/release across 480 host
+frames and more than 500 fixed cycles without repeats.
+
+The production windowed pilot clears three blocks and both rolling refills.
+A bounded observation records a 22.2167 s W hold without repeats, native Modelica
+demand and both drive outputs at 1.0, and Ctrl+P pause/resume. That diagnostic
+run was deliberately stopped at the ramp; it is not a full-course pass. Evidence
+is the Twin's `results/held-input.json`. Native injection exercises the Bevy
+input path after event creation; OS device/compositor delivery is not qualified.

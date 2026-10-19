@@ -705,6 +705,13 @@ pub fn ensure_control_plugin(app: &mut App) {
 impl Plugin for LunCoControlPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default())
+            // The shared store must be empty before physical sources populate
+            // it. Resource conflicts alone do not order reset before unification.
+            .configure_sets(
+                PreUpdate,
+                leafwing_input_manager::plugin::InputManagerSystem::Tick
+                    .before(leafwing_input_manager::plugin::InputManagerSystem::Unify),
+            )
             .init_resource::<EguiFocus>()
             .init_resource::<CausalTrace>()
             .init_resource::<SimulationInputOrderAllocator>()
@@ -723,6 +730,98 @@ mod tests {
         parse_user_intent,
     };
     use bevy::prelude::*;
+
+    #[test]
+    fn held_keyboard_survives_frames_and_fixed_catchup_without_repeats() {
+        use bevy::input::{
+            ButtonState, InputPlugin,
+            keyboard::{Key, KeyboardInput, NativeKey},
+        };
+        use bevy::time::TimeUpdateStrategy;
+        use leafwing_input_manager::prelude::{ActionState, InputMap};
+        use std::time::Duration;
+        #[derive(Resource, Default)]
+        struct Observed {
+            held: bool,
+            lost: usize,
+            ticks: usize,
+        }
+        fn observe(state: Query<&ActionState<UserIntent>>, mut observed: ResMut<Observed>) {
+            observed.ticks += 1;
+            if state.single().unwrap().pressed(&UserIntent::MoveForward) != observed.held {
+                observed.lost += 1;
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin, LunCoControlPlugin))
+            .init_resource::<Observed>()
+            .add_systems(FixedUpdate, observe);
+        let mut map = InputMap::default();
+        map.insert(UserIntent::MoveForward, KeyCode::KeyW);
+        let entity = app
+            .world_mut()
+            .spawn((ActionState::<UserIntent>::default(), map))
+            .id();
+        app.update();
+        // Resetting the shared store after unification erases held state even
+        // though Bevy still owns a pressed physical key. Composition must order
+        // these public phases, independently of executor scheduling or repeats.
+        {
+            use bevy::ecs::schedule::{NodeId, SystemSet};
+            use leafwing_input_manager::plugin::InputManagerSystem;
+            let schedules = app.world().resource::<Schedules>();
+            let graph = schedules.get(PreUpdate).unwrap().graph();
+            let reset = graph
+                .system_sets
+                .get_key(InputManagerSystem::Tick.intern())
+                .unwrap();
+            let unify = graph
+                .system_sets
+                .get_key(InputManagerSystem::Unify.intern())
+                .unwrap();
+            assert!(
+                graph
+                    .dependency()
+                    .graph()
+                    .contains_edge(NodeId::Set(reset), NodeId::Set(unify)),
+                "input reset must precede physical input unification"
+            );
+        }
+        for pressed in [true, false] {
+            app.world_mut().resource_mut::<Observed>().held = pressed;
+            app.world_mut()
+                .resource_mut::<Messages<KeyboardInput>>()
+                .write(KeyboardInput {
+                    key_code: KeyCode::KeyW,
+                    logical_key: Key::Unidentified(NativeKey::Unidentified),
+                    state: if pressed {
+                        ButtonState::Pressed
+                    } else {
+                        ButtonState::Released
+                    },
+                    text: None,
+                    repeat: false,
+                    window: Entity::PLACEHOLDER,
+                });
+            for frame in 0..240 {
+                app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                    [1, 100, 4, 0][frame % 4],
+                )));
+                app.update();
+                assert_eq!(
+                    app.world()
+                        .get::<ActionState<UserIntent>>(entity)
+                        .unwrap()
+                        .pressed(&UserIntent::MoveForward),
+                    pressed,
+                    "frame {frame}"
+                );
+            }
+        }
+        let observed = app.world().resource::<Observed>();
+        assert!(observed.ticks > 500);
+        assert_eq!(observed.lost, 0);
+    }
 
     #[test]
     fn simulation_input_order_allocator_shares_sequences_per_tick_and_resets_forward() {
