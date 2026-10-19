@@ -9,14 +9,12 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
+use lunco_physics::joint::{JointTorqueActuator, revolute_hinge_axis_world};
 use lunco_port_core::InputPorts;
 use lunco_port_core::Port;
 
 use crate::wheel_kinematics::body_point_velocity;
-use crate::{
-    TireLateralStiffnessGraph, contact_plane_basis, longitudinal_tire_step, tire_patch_force,
-};
+use crate::{TireLateralStiffnessGraph, contact_plane_basis, solve_axle_step, tire_patch_force};
 
 /// Authored tire parameters and topology for one Avian-backed wheel body.
 ///
@@ -131,9 +129,10 @@ pub fn apply_jointed_tire_forces(
         Entity,
         Option<&lunco_physics::PhysicsOrderKey>,
         &JointedWheelTire,
+        Option<&crate::WheelHeatPorts>,
     )>,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
-    q_ports: Query<&Port>,
+    mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     collisions: Collisions,
     fixed_time: Res<Time<Fixed>>,
@@ -146,7 +145,7 @@ pub fn apply_jointed_tire_forces(
         return;
     }
     let wheel_order = match lunco_physics::ordered_physics_entities(
-        q_tires.iter().map(|(entity, key, _)| (entity, key)),
+        q_tires.iter().map(|(entity, key, _, _)| (entity, key)),
         "jointed wheel tire force",
     ) {
         Ok(order) => order,
@@ -166,7 +165,7 @@ pub fn apply_jointed_tire_forces(
     {
         let q_state = bodies.p1();
         for wheel in wheel_order {
-            let Ok((_, _, tire)) = q_tires.get(wheel) else {
+            let Ok((_, _, tire, heat_ports)) = q_tires.get(wheel) else {
                 continue;
             };
             let Ok((motor, joint)) = q_joints.get(tire.drive_joint) else {
@@ -194,20 +193,14 @@ pub fn apply_jointed_tire_forces(
             let omega = (wheel_state.angular_velocity - chassis_state.angular_velocity)
                 .dot(axle_world)
                 * motor.drive_sign;
-            let Ok(port) = q_ports.get(motor.port_entity) else {
-                continue;
+            let drive_torque = match q_ports.p0().get(motor.port_entity) {
+                Ok(port) => port.value,
+                Err(_) => continue,
             };
             let braking = q_inputs
                 .get(motor.control_entity)
                 .ok()
                 .is_some_and(|inputs| inputs.brake_active);
-            let brake_torque = if braking {
-                bounded_brake_torque(motor.brake_torque, motor.rotational_inertia, omega, full_dt)
-            } else {
-                0.0
-            };
-            let axle_torque = port.value + brake_torque;
-
             let other_velocity_at = |other: Option<Entity>, point: DVec3| {
                 other
                     .and_then(|entity| body_state(&q_state, entity))
@@ -302,50 +295,109 @@ pub fn apply_jointed_tire_forces(
             });
             let total_normal_force = contacts.iter().map(|c| c.normal_force).sum::<f64>();
 
+            if let Some(endpoint) = heat_ports.and_then(|ports| ports.contact) {
+                if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                    port.value = if total_normal_force > 0.0 && !contacts.is_empty() {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                }
+            }
             if total_normal_force <= 0.0 || contacts.is_empty() {
+                if let Some(endpoint) = heat_ports.and_then(|ports| ports.tire) {
+                    if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                        port.value = 0.0;
+                    }
+                }
                 continue;
             }
 
-            let weighted_v_long = contacts
-                .iter()
-                .map(|contact| contact.v_long * contact.normal_force)
-                .sum::<f64>()
-                / total_normal_force;
-            let (_, f_long) = longitudinal_tire_step(
-                omega,
-                weighted_v_long,
-                tire.radius,
-                tire.axle_inertia,
-                tire.slip_stiffness,
-                tire.bearing_damping,
-                axle_torque,
-                0.0,
-                total_normal_force,
-                tire.friction_mu,
-                full_dt,
-            );
-            for contact in contacts {
-                let load_share = contact.normal_force / total_normal_force;
-                let f_long = f_long * load_share;
-                let rolling_reference = contact
-                    .v_long
-                    .abs()
-                    .max((omega * tire.radius).abs())
-                    .max(tire.min_validated_speed);
-                let (_, f_lat) = tire_patch_force(
-                    f_long,
-                    rolling_reference,
+            let patch = |contact: &TireContact, w: f64| {
+                tire_patch_force(
+                    tire.slip_stiffness * (w * tire.radius - contact.v_long) * contact.normal_force
+                        / total_normal_force,
+                    contact
+                        .v_long
+                        .abs()
+                        .max((w * tire.radius).abs())
+                        .max(tire.min_validated_speed),
                     contact.v_lat,
                     contact.normal_force,
                     tire.friction_mu,
                     tire.lateral_stiffness_graph,
+                )
+            };
+            let step = match solve_axle_step(
+                omega,
+                tire.axle_inertia,
+                tire.bearing_damping,
+                drive_torque,
+                if braking { motor.brake_torque } else { 0.0 },
+                tire.radius * tire.friction_mu * total_normal_force,
+                full_dt,
+                |w| {
+                    contacts
+                        .iter()
+                        .map(|contact| patch(contact, w).0 * tire.radius)
+                        .sum()
+                },
+            ) {
+                Ok(step) => step,
+                Err(detail) => {
+                    if let Some(holds) = holds.as_deref_mut() {
+                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                    }
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "physics-wheel-step-invalid",
+                            Some(wheel),
+                            "wheel mechanical step",
+                            detail,
+                        );
+                    }
+                    return;
+                }
+            };
+            let tire_heat = contacts
+                .iter()
+                .map(|contact| {
+                    step.intervals
+                        .iter()
+                        .filter(|s| s.duration > 0.0)
+                        .map(|interval| {
+                            let (long, lat) = patch(contact, interval.speed);
+                            interval.duration / full_dt
+                                * (long * (interval.speed * tire.radius - contact.v_long)
+                                    - lat * contact.v_lat)
+                        })
+                        .sum::<f64>()
+                })
+                .sum::<f64>();
+            if let Some(heat) = heat_ports {
+                if let Some(endpoint) = heat.tire {
+                    if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                        port.value = tire_heat;
+                    }
+                }
+            }
+            for contact in &contacts {
+                let (f_long, f_lat) = step.intervals.iter().filter(|s| s.duration > 0.0).fold(
+                    (0.0, 0.0),
+                    |(long, lat), interval| {
+                        let (f_long, f_lat) = patch(contact, interval.speed);
+                        (
+                            long + interval.duration / full_dt * f_long,
+                            lat + interval.duration / full_dt * f_lat,
+                        )
+                    },
                 );
                 let force = contact.forward * f_long + contact.right * f_lat;
                 // A zero-torque tire patch is a persistent contact reaction,
                 // not a wake-up event. Preserve the command bit with the
                 // pending force so a real drive or brake command can wake a
                 // sleeping wheel island through Avian's regular accumulator.
-                pending.push((wheel, force, contact.point, port.value != 0.0 || braking));
+                pending.push((wheel, force, contact.point, drive_torque != 0.0 || braking));
             }
         }
     }

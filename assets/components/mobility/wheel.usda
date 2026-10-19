@@ -2,153 +2,59 @@
 (
     defaultPrim = "Wheel"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# A motorized wheel — the HUB: how big it is, what it weighs, how hard it can push and
-# how hard it can brake. What it grips with is a TIRE, and what it rides on is a
-# SUSPENSION, and both are separate files, because both are separate decisions.
-#
-#   def Cylinder "Wheel_FL" (
-#       prepend references = [
-#           @lunco://components/mobility/wheel.usda@</Wheel>,
-#           @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
-#       ]
-#       variants = { string tire = "regolith" }
-#   )
-#   {
-#       double radius = 0.4
-#       double height = 0.3
-#       float physxVehicleWheel:radius = 0.4
-#       int physxVehicleWheelAttachment:index = 0
-#       double3 xformOp:translate = (0.8, -0.2, 1.0)
-#   }
-#
-# Re-shoe a rover by changing one variant; re-spring it by swapping one arc. Neither
-# touches the hub, and neither needs any code.
-#
-# The drive torque is a boundary of the authored mechanical network. The
-# wheel declares the boundary ports; a containing vehicle authors the motor,
-# reduction, and generic Avian shaft components that connect to them.
-# The containing vehicle also applies the standard PhysX wheel and attachment
-# schemas, because the attachment is a relationship between that wheel and its
-# selected suspension/tire arcs. This component is the reusable hub, not a
-# standalone vehicle wheel.
-#
-# The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`), so they
-# mean the same thing here as in any other PhysX vehicle, and
-# `lunco_mobility::update_wheel_spin` reads exactly them.
 
 def Cylinder "Wheel" (
-    doc = "Reusable motorized rover wheel hub with authored radius, traction, braking, and spin parameters."
+    documentation = "Reusable motorized rover wheel hub with authored radius, traction, braking, and spin parameters."
     kind = "component"
-    # The reusable hub owns the wheel dynamics contract. A physical vehicle
-    # realization applies `PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` at the
-    # wheel instance; a raycast realization remains a query-only wheel. Keeping
-    # those schemas out of the shared hub prevents a raycast wheel from becoming
-    # an accidental rigid body or collider.
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWheelAPI"]
-    prepend variantSets = ["tire"]
-    variants = {
-        string tire = "regolith"
-    }
+    prepend variantSets = "tire"
+    variants = { string "tire" = "regolith" }
 )
 {
-    # --- Geometry ---
-    # `axis = "X"` so the cylinder lies along the rover's left/right axle direction
-    # (perpendicular to forward). Instances may override `axis` (Rucheyok is Z-forward
-    # and sets axis="Z") and the size — a wheel is sized by the vehicle it is on.
     uniform token axis = "X"
     double radius = 0.4
     double height = 0.3
-    double3 xformOp:translate = (0, 0, 0)
+    double3 xformOp:translate = (0.0, 0.0, 0.0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
-
-    # --- Physics ---
-    # Standard PhysX wheel mass is the single source for both wheel
-    # realizations; the old raycast/physical Rust fork is gone. The physical
-    # projection applies this mass directly, independently of authored collision
-    # geometry, while the wheel MOI remains the separate rotational contract.
     float physxVehicleWheel:mass = 25.0 (
         customData = {
-            double min = 1
-            double max = 500
-            string unit = "kg"
-        }
+    double max = 500.0
+    double min = 1.0
+    string unit = "kg"
+}
     )
-    # --- Wheel dynamics (Omniverse PhysX vehicle schema) ---
-    # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
-    # visible rotation is grounded in authored data:
-    #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
-    # with I = physxVehicleWheel:moi (or the documented solid-cylinder derivation
-    # from physxVehicleWheel:mass + radius). τ_drive arrives
-    # from the motor + gearbox driving this hub's joint; bearing drag is the wheel's own
-    # authored physical property (dampingRate), never inferred from the drive torque.
-    float physxVehicleWheel:radius = 0.4
-    float physxVehicleWheel:width = 0.3
+    float physxVehicleWheel:radius = 0.4000000059604645
+    float physxVehicleWheel:width = 0.30000001192092896
     float physxVehicleWheel:moi = 2.0
-    # Axle bearing + rolling drag, N·m·s (τ_drag = this · ω). Sized from what the
-    # hardware actually loses, not from the drive torque: a sealed, dry-lubricated
-    # lunar wheel bearing plus regolith rolling resistance costs on the order of a
-    # few percent of rated torque at rated speed. At ω_max = 12 rad/s that is
-    # ~5 N·m of drag, i.e. 5/12 ≈ 0.42 N·m·s — and rolling resistance grows with
-    # speed rather than being constant, so a linear coefficient in that band is the
-    # right shape. 0.45 keeps parasitic loss at ~1.8% of the 300 N·m peak at full
-    # speed, which is where a well-built wheel sits (the motor+gearbox this hub is
-    # driven by deliver ~255 N·m at ~12 rad/s); it also lets a lifted wheel
-    # coast down over a few seconds instead of stopping dead.
-    float physxVehicleWheel:dampingRate = 0.45            # N·m·s axle bearing/rolling drag
-    float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
-
-    # --- LunCo wheel dynamics (LunCoWheelAPI) ---
-    # The knobs LunCo's integrator needs and PhysX does not model. The schema declares
-    # them with no fallback, so a wheel that composes this file has its handling and one
-    # that does not is a hard error — never a wheel silently running on Rust defaults.
-    #
-    # Steering is NOT here: wheel heading is a generic joint/port property. The
-    # controller source owns any steering geometry or lock for its vehicle.
-    # Former calibration knobs are intentionally absent. The tire force is the
-    # real contact slip `k·(ω·r − v)` out of the spin solve
-    # (`lunco_mobility::update_wheel_spin`), so a second traction multiplier or
-    # travel-speed drag would be a duplicate model rather than a wheel property.
-    double3 lunco:wheel:headingAxis = (0, 1, 0)     # heading axis, wheel-local: vertical yaw
-    # Mechanical network boundary. `drive` is solved torque in N.m and
-    # `shaft_speed` is the measured wheel speed in rad/s. Their runtime
-    # endpoints are projected from these authored names without a wheel/motor
-    # special case.
+    float physxVehicleWheel:dampingRate = 0.44999998807907104
+    float physxVehicleWheel:maxBrakeTorque = 1500.0
+    double3 lunco:wheel:headingAxis = (0.0, 1.0, 0.0)
     float inputs:drive
     float inputs:heading
     float outputs:shaft_speed
-
-    # --- Tires ---
-    # Which rubber this wheel runs. Each variant is nothing but a reference to a tire
-    # file, whose `over` composes grip and tread onto this prim — the same shape as the
-    # rover `drivetrain` variantSet, and for the same reason: a variant should CHOOSE a
-    # component, not restate one.
+    custom double outputs:bearing_heat = 0.0
+    custom double outputs:brake_heat = 0.0
+    custom double outputs:tire_heat = 0.0
+    custom double outputs:contact = 0.0
     variantSet "tire" = {
         "regolith" (
             prepend references = @lunco://components/mobility/tires/regolith.usda@</Tire>
         ) {
         }
-
         "hard" (
             prepend references = @lunco://components/mobility/tires/hard.usda@</Tire>
         ) {
         }
-
-        # Grip tiers — regolith tread, three states of wear. The scored-run rover
-        # variants (`vessels/rovers/variants/*.usda`) select these to set their
-        # difficulty: μ is a property of the rubber, so a tier changes its tires.
         "cleated" (
             prepend references = @lunco://components/mobility/tires/cleated.usda@</Tire>
         ) {
         }
-
         "worn" (
             prepend references = @lunco://components/mobility/tires/worn.usda@</Tire>
         ) {
         }
-
         "bald" (
             prepend references = @lunco://components/mobility/tires/bald.usda@</Tire>
         ) {

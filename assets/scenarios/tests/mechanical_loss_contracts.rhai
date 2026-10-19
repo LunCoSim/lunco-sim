@@ -19,7 +19,7 @@ fn on_tick(me, params) {
         ["reverse",2.0,10.0,-8.0],["reverse_backdrive",2.5,-10.0,12.5],
         ["neutral",0.0,0.0,0.0],["stopped",0.0,0.0,0.0],
         ["ideal",0.0,10.0,-10.0],["negative_ratio",2.5,-10.0,12.5]];
-    let names=["power_balance_w","thermal_balance_j","thermal_rise_k","reversal_heat_w"];
+    let names=["power_balance_w","thermal_balance_j","thermal_rise_k","reversal_heat_w","contact_power_balance_w","contact_energy_balance_j","tire_rise_k","ground_rise_k"];
     for spec in specs {for leaf in ["heat","power_a_w","power_b_w"] {names.push(spec[0]+".gear."+leaf);}}
     for name in ["bearing_forward","bearing_reverse","bearing_ideal"] {
         names.push(name+".bearing.heat");names.push(name+".bearing.resisting_torque_nm");
@@ -54,6 +54,15 @@ fn on_tick(me, params) {
     checks.push(t_true(passive && both_signs,"reversing power flow remains passive through zero speed"));
     let diagnostics=["requires 0 < eta <= 1","requires 0 < eta <= 1","requires a nonzero ratio",
         "output torque exceeds its rating","requires nonnegative viscous damping","output torque exceeds its rating"];
+    checks.push(t_true(near(s.contact_power_balance_w,0.0,1.0e-7),"contact interface conserves wheel and terrain heat flow"));
+    checks.push(t_true(near(s.contact_energy_balance_j,0.0,1.0e-6),"wheel plus terrain stored heat equals friction input"));
+    checks.push(t_true(s.tire_rise_k[s.tire_rise_k.len()-1]>0.0,"contact friction heats the wheel mass"));
+    checks.push(t_true(s.ground_rise_k[s.ground_rise_k.len()-1]>0.0,"contact friction heats the terrain mass"));
+    let isolated=true;
+    for i in 0..result.times.len() {
+        if result.times[i]<0.99 {isolated=isolated && abs(s.ground_rise_k[i])<1.0e-10;}
+    }
+    checks.push(t_true(isolated,"opening the contact conductance prevents airborne ground heating"));
     for index in 0..params.invalid_runs.len() {
         let run=params.invalid_runs[index];
         let failed=query("RunStatus",#{experiment_id:run});

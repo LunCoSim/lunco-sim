@@ -340,6 +340,7 @@ pub(crate) fn resync_wheels_for_stage(
 
         if let Some(mut actuator) = world.get_mut::<lunco_physics::joint::JointTorqueActuator>(je) {
             actuator.brake_torque = u.params.brake_torque_max;
+            actuator.bearing_damping = u.params.bearing_damping;
             actuator.rotational_inertia = u.params.axle_inertia();
         }
     }

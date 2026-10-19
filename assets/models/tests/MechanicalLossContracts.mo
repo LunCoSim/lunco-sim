@@ -42,12 +42,33 @@ model MechanicalLossContracts
   LunCo.Thermal.HeatLoad losses(heat_w=motor.heat+gear.heat+bearing.heat);
   LunCo.Thermal.ThermalMass body(c_th=4000.0, T_init=293.15);
   Real accumulated_heat_j(start=0.0, fixed=true);
+  // A massless contact interface divides heat through passive conductances,
+  // rather than inventing a fixed wheel/terrain heat fraction.
+  LunCo.Thermal.HeatLoad contact_heat(heat_w=80.0);
+  LunCo.Thermal.ThermalConductor to_tire(G=2.0);
+  LunCo.Thermal.ThermalConductor to_ground(G=6.0,conductance_scale=if time<1.0 then 0.0 else 1.0);
+  LunCo.Thermal.ThermalMass tire_body(c_th=4000.0,T_init=250.0);
+  LunCo.Thermal.ThermalMass ground_body(c_th=12000.0,T_init=250.0);
+  Real contact_energy_j(start=0.0,fixed=true);
+  output Real contact_power_balance_w;
+  output Real contact_energy_balance_j;
+  output Real tire_rise_k;
+  output Real ground_rise_k;
   output Real power_balance_w;
   output Real thermal_balance_j;
   output Real thermal_rise_k;
   output Real reversal_heat_w;
 equation
   // Sweep all four quadrants, including zero power, without root events.
+  connect(contact_heat.port,to_tire.port_a);
+  connect(contact_heat.port,to_ground.port_a);
+  connect(to_tire.port_b,tire_body.port);
+  connect(to_ground.port_b,ground_body.port);
+  der(contact_energy_j)=contact_heat.heat_in_w;
+  contact_power_balance_w=contact_heat.heat_in_w-to_tire.heat_flow_w-to_ground.heat_flow_w;
+  tire_rise_k=tire_body.temp_k-250.0;
+  ground_rise_k=ground_body.temp_k-250.0;
+  contact_energy_balance_j=4000.0*tire_rise_k+12000.0*ground_rise_k-contact_energy_j;
   connect(rail.p, motor.p);
   connect(source.flange, gear.flange_a);
   connect(gear.flange_b, bearing.flange);

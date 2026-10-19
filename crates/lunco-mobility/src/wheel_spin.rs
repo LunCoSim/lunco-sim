@@ -13,14 +13,6 @@ use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use crate::wheel_kinematics::{body_point_velocity, wheel_heading, wheel_hub_pose};
 use crate::{Suspension, WheelBodyMount, WheelRaycast};
 
-/// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
-/// for a wheel of inertia `i` (`τ = I·ω/dt`). The brake applies the negative
-/// of this, clamped to its peak, so it can lock the wheel without overshoot.
-#[inline]
-fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
-    i * w / dt
-}
-
 /// Integrates realistic tire spin and drives the visual wheel rotation.
 ///
 /// The spin tracks ground speed when rolling, breaks loose into wheelspin when
@@ -53,6 +45,7 @@ pub(crate) fn update_wheel_spin(
         &RayHits,
         &Suspension,
         &WheelBodyMount,
+        Option<&crate::WheelHeatPorts>,
     )>,
     mut q_ports: ParamSet<(
         Query<&lunco_port_core::Port>,
@@ -88,6 +81,8 @@ pub(crate) fn update_wheel_spin(
     // step. Rollback replay is unaffected: `replay_one_tick` runs
     // `RollbackReplay` with `Time<Fixed>`'s own delta.
     time: Res<Time<Fixed>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     use std::f64::consts::TAU;
 
@@ -95,7 +90,7 @@ pub(crate) fn update_wheel_spin(
     if dt <= 0.0 {
         return;
     }
-    for (entity, mut wheel, hits, suspension, mount) in q_wheels.iter_mut() {
+    for (entity, mut wheel, hits, suspension, mount, heat_ports) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -202,129 +197,93 @@ pub(crate) fn update_wheel_spin(
             }
         }
 
-        // Brake torque opposes the current spin, clamped to the authored peak.
-        // Using the spin-stopping torque as the target lets a strong brake lock
-        // the wheel (ω→0) without overshooting past zero and chattering.
-        let tau_brake = if braking {
-            (-w_stop_torque(wheel.spin_velocity, inertia, dt))
-                .clamp(-wheel.brake_torque_max, wheel.brake_torque_max)
+        let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
+        let load = if on_ground {
+            wheel.last_normal_force
         } else {
             0.0
         };
-        let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
-        // This is the shared analytic tire solve. The physical realization gets
-        // its normal load and contact point from Avian, then calls this same
-        // longitudinal/lateral law; Avian's generic tangent friction is disabled
-        // for those marked wheel contacts so it cannot create a second model.
-        let (w, f_long) = crate::longitudinal_tire_step(
+        let patch = |omega: f64| {
+            crate::tire_patch_force(
+                k_slip * (omega * r - v_long),
+                v_long
+                    .abs()
+                    .max((omega * r).abs())
+                    .max(wheel.min_validated_speed),
+                v_lat,
+                load,
+                friction_mu,
+                wheel.lateral_stiffness_graph,
+            )
+        };
+        let step = crate::solve_axle_step(
             wheel.spin_velocity,
-            v_long,
-            r,
             inertia,
-            k_slip,
             c_bearing,
             tau_drive,
-            tau_brake,
-            if on_ground {
-                wheel.last_normal_force
-            } else {
-                0.0
-            },
-            friction_mu,
+            if braking { wheel.brake_torque_max } else { 0.0 },
+            r * friction_mu * load,
             dt,
+            |omega| patch(omega).0 * r,
         );
-
+        let step = match step {
+            Ok(step) => step,
+            Err(detail) => {
+                if let Some(holds) = holds.as_deref_mut() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                }
+                if let Some(faults) = faults.as_deref_mut() {
+                    if faults.raise(
+                        "physics-wheel-step-invalid",
+                        Some(entity),
+                        "wheel mechanical step",
+                        detail,
+                    ) {
+                        error!("[wheel] {detail}");
+                    }
+                }
+                return;
+            }
+        };
+        let w = step.speed;
+        let mut f_long = 0.0;
+        let mut f_lat = 0.0;
+        let mut bearing_heat = 0.0;
+        let mut brake_heat = 0.0;
+        let mut tire_heat = 0.0;
+        for interval in step.intervals.into_iter().filter(|s| s.duration > 0.0) {
+            let weight = interval.duration / dt;
+            let (long, lat) = patch(interval.speed);
+            f_long += weight * long;
+            f_lat += weight * lat;
+            bearing_heat += weight * c_bearing * interval.speed * interval.speed;
+            brake_heat -=
+                weight * interval.brake_torque * (interval.start_speed + interval.speed) * 0.5;
+            tire_heat += weight * (long * (interval.speed * r - v_long) - lat * v_lat);
+        }
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
         if let Ok(mut speed_port) = q_ports.p1().get_mut(wheel.speed_port) {
             speed_port.value = w;
         }
-
-        // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────
-        //
-        // The chassis force used to be computed independently, in
-        // `apply_wheel_drive`, from quantities the axle never saw: a drive term
-        // a throttle-scaled normal force and a drag term proportional to the FULL
-        // travel speed. Neither is a contact force. A tire transmits torque by
-        // SLIPPING — the patch force is `k · (ω·r − v)` — so a model that reads
-        // travel speed as slip is claiming a rolling wheel is sliding at road
-        // speed, and has to be given a drive coefficient large enough to overcome
-        // its own invented drag. That was a pair of calibration fudges, not a tire
-        // property.
-        //
-        // They cancelled ONLY at the parameters they were fitted at. Change μ, or
-        // the tire, or the mass, and the cancellation drifts, and every knob
-        // interacted with every other.
-        //
-        // Now both halves read the SAME `f_long` the ω solve just produced, and the
-        // cone is spent on real forces:
-        //   * at cruise ω ≈ v/r, so `f_long` is a few newtons and nearly the whole
-        //     cone is available laterally — a rover holds its line;
-        //   * under wheelspin `f_long` saturates at μ·N, and the surplus torque
-        //     goes where it physically goes: into ω, as visible spin.
-        // Nothing is calibrated against anything else, so μ means μ and a tire
-        // swapped at runtime behaves like the tire it is.
-        // ── LATERAL: THE STANDARD PHYSX LOAD GRAPH ─────────────────────────────
-        //
-        // The tire's lateral stiffness is authored as
-        // `physxVehicleTire:lateralStiffnessGraph`, not as a LunCo scalar. The
-        // shared patch law evaluates that graph at this contact's normal load
-        // and then applies the resulting force to the slip angle.
-        //
-        // The consequence is that grip vanished with speed. At the same slip angle
-        // — the same wheel scrubbing equally badly sideways — a wheel at 0.5 m/s
-        // got a tenth the side force of one at 5 m/s, so a slow rover slid
-        // sideways almost freely. That is why `drivetrain_parity` measured the
-        // raycast rover sweeping 53.3° against the jointed rover's 12.2°, and why
-        // the fit never converged: the parity handover proved by sweep that NO
-        // value of `k` satisfies all five scenes, and `tires/regolith.usda` carries
-        // the record of that search. A constant cannot fix a model that has the
-        // wrong independent variable.
-        //
-        // A slip angle is speed-free by construction, so one authored number now
-        // means the same grip at every speed.
-        //
-        // The slip-angle reference is kinematic: the larger of hub travel speed
-        // and circumferential wheel speed. A pivot wheel therefore retains a
-        // well-defined angle even while its hub's longitudinal speed is near zero.
-        // The graph's reference load makes the same tire setup usable across
-        // contact loads while retaining the standard load-dependent response.
-        // ── THE FRICTION CONE — SCALE THE FORCE, DON'T RE-DERIVE IT ────────────
-        //
-        // The two components above are the whole tire model: `f_long` from the slip
-        // RATIO solve, `f_lat` from the slip ANGLE. When their resultant exceeds the
-        // cone `μ·N`, the patch cannot deliver it, so the pair is scaled back onto
-        // the cone along its own direction. That is ONE force law with a magnitude
-        // bound.
-        //
-        // It used to re-derive a direction here from `(ω·r − v_long, −v_lat)` — a
-        // slip-VELOCITY vector. That reintroduced, in the saturated regime only, the
-        // exact lateral variable the slip-angle model was written to replace
-        // (`v_lat`, whose grip vanishes with speed), so the tire obeyed one lateral
-        // law below the cone and a different one above it. Two laws in one function
-        // is the bug, not the numbers: a former scalar stiffness set the direction
-        // the force pointed under grip and had no say in it under saturation.
-        //
-        // The low-speed definition lives in `tire_patch_force`: actual `omega*r`
-        // keeps a rolling/pivoting wheel's angle defined, and `atan2` supplies the
-        // static limit when both longitudinal motions vanish. The authored lower
-        // validation bound prevents a steady-state test curve being extrapolated
-        // below its measured domain; it is evidence metadata, not a fitted switch.
-        let (f_long, f_lat) = if on_ground {
-            crate::tire_patch_force(
-                f_long,
-                v_long
-                    .abs()
-                    .max((wheel.spin_velocity * r).abs())
-                    .max(wheel.min_validated_speed),
-                v_lat,
-                wheel.last_normal_force,
-                friction_mu,
-                wheel.lateral_stiffness_graph,
-            )
-        } else {
-            (0.0, 0.0)
-        };
+        // Powers use the very same implicit stage and force pair as the axle
+        // balance. The backward-Euler kinetic-energy residual is numerical and
+        // is deliberately excluded from these physical heat rates.
+        if let Some(heat) = heat_ports {
+            let mut ports = q_ports.p1();
+            for (endpoint, value) in [
+                (Some(heat.bearing), bearing_heat),
+                (Some(heat.brake), brake_heat),
+                (heat.tire, tire_heat),
+                (heat.contact, if on_ground { 1.0 } else { 0.0 }),
+            ] {
+                if let Some(endpoint) = endpoint {
+                    if let Ok(mut port) = ports.get_mut(endpoint) {
+                        port.value = value;
+                    }
+                }
+            }
+        }
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
         // Compose the visual mesh rotation from the fixed-step wheel state:
         // steering rotation · roll about the axle · cylinder-on-its-side base.

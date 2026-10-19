@@ -65,6 +65,20 @@ pub fn contact_normal_for_body(
 pub mod wheel_kinematics;
 use wheel_kinematics::wheel_hub_pose;
 
+/// Child endpoints for physical loss rates, in W. The force owner publishes
+/// these samples; authored thermal networks consume them through PortSurface.
+/// Scene hierarchy owns endpoint retirement together with the wheel.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component)]
+pub struct WheelHeatPorts {
+    pub bearing: Entity,
+    pub brake: Entity,
+    /// Present only when the wheel's tire-contact owner publishes physical work.
+    pub tire: Option<Entity>,
+    /// Actual support contact (0 or 1), consumed by thermal contact conductance.
+    pub contact: Option<Entity>,
+}
+
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
 
@@ -128,6 +142,7 @@ impl Plugin for LunCoMobilityPlugin {
             )
             .register_type::<Suspension>()
             .register_type::<WheelRaycast>()
+            .register_type::<WheelHeatPorts>()
             .register_type::<JointedWheelTire>()
             .register_type::<TireLateralStiffnessGraph>()
             .register_type::<DifferentialCoupling>()
@@ -1138,7 +1153,16 @@ fn parking_brake_force_with_velocity(
     let tangent_gravity = gravity - normal * gravity.dot(normal);
     let tangent_velocity = tangential_velocity - normal * tangential_velocity.dot(normal);
     let requested_accel = -tangent_gravity - tangent_velocity / dt;
-    let requested = requested_accel * supported_mass;
+    let mut requested = requested_accel * supported_mass;
+    // A sliding contact cannot propel its own slip. Static friction may hold
+    // against gravity at zero velocity, where it performs no work.
+    let slip_squared = tangent_velocity.length_squared();
+    if slip_squared > 0.0 {
+        let propelling_work = requested.dot(tangent_velocity);
+        if propelling_work > 0.0 {
+            requested -= tangent_velocity * (propelling_work / slip_squared);
+        }
+    }
     let available = friction_mu * normal_force;
     let magnitude = requested.length();
     if magnitude <= f64::EPSILON {
@@ -1148,62 +1172,154 @@ fn parking_brake_force_with_velocity(
     }
 }
 
-/// Advance the analytic raycast longitudinal tire/axle solve by one fixed step.
-///
-/// The return value is `(new_axle_speed, longitudinal_patch_force)`.  Both the
-/// raycast wheel's spin and patch-force calculations use this exact relationship.
-/// A jointed wheel uses Avian only for normal contact and the revolute
-/// constraint; its tangential force and axle update call the same equations as
-/// the raycast wheel. The solver's accumulated normal impulse supplies the
-/// load, so no second lateral/friction law or physical-only coefficient exists.
-pub fn longitudinal_tire_step(
-    axle_speed: f64,
-    hub_speed: f64,
-    radius: f64,
+/// A mechanical interval ending at the implicit contact-force stage. Splitting
+/// at a brake stop prevents reversal chatter and retains the finite braking work.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AxleInterval {
+    pub start_speed: f64,
+    pub speed: f64,
+    pub brake_torque: f64,
+    pub duration: f64,
+}
+
+/// One axle step contains at most one zero-speed crossing for the monotone tire
+/// law and constant drive command. No allocation or independent thermal state.
+#[derive(Clone, Copy, Debug)]
+pub struct AxleStep {
+    pub speed: f64,
+    pub intervals: [AxleInterval; 2],
+}
+
+/// Backward-Euler axle balance with viscous drag and passive Coulomb braking.
+/// `traction_torque(speed)` includes the final combined friction cone. The
+/// bound is the sum of each contact's `radius * mu * load`. Brake stopping is
+/// resolved inside the interval; thermal work uses its angular displacement,
+/// rather than the zero terminal speed. Contact/bearing rates use the implicit
+/// stage. Numerical integration work is separate from physical friction heat.
+pub fn solve_axle_step(
+    speed: f64,
     inertia: f64,
-    slip_stiffness: f64,
     bearing_damping: f64,
     drive_torque: f64,
-    brake_torque: f64,
-    normal_force: f64,
-    friction_mu: f64,
+    brake_limit: f64,
+    traction_bound: f64,
     dt: f64,
-) -> (f64, f64) {
-    if dt <= 0.0 || inertia <= 0.0 || radius <= 0.0 {
-        return (axle_speed, 0.0);
+    traction_torque: impl Fn(f64) -> f64,
+) -> Result<AxleStep, &'static str> {
+    if ![
+        speed,
+        inertia,
+        bearing_damping,
+        drive_torque,
+        brake_limit,
+        traction_bound,
+        dt,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || inertia <= 0.0
+        || dt <= 0.0
+        || bearing_damping < 0.0
+        || brake_limit < 0.0
+        || traction_bound < 0.0
+    {
+        return Err(
+            "axle requires finite state, positive inertia/time and nonnegative passive coefficients",
+        );
     }
-    if normal_force < 1.0 {
-        let speed = axle_speed
-            + dt * (drive_torque + brake_torque - bearing_damping * axle_speed) / inertia;
-        return (speed, 0.0);
+    let rest_torque = drive_torque - traction_torque(0.0);
+    if !rest_torque.is_finite() {
+        return Err("axle contact torque is not finite");
     }
-
-    let denom = inertia / dt + slip_stiffness * radius * radius + bearing_damping;
-    let w_grip = (inertia / dt * axle_speed
-        + drive_torque
-        + brake_torque
-        + slip_stiffness * radius * hub_speed)
-        / denom.max(1.0e-12);
-    let f_slip = slip_stiffness * (w_grip * radius - hub_speed);
-    let mu_n = friction_mu.max(0.0) * normal_force;
-    if f_slip.abs() <= mu_n {
-        (w_grip, f_slip)
+    let advance = |old: f64, h: f64, brake: f64| -> Result<f64, &'static str> {
+        let rhs = inertia / h * old + drive_torque + brake;
+        let diagonal = inertia / h + bearing_damping;
+        let mut lower = (rhs - traction_bound) / diagonal;
+        let mut upper = (rhs + traction_bound) / diagonal;
+        if ![lower, upper].into_iter().all(f64::is_finite) {
+            return Err("axle step is not representable");
+        }
+        for _ in 0..48 {
+            let middle = lower + (upper - lower) * 0.5;
+            let residual = diagonal * middle + traction_torque(middle) - rhs;
+            if !residual.is_finite() {
+                return Err("axle contact residual is not finite");
+            }
+            if residual > 0.0 {
+                upper = middle;
+            } else {
+                lower = middle;
+            }
+        }
+        Ok(lower + (upper - lower) * 0.5)
+    };
+    let from_rest = |h: f64| -> Result<AxleInterval, &'static str> {
+        if rest_torque.abs() <= brake_limit {
+            return Ok(AxleInterval {
+                start_speed: 0.0,
+                speed: 0.0,
+                brake_torque: -rest_torque,
+                duration: h,
+            });
+        }
+        let brake = -brake_limit * rest_torque.signum();
+        Ok(AxleInterval {
+            start_speed: 0.0,
+            speed: advance(0.0, h, brake)?,
+            brake_torque: brake,
+            duration: h,
+        })
+    };
+    if speed == 0.0 {
+        let interval = from_rest(dt)?;
+        return Ok(AxleStep {
+            speed: interval.speed,
+            intervals: [interval, AxleInterval::default()],
+        });
+    }
+    let brake = -brake_limit * speed.signum();
+    let candidate = advance(speed, dt, brake)?;
+    if candidate * speed >= 0.0 || brake_limit == 0.0 {
+        return Ok(AxleStep {
+            speed: candidate,
+            intervals: [
+                AxleInterval {
+                    start_speed: speed,
+                    speed: candidate,
+                    brake_torque: brake,
+                    duration: dt,
+                },
+                AxleInterval::default(),
+            ],
+        });
+    }
+    // The implicit endpoint at zero has no viscous torque. The constant
+    // command/contact torque determines the stop time, before any reversal.
+    let stop_time = -inertia * speed / (rest_torque + brake);
+    if !stop_time.is_finite() || stop_time <= 0.0 || stop_time > dt * (1.0 + 64.0 * f64::EPSILON) {
+        return Err("axle brake stop could not be resolved within the step");
+    }
+    let stop_time = stop_time.min(dt);
+    let first = AxleInterval {
+        start_speed: speed,
+        speed: 0.0,
+        brake_torque: brake,
+        duration: stop_time,
+    };
+    let second = if stop_time < dt {
+        from_rest(dt - stop_time)?
     } else {
-        // The implicit candidate is the current step's authoritative slip
-        // state.  Reusing the previous-step slip here makes a newly commanded
-        // drive inherit a stale sign from a tiny residual velocity and apply
-        // the Coulomb force backwards for one full step.
-        let traction_torque = f_slip.signum() * mu_n * radius;
-        let speed = axle_speed
-            + dt * (drive_torque + brake_torque - traction_torque - bearing_damping * axle_speed)
-                / inertia;
-        (speed, traction_torque / radius)
-    }
+        AxleInterval::default()
+    };
+    Ok(AxleStep {
+        speed: second.speed,
+        intervals: [first, second],
+    })
 }
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{TireLateralStiffnessGraph, longitudinal_tire_step, tire_patch_force};
+    use super::{TireLateralStiffnessGraph, solve_axle_step, tire_patch_force};
     use bevy::math::DVec3;
 
     #[test]
@@ -1344,20 +1460,138 @@ mod tire_patch_tests {
     }
 
     #[test]
+    fn axle_step_conserves_work_and_keeps_physical_heat_passive() {
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 1.0,
+            max_stiffness: 1200.0,
+            rest_load: 400.0,
+        };
+        let radius = 0.4;
+        let inertia = 6.8;
+        let dt = 1.0 / 60.0;
+        let damping = 0.45;
+        for old in [-5.0, 0.0, 5.0] {
+            for drive in [-400.0, 0.0, 400.0] {
+                for hub in [-2.0, 0.0, 2.0] {
+                    for lateral in [-1.0, 0.0, 1.0] {
+                        for load in [0.0, 455.0] {
+                            for brake in [0.0, 300.0] {
+                                let patch = |w: f64| {
+                                    tire_patch_force(
+                                        8000.0 * (w * radius - hub),
+                                        hub.abs().max((w * radius).abs()).max(0.1),
+                                        lateral,
+                                        load,
+                                        1.5,
+                                        graph,
+                                    )
+                                };
+                                let step = solve_axle_step(
+                                    old,
+                                    inertia,
+                                    damping,
+                                    drive,
+                                    brake,
+                                    radius * 1.5 * load,
+                                    dt,
+                                    |w| patch(w).0 * radius,
+                                )
+                                .unwrap();
+                                for interval in
+                                    step.intervals.into_iter().filter(|s| s.duration > 0.0)
+                                {
+                                    let w = interval.speed;
+                                    let old = interval.start_speed;
+                                    let dt = interval.duration;
+                                    let (long, lat) = patch(w);
+                                    let bearing_heat = damping * w * w;
+                                    let brake_heat = -interval.brake_torque * (old + w) * 0.5;
+                                    let tire_heat = long * (w * radius - hub) - lat * lateral;
+                                    assert!(
+                                        bearing_heat >= 0.0
+                                            && brake_heat >= -1.0e-8
+                                            && tire_heat >= -1.0e-8
+                                    );
+                                    assert!(long.hypot(lat) <= 1.5 * load + 1.0e-8);
+                                    let stored = inertia * (w * w - old * old) / (2.0 * dt);
+                                    let numerical = inertia * (w - old).powi(2) / (2.0 * dt)
+                                        + interval.brake_torque * (old - w) * 0.5;
+                                    let balance = drive * w
+                                        - long * hub
+                                        - lat * lateral
+                                        - bearing_heat
+                                        - brake_heat
+                                        - tire_heat
+                                        - stored
+                                        - numerical;
+                                    assert!(
+                                        balance.abs() < 1.0e-6,
+                                        "discrete work residual {balance}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn axle_brake_holds_and_airborne_bearing_drag_cannot_reverse_the_shaft() {
+        let stopped = solve_axle_step(0.0, 2.0, 0.45, 200.0, 300.0, 0.0, 0.1, |_| 0.0).unwrap();
+        assert_eq!(stopped.speed, 0.0);
+        assert_eq!(stopped.intervals[0].brake_torque, -200.0);
+        let damped = solve_axle_step(1.0, 2.0, 2000.0, 0.0, 0.0, 0.0, 0.1, |_| 0.0).unwrap();
+        assert!(damped.speed >= 0.0 && damped.speed < 1.0);
+        assert!(solve_axle_step(1.0, 2.0, -0.45, 0.0, 0.0, 0.0, 0.1, |_| 0.0).is_err());
+    }
+
+    #[test]
+    fn a_brake_stop_retains_kinetic_heat_but_static_holding_has_no_work() {
+        let step = solve_axle_step(1.0, 2.0, 0.0, 0.0, 100.0, 0.0, 0.1, |_| 0.0).unwrap();
+        assert_eq!(step.speed, 0.0);
+        let energy = step
+            .intervals
+            .iter()
+            .map(|s| -s.brake_torque * (s.start_speed + s.speed) * 0.5 * s.duration)
+            .sum::<f64>();
+        assert!((energy - 1.0).abs() < 1.0e-12);
+        let holding = solve_axle_step(0.0, 2.0, 0.0, 50.0, 100.0, 0.0, 0.1, |_| 0.0).unwrap();
+        assert_eq!(holding.speed, 0.0);
+        assert_eq!(holding.intervals[0].start_speed, 0.0);
+    }
+
+    #[test]
+    fn a_parking_contact_never_propels_an_existing_slip() {
+        let velocity = DVec3::new(0.0, 0.0, 0.001);
+        let force = super::parking_brake_force_with_velocity(
+            DVec3::new(0.0, -1.62, -0.8),
+            DVec3::Y,
+            400.0,
+            400.0 / 1.62,
+            1.5,
+            velocity,
+            1.0 / 60.0,
+        );
+        assert!(force.dot(velocity) <= 1.0e-12);
+    }
+
+    #[test]
     fn saturated_drive_uses_current_candidate_after_a_small_residual_reversal() {
-        let (_, force) = longitudinal_tire_step(
+        let traction = |w: f64| (8_000.0 * (w * 0.4)).clamp(-1.5 * 455.0, 1.5 * 455.0);
+        let step = solve_axle_step(
             -1.0e-3,
-            0.0,
-            0.4,
             6.8,
-            8_000.0,
             0.0,
             400.0,
             0.0,
-            455.0,
-            1.5,
+            0.4 * 1.5 * 455.0,
             1.0 / 60.0,
-        );
+            |w| traction(w) * 0.4,
+        )
+        .unwrap();
+        let force = traction(step.speed);
         assert!(force > 0.0);
     }
 }
@@ -1920,8 +2154,9 @@ fn apply_wheel_drive(
         &Suspension,
         &RayHits,
         &WheelBodyMount,
+        Option<&WheelHeatPorts>,
     )>,
-    q_ports: Query<&Port>,
+    mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -1963,7 +2198,7 @@ fn apply_wheel_drive(
     // Stable summation in the same physics order used to apply contact forces.
     let mut total_normal_load = std::collections::HashMap::<Entity, f64>::new();
     for entity in &order {
-        if let Ok((_, _, wheel, _, hits, mount)) = q_wheels.get(*entity) {
+        if let Ok((_, _, wheel, _, hits, mount, _)) = q_wheels.get(*entity) {
             if hits
                 .iter_sorted()
                 .any(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
@@ -1974,7 +2209,7 @@ fn apply_wheel_drive(
         }
     }
     for entity in order {
-        let Ok((_, _, wheel, susp, hits, mount)) = q_wheels.get(entity) else {
+        let Ok((_, _, wheel, susp, hits, mount, heat_ports)) = q_wheels.get(entity) else {
             continue;
         };
         let parent_entity = mount.body;
@@ -1986,7 +2221,12 @@ fn apply_wheel_drive(
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
-            if let Ok(drive_port) = q_ports.get(wheel.drive_port) {
+            let drive_torque = q_ports
+                .p0()
+                .get(wheel.drive_port)
+                .map(|port| port.value)
+                .ok();
+            if let Some(drive_torque) = drive_torque {
                 let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
                     GridPos(forces.position().0),
                     GridRot(forces.rotation().0),
@@ -2059,14 +2299,28 @@ fn apply_wheel_drive(
                     // is an authored wake-up event and must use the regular
                     // accumulator so a parked rover responds immediately.
                     let commanded =
-                        drive_port.value != 0.0 || inputs.is_some_and(|input| input.brake_active);
+                        drive_torque != 0.0 || inputs.is_some_and(|input| input.brake_active);
                     // A locked patch has one Coulomb cone. Adding the dynamic
                     // tire force again would count its grip twice.
-                    let force = if inputs.is_some_and(|i| i.brake_active) && gravity.is_some() {
-                        parking_force
+                    let locked = inputs.is_some_and(|i| i.brake_active)
+                        && wheel.spin_velocity == 0.0
+                        && gravity.is_some();
+                    let force = if locked {
+                        let brake_force = (wheel.brake_torque_max - drive_torque.abs()).max(0.0)
+                            / wheel.wheel_radius;
+                        parking_force.clamp_length_max(brake_force)
                     } else {
                         wheel.tire_force
                     };
+                    if locked {
+                        if let Some(endpoint) = heat_ports.and_then(|ports| ports.tire) {
+                            if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                                // This is the delivered locked-patch force and
+                                // its conjugate slip, not the rolling predictor.
+                                port.value = -force.dot(forces.velocity_at_point(contact_point));
+                            }
+                        }
+                    }
                     if commanded {
                         forces.apply_force_at_point(force, contact_point);
                     } else {

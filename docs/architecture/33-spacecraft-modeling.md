@@ -454,18 +454,41 @@ lint; generic synthesized-joint admission enforces the same invariant.
 ### Mechanical dissipation and thermal boundaries
 
 `GearRatio` owns bidirectional mesh efficiency. Terminal powers are positive
-into the component; `power_a_w + power_b_w = heat`. Reverse power flow uses
-reciprocal torque scaling so regeneration cannot create power. The rigid model
-asserts its output torque rating rather than saturating torque at incompatible
-shaft speeds. It omits backlash, slip and static friction. `BearingFriction`
-absorbs `d*w^2` and exports `heat`; its damping must be nonnegative.
+into the component; `power_a_w + power_b_w = heat`. Its output torque is a
+checked rating; a physical limiter requires a clutch/slip model. The stateless
+constant-efficiency model omits backlash and static friction.
 
-Use the existing `HeatLoad` bridge to feed these measured losses into an authored
-thermal collection. FLIP's enabled left/right thermal banks receive motor copper
-and gearbox mesh losses separately. Native wheel drag, braking, tire slip,
-suspension damping and contact response retain their native owners; adding
-another gearbox efficiency or bearing element there would count losses twice.
-Their heat distribution is outside these motor/gear thermal banks; neither
-numerical damping nor contact-solver residuals are treated as calibrated heat.
-The production mechanical contract is `scripts/api/test_mechanical_losses.py`
-(41 authored checks), plus FLIP's route/thermal gate (19 checks).
+Native wheel mechanics own bearing, brake and contact forces. `solve_axle_step`
+evaluates the final combined friction cone in the axle balance. The same force
+pair reaches the chassis; it is not rescaled after solving wheel spin. A brake
+stop splits the interval at zero speed, and braking work includes the interval's
+angular displacement. A stationary brake holding torque produces no heat.
+The locked-patch projection cannot propel existing slip and is bounded by the
+remaining authored brake authority. Physical wheels apply bearing torque across
+the relative axle/housing coordinate, rather than damping world rotation.
+
+USD wheel surfaces expose physical `bearing_heat`, `brake_heat`, `tire_heat`
+(W), plus support `contact` (0/1). Existing child `Port` endpoints and
+`PortSurfaceReady` own causal publication and scene retirement; no new global
+state, policy hook or duplicate force model is involved. The joint actuator
+publishes physical bearing/brake work; the raycast/shared-tire owner publishes
+contact work. Bound native `PhysicsMaterial` contacts retain Avian's tangent
+solver and do not declare a shared-tire heat/contact endpoint. Wiring an
+unsupported endpoint fails binding rather than inventing a zero measurement.
+Numerical integration work is not injected into thermal masses as physical heat.
+
+FLIP's thermal collection consumes these signals through existing `HeatLoad`
+facets. Motor copper, gearbox mesh, bearing and brake losses enter the drive/hub
+banks. Contact heat enters a massless interface, then flows through passive
+conductors into wheel and near-contact ground thermal masses. The ground
+conductors use the actual support signal as `ThermalConductor.conductance_scale`,
+so airborne wheels do not conduct into the ground. Scale 1 retains the ordinary
+conductor law; scale 0 opens it. Radiators and wheel-to-hub conductors close the
+thermal topology. Capacities, conductances and the spatially averaged ground
+reservoir are explicit study assumptions, not calibrated FLIP material data.
+
+Verification: `scripts/api/test_mechanical_losses.py` has 46 authored checks,
+including a closed wheel/ground stored-heat balance and airborne isolation;
+FLIP's route/brake/thermal gate has 25. `tire_patch_tests` covers the native
+force cone, interval work and passivity; `drivetrain_parity` covers both wheel
+realizations. No third-party source is changed.

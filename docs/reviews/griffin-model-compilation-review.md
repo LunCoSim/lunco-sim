@@ -89,7 +89,7 @@ Existing production gates passed: drivetrain 6, electrical/thermal 6,
 empty battery 4, plume conservation 48, RCS feed starvation 16, Griffin GNC 12,
 engine-out 20, RCS commands 19, fuel exhaustion 11 and oxidizer exhaustion 11
 (153 assertions). The solar rover energy cycle also passes 51 assertions,
-and FLIP route/thermal verification passes 19 assertions (223 scenario
+and FLIP route/thermal verification passes 25 assertions (229 scenario
 assertions in total). The route observer now preserves the route editor's typed `retryable`
 status while a point edit projects, bounded by its existing ten-second deadline;
 terminal errors still fail immediately with their diagnostic. The GNC gate uses the unchanged fixed-rk4 solver. All source
@@ -127,24 +127,32 @@ not claim the full sticking/sliding model. FLIP's four gearbox heat outputs feed
 four `HeatLoad` facets in its enabled left/right thermal banks. The
 bank coefficients and lumping remain study assumptions, not FLIP calibration.
 
-Native wheel bearing drag, brakes, tire slip and suspension damping retain their
-existing native force/torque owners. No additional efficiency or bearing element
-is applied to them. Their dissipated energy leaves the modeled mechanical
-subsystem; its distribution into hub, brake, tire and terrain temperatures is
-outside the motor/gear thermal banks. Native numerical dissipation is not
-reported as physical heat. This is not a whole-vehicle thermal qualification.
+Native bearing, brake and shared-tire loss powers now feed the Modelica heat
+network through directed wheel ports. The axle solver uses the final combined
+friction force, splits brake stops within the step and accounts for their finite
+work. Static holding has zero heat. The parking-force projection is passive and
+brake-authority limited. Physical bearing torque is relative to its housing.
+Numerical integration work is excluded from physical heat. Native-material
+contact friction remains Avian-owned and has no shared-tire thermal endpoint;
+unsupported wiring rejects explicitly. No dependency source was modified.
 
-The maintained `scripts/api/test_mechanical_losses.py` gate passes 41 authored
-checks in both windowed and headless production sessions: four quadrants,
-negative reduction, zero load/speed, unity efficiency, reversal, signed bearing
-drag, motor-to-shaft power and stored-heat balance, invalid parameters, and
-initial/transient overload. The transient rating violation is diagnosed after
-startup. No Rust or third-party source change is needed for these equations.
-Fresh affected gates pass drive 6, thermal 6, empty battery 4, solar energy 51,
-and FLIP route/thermal 19. The route observes actual gear loss at the thermal
-participant and a rising thermal-bank temperature while completing all three
-waypoints. Surface startup advances all ten Modelica participants fault-free.
-Evidence: `/tmp/griffin-mechanical-losses-20261019`.
+FLIP uses a massless contact interface with passive wheel/ground conductors,
+thermal masses, wheel-to-hub conduction and radiators. Actual support gates each
+ground conductance through the generic conductor scale input. The lumped
+capacities, conductances and local averaged ground reservoir are study
+assumptions, not material calibration or a spatial terrain-temperature model.
+
+The maintained `scripts/api/test_mechanical_losses.py` passes 46 authored checks
+in headless and windowed production sessions. It covers four quadrants,
+reversal, signed bearing drag, stored-heat balance, invalid parameters,
+initial/transient overload, wheel/ground heat conservation and airborne isolation.
+The native mechanics suite passes 13 checks including a 324-case signed
+force/work sweep, finite stopping heat, zero-work static braking and passive
+parking contact. The route/brake/thermal gate passes 25 checks; all four native
+bearing and tire heat paths reach the thermal participant, braking heats its
+bank, and both wheel and ground heat paths respond. Physical/raycast drivetrain
+parity passes 20 unchanged checks. Evidence:
+`/tmp/griffin-native-heat-20261019` and `/tmp/griffin-native-heat-math-tests.log`.
 
 ## Remaining non-compilation findings
 

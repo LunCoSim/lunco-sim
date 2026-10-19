@@ -185,15 +185,21 @@ boundaries. Supply `CryoTank.saturation_temperature_k` from the operating point;
 connect both `ElectricalSensor.p` and `.n` across the measured branch.
 
 Use `scripts/api/test_mechanical_losses.py --output <directory>` (also
-`--headless`) for 41 passive transmission, bearing and stored-heat checks.
+`--headless`) for 46 passive transmission, bearing and stored-heat checks.
 `GearRatio.eta` is mesh efficiency in either power direction, not a global
 vehicle multiplier. Its output torque is a checked rating; use an explicit
 clutch/slip model for a physical torque limiter. `GearRatio.heat` and
 `BearingFriction.heat` connect through the existing `HeatLoad` to an authored
-thermal bank. Native wheel damping/braking/tire losses remain native and must
-not acquire a second Modelica loss element. FLIP's 19-check route gate also
-observes gear heat at the running thermal participant. Distribution of native
-friction heat into wheel/brake/terrain temperatures is outside that bank.
+thermal bank. Native wheel surfaces publish `bearing_heat`, `brake_heat`,
+`tire_heat` (W) and `contact` (0/1) through the existing directed port surface.
+Thermal wiring consumes the actual producer; do not add a second Modelica force
+or infer losses from a controller command. FLIP's 25-check route gate observes
+all four bearing/tire paths, braking heat and wheel/ground thermal response.
+Ground conductors consume support as `conductance_scale`; zero must isolate the
+ground while airborne. Bound native-material contacts do not declare the
+shared-tire heat endpoint; a wire to that unsupported producer must fail visibly.
+Keep numerical solver work separate from physical heat, and declare capacities,
+conductances and spatial ground averaging as study assumptions.
 
 ### No-API alternative
 The standalone runner is owned by `lunco-modelica-execution`, not

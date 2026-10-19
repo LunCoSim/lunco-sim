@@ -165,6 +165,8 @@ pub fn apply_joint_torque_actuators(
         };
         if !torque.is_finite()
             || !actuator.brake_torque.is_finite()
+            || !actuator.bearing_damping.is_finite()
+            || actuator.bearing_damping < 0.0
             || !actuator.rotational_inertia.is_finite()
             || !actuator.drive_sign.is_finite()
         {
@@ -200,7 +202,33 @@ pub fn apply_joint_torque_actuators(
         } else {
             0.0
         };
-        let coordinate_torque = torque + brake;
+        // Conjugate torque/speed use the same relative axle coordinate as the
+        // delivered motor torque. Housing rotation is not bearing slip.
+        let bearing_torque = -actuator.bearing_damping * coordinate_speed;
+        let brake_heat = if brake == 0.0 {
+            0.0
+        } else {
+            -brake
+                * (coordinate_speed
+                    + 0.5 * brake * physics_time.delta_secs_f64() / actuator.rotational_inertia)
+        };
+        {
+            let mut ports = q_ports.p1();
+            for (endpoint, power) in [
+                (
+                    actuator.bearing_heat_port,
+                    -bearing_torque * coordinate_speed,
+                ),
+                (actuator.brake_heat_port, brake_heat),
+            ] {
+                if let Some(endpoint) = endpoint {
+                    if let Ok(mut port) = ports.get_mut(endpoint) {
+                        port.value = power;
+                    }
+                }
+            }
+        }
+        let coordinate_torque = torque + brake + bearing_torque;
         if coordinate_torque == 0.0 {
             continue;
         }

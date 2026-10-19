@@ -50,6 +50,11 @@ pub struct JointTorqueActuator {
     pub control_entity: Entity,
     /// Passive opposing torque when the owning vessel's brake command is active.
     pub brake_torque: f64,
+    /// Viscous axle friction relative to the housing, N m s/rad.
+    pub bearing_damping: f64,
+    /// Optional physical heat-rate outputs (W), owned by the projected joint's wheel.
+    pub bearing_heat_port: Option<Entity>,
+    pub brake_heat_port: Option<Entity>,
     /// Rotational inertia at the actuator boundary, kg m². It bounds the
     /// braking impulse for one fixed step so a brake cannot integrate through
     /// zero and reverse the joint every tick.
@@ -65,6 +70,9 @@ impl Default for JointTorqueActuator {
             speed_port_entity: Entity::PLACEHOLDER,
             control_entity: Entity::PLACEHOLDER,
             brake_torque: 0.0,
+            bearing_damping: 0.0,
+            bearing_heat_port: None,
+            brake_heat_port: None,
             rotational_inertia: 0.0,
             drive_sign: 1.0,
         }

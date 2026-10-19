@@ -2829,6 +2829,27 @@ fn process_usd_sim_prim_read(
             None
         };
 
+        let native_material = if is_physical {
+            match lunco_usd_avian::material::read_physics_material(reader, &sdf_path) {
+                Ok(material) => material,
+                Err(error) => {
+                    error!(
+                        "USD physical wheel {} has invalid bound material: {error}",
+                        prim_path.path
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-wheel-material-invalid",
+                        format!("{}: {error}", prim_path.path),
+                    );
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         // Create the actuator-side ports for drive and heading. Owned by the wheel via
         // `ChildOf` so the single recursive scene-clear reclaims them with the
         // wheel — synthesized backing entities are never left detached at the root
@@ -2846,6 +2867,52 @@ fn process_usd_sim_prim_read(
                 ChildOf(entity),
             ))
             .id();
+
+        let p_bearing_heat = commands
+            .spawn((
+                Port::default(),
+                Name::new("Port_BearingHeat"),
+                ChildOf(entity),
+            ))
+            .id();
+        let p_brake_heat = commands
+            .spawn((
+                Port::default(),
+                Name::new("Port_BrakeHeat"),
+                ChildOf(entity),
+            ))
+            .id();
+        // A raycast/shared tire owns its contact work. Native material contacts
+        // have no tire-law heat endpoint; an attempted wire fails at port binding.
+        let p_tire_heat = if !is_physical || native_material.is_none() {
+            Some(
+                commands
+                    .spawn((Port::default(), Name::new("Port_TireHeat"), ChildOf(entity)))
+                    .id(),
+            )
+        } else {
+            None
+        };
+        let p_contact = if p_tire_heat.is_some() {
+            Some(
+                commands
+                    .spawn((
+                        Port::default(),
+                        Name::new("Port_WheelContact"),
+                        ChildOf(entity),
+                    ))
+                    .id(),
+            )
+        } else {
+            None
+        };
+        let heat_ports = lunco_mobility::WheelHeatPorts {
+            bearing: p_bearing_heat,
+            brake: p_brake_heat,
+            tire: p_tire_heat,
+            contact: p_contact,
+        };
+        commands.entity(entity).try_insert(heat_ports);
 
         // Wheel identity belongs to the standard attachment schema. The index
         // is looked up through the stage-local wheel→attachment map, so the
@@ -2894,21 +2961,42 @@ fn process_usd_sim_prim_read(
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         };
+        let mut wheel_surface = HashMap::from([
+            (
+                "drive".to_owned(),
+                PortSurfacePort::new(p_drive, PortDirection::In),
+            ),
+            (
+                "heading".to_owned(),
+                PortSurfacePort::new(p_heading, PortDirection::In),
+            ),
+            (
+                "shaft_speed".to_owned(),
+                PortSurfacePort::new(p_speed, PortDirection::Out),
+            ),
+        ]);
+        wheel_surface.insert(
+            "bearing_heat".to_owned(),
+            PortSurfacePort::new(p_bearing_heat, PortDirection::Out),
+        );
+        wheel_surface.insert(
+            "brake_heat".to_owned(),
+            PortSurfacePort::new(p_brake_heat, PortDirection::Out),
+        );
+        if let Some(endpoint) = p_tire_heat {
+            wheel_surface.insert(
+                "tire_heat".to_owned(),
+                PortSurfacePort::new(endpoint, PortDirection::Out),
+            );
+        }
+        if let Some(endpoint) = p_contact {
+            wheel_surface.insert(
+                "contact".to_owned(),
+                PortSurfacePort::new(endpoint, PortDirection::Out),
+            );
+        }
         commands.entity(entity).try_insert((
-            PortSurface::new(HashMap::from([
-                (
-                    "drive".to_owned(),
-                    PortSurfacePort::new(p_drive, PortDirection::In),
-                ),
-                (
-                    "heading".to_owned(),
-                    PortSurfacePort::new(p_heading, PortDirection::In),
-                ),
-                (
-                    "shaft_speed".to_owned(),
-                    PortSurfacePort::new(p_speed, PortDirection::Out),
-                ),
-            ])),
+            PortSurface::new(wheel_surface),
             lunco_port_core::PortSurfaceReady,
         ));
 
@@ -2988,23 +3076,6 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             };
-            let native_material =
-                match lunco_usd_avian::material::read_physics_material(reader, &sdf_path) {
-                    Ok(material) => material,
-                    Err(error) => {
-                        error!(
-                            "USD physical wheel {} has invalid bound material: {error}",
-                            prim_path.path
-                        );
-                        commands.entity(entity).try_insert(UsdSimProcessed);
-                        lunco_core::trigger_runtime_error(
-                            commands,
-                            "usd-wheel-material-invalid",
-                            format!("{}: {error}", prim_path.path),
-                        );
-                        return;
-                    }
-                };
             setup_physical_wheel(
                 commands,
                 entity,
@@ -3033,6 +3104,7 @@ fn process_usd_sim_prim_read(
                 vehicle_mount,
                 p_drive,
                 p_speed,
+                heat_ports,
                 authored_collider,
                 native_material,
                 control_entity,
@@ -3535,6 +3607,7 @@ fn setup_physical_wheel(
     vehicle_mount: Transform,
     p_drive: Entity,
     p_speed: Entity,
+    heat_ports: lunco_mobility::WheelHeatPorts,
     authored_collider: Collider,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
     control_entity: Entity,
@@ -3623,25 +3696,10 @@ fn setup_physical_wheel(
         collider,
         lunco_usd_avian_contracts::UsdColliderSource(prim_path.path.clone()),
         Friction::new(params.friction_mu),
-        // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
-        // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast
-        // wheel does not share: its spin integrator subtracts
-        // `physxVehicleWheel:dampingRate · ω` (N·m·s, 0.45) from the axle torque.
-        // avian's `AngularDamping` is not a torque coefficient but a per-second
-        // decay applied to ω, i.e. τ ≈ d·I·ω, so the authored N·m·s converts as
-        // `d = dampingRate / I_axle`; the live authored inertia is the complete
-        // wheel assembly. One authored number, two realizations, each in its
-        // own units.
-        //
-        // `LinearDamping(0.1)` is GONE with no replacement. A wheel hinged to the
-        // chassis travels at the chassis's speed, so a linear damper on it was a
-        // second, unauthored aerodynamic-style drag on the vehicle (≈22 N at
-        // cruise) that the raycast rover — whose wheels are not bodies — could not
-        // have. Rolling drag is the bearing term above; there is no air on the Moon.
-        // `WheelParams::read` rejects every non-finite/non-positive wheel input,
-        // so the authored inertia is already finite and positive here. Do not
-        // hide an invalid projection behind a numerical floor.
-        AngularDamping(params.bearing_damping / params.axle_inertia()),
+        // Bearing drag belongs to the relative axle/housing coordinate in
+        // JointTorqueActuator. World-axis damping would also resist steering
+        // and chassis rotation and could not supply the same thermal work.
+        AngularDamping(0.0),
         // Continuous collision detection: a thin, fast-falling wheel cylinder can
         // pass THROUGH the one-sided terrain heightfield in a single step (and once
         // below a one-sided surface, no contact ever pushes it back — it falls
@@ -3719,6 +3777,9 @@ fn setup_physical_wheel(
             speed_port_entity: p_speed,
             control_entity,
             brake_torque: params.brake_torque_max,
+            bearing_damping: params.bearing_damping,
+            bearing_heat_port: Some(heat_ports.bearing),
+            brake_heat_port: Some(heat_ports.brake),
             rotational_inertia: params.axle_inertia(),
             // The wheel hinge is authored about +X. Negative +X rotation is the
             // demand-positive rolling sense for a chassis-forward -Z wheel;

@@ -142,3 +142,10 @@ thermal collection. `LunCo.Mechanics.BearingFriction` exposes viscous heat but
 has no independently placeable USD wrapper; native wheels already own their
 bearing damping. See `scripts/api/test_mechanical_losses.py` for the composed
 power/heat contract.
+
+The shared wheel surface additionally publishes `bearing_heat`, `brake_heat`,
+`tire_heat` in W and `contact` as 0/1 for the raycast/shared-tire realization.
+Reuse `HeatLoad`, `ThermalMass`, `ThermalConductor` and `Radiator` to consume
+those physical losses. `ThermalConductor.conductance_scale` defaults to 1;
+connecting support opens the wheel/ground conductance while airborne. Direct
+native-material tangent contacts do not expose shared-tire thermal measurements.
