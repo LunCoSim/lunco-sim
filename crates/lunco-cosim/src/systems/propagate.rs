@@ -176,7 +176,7 @@ struct PropagationScratch {
     broken: Vec<BrokenConnection>,
     pending: Vec<BrokenConnection>,
     landed_targets: Vec<usize>,
-    writes: Vec<lunco_port_core::ports::PreparedPortWrite>,
+    writes: lunco_port_core::ports::InputWriteBuffer,
     write_targets: Vec<usize>,
     /// Acknowledgements of successful ledger publication in this compiled fabric.
     /// These never admit a write or decide whether a failure is already landed.
@@ -730,94 +730,95 @@ fn propagate_connections_with_cache(
     }
     drop(holds_span);
     let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
-    scratch.writes.clear();
     scratch.write_targets.clear();
-    for (i, t) in compiled.targets.iter().enumerate() {
-        if !peer_simulates(world, t.entity) {
-            continue;
-        }
-        if scratch.unavailable[i] && scratch.held_values[i].is_none() {
-            scratch.pending.push(BrokenConnection {
-                entity: t.entity,
-                global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
-                port: Arc::clone(&t.name),
-                has_port_surface: t.has_port_surface,
-                dropped_value: None,
-                failure: Some("connected source sample unavailable".into()),
-            });
-            continue;
-        }
-        // A HELD port is not driven by its wire. Without this, a `SetPorts` write on a
-        // wired input is overwritten by the next propagation tick — the write
-        // "succeeds" and nothing happens, which is indistinguishable from a
-        // broken port to whoever sent it.
-        let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
-        let prepared = match &t.resolved {
-            Some(resolved) => {
-                registry.prepare_resolved_input_write(world, t.entity, resolved, value)
-            }
-            None => registry.prepare_input_write(world, t.entity, Arc::clone(&t.name), value),
-        };
-        let failure = match prepared {
-            Ok(write) => {
-                scratch.writes.push(write);
-                scratch.write_targets.push(i);
+    let committed = registry.input_transaction(world, &mut scratch.writes, |transaction| {
+        for (i, t) in compiled.targets.iter().enumerate() {
+            if !peer_simulates(transaction.world(), t.entity) {
                 continue;
             }
-            Err(error) => error,
-        };
-        let unresolved = BrokenConnection {
-            entity: t.entity,
-            global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
-            port: Arc::clone(&t.name),
-            has_port_surface: t.has_port_surface,
-            dropped_value: Some(value),
-            failure: Some(failure.to_string()),
-        };
-        let model_status = world
-            .get::<SimComponent>(t.entity)
-            .map(|component| &component.status);
-        let compiling = matches!(model_status, Some(SimStatus::Compiling));
-        // Only an explicitly published pending marker or a compiling Modelica
-        // component is assembly progress. Structural Motor/Gearbox edges are
-        // filtered during USD wire derivation, so a bare endpoint with no
-        // surface is a terminal authoring fault rather than a forever-pending
-        // wire.
-        let surface_pending = world
-            .get::<lunco_port_core::PortSurfacePending>(t.entity)
-            .is_some();
-        if compiling || surface_pending {
-            scratch.pending.push(unresolved);
-            continue;
-        }
+            if scratch.unavailable[i] && scratch.held_values[i].is_none() {
+                scratch.pending.push(BrokenConnection {
+                    entity: t.entity,
+                    global_id: transaction
+                        .world()
+                        .get::<lunco_core::GlobalEntityId>(t.entity)
+                        .copied(),
+                    port: Arc::clone(&t.name),
+                    has_port_surface: t.has_port_surface,
+                    dropped_value: None,
+                    failure: Some("connected source sample unavailable".into()),
+                });
+                continue;
+            }
+            // A HELD port is not driven by its wire. Without this, a `SetPorts` write on a
+            // wired input is overwritten by the next propagation tick — the write
+            // "succeeds" and nothing happens, which is indistinguishable from a
+            // broken port to whoever sent it.
+            let value = scratch.held_values[i].unwrap_or(scratch.accumulator[i]);
+            let prepared = match &t.resolved {
+                Some(resolved) => transaction.stage_resolved(t.entity, resolved, value),
+                None => transaction.stage_input(t.entity, Arc::clone(&t.name), value),
+            };
+            let failure = match prepared {
+                Ok(()) => {
+                    scratch.write_targets.push(i);
+                    continue;
+                }
+                Err(error) => error,
+            };
+            let unresolved = BrokenConnection {
+                entity: t.entity,
+                global_id: transaction
+                    .world()
+                    .get::<lunco_core::GlobalEntityId>(t.entity)
+                    .copied(),
+                port: Arc::clone(&t.name),
+                has_port_surface: t.has_port_surface,
+                dropped_value: Some(value),
+                failure: Some(failure.to_string()),
+            };
+            let model_status = transaction
+                .world()
+                .get::<SimComponent>(t.entity)
+                .map(|component| &component.status);
+            let compiling = matches!(model_status, Some(SimStatus::Compiling));
+            // Only an explicitly published pending marker or a compiling Modelica
+            // component is assembly progress. Structural Motor/Gearbox edges are
+            // filtered during USD wire derivation, so a bare endpoint with no
+            // surface is a terminal authoring fault rather than a forever-pending
+            // wire.
+            let surface_pending = transaction
+                .world()
+                .get::<lunco_port_core::PortSurfacePending>(t.entity)
+                .is_some();
+            if compiling || surface_pending {
+                scratch.pending.push(unresolved);
+                continue;
+            }
 
-        scratch.landing_published[i] = false;
-        scratch.broken.push(crate::failure::reject_input(
-            world,
-            "cosim-input-write-rejected",
-            t.entity,
-            Arc::clone(&t.name),
-            Some(value),
-            failure.to_string(),
-        ));
-        break;
-    }
-    if scratch.broken.is_empty() {
-        match registry.apply_prepared_input_writes(world, &scratch.writes) {
-            Ok(()) => {
-                for index in scratch.write_targets.iter().copied() {
-                    if !scratch.landing_published[index] {
-                        scratch.landed_targets.push(index);
-                    }
+            return Err((i, value, failure.to_string()));
+        }
+        Ok(())
+    });
+    match committed {
+        Ok(()) => {
+            for index in scratch.write_targets.iter().copied() {
+                if !scratch.landing_published[index] {
+                    scratch.landed_targets.push(index);
                 }
             }
-            Err(error) => crate::failure::stop(
+        }
+        Err((index, value, failure)) => {
+            let target = &compiled.targets[index];
+            scratch.landing_published[index] = false;
+            scratch.broken.push(crate::failure::reject_input(
                 world,
                 "cosim-input-write-rejected",
-                None,
-                "input batch",
-                error.to_string(),
-            ),
+                target.entity,
+                Arc::clone(&target.name),
+                Some(value),
+                failure,
+            ));
         }
     }
     drop(write_span);

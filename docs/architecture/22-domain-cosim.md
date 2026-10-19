@@ -69,10 +69,16 @@ wiring. A target with an unbound or unavailable source retains its previous
 input until all contributions are available; explicit holds retain priority. Diagnostics
 use an absent `dropped_value` when no numerical write was attempted.
 
-Initial handoff and live exchange preflight their complete eligible input batch
-through `PortRegistry::prepare_input_write` /
-`prepare_resolved_input_write`, then use `apply_prepared_input_writes` for the
-all-or-none commit. No target or successful-publication acknowledgement changes
+Initial handoff and live exchange use `PortRegistry::input_transaction` to
+preflight their complete eligible input batch and commit under one exclusive
+`World` borrow. Its staging view permits immutable eligibility reads and
+named/resolved staging through the live owner validator. An error returned by
+the callback commits nothing; explicitly pending endpoints can be excluded.
+Accepted targets commit in staged order without a second preflight because the
+callback cannot mutate the world. `InputWriteBuffer` retains staging capacity,
+not write authority. Independently prepared command batches retain their
+`apply_prepared_input_writes` revalidation because their preparation does not
+hold that world borrow. No target or successful-publication acknowledgement changes
 when another target rejects the communication point. Cached locators keep the
 same live-owner and metadata validation as named writes.
 

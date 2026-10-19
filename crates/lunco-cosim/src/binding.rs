@@ -113,38 +113,30 @@ fn seed_bound_inputs(world: &mut World, registry: &PortRegistry, epoch: u64) {
     }
     // Resolve and validate the complete initial handoff before any target
     // changes. Port owners commit this same batch mechanism during live exchange.
-    let mut writes = Vec::new();
+    let mut buffer = lunco_port_core::ports::InputWriteBuffer::default();
     let mut sampled_edges = Vec::new();
-    for (target, name, edges, values) in samples {
-        for (_, value) in values {
-            match registry.prepare_input_write(world, target, name.as_str(), value) {
-                Ok(write) => writes.push(write),
-                Err(detail) => {
-                    let edge = edges[0];
-                    let spec = world
-                        .get::<SimConnection>(edge)
-                        .expect("admitted edge snapshot")
-                        .clone();
-                    reject_connection_contract(
-                        world,
-                        edge,
-                        &spec,
-                        format!("initial connection sample rejected: {detail}"),
-                        Some(value),
-                    );
-                    return;
-                }
+    let result = registry.input_transaction(world, &mut buffer, |transaction| {
+        for (target, name, edges, values) in samples {
+            for (_, value) in values {
+                transaction
+                    .stage_input(target, name.as_str(), value)
+                    .map_err(|error| (edges[0], value, error.to_string()))?;
             }
+            sampled_edges.extend(edges);
         }
-        sampled_edges.extend(edges);
-    }
-    if let Err(detail) = registry.apply_prepared_input_writes(world, &writes) {
-        crate::failure::stop(
+        Ok(())
+    });
+    if let Err((edge, value, detail)) = result {
+        let spec = world
+            .get::<SimConnection>(edge)
+            .expect("admitted edge snapshot")
+            .clone();
+        reject_connection_contract(
             world,
-            "cosim-connection-contract-invalid",
-            None,
-            "initial input batch",
-            detail.to_string(),
+            edge,
+            &spec,
+            format!("initial connection sample rejected: {detail}"),
+            Some(value),
         );
         return;
     }

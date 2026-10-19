@@ -101,6 +101,13 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Architecture checks
 
+For co-simulation input writes, preserve the port owner's live metadata and
+precedence checks. Initial handoff and live exchange use `input_transaction`:
+immutable staging and commit share one exclusive world borrow, so each eligible
+target is validated once. Returning an error rejects the staged batch. A
+retained command preparation has no such borrow guarantee and must still be
+revalidated at commit. Do not replace either proof with a revision-only cache.
+
 For synchronous USD edit stalls, inspect compound operation count and native
 composition lifetime. The document owner's `UsdEditSession` shares one current
 authoring stage across an ordered sequence; direct layer changes invalidate it.

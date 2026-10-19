@@ -357,6 +357,10 @@ re-admission; direct backend contract reads remain live.
 Live ownership selection retains the winning backend's optional slot within
 the same immutable World borrow, avoiding repeated resolution during handle
 creation and write admission while preserving live precedence and metadata.
+`PortRegistry::input_transaction` exposes immutable staging while retaining an
+exclusive world borrow through ordered commit. Initial co-simulation binding
+and live exchange validate each eligible owner once and reuse `InputWriteBuffer`
+capacity; independently retained command preparations revalidate at commit.
 
 **`lunco-spatial`**
 Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. The canonical `WorldGrid` carries deterministic content provenance so session records can identify the active coordinate frame. It depends on `lunco-core` for shared identity and runtime-diagnostic contracts; the dependency direction is one-way, so changing spatial code does not rebuild core.

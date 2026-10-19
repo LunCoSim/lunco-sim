@@ -63,9 +63,11 @@ observer in the visible production host. It requires the post-fault verdict,
 including the retained valid target value, rather than treating fault arrival
 alone as the test result.
 
-Initial handoff and live exchange use the registry's input preflight and atomic
-batch commit. A rejected live value preserves every target in that batch and
-latches `cosim-input-write-rejected`, including after previous success. The
+Initial handoff and live exchange use the registry's scoped `input_transaction`.
+Its immutable staging view keeps each live owner validation current through
+atomic commit under the same exclusive world borrow. Reusable staging storage
+retains capacity between exchanges. A rejected live value preserves every target
+in that batch and latches `cosim-input-write-rejected`, including after previous success. The
 shared failure owner pauses native physics immediately, before its scheduled
 integration, and retains the real rejected value and owner diagnostic.
 `python3 scripts/api/test_connection_transaction.py --port <free-port>`
