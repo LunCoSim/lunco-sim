@@ -556,128 +556,43 @@ fly — and the Inspector will let you drag it.
 
 ## Step 5 — Give it a plume
 
-A rocket with no plume looks dead. Let's add one that grows and shrinks with the
-throttle and flickers like real fire.
+Use the reusable `lunco://components/propulsion/rocket_engine_visual.usda`
+component at each engine. Position its `Exhaust` frame at the nozzle exit;
+it supplies a render-only expanding volume, materials and local light.
+Author the reference through the document tools used in Step 1.
 
-The plume is a **cone that never moves**, plus a shader that draws inside it. The
-cone is a bounding volume, authored once at the plume's full-throttle size; the
-shader is told the engine's `throttle` and draws whatever plume that throttle
-means — shorter, narrower and dimmer as it drops, nothing at all at zero.
+Instantiate `LunCo.Propulsion.PlumePhotometry` in the propulsion network. Feed
+it **delivered** thrust, propellant flow and effective Isp velocity, the nominal
+thrust capability, and the nozzle design's exit radius/area, Mach, gamma and
+wall angle. These are physical model outputs, rather than pilot commands. For
+an independently failing engine, use its own plume model with count 1. An
+identical aggregate engine model instead supplies its configured nozzle count.
 
-Nothing here is animated. `throttle` is *wired* to the shader with a USD
-connection, so the plume is a consequence of the engine's real output: it honestly
-shows nothing when the engine is off or out of fuel, even if the active thrust
-binding is held.
+Publish the model's scalar outputs and author its connections with
+`engine_exhaust::connection_ops(edit_target, engine_path, photometry_path, #{})`.
+The helper declares the local inherited overrides and connects gas stations,
+metric bounds, transported phase, fuel tint and light. Use
+`engine_exhaust::physical_outputs()` for the scalar interface; the outputs named
+by `render_outputs()` are the explicit USD/GPU float boundary, while engineering
+diagnostics retain double precision. Save and inspect composed source/sink paths.
+The [component contract](../../assets/components/propulsion/README.md) describes
+RCS mapping and feed wiring.
 
-Add two cones as children of `MyLander` — a soft outer plume and a hot inner core:
+Modelica computes five gas stations with mass and stagnation-energy closure.
+The shader samples emitted light within a Cylinder, including radial structure
+and simulation-clock advection. Neither Rhai nor Rust computes a second plume.
+Zero delivered thrust produces no hot emission, even with a held pilot command.
+Do not scale the physical force-actuator frame when changing its visual bound.
 
-```usda
-    def Cone "Flame"
-    {
-        uniform token axis = "Y"
-        double radius = 1.0
-        double height = 1.0
-        # Centre the cone so its base sits at the nozzle exit (y = -2.7) and its
-        # apex reaches 3.6 m below that: -2.7 - 3.6/2.
-        double3 xformOp:translate = (0, -4.5, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        # THE SIZE IS THE SCALE: 1.05 m base radius, 3.6 m long, at full throttle.
-        double3 xformOp:scale = (1.05, 3.6, 1.05)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        rel material:binding = </MyLander/Looks/Flame_Mat>
-        float[] primvars:displayOpacity = [0.4]
-        bool physics:collisionEnabled = false
-        bool primvars:doNotCastShadows = true
+The finite observation horizon is not the end of a vacuum plume. Gas spreading,
+radiative fraction, luminous efficacy and the fuel RGB palette are explicitly
+limited approximations, not flight-calibrated chemistry. Read the
+[equations and validity limits](../architecture/propulsion-plume.md).
 
-        float inputs:throttle.connect = </MyLander.outputs:throttle>
-    }
-    def Cone "FlameCore"
-    {
-        uniform token axis = "Y"
-        double radius = 1.0
-        double height = 1.0
-        double3 xformOp:translate = (0, -3.95, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        double3 xformOp:scale = (0.5, 2.5, 0.5)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        rel material:binding = </MyLander/Looks/FlameCore_Mat>
-        float[] primvars:displayOpacity = [0.85]
-        bool physics:collisionEnabled = false
-        bool primvars:doNotCastShadows = true
-
-        float inputs:throttle.connect = </MyLander.outputs:throttle>
-    }
-```
-
-and the two materials they bind, in your `Looks` scope:
-
-```usda
-        def Material "Flame_Mat"
-        {
-            token outputs:surface.connect = </MyLander/Looks/Flame_Mat/Surface.outputs:surface>
-
-            def Shader "Surface"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (3.0, 1.0, 0.12)
-                color3f inputs:edge_color = (1.2, 0.35, 0.05)
-                float inputs:throttle = 0
-                float inputs:flicker = 1.0
-                token outputs:surface
-            }
-        }
-
-        def Material "FlameCore_Mat"
-        {
-            token outputs:surface.connect = </MyLander/Looks/FlameCore_Mat/Surface.outputs:surface>
-
-            def Shader "Surface"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
-                color3f inputs:core_color = (6.0, 3.5, 0.9)
-                color3f inputs:edge_color = (3.0, 1.2, 0.2)
-                float inputs:throttle = 0
-                float inputs:flicker = 0.5
-                token outputs:surface
-            }
-        }
-```
-
-A few choices worth a sentence each. `displayOpacity` makes the cones see-through —
-a plume is defined by what shows through it. The colours are *bigger than 1* on
-purpose: that makes them glow like a light source instead of a dull painted
-surface, so the sun can't wash your orange plume into beige.
-
-Both cones bind the **same** shader (`lunco://shaders/plume.wgsl`) and differ only
-in their own numbers. Their SIZE is the prim's `xformOp:scale`, so the shader never
-needs to be told it — a plume is as big as the volume it is drawn in. Their COLOUR
-and flicker depth are `inputs:` on their own `Shader` prim, which is where a
-shader's parameters belong.
-
-The one connected line is the whole mechanism:
-
-```usda
-    float inputs:throttle.connect = </MyLander.outputs:throttle>
-```
-
-`inputs:` is the engine's spelling for every port. `rewire_usd_connections` turns
-that into a wire, propagation writes the value through the port registry, and it
-lands on the shader's `throttle` uniform. A shader parameter is only drivable if
-the shader **declares** it — that is why `float inputs:throttle = 0` also appears
-on the `Shader` prim. Misspell it and you get a dangling-wire warning instead of a
-uniform that silently stays at zero.
-
-Reload and watch the descent: a flickering plume that swells under hard braking and
-dies to nothing the instant the engine cuts.
-
-> **Why not a script?** Because a plume is a *consequence*, not a performance. A
-> script that resized the cone every frame would re-derive in rhai what the engine
-> model already computed, sample a clock for the flicker, and drift the moment the
-> engine is re-tuned. Wiring the number instead means one fact, one writer, and a
-> stage you can read to see where the value comes from. The same rule gives the
-> struts their load glow in Step 4.
+Run the production `rocket_engine_plume_defaults`, `lander_plume_activity` and
+`rcs_feed_starvation` gates. Inspect idle, powered and shutdown views, including
+an oblique camera and a small attitude nozzle. Model samples prove physical
+wiring; windowed frames and clean GPU logs establish the rendered result.
 
 ---
 
@@ -1074,8 +989,8 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - Your self-flying vehicle went inert the moment a script touched it? Something
   possessed it. `piloted` is 1, so the authority gate handed control to a pilot who
   isn't pressing anything. Use `follow()` to watch, `possess()` only to fly.
-- A plume looks beige instead of fiery? Its `core_color` is probably ≤ 1 — push it
-  above 1 so it glows instead of being lit by the sun.
+- A plume looks wrong? Inspect the physical station outputs, radiative estimate,
+  shader interfaces and camera exposure before changing fuel tint.
 - A plume never appears at all? Check the `Shader` prim declares `float
   inputs:throttle` — a parameter the shader does not declare is refused, and the
   wire is reported as dangling.

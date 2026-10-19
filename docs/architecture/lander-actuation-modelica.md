@@ -227,8 +227,9 @@ boundary rather than hidden by a Rust-only solver fixture.
 Engine components reference `assets/components/propulsion/rocket_engine_visual.usda`.
 The `engine_exhaust` Rhai library authors connections once; Modelica
 `PlumePhotometry` exposes the shared `computePlumePhotometry` calculation for
-nozzle-based envelope dimensions, fuel/richness colour,
-activity and light. Combustion activity includes mixture efficiency. Without a
+conservative gas stations, metric observation bounds, transported phase,
+fuel/richness colour and an energy-bounded radiative estimate. See the
+[plume equations and limits](propulsion-plume.md). Combustion activity includes mixture efficiency. Without a
 reactant, thrust and heat cease; zero delivered jet momentum gives zero visible
 plume and light. See the [component contract](../../assets/components/propulsion/README.md).
 
