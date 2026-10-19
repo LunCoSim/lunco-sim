@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**269 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**270 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -84,7 +84,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
-- [`lunco-camera-core`](#lunco-camera-core) (6 commands)
+- [`lunco-camera-core`](#lunco-camera-core) (7 commands)
 - [`lunco-capture`](#lunco-capture) (4 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
@@ -1886,6 +1886,22 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `camera` | `Entity` |  The camera rig returning from orbit view. |
+
+#### `SetCameraFollow`
+
+ Atomically tune a live subject-follow rig without rebinding its subject.
+
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `camera` | `Option < Entity >` |  Local follow camera; omitted selects the current local embodiment. |
+| `distance_m` | `Option < f64 >` |  Positive requested boom distance in metres; scene obstruction may shorten it. |
+| `height_m` | `Option < f64 >` |  Focus height along surface up, or world Y in a flat grid. |
+| `yaw_rad` | `Option < f64 >` |  Orbit yaw offset in radians. |
+| `pitch_rad` | `Option < f64 >` |  View tilt in radians, strictly between -pi/2 and pi/2. |
+| `mode` | `Option < String >` |  stabilized (external frame), heading (surface yaw), or body (all axes). |
+| `damping` | `Option < f64 >` |  Native exponential easing damping, in [0,1). |
 
 #### `SetCameraInput`
 
@@ -4091,7 +4107,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 269 commands from the runtime schema; scanned 1022 .rs files for docs (0 parse failure(s) skipped).
+<!-- 270 commands from the runtime schema; scanned 1023 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

@@ -165,8 +165,8 @@ The production binary builds successfully, and
 `cargo check -p lunco-modelica-ui --bin lunica -j 4` passes for the standalone
 caller. The saved-center serialization seam
 and the negative scene-generation lifecycle seam have focused Rust coverage.
-The command reference is regenerated from the live **269-command** schema:
-`OpenTab` and `CloseTab` are added and all 267 previously documented commands
+The command reference is regenerated from the live **270-command** schema:
+`OpenTab` and `CloseTab` are added and all 268 commands documented on main
 remain. Skill catalogue/link validation and Python harness compilation pass.
 Standalone Lunica runtime, browser and packaged application acceptance, and
 keyboard/accessibility conformance are outside this validation.

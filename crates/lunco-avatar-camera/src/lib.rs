@@ -312,6 +312,7 @@ register_commands!(
     on_surface_teleport_command,
     on_leave_surface_command,
     subject::on_follow_command,
+    spring_arm::on_set_camera_follow,
     transactions::on_return_from_orbit,
     transactions::on_focus_command,
     transactions::on_animate_orbit_camera_direction,

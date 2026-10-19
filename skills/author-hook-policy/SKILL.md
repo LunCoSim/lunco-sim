@@ -226,6 +226,17 @@ ignored artifact and compares all document layers. The production
 [`test_hook_policies.rhai`](../../assets/scripting/tests/test_hook_policies.rhai)
 covers declaration and off-cycle rejection.
 
+### Live camera presentation
+
+`camera.follow(ctx)` is a per-presentation-frame, optional camera-core seam.
+Use its typed rig/subject/obstruction facts for vessel-specific framing and easing.
+The native adapter validates decisions and commits collision-constrained poses;
+it holds the camera and reports `camera-follow` on an invalid callback result.
+Use a Twin-scoped operator tool (`RunRhaiToolHook`) to replace a Twin policy;
+an application-scoped REPL cannot replace its ownership layer. Policy updates
+must not reload the scene or advance held physics. Full contract and acceptance
+boundaries: [camera follow policy](../../docs/architecture/camera-follow-policy.md).
+
 ## Task perspectives
 
 Use `workbench.perspectives.twin(facts)` for custom layouts shipped with a Twin;
