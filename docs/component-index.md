@@ -134,3 +134,11 @@ The following library models currently have no standalone USD component wrapper:
 assemblies. They must not be advertised as independently placeable parts until
 their USD mounting, network membership, physics projection and production
 verdicts exist.
+
+`mobility/gearbox.usda` exposes `speed_a`, signed `power_a_w`/`power_b_w`,
+and dissipated `heat`. Its torque rating is checked, not a saturating clutch.
+Connect `heat` to the existing `LunCo.Thermal.HeatLoad` through the assembly's
+thermal collection. `LunCo.Mechanics.BearingFriction` exposes viscous heat but
+has no independently placeable USD wrapper; native wheels already own their
+bearing damping. See `scripts/api/test_mechanical_losses.py` for the composed
+power/heat contract.

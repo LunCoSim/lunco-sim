@@ -184,6 +184,17 @@ sensor, non-loading thermal sensor and prescribed-temperature phase-change
 boundaries. Supply `CryoTank.saturation_temperature_k` from the operating point;
 connect both `ElectricalSensor.p` and `.n` across the measured branch.
 
+Use `scripts/api/test_mechanical_losses.py --output <directory>` (also
+`--headless`) for 41 passive transmission, bearing and stored-heat checks.
+`GearRatio.eta` is mesh efficiency in either power direction, not a global
+vehicle multiplier. Its output torque is a checked rating; use an explicit
+clutch/slip model for a physical torque limiter. `GearRatio.heat` and
+`BearingFriction.heat` connect through the existing `HeatLoad` to an authored
+thermal bank. Native wheel damping/braking/tire losses remain native and must
+not acquire a second Modelica loss element. FLIP's 19-check route gate also
+observes gear heat at the running thermal participant. Distribution of native
+friction heat into wheel/brake/terrain temperatures is outside that bank.
+
 ### No-API alternative
 The standalone runner is owned by `lunco-modelica-execution`, not
 `lunco-modelica-core`. For a one-shot current-source compile and fixed-step

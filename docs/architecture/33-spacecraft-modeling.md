@@ -221,7 +221,7 @@ reader** — `lunco_usd_sim_authoring::wheel_params` — that serves **both** wh
   scenes author it at 12000, which fed straight into the motor and made the rover
   apply ~30× its lunar weight and wheelie on every input (see
   `project_physical_rover_suspension`). The composed motor stall torque, gearbox
-  ratio/efficiency, and gearbox output limit are the canonical drive authority;
+  ratio/efficiency, and gearbox torque rating are the canonical drive authority;
   tune those authored parts instead of a joint saturation limit.
 
 ### G9 — Generic joint actuation + USD drive schema  **[DONE]**
@@ -450,3 +450,22 @@ Native joint damping conserves angular momentum through effective inverse
 inertia and keeps kinematic velocities immutable. It consumes the runtime's
 stable joint order. USD endpoints that alias the same body fail projection and
 lint; generic synthesized-joint admission enforces the same invariant.
+
+### Mechanical dissipation and thermal boundaries
+
+`GearRatio` owns bidirectional mesh efficiency. Terminal powers are positive
+into the component; `power_a_w + power_b_w = heat`. Reverse power flow uses
+reciprocal torque scaling so regeneration cannot create power. The rigid model
+asserts its output torque rating rather than saturating torque at incompatible
+shaft speeds. It omits backlash, slip and static friction. `BearingFriction`
+absorbs `d*w^2` and exports `heat`; its damping must be nonnegative.
+
+Use the existing `HeatLoad` bridge to feed these measured losses into an authored
+thermal collection. FLIP's enabled left/right thermal banks receive motor copper
+and gearbox mesh losses separately. Native wheel drag, braking, tire slip,
+suspension damping and contact response retain their native owners; adding
+another gearbox efficiency or bearing element there would count losses twice.
+Their heat distribution is outside these motor/gear thermal banks; neither
+numerical damping nor contact-solver residuals are treated as calibrated heat.
+The production mechanical contract is `scripts/api/test_mechanical_losses.py`
+(41 authored checks), plus FLIP's route/thermal gate (19 checks).
