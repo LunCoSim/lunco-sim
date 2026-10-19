@@ -578,7 +578,7 @@ impl InstancePanel for UsdPreviewViewPanel {
             let view = UsdPreviewViewId(instance);
             ctx.trigger(CloseUsdPreviewView { view });
             ctx.trigger(CloseTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance,
             });
         }

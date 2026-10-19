@@ -15,6 +15,11 @@ in [`lunco-experiments-ui`](../lunco-experiments-ui/).
 This package adds the egui/workbench presentation. The standalone application
 composes its execution engine separately from that presentation.
 
+The `ui` feature includes Rhai scripting for task composition. The shared
+workbench policy assembles Lunica and Analyze from registered capabilities;
+Twins may [ship additional perspectives](../../docs/tutorials/05-twin-perspectives.md).
+Headless compiler/execution consumers can omit both `ui` and `scripting`.
+
 ## What This Crate Does
 
 - **Workbench UI** — code editor, component diagrams, parameter tuning, time-series plots

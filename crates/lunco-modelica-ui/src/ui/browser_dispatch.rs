@@ -140,7 +140,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     world
                         .commands()
                         .trigger(lunco_workbench_core::commands::CloseTab {
-                            kind: crate::ui::MODEL_VIEW_KIND,
+                            kind: crate::ui::MODEL_VIEW_KIND.as_str().to_owned(),
                             instance: old_id,
                         });
                     world
@@ -155,7 +155,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 world
                     .commands()
                     .trigger(lunco_workbench_core::commands::OpenTab {
-                        kind: crate::ui::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND.as_str().to_owned(),
                         instance: tab_id,
                     });
                 // Make this doc the active workspace doc so the
@@ -185,7 +185,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     world
                         .commands()
                         .trigger(lunco_workbench_core::commands::CloseTab {
-                            kind: MODEL_VIEW_KIND,
+                            kind: MODEL_VIEW_KIND.as_str().to_owned(),
                             instance: tab,
                         });
                     if let Some(mut state) = world

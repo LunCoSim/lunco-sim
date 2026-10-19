@@ -1,28 +1,6 @@
-//! Modelica plot panel — multi-instance host for time-series plots.
-//!
-//! Each tab is a `ModelicaPlotPanel` instance keyed by `VizId`. The
-//! canonical "Graphs" tab is the first instance, seeded by the Build
-//! perspective with `VizId = DEFAULT_MODELICA_GRAPH` and the title "Graphs".
-//! Telemetry checkboxes bind their signals to that default config; users can
-//! open additional plots via `NewPlotPanel` (the `➕` button) and each gets its
-//! own `VisualizationConfig` with independent live-signal bindings.
-//!
-//! 1. Reserves the `modelica_graphs` slot in the bottom dock.
-//! 2. Renders a small toolbar (Fit + count).
-//! 3. Delegates the plot to [`LinePlot::render_panel_2d`] reading the
-//!    [`DEFAULT_MODELICA_GRAPH`]
-//!    config.
-//!
-//! No shadow state, no per-frame syncing — Telemetry writes directly
-//! to the same config and the worker pushes samples into the same
-//! `SignalRegistry`. Adding multiple plots is a future feature: open
-//! a new `VizPanel` instance via `OpenTab { kind: VIZ_PANEL_KIND, .. }`.
-//!
-//! Experiments overlay state (`ExperimentVisibility`) is currently
-//! shared across all plot instances — picked variables show up in
-//! every plot's experiments section. Per-panel experiment state is
-//! a follow-up; the live-signal split (the more impactful one) is in
-//! place.
+//! Multi-instance time-series plots over shared signal and experiment owners.
+//! The canonical Graphs instance is seeded by Analyze. Telemetry checkboxes
+//! bind to that config; additional plots retain independent signal selections.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -65,9 +43,10 @@ impl InstancePanel for ModelicaPlotPanel {
 
     fn menu_entry(&self) -> Option<lunco_workbench_core::InstancePanelMenuEntry> {
         Some(lunco_workbench_core::InstancePanelMenuEntry {
-            group: lunco_workbench_core::PanelMenuGroup::Lunica,
+            group: lunco_workbench_core::PanelMenuGroup::Analysis,
             title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
+            perspective: Some(lunco_workbench_core::PerspectiveId::new("analysis")),
         })
     }
 
@@ -160,7 +139,7 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
             // dead "not found" panel to the user.
             let stale_instance = viz_id.0;
             ctx.trigger(lunco_workbench_core::commands::CloseTab {
-                kind: MODELICA_PLOT_KIND,
+                kind: MODELICA_PLOT_KIND.as_str().to_owned(),
                 instance: stale_instance,
             });
             return;

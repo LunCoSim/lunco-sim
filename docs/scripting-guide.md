@@ -189,11 +189,11 @@ target/debug/luncosim --api 4101
 | `fn task(me, ctx)` | builds one native task tree; the kernel advances it each fixed step |
 | `fn mission(me, ctx)` | declares objective state and completion conditions |
 | `fn simulation_dependencies(me, ctx)` | read-only admission plan before per-instance initialization |
-| `fn on_visualization(me, ctx)` | one-shot presentation preparation after scene/document/terrain inputs settle |
+| `fn on_visualization(me, ctx)` | one-shot read-only presentation preparation; scene prerequisites apply to scene-dependent programs |
 | top-level Rhai statements | one-time initialization after declared inputs are ready |
-| `fn on_start(me, ctx)` | one-time ready callback after scene and declared-input readiness |
+| `fn on_start(me, ctx)` | one-time ready callback after the owner's declared-input and applicable scene readiness |
 | `fn on_event(me, evt, ctx)` | event reaction in the owner's next eligible pass, retaining the producer stamp |
-| `fn on_tick(me, ctx)` | optional fixed-simulation-step callback; use `task` for production behavior |
+| `fn on_tick(me, ctx)` | test-only callback on the authored simulation or presentation cadence |
 | `fn on_stop(me, ctx)` | optional teardown on hot-reload / detach / despawn |
 
 `me` is the host entity's id. Task action and predicate leaves accept anonymous
@@ -214,11 +214,15 @@ frames with presentation-clock waits, including during a simulation pause or
 manual hold. They submit typed domain commands and cannot perform direct
 reflection/structural world writes. Timing metadata does not install schedules. Neither directive
 chooses the script's `Core`, `Application`, or `Twin` owner; Rust assigns that
-owner and the schedules that invoke it.
+owner and the schedules that invoke it. A standalone Twin presentation program
+can start and handle navigation without a scene. Its exact Twin lease and its
+own declared inputs remain mandatory; scene-owned programs retain the scene
+readiness gate.
 `on_visualization` runs once in `PreUpdate`, after lifecycle, document, and
 terrain admission scans and time-spine projection, but before the first fixed
-tick. It runs in the Twin Visualization cycle after scene, reference, document,
-and terrain preparation holds clear; Modelica holds do not block it. Its context
+tick. Scene-dependent programs wait for scene, reference, document,
+and terrain preparation holds; Modelica holds do not block this visual path.
+Independent presentation programs do not require scene admission. Its context
 uses presentation time and has no simulation tick, so it can prepare disposable
 visual state while Modelica participants are loading. Rhai blocks world writes
 and events in this phase; only `ApplyUsdTransientOps` can update the disposable
@@ -237,20 +241,22 @@ module body then initializes per-instance scope with its stable scenario
 identity, so declared `query_reads` work during initialization as well as in
 later hooks. It is followed by `on_start` before that activation pass advances
 its task or tick hook. `on_start` is the current
-ready boundary: it runs after scene admission and required owner inputs are
+ready boundary: it runs after applicable scene admission and required owner inputs are
 ready. Scenario events are delivered by the owner's eligible pass; their
 producer stamp remains visible, while `execution_context()` describes the
-consumer pass. Persistent scenario scripts currently use the Simulation timing
-lane. A single script instance must not run mutable `this` state on multiple
+consumer pass. A single script instance must not run mutable `this` state on multiple
 cycles; UI, Interaction, and Presentation work needs its own owner and state,
 with typed messages across cycles.
 
 Scenario ownership follows its explicit host marker. Twin-owned scenarios expose
-the stable Twin ID and scene generation in `execution_context()` and are stopped
+the stable Twin ID and optional scene generation in `execution_context()`
+(generation zero explicitly denotes no committed scene generation) and are stopped
 with their source document and asset handles on `TwinClosed`. Scene-owned
 programs are stopped when their USD scene is replaced; a USD script can carry
 both markers. Unmarked application scenarios keep generation zero across Twin
 reloads, and Core/Application policy engines remain in their own owner scope.
+A committed Clear can carry a lifecycle generation with no mounted payload;
+use `InspectWorkbench.scene_mounted` when that distinction matters to UI policy.
 Launching a Twin tutorial creates an isolated host, so it cannot replace an
 application-owned scenario on `WorldRoot`.
 The Tutorials menu binds each launch to the Twin active when the item is

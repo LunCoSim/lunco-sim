@@ -41,18 +41,14 @@
 //!   keyed by Twin path,
 //!   VSCode-`workspaceStorage` style. See [`lunco_workbench_state`].
 //!
-//! ## What's deferred
-//!
-//! - **Free-form dock-tree fidelity** — restore re-applies the
-//!   *perspective* preset, not arbitrary user split rearrangements
-//!   (egui_dock's tree isn't serialized; `TabId`/`PanelId` hold
-//!   `&'static str`).
-//! - **Command palette** — `Ctrl+P` unbound.
+//! Dock trees and per-perspective instance-center intent are persisted by
+//! `lunco-workbench-state`; user rearrangements survive policy reevaluation.
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use egui_dock::{DockArea, Style, TabViewer, widgets::tab_viewer::OnCloseResponse};
-use lunco_core::{on_command, register_commands};
+use lunco_command_contracts::{Ack, OpId, Reject};
+use lunco_core::{ActiveCommandId, CommandOutcome, CommandResults, on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
@@ -72,6 +68,7 @@ use lunco_workbench_widgets::{UiIcon, icon_button_sized, text_editor};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod authored_perspectives;
 mod layout_render;
 mod render;
 mod resource_preview;
@@ -158,17 +155,38 @@ fn running_app_name() -> &'static str {
     })
 }
 
+fn registered_instance_kind(layout: &WorkbenchLayout, id: &str) -> Result<PanelId, Reject> {
+    layout
+        .instance_panels
+        .keys()
+        .copied()
+        .find(|kind| kind.as_str() == id)
+        .ok_or_else(|| {
+            let message = format!("No workbench instance panel kind `{id}` is registered");
+            warn!("{message}");
+            Reject::InvalidOp(message)
+        })
+}
+
+#[on_command(OpenTab)]
 fn on_open_tab(
     trigger: On<OpenTab>,
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingTabRequests>,
-) {
-    let ev = *trigger.event();
+    active: Res<ActiveCommandId>,
+) -> CommandOutcome {
+    let ev = trigger.event().clone();
     if let Some(mut layout) = layout {
-        layout.open_instance(ev.kind, ev.instance);
+        let kind = match registered_instance_kind(&layout, &ev.kind) {
+            Ok(kind) => kind,
+            Err(reject) => return CommandOutcome::Rejected(reject),
+        };
+        layout.open_instance(kind, ev.instance);
     } else {
-        pending.0.push(TabRequest::Open(ev));
+        pending.0.push(TabRequest::Open(ev, active.get()));
+        return CommandOutcome::Pending;
     }
+    CommandOutcome::Succeeded(Ack::new(OpId::new()))
 }
 
 fn on_open_tab_preserve_focus(
@@ -184,24 +202,32 @@ fn on_open_tab_preserve_focus(
     }
 }
 
+#[on_command(CloseTab)]
 fn on_close_tab(
     trigger: On<CloseTab>,
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingTabRequests>,
-) {
-    let ev = *trigger.event();
+    active: Res<ActiveCommandId>,
+) -> CommandOutcome {
+    let ev = trigger.event().clone();
     if let Some(mut layout) = layout {
-        layout.close_instance(ev.kind, ev.instance);
+        let kind = match registered_instance_kind(&layout, &ev.kind) {
+            Ok(kind) => kind,
+            Err(reject) => return CommandOutcome::Rejected(reject),
+        };
+        layout.close_instance(kind, ev.instance);
     } else {
-        pending.0.push(TabRequest::Close(ev));
+        pending.0.push(TabRequest::Close(ev, active.get()));
+        return CommandOutcome::Pending;
     }
+    CommandOutcome::Succeeded(Ack::new(OpId::new()))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum TabRequest {
-    Open(OpenTab),
+    Open(OpenTab, Option<u64>),
     OpenPreserveFocus(OpenTabPreserveFocus),
-    Close(CloseTab),
+    Close(CloseTab, Option<u64>),
 }
 
 /// Layout mutations raised by egui controls are committed by `Update`, after
@@ -227,17 +253,34 @@ struct PendingTabRequests(Vec<TabRequest>);
 fn drain_pending_tab_requests(
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingTabRequests>,
+    mut results: ResMut<CommandResults>,
 ) {
     let Some(mut layout) = layout else {
         return;
     };
     for request in std::mem::take(&mut pending.0) {
-        match request {
-            TabRequest::Open(ev) => layout.open_instance(ev.kind, ev.instance),
+        let (id, result) = match request {
+            TabRequest::Open(ev, id) => (
+                id,
+                registered_instance_kind(&layout, &ev.kind).map(|kind| {
+                    layout.open_instance(kind, ev.instance);
+                    Ack::new(OpId::new())
+                }),
+            ),
             TabRequest::OpenPreserveFocus(ev) => {
-                layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore)
+                layout.open_instance_without_focus(ev.kind, ev.instance, ev.restore);
+                continue;
             }
-            TabRequest::Close(ev) => layout.close_instance(ev.kind, ev.instance),
+            TabRequest::Close(ev, id) => (
+                id,
+                registered_instance_kind(&layout, &ev.kind).map(|kind| {
+                    layout.close_instance(kind, ev.instance);
+                    Ack::new(OpId::new())
+                }),
+            ),
+        };
+        if let Some(id) = id {
+            results.record_handler_result(id, result);
         }
     }
 }
@@ -246,6 +289,8 @@ fn drain_pending_layout_requests(
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingLayoutRequests>,
     mut commands: Commands,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut choice: Option<ResMut<lunco_workbench_core::ExplicitPerspectiveChoice>>,
 ) {
     let Some(mut layout) = layout else {
         return;
@@ -256,11 +301,20 @@ fn drain_pending_layout_requests(
             LayoutRequest::Reset => layout.reset_to_default_layout(),
             LayoutRequest::SetActivityBar(visible) => layout.activity_bar = visible,
             LayoutRequest::ActivatePerspective(id) => {
-                if !layout.activate_perspective_by_str(&id) {
+                if layout.activate_perspective_by_str(&id) {
+                    record_explicit_perspective(
+                        &layout,
+                        workspace.as_deref(),
+                        choice.as_deref_mut(),
+                    );
+                } else {
                     perspective_command::report_unknown_perspective(&mut commands, &id);
                 }
             }
-            LayoutRequest::FocusPanel(id) => focus_registered_panel(&mut layout, id.0),
+            LayoutRequest::FocusPanel(id) => {
+                focus_registered_panel(&mut layout, id.0);
+                record_explicit_perspective(&layout, workspace.as_deref(), choice.as_deref_mut());
+            }
             LayoutRequest::RemoveSingleton(id) => {
                 layout.side_browser.retain(|panel| *panel != id);
                 layout.side_browser_bottom.retain(|panel| *panel != id);
@@ -315,7 +369,7 @@ pub(crate) fn publish_workbench_snapshot(layout: &WorkbenchLayout) -> WorkbenchS
     }
     let mut snapshot = WorkbenchSnapshot::default();
     snapshot.replace(
-        layout.active_perspective,
+        layout.active_perspective.clone(),
         focused_tab,
         tabs,
         visible_tabs,
@@ -331,7 +385,7 @@ pub(crate) fn snapshot_for_layout_if_changed(
     current: &WorkbenchSnapshot,
 ) -> Option<WorkbenchSnapshot> {
     let same = current.matches_layout_projection(
-        layout.active_perspective,
+        layout.active_perspective.clone(),
         layout.focused_tab().copied(),
         layout.dock.iter_all_tabs().map(|(_, tab)| *tab),
         layout
@@ -373,6 +427,8 @@ fn on_focus_panel(
     trigger: On<FocusPanel>,
     layout: Option<ResMut<WorkbenchLayout>>,
     pending: Option<ResMut<PendingPanelFocus>>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut choice: Option<ResMut<lunco_workbench_core::ExplicitPerspectiveChoice>>,
 ) {
     // `FocusPanel` is safe to fire at any time (e.g. an asset-browser click
     // before the workbench has finished setting up, or in a host config that
@@ -393,6 +449,21 @@ fn on_focus_panel(
         return;
     };
     focus_registered_panel(&mut layout, &trigger.event().id);
+    record_explicit_perspective(&layout, workspace.as_deref(), choice.as_deref_mut());
+}
+
+fn record_explicit_perspective(
+    layout: &WorkbenchLayout,
+    workspace: Option<&WorkspaceResource>,
+    choice: Option<&mut lunco_workbench_core::ExplicitPerspectiveChoice>,
+) {
+    if let Some(choice) = choice {
+        choice.twin_id = workspace.and_then(|w| w.active_twin).map(|id| id.raw());
+        choice.id = layout
+            .active_perspective
+            .as_ref()
+            .map(|id| id.as_str().to_owned());
+    }
 }
 
 fn focus_registered_panel(layout: &mut WorkbenchLayout, want: &str) {
@@ -402,7 +473,7 @@ fn focus_registered_panel(layout: &mut WorkbenchLayout, want: &str) {
         .find(|(id, _)| id.0 == want)
         .and_then(|(_, panel)| panel.preferred_perspective());
     if let Some(preferred_perspective) = preferred_perspective
-        && layout.active_perspective() != Some(preferred_perspective)
+        && layout.active_perspective() != Some(preferred_perspective.clone())
         && layout
             .perspectives
             .iter()
@@ -481,7 +552,7 @@ fn drain_pending_panel_focus(
     }
 }
 
-register_commands!(on_focus_panel,);
+register_commands!(on_focus_panel, on_open_tab, on_close_tab);
 
 // The session binding (WorkspaceResource, WorkspacePlugin, add/close events)
 // lives in `lunco-workspace` now — consumers import it from there directly.
@@ -783,7 +854,9 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench_help_ui::PerspectiveHelpPlugin>() {
             app.add_plugins(lunco_workbench_help_ui::PerspectiveHelpPlugin);
         }
-        app.init_resource::<WorkbenchLayout>()
+        app.init_resource::<CommandResults>()
+            .init_resource::<ActiveCommandId>()
+            .init_resource::<WorkbenchLayout>()
             .init_resource::<WorkbenchMenuRegistry>()
             .init_resource::<WorkbenchSnapshot>()
             .init_resource::<lunco_interaction_core::SceneInteractionMode>()
@@ -801,9 +874,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
             .init_resource::<CurrentScenePath>()
-            .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
-            .add_observer(on_close_tab)
             .add_observer(twin_settings::clear_on_twin_closed)
             .add_systems(
                 Update,
@@ -824,6 +895,7 @@ impl Plugin for WorkbenchPlugin {
                     .chain(),
             )
             .add_systems(First, lunco_workbench_layout::sync_scene_interaction_mode);
+        authored_perspectives::install(app);
         register_all_commands(app);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
         drain_registered_panels(app.world_mut());
@@ -916,36 +988,9 @@ impl WorkbenchAppExt for App {
         {
             self.init_resource::<lunco_workbench_help_ui::PerspectiveHelpRegistry>();
         }
-        // First registration for this id also contributes the Help-menu
-        // item — so a subsystem gets both popup and menu entry from this
-        // single call, with no central list to maintain.
-        let is_new = self
-            .world()
-            .resource::<lunco_workbench_help_ui::PerspectiveHelpRegistry>()
-            .get(id)
-            .is_none();
         self.world_mut()
             .resource_mut::<lunco_workbench_help_ui::PerspectiveHelpRegistry>()
             .register(id, help);
-        if is_new {
-            if !self.world().contains_resource::<WorkbenchLayout>() {
-                self.init_resource::<WorkbenchLayout>();
-            }
-            let title = self
-                .world()
-                .resource::<WorkbenchLayout>()
-                .perspectives
-                .iter()
-                .find(|perspective| perspective.id() == id && perspective.show_in_switcher())
-                .map(|perspective| perspective.title());
-            if let Some(title) = title {
-                if !self.world().contains_resource::<WorkbenchMenuRegistry>() {
-                    self.init_resource::<WorkbenchMenuRegistry>();
-                }
-                let mut menus = self.world_mut().resource_mut::<WorkbenchMenuRegistry>();
-                lunco_workbench_help_ui::register_help_menu_item(&mut menus, id, title);
-            }
-        }
         self
     }
 }

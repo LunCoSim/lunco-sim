@@ -391,7 +391,7 @@ fn close_model_tab(world: &mut World, tab_id: u64) {
     world
         .commands()
         .trigger(lunco_workbench_core::commands::CloseTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
     if let Some(mut tabs) = world.get_resource_mut::<ModelTabs>() {
@@ -457,7 +457,7 @@ fn create_new_scratch_model(
 
     let tab_id = model_tabs.ensure_for(doc_id, None);
     commands.trigger(lunco_workbench_core::commands::OpenTab {
-        kind: MODEL_VIEW_KIND,
+        kind: MODEL_VIEW_KIND.as_str().to_owned(),
         instance: tab_id,
     });
     doc_id
@@ -662,7 +662,7 @@ pub fn on_duplicate_model_from_read_only(
         tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
     }
     commands.trigger(lunco_workbench_core::commands::OpenTab {
-        kind: MODEL_VIEW_KIND,
+        kind: MODEL_VIEW_KIND.as_str().to_owned(),
         instance: tab_id,
     });
 
@@ -804,7 +804,7 @@ fn spawn_duplicate_class_task(
     world
         .commands()
         .trigger(lunco_workbench_core::commands::OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
 
@@ -855,7 +855,7 @@ pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
         world
             .commands()
             .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: MODEL_VIEW_KIND,
+                kind: MODEL_VIEW_KIND.as_str().to_owned(),
                 instance: new_id,
             });
     });
@@ -1027,7 +1027,7 @@ pub fn on_browser_modelica_file(
         world
             .commands()
             .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: MODEL_VIEW_KIND,
+                kind: MODEL_VIEW_KIND.as_str().to_owned(),
                 instance: tab,
             });
         let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
@@ -1257,7 +1257,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         world
             .commands()
             .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: MODEL_VIEW_KIND,
+                kind: MODEL_VIEW_KIND.as_str().to_owned(),
                 instance: tab_id,
             });
         bevy::log::info!("[OpenFile] opened `{}` as `{}`", path.display(), stem);
@@ -1283,7 +1283,7 @@ pub fn focus_in_memory_doc(world: &mut World, name: &str) {
     world
         .commands()
         .trigger(lunco_workbench_core::commands::OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
 }
@@ -1343,7 +1343,7 @@ pub fn on_document_closed_cleanup(
     );
     for tab in model_tabs.close_all_for_doc(doc) {
         commands.trigger(lunco_workbench_core::commands::CloseTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab,
         });
     }
@@ -1485,7 +1485,10 @@ pub fn drain_pending_tab_closes(
         if kind == lunco_viz::VIZ_PANEL_KIND
             || kind == crate::ui::panels::graphs::MODELICA_PLOT_KIND
         {
-            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab {
+                kind: kind.as_str().to_owned(),
+                instance,
+            });
             commands.queue(move |world: &mut World| {
                 if let Some(mut reg) = world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
                 {
@@ -1499,7 +1502,10 @@ pub fn drain_pending_tab_closes(
             continue;
         }
         let Some(doc) = model_tabs.get(instance).map(|s| s.doc) else {
-            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab {
+                kind: kind.as_str().to_owned(),
+                instance,
+            });
             continue;
         };
         let (is_dirty, is_read_only) = registry
@@ -1518,7 +1524,10 @@ pub fn drain_pending_tab_closes(
                 dialogs.pending.push((doc, instance));
             }
         } else {
-            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab {
+                kind: kind.as_str().to_owned(),
+                instance,
+            });
             model_tabs.close_tab(instance);
             commands.queue(move |world: &mut World| {
                 if let Some(mut state) = world

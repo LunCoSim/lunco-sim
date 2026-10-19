@@ -453,9 +453,12 @@ impl Panel for PortPanel {
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Builder
+        lunco_workbench_core::PanelMenuGroup::Analysis
     }
 
+    fn preferred_perspective(&self) -> Option<lunco_workbench_core::PerspectiveId> {
+        Some(lunco_workbench_core::PerspectiveId::new("analysis"))
+    }
     fn transparent_background(&self) -> bool {
         true
     }

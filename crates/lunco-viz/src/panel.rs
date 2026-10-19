@@ -96,7 +96,7 @@ impl InstancePanel for VizPanel {
                 // the stale tab after this paint rather than showing a dead
                 // panel body.
                 ctx.trigger(CloseTab {
-                    kind: VIZ_PANEL_KIND,
+                    kind: VIZ_PANEL_KIND.as_str().to_owned(),
                     instance,
                 });
                 return;

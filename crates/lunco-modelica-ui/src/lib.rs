@@ -19,23 +19,6 @@ use bevy::prelude::*;
 use lunco_modelica_ast::pretty;
 
 #[cfg(feature = "ui")]
-/// UI configuration for the Modelica workbench.
-#[derive(Resource, Clone, Debug)]
-pub struct ModelicaUiConfig {
-    /// Include the landing-page Welcome panel.
-    pub include_welcome_panel: bool,
-}
-
-#[cfg(feature = "ui")]
-impl Default for ModelicaUiConfig {
-    fn default() -> Self {
-        Self {
-            include_welcome_panel: true,
-        }
-    }
-}
-
-#[cfg(feature = "ui")]
 /// Modelica panels, document presentation, and shared visualization. The host
 /// installs ModelicaCorePlugin and ModelicaExecutionPlugin before this plugin.
 #[derive(Default)]
@@ -98,10 +81,7 @@ impl Plugin for ModelicaPlugin {
 #[cfg(feature = "ui")]
 /// One-call bundle for standalone lunica and embedded Modelica workspaces.
 #[derive(Default)]
-pub struct ModelicaWorkbenchPlugin {
-    /// Workbench onboarding and welcome-panel configuration.
-    pub config: ModelicaUiConfig,
-}
+pub struct ModelicaWorkbenchPlugin;
 
 #[cfg(feature = "ui")]
 impl Plugin for ModelicaWorkbenchPlugin {
@@ -115,7 +95,6 @@ impl Plugin for ModelicaWorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench_browser::TwinBrowserPlugin>() {
             app.add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
         }
-        app.insert_resource(self.config.clone());
         app.add_plugins(ModelicaPlugin);
 
         #[cfg(target_arch = "wasm32")]

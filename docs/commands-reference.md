@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**267 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**269 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workbench-core`](#lunco-workbench-core) (10 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
@@ -3618,6 +3618,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `id` | `String` |  The identifier of the perspective to activate. |
 
+#### `CloseTab`
+
+ Request the workbench close a multi-instance tab, if open.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `String` |  The [`crate::InstancePanel::kind`] to close. |
+| `instance` | `u64` |  The tab's instance discriminant, typically a document id. |
+
 #### `FocusPanel`
 
  Open and focus a registered singleton panel, activating its preferred perspective when set.
@@ -3659,6 +3670,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `asset_path` | `String` |  Registered asset path. |
+
+#### `OpenTab`
+
+ Request the workbench open (or focus) a multi-instance tab.
+
+ The concrete shell validates the registered kind and applies this command to its dock.
+ Domain UI crates can therefore open a tab without depending on egui-dock.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `String` |  The [`crate::InstancePanel::kind`] to open. |
+| `instance` | `u64` |  The tab's instance discriminant, typically a document id. |
 
 #### `OpenTwinSource`
 
@@ -3826,6 +3851,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `InspectGuidedHud`
 
  Inspect authored cards and the same visibility/input decision used by rendering.
+ Includes the active anchored tour's Twin owner, step and target.
 
 - *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 - *fields:* none — call with `InspectGuidedHud` (no params)
@@ -4065,7 +4091,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 267 commands from the runtime schema; scanned 1021 .rs files for docs (0 parse failure(s) skipped).
+<!-- 269 commands from the runtime schema; scanned 1022 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

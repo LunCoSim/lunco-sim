@@ -5,15 +5,13 @@
 //! **modal popup** (not a dock panel) so it reads as a transient "what
 //! can I do here" overlay rather than another tab to manage.
 //!
-//! The Help menu gets **one entry per visible perspective**
-//! (`📖 <Perspective> Help`); each opens a popup showing just that
-//! perspective's controls. The perspective switcher owns the labels and
-//! visibility, so Help cannot drift from the top-right navigation. Closed
-//! with Esc or by clicking the dimmed backdrop.
+//! The shell reads the live perspective registry for Help navigation. This
+//! package renders its task description and optional owner-authored controls.
+//! Escape and the dimmed backdrop close the popup.
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_workbench_core::{PerspectiveId, WorkbenchMenuRegistry};
+use lunco_workbench_core::PerspectiveId;
 use lunco_workbench_layout::WorkbenchLayout;
 use lunco_workbench_widgets::{UiIcon, icon_button, paint_icon};
 use std::collections::HashMap;
@@ -65,11 +63,9 @@ impl LiveHelpSections {
     }
 }
 
-/// Human-authored help content for a Perspective.
+/// Owner-authored control reference supplementing a perspective's description.
 #[derive(Debug, Clone, Default)]
 pub struct PerspectiveHelp {
-    /// One-paragraph summary of what this perspective is for.
-    pub description: &'static str,
     /// Primary keyboard shortcuts.
     pub shortcuts: Vec<HelpShortcut>,
     /// Primary mouse interactions.
@@ -113,37 +109,16 @@ impl Plugin for PerspectiveHelpPlugin {
     }
 }
 
-/// Add a Help-menu entry that opens `id`'s help popup. Called by
-/// `WorkbenchAppExt::register_perspective_help` in `lunco-workbench`
-/// so each subsystem contributes its *own* menu item at the point it
-/// registers its perspective — the workbench never hardcodes a list.
-pub fn visible_perspective_title(layout: &WorkbenchLayout, id: PerspectiveId) -> Option<String> {
+/// Resolve a title from the live perspective registry, including perspectives
+/// without a separately registered control reference.
+pub fn registered_perspective_title(layout: &WorkbenchLayout, id: PerspectiveId) -> Option<String> {
     layout
         .perspectives
         .iter()
-        .find(|perspective| perspective.id() == id && perspective.show_in_switcher())
+        .find(|perspective| perspective.id() == id)
         .map(|perspective| perspective.title())
 }
 
-pub fn register_help_menu_item(
-    menus: &mut WorkbenchMenuRegistry,
-    id: PerspectiveId,
-    title: String,
-) {
-    menus.register_help_menu(move |ui, ctx| {
-        let available = ctx
-            .resource::<PerspectiveHelpRegistry>()
-            .is_some_and(|registry| registry.get(id).is_some());
-        if available && ui.button(format!("{title} Help")).clicked() {
-            ctx.set_resource(HelpPopup(Some(id)));
-            ui.close();
-        }
-    });
-}
-
-/// Renders one help row: a fixed-width left column (key / interaction)
-/// and a wrapping right column (description) that fills the remaining
-/// horizontal space so long text never clips.
 fn help_row(ui: &mut egui::Ui, left: egui::RichText, right: &str, right_color: egui::Color32) {
     const KEY_COL_W: f32 = 150.0;
     ui.horizontal_top(|ui| {
@@ -167,17 +142,21 @@ fn render_help_popup(
     live_sections: Res<LiveHelpSections>,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
-    let Some(id) = popup.0 else {
+    let Some(id) = popup.0.clone() else {
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else {
         return;
     };
-    let Some(help) = registry.get(id) else {
-        popup.0 = None;
-        return;
-    };
-    let Some(title) = visible_perspective_title(&layout, id) else {
+    let empty = PerspectiveHelp::default();
+    let help = registry.get(id.clone()).unwrap_or(&empty);
+    let description = layout
+        .perspectives
+        .iter()
+        .find(|p| p.id() == id)
+        .map(|p| p.description())
+        .unwrap_or_default();
+    let Some(title) = registered_perspective_title(&layout, id.clone()) else {
         popup.0 = None;
         return;
     };
@@ -237,7 +216,7 @@ fn render_help_popup(
                         });
                     });
                     ui.add_space(2.0);
-                    ui.label(egui::RichText::new(help.description).color(muted));
+                    ui.label(egui::RichText::new(description).color(muted));
                     ui.add_space(14.0);
 
                     egui::ScrollArea::vertical()

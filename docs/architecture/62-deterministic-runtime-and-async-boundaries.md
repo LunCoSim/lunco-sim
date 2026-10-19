@@ -475,11 +475,19 @@ and execution routes. Other Twin-scoped cycle owners use the same source instead
 of keeping private scene counters. Before a successful scene commit, there is
 no scene-bound Twin scenario route. Discrete Twin lifecycle callbacks carry the
 stable owner ID and use generation zero until a scene generation exists.
-Scenario execution waits for the readiness gate.
-Application-owned scenarios keep generation zero and may finish source
-preparation across a Twin transition; Twin- and scene-owned scenarios use the
-committed scene generation. A missing generation faults only when live
-scene/Twin scenario work needs that route.
+Scene-owned scenario execution waits for the scene readiness gate. Independent
+Twin and Application presentation programs can prepare, start and receive
+events without a scene. They wait for their own declared prerequisites;
+scene-bound and simulation-timed programs also wait for global scene readiness.
+The scenario driver captures one `ScenarioLease` containing the exact Twin
+owner and optional scene revision through compilation and dependency admission.
+An absent committed generation stays `None` in that lease; only the existing
+route/stamp ABI encodes that absence as generation zero. A committed Clear may
+have a generation without a mounted USD payload. Scene mounting and lifecycle
+revision are separate owner facts. Captured Twin identity and scene
+revision must both still match before a worker result is consumed. Application
+leases ignore scene revisions. A missing generation faults only when live
+scene-owned work requires one after its execution gate has opened.
 
 Scenario ownership is explicit on the host entity. `TwinOwnedScript` carries a
 stable `TwinId`; `SceneOwnedScript` marks a program projected from the current
@@ -577,6 +585,8 @@ receives `Time<Real>` frame samples and a frame sequence; waits use that typed
 context. Its independent bounded event queue prevents a paused simulation pass
 from consuming presentation events. Subscription exists only while the language
 has presentation actors, avoiding event clones in simulation-only hosts.
+While the scene gate is closed, discrete events enter only the presentation
+queue. No simulation-event backlog accumulates across that gate.
 Presentation programs submit typed commands; direct world writes are rejected.
 Rust installs and invokes both cadences from their owning schedules. Lifecycle
 hooks receive the lifecycle, presentation or simulation

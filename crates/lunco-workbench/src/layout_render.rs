@@ -513,7 +513,7 @@ pub(super) fn render_layout(
                         render_settings_menu(ui, world, menus);
                     });
                     ui.menu_button("Help", |ui| {
-                        render_help_menu(ui, world, menus);
+                        render_help_menu(ui, world, menus, layout);
                     });
                     ui.menu_button("Time", |ui| {
                         render_time_menu(ui, world, menus);
@@ -522,6 +522,18 @@ pub(super) fn render_layout(
                 anchor_rects.push((Cow::Borrowed("menu.more"), r_more.response.rect));
             }
             let r_view = ui.menu_button("View", |ui| {
+                ui.menu_button("Perspectives", |ui| {
+                    for perspective in &layout.perspectives {
+                        let id = perspective.id();
+                        let active = layout.active_perspective.as_ref() == Some(&id);
+                        if ui.selectable_label(active, perspective.title())
+                            .on_hover_text(perspective.description()).clicked() {
+                            world.resource_mut::<PendingLayoutRequests>().0
+                                .push(LayoutRequest::ActivatePerspective(id.as_str().to_owned()));
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
                     // restoring panels (notably the 3D Viewport) a stale
@@ -554,6 +566,7 @@ pub(super) fn render_layout(
                     open: bool,
                     singleton: Option<PanelId>,
                     instance: Option<(PanelId, u64)>,
+                    perspective: Option<PerspectiveId>,
                 }
                 let panels_meta: Vec<ViewPanelEntry> = {
                     let docked: std::collections::HashSet<PanelId> = layout
@@ -577,6 +590,7 @@ pub(super) fn render_layout(
                                     open: docked.contains(&id),
                                     singleton: Some(id),
                                     instance: None,
+                                    perspective: None,
                                 }
                             })
                             .collect();
@@ -598,6 +612,9 @@ pub(super) fn render_layout(
                             open: layout.dock.find_tab(&tab).is_some(),
                             singleton: None,
                             instance: Some((*kind, entry.instance)),
+                            perspective: entry.perspective.filter(|id| {
+                                layout.perspectives.iter().any(|p| p.id() == *id)
+                            }),
                         });
                     }
                     // Group first, then title — but sort titles on their FIRST
@@ -630,10 +647,11 @@ pub(super) fn render_layout(
 
                 for (group, entries) in panels_by_group {
                     let heading = match group {
-                        PanelMenuGroup::Builder => "Builder",
+                        PanelMenuGroup::Builder => "Build",
+                        PanelMenuGroup::Analysis => "Analyze",
                         PanelMenuGroup::Editor => "Editor",
                         PanelMenuGroup::Lunica => "Lunica",
-                        PanelMenuGroup::Other => "Other",
+                        PanelMenuGroup::Other => "General",
                         PanelMenuGroup::Hidden => unreachable!("filtered above"),
                     };
                     ui.menu_button(heading, |ui| {
@@ -643,16 +661,25 @@ pub(super) fn render_layout(
                                 open: is_open,
                                 singleton,
                                 instance,
+                                perspective,
                                 ..
                             } = entry;
                             let mut checked = is_open;
                             if ui.checkbox(&mut checked, title).clicked() {
                                 if checked && !is_open {
                                     if let Some((kind, instance)) = instance {
+                                        if let Some(perspective) = perspective {
+                                            world
+                                                .resource_mut::<PendingLayoutRequests>()
+                                                .0
+                                                .push(LayoutRequest::ActivatePerspective(
+                                                    perspective.as_str().to_owned(),
+                                                ));
+                                        }
                                         world
                                             .resource_mut::<PendingTabRequests>()
                                             .0
-                                            .push(TabRequest::Open(OpenTab { kind, instance }));
+                                            .push(TabRequest::Open(OpenTab { kind: kind.as_str().to_owned(), instance }, None));
                                         ui.close();
                                         continue;
                                     }
@@ -669,7 +696,7 @@ pub(super) fn render_layout(
                                         world
                                             .resource_mut::<PendingTabRequests>()
                                             .0
-                                            .push(TabRequest::Close(CloseTab { kind, instance }));
+                                            .push(TabRequest::Close(CloseTab { kind: kind.as_str().to_owned(), instance }, None));
                                         ui.close();
                                         continue;
                                     }
@@ -702,7 +729,7 @@ pub(super) fn render_layout(
             });
             anchor_rects.push((Cow::Borrowed("menu.settings"), r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
-                render_help_menu(ui, world, menus);
+                render_help_menu(ui, world, menus, layout);
             });
             anchor_rects.push((Cow::Borrowed("menu.help"), r_help.response.rect));
 
@@ -786,7 +813,26 @@ pub(super) fn render_layout(
                     }
                     ui.separator();
                 }
-                if perspective_tabs.len() > 1 {
+                if matches!(menu_mode, TopMenuMode::Overflow) && !layout.perspectives.is_empty() {
+                    let title = layout.perspectives.iter()
+                        .find(|p| Some(p.id()) == layout.active_perspective)
+                        .map(|p| p.title()).unwrap_or_else(|| "Perspectives".to_owned());
+                    let picker = ui.menu_button(title, |ui| {
+                        for perspective in &layout.perspectives {
+                            let id = perspective.id();
+                            let active = layout.active_perspective.as_ref() == Some(&id);
+                            if ui.selectable_label(active, perspective.title())
+                                .on_hover_text(perspective.description()).clicked() {
+                                world.resource_mut::<PendingLayoutRequests>().0
+                                    .push(LayoutRequest::ActivatePerspective(id.as_str().to_owned()));
+                                ui.close();
+                            }
+                        }
+                    });
+                    for (id, _, _) in &perspective_tabs {
+                        anchor_rects.push((Cow::Owned(perspective_help_anchor(id.clone())), picker.response.rect));
+                    }
+                } else if perspective_tabs.len() > 1 {
                     for (id, title, is_active) in &perspective_tabs {
                         let mut label = egui::RichText::new(title.as_str()).color(if *is_active {
                             theme.colors.text
@@ -805,14 +851,14 @@ pub(super) fn render_layout(
                         }
                         let response = ui.add(button);
                         anchor_rects.push((
-                            Cow::Owned(perspective_help_anchor(*id)),
+                            Cow::Owned(perspective_help_anchor(id.clone())),
                             response.rect,
                         ));
                         if response.clicked() && !*is_active {
                             world
                                 .resource_mut::<PendingLayoutRequests>()
                                 .0
-                                .push(LayoutRequest::ActivatePerspective(id.0.to_owned()));
+                                .push(LayoutRequest::ActivatePerspective(id.as_str().to_owned()));
                         }
                     }
                 }
@@ -934,7 +980,8 @@ pub(super) fn render_layout(
     // perspective's centre intent keeps `View` pure-3D and leaves the
     // parked docs hidden until the user switches to a centre-driven
     // perspective (which re-attaches them via `rebuild_dock`).
-    let has_dock_tabs = !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
+    let has_dock_tabs =
+        layout.has_central_content() && layout.dock.iter_all_tabs().next().is_some();
     let translucent_tab_content = world
         .resource::<WorkbenchAppearanceSettings>()
         .translucent_tab_content;

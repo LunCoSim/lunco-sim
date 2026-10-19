@@ -246,6 +246,8 @@ impl<'w> PanelCtx<'w> {
 pub enum PanelMenuGroup {
     /// Live Twin building workflow.
     Builder,
+    /// Runtime telemetry and results inspection workflow.
+    Analysis,
     /// Authored document editing workflow.
     Editor,
     /// Modelica engineering workbench workflow.
@@ -351,7 +353,7 @@ pub trait InstancePanel: Send + Sync + 'static {
 }
 
 /// A discoverable entry for an instance-panel kind.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct InstancePanelMenuEntry {
     /// Menu group.
     pub group: PanelMenuGroup,
@@ -359,6 +361,8 @@ pub struct InstancePanelMenuEntry {
     pub title: &'static str,
     /// Canonical instance to open.
     pub instance: u64,
+    /// Workflow to activate when opened from the menu, if installed by the host.
+    pub perspective: Option<PerspectiveId>,
 }
 
 /// Identity of a singleton or instance tab.

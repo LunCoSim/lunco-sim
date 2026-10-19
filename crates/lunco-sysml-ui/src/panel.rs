@@ -289,7 +289,7 @@ impl Panel for SysmlRequirementsPanel {
     }
 
     fn preferred_perspective(&self) -> Option<PerspectiveId> {
-        Some(PerspectiveId("editor"))
+        Some(PerspectiveId::new("editor"))
     }
 
     fn scroll_policy(&self) -> PanelScrollPolicy {
@@ -352,11 +352,11 @@ impl Panel for SysmlRequirementDetailsPanel {
     }
 
     fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
-        (perspective == PerspectiveId("editor")).then_some(PanelSlot::RightInspectorBottom)
+        (perspective == PerspectiveId::new("editor")).then_some(PanelSlot::RightInspectorBottom)
     }
 
     fn preferred_perspective(&self) -> Option<PerspectiveId> {
-        Some(PerspectiveId("editor"))
+        Some(PerspectiveId::new("editor"))
     }
 
     fn scroll_policy(&self) -> PanelScrollPolicy {

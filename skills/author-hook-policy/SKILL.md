@@ -225,3 +225,14 @@ in an owned windowed production session, supplying its exact `doc_id` and
 ignored artifact and compares all document layers. The production
 [`test_hook_policies.rhai`](../../assets/scripting/tests/test_hook_policies.rhai)
 covers declaration and off-cycle rejection.
+
+## Task perspectives
+
+Use `workbench.perspectives.twin(facts)` for custom layouts shipped with a Twin;
+the application defaults use `workbench.perspectives.defaults`. Both return
+arrays of typed semantic layout maps, consumed by the existing dock owner.
+Discover exact panel and instance capabilities with `InspectWorkbench` and read
+[the perspective tutorial](../../docs/tutorials/05-twin-perspectives.md).
+Evaluation is revision-driven Visualization/Preparation work over immutable
+facts; a policy reload does not reset a visited layout. Verify positive and
+rejected plans, explicit reset, and Twin replacement through the production app.

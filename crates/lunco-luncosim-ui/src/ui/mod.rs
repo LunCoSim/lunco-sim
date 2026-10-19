@@ -12,7 +12,7 @@ use bevy_egui::{EguiContexts, egui};
 use lunco_core::{AppSceneExt, SceneResource};
 use lunco_workbench_runtime_ui as runtime_ui;
 
-use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
+use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 use lunco_usd_bevy_camera::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector,
 };
@@ -263,7 +263,7 @@ impl Plugin for LunCoSimUiPlugin {
         install_runtime_ui_dropdown_state(app);
         dataset_provisioning::install(app);
         app.insert_resource(lunco_workbench_guided_ui::GuidedHudVisibility {
-            visible_in_perspective: Some(lunco_workbench_core::PerspectiveId("sandbox_view")),
+            visible_in_perspective: Some(lunco_workbench_core::PerspectiveId::new("sandbox_view")),
         });
         // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
         // per-prim contour display. Keep it at the render boundary so this UI
@@ -426,18 +426,9 @@ impl Plugin for LunCoSimUiPlugin {
                 ),
             );
 
-        // Embed the FULL lunica workbench as the "Design" workspace via the
-        // shared bundle — same clipboard bridge, autosave, worker, and panels
-        // as standalone lunica, so the Design tab can't drift from the real
-        // IDE. We pass only the one intentional embed knob: suppress the
-        // first-run help overlay (lunica's onboarding coach-marks, out of
-        // place inside a 3D physics demo). Welcome panel stays ON — it's the
-        // same landing page lunica uses for the Design tab.
-        app.add_plugins(ModelicaWorkbenchPlugin {
-            config: ModelicaUiConfig {
-                include_welcome_panel: true,
-            },
-        });
+        // Share Lunica's panels, clipboard bridge, autosave and worker.
+        // Rhai composes task layouts from these registered capabilities.
+        app.add_plugins(ModelicaWorkbenchPlugin);
 
         #[cfg(feature = "sysml")]
         app.add_plugins(lunco_sysml_ui::SysmlUiPlugin);
@@ -472,7 +463,7 @@ fn update_runtime_ui_gates(
     }
     *initialized = true;
     let in_view = layout.is_some_and(|value| {
-        value.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
+        value.active_perspective() == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
     });
     let overlay_enabled = overlays.is_some_and(|value| value.view_switcher);
     let recording = recording.is_some_and(|value| value.active);
@@ -487,7 +478,8 @@ fn recording_offline(
 
 fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
     layout.is_some_and(|layout| {
-        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
+        layout.active_perspective()
+            == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
     })
 }
 
@@ -874,7 +866,8 @@ fn draw_runtime_ui_dropdowns(
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) {
     if !layout.is_some_and(|layout| {
-        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
+        layout.active_perspective()
+            == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
     }) {
         dropdowns.close();
         return;

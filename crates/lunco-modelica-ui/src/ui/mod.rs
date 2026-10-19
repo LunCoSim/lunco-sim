@@ -64,8 +64,7 @@ use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_ui::log::{LogBuffer, LogLevel};
 use lunco_workbench::WorkbenchAppExt;
 use lunco_workbench_core::{
-    MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
-    UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelAppExt,
+    MenuCtx, PanelId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelAppExt,
 };
 use lunco_workbench_help_ui::{HelpMouse, HelpShortcut, PerspectiveHelp};
 
@@ -437,73 +436,6 @@ fn link_added_simulators(
     }
 }
 
-/// The Modelica workbench's default workspace preset.
-///
-/// Mirrors the "Analyze — Modelica deep dive" slot map from the workbench
-/// design doc (`docs/architecture/11-workbench.md` § 4).
-pub struct AnalyzePerspective {
-    /// When true, seed the centre with the Welcome tab so a freshly
-    /// switched-into Design workspace has *some* visible content.
-    /// Sandbox-class embeds disable this (`ModelicaUiConfig
-    /// { include_welcome_panel: false }`) so the Design tab opens
-    /// empty — the user is expected to drill into a model first.
-    pub seed_welcome: bool,
-}
-
-impl Default for AnalyzePerspective {
-    fn default() -> Self {
-        Self { seed_welcome: true }
-    }
-}
-
-impl Perspective for AnalyzePerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("modelica_analyze")
-    }
-    fn title(&self) -> String {
-        // Keep the accepted equation-wave glyph in the perspective title.
-        "∿ Lunica".into()
-    }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        let mut plan = PerspectiveLayoutPlan::new();
-        // Side dock = Twin Browser only. Modelica contributes its library
-        // section to that browser, so there is one authoritative browse
-        // surface for workspace classes and standard libraries.
-        // Two sibling tabs in the side dock — Twin (everything you
-        // browse by name: workspace classes, source library, bundled, future
-        // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
-        // pattern) and Files (raw FS). Twin is leftmost so it's the
-        // default active tab on first launch.
-        plan.side_browser = PerspectiveSlotPlan::new().tabs([
-            lunco_workbench_browser::TWIN_BROWSER_PANEL_ID,
-            lunco_workbench_browser::FILES_PANEL_ID,
-        ]);
-        // Center is seeded with no singleton tab — model views are
-        // multi-instance tabs opened dynamically by the Package Browser
-        // (one tab per open document). An app that boots with a
-        // default model can pre-open a tab after setup via
-        // The shell opens the instance through the `OpenTab` command using
-        // this panel kind and document id.
-        //
-        // Keep a placeholder center tab so the dock's cross layout
-        // still builds on apps with nothing open yet. When the first
-        // real model tab opens, the placeholder stays docked next
-        // to it — users can close it.
-        if self.seed_welcome {
-            plan.center = PerspectiveSlotPlan::new().tabs([PanelId("modelica_welcome")]);
-        } else {
-            plan.center = PerspectiveSlotPlan::new();
-        }
-        // Start with the browse-and-open task only. Context panels and output
-        // docks are opened by the operation that has content for them, or from
-        // View; empty telemetry, inspector, plots, and log tabs should not take
-        // half of a fresh workbench.
-        plan.right_inspector = PerspectiveSlotPlan::new();
-        plan.bottom = PerspectiveSlotPlan::new();
-        plan
-    }
-}
-
 /// Plugin that registers all Modelica workbench UI panels.
 ///
 /// Panels are entity viewers — they watch `WorkbenchState.selected_entity`
@@ -516,15 +448,6 @@ impl Plugin for ModelicaUiPlugin {
         if !app.is_plugin_added::<lunco_modelica_core::modelica_lint::ModelicaLintPlugin>() {
             app.add_plugins(lunco_modelica_core::modelica_lint::ModelicaLintPlugin);
         }
-        // Read embed config once. Defaults to "everything on" (lunica).
-        // Sandbox-class embeds insert `ModelicaUiConfig { include_*: false }`
-        // before adding this plugin. See `lib.rs::ModelicaUiConfig`.
-        let config = app
-            .world()
-            .get_resource::<crate::ModelicaUiConfig>()
-            .cloned()
-            .unwrap_or_default();
-
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Update, workbench_state::update_file_load_result);
 
@@ -793,14 +716,9 @@ impl Plugin for ModelicaUiPlugin {
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
-            .register_perspective(AnalyzePerspective {
-                seed_welcome: config.include_welcome_panel,
-            })
             .register_perspective_help(
-                lunco_workbench_core::PerspectiveId("modelica_analyze"),
+                lunco_workbench_core::PerspectiveId::new("modelica_analyze"),
                 PerspectiveHelp {
-                    description: "Modelica engineering workbench. Author models as \
-                                  text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "F5",
@@ -1383,11 +1301,6 @@ fn fan_status_bus_to_console(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn analyze_perspective_uses_accepted_tab_title() {
-        assert_eq!(AnalyzePerspective::default().title(), "∿ Lunica");
-    }
 
     /// THE DATA-LOSS REGRESSION. A despawn must not destroy the document.
     ///

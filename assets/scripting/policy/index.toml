@@ -215,3 +215,9 @@ source = "diagram_drop.rhai"
 entry = "open_diagram"
 deterministic = true
 skip_when_hook_unavailable = true
+
+[[policies]]
+hook = "workbench.perspectives.defaults"
+source = "workbench_perspectives.rhai"
+entry = "assemble"
+skip_when_hook_unavailable = true

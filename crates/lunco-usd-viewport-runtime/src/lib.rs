@@ -1578,7 +1578,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             };
             if let Some(view) = primary_view {
                 world.trigger(OpenTab {
-                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
                 });
             }
@@ -1697,7 +1697,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             .resource_mut::<UsdViewportState>()
             .clear_preview_closed(doc);
         world.trigger(OpenTab {
-            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
             instance: primary_view.0,
         });
         request_preview_text_read(world, preview);
@@ -1780,7 +1780,7 @@ fn on_open_usd_preview_view(
                     .clear_preview_closed(doc);
             }
             world.trigger(OpenTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance: command.view.0,
             });
             Ok(Ack::with_data(
@@ -1819,7 +1819,7 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
         };
         if let Some(view) = primary_view {
             world.trigger(OpenTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance: view.0,
             });
         } else {
@@ -1852,7 +1852,7 @@ fn on_focus_usd_preview_view(
         let outcome = match preview {
             Some(preview) if world.resource_mut::<UsdViewportState>().focus_view(view) => {
                 world.trigger(OpenTab {
-                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
                 });
                 Ok(Ack::with_data(
@@ -3066,7 +3066,10 @@ fn drain_preview_view_closes(pending: Option<ResMut<PendingTabCloses>>, mut comm
         commands.trigger(CloseUsdPreviewView {
             view: UsdPreviewViewId(instance),
         });
-        commands.trigger(CloseTab { kind, instance });
+        commands.trigger(CloseTab {
+            kind: kind.as_str().to_owned(),
+            instance,
+        });
     }
     for tab in unclaimed {
         pending.push(tab);
@@ -3198,7 +3201,7 @@ fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<Do
     }
     for view in views {
         world.trigger(CloseTab {
-            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
             instance: view.id().0,
         });
         despawn_preview_view(world, view);

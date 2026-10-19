@@ -2235,7 +2235,11 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn menu_group(&self) -> PanelMenuGroup {
-        PanelMenuGroup::Lunica
+        PanelMenuGroup::Analysis
+    }
+
+    fn preferred_perspective(&self) -> Option<lunco_workbench_core::PerspectiveId> {
+        Some(lunco_workbench_core::PerspectiveId::new("analysis"))
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -2769,7 +2773,7 @@ impl TelemetryBrowserState {
             let instance = cfg.id.raw();
             ctx.trigger(OpenVisualizationRequested { config: cfg });
             ctx.trigger(OpenTab {
-                kind: VIZ_PANEL_KIND,
+                kind: VIZ_PANEL_KIND.as_str().to_owned(),
                 instance,
             });
         }

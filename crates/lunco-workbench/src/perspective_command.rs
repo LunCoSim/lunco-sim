@@ -1,15 +1,6 @@
-//! `ActivatePerspective` API command — switch the active workbench
-//! [`Perspective`](crate::Perspective) (a named layout preset) from the
-//! HTTP/script bus, mirroring the View / Build / Editor buttons in the title
-//! bar.
-//!
-//! Why this exists as a command: the buttons call
-//! [`WorkbenchLayout::activate_perspective`] directly inside the egui draw, so
-//! there was no way to switch layouts headlessly (test loops, agents driving
-//! the native window over `/api/commands`). Activating a perspective at runtime
-//! also **rebuilds the dock from the preset**, which restores a panel (e.g. the
-//! 3D `ViewportPanel`) that a stale persisted workspace-state had dropped — the
-//! persisted restore only runs at load, so a runtime re-activation wins.
+//! Typed task activation and explicit layout reset commands.
+//! Selecting the active task preserves its dock. ResetWorkspaceLayout reapplies
+//! the current authored preset, while task navigation restores visited layouts.
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
@@ -25,6 +16,8 @@ fn on_activate_perspective(
     mut snapshot: Option<ResMut<crate::WorkbenchSnapshot>>,
     pending: Option<ResMut<crate::PendingLayoutRequests>>,
     mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut choice: Option<ResMut<lunco_workbench_core::ExplicitPerspectiveChoice>>,
 ) {
     let id = trigger.event().id.clone();
     let Some(mut layout) = layout else {
@@ -36,6 +29,7 @@ fn on_activate_perspective(
         return;
     };
     if layout.activate_perspective_by_str(&id) {
+        crate::record_explicit_perspective(&layout, workspace.as_deref(), choice.as_deref_mut());
         if let Some(snapshot) = snapshot.as_deref_mut() {
             if let Some(next) = crate::snapshot_for_layout_if_changed(&layout, snapshot) {
                 *snapshot = next;

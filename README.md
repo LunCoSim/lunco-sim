@@ -56,7 +56,7 @@ you can move from interactive exploration to automated studies.
 
 1. Download the installer for your platform from [GitHub Releases](https://github.com/LunCoSim/lunco-sim/releases).
    See the [installation guide](docs/apps/luncosim/README.md#desktop-updates) for package details.
-2. Open the app's Tutorials menu. Start with **View, Build, Editor & Lunica**
+2. Open the app's Tutorials menu. Start with **Choose a Perspective**
    to find your way around, then **First Drive** to try a rover.
 3. Follow a [walkthrough](docs/tutorials/README.md#authoring-walkthroughs) to build your own project.
 

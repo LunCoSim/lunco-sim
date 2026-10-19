@@ -79,7 +79,7 @@ impl WorkbenchSnapshot {
             && self
                 .registered_perspectives
                 .iter()
-                .copied()
+                .cloned()
                 .eq(registered_perspectives)
     }
 
@@ -103,7 +103,7 @@ impl WorkbenchSnapshot {
 
     /// Return the active perspective, if one is selected.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
-        self.active_perspective
+        self.active_perspective.clone()
     }
 
     /// Return the currently focused tab, if any.
@@ -180,23 +180,23 @@ mod tests {
 
     #[test]
     fn registration_and_layout_facts_are_exposed_without_shell_types() {
-        let editor = PerspectiveId("editor");
+        let editor = PerspectiveId::new("editor");
         let model = PanelId("model");
         let document = TabId::instance(model, 7);
         let mut snapshot = WorkbenchSnapshot::default();
 
-        snapshot.register_perspective(editor);
-        snapshot.register_perspective(editor);
-        assert!(snapshot.has_perspective(editor));
+        snapshot.register_perspective(editor.clone());
+        snapshot.register_perspective(editor.clone());
+        assert!(snapshot.has_perspective(editor.clone()));
         assert!(snapshot.has_perspective_named("editor"));
 
         snapshot.replace(
-            Some(editor),
+            Some(editor.clone()),
             Some(document),
             vec![TabId::singleton(PanelId("browser")), document],
             vec![document],
             vec![model],
-            vec![editor],
+            vec![editor.clone()],
             vec![model],
         );
 
