@@ -1032,7 +1032,7 @@ policy. It reuses the authoritative geometry and joint readers from
 the runtime physics package.
 
 **`lunco-usd-sim`**
-Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from shader intent and the USD cosim translator; the application runtime installs those independent projectors explicitly. Direct USD physics lowering remains in `lunco-usd-avian`.
+Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from shader intent and the USD cosim translator; the application runtime installs those independent projectors explicitly. Direct USD physics lowering remains in `lunco-usd-avian`. Physical wheel contact reuses its shared bound-material reader/projector; the canonical tire curve projection is supplied by `lunco-usd-sim-authoring`.
 
 **`lunco-usd-sim-authoring`**
 Render-free composed readers for the standard PhysX vehicle wheel-attachment

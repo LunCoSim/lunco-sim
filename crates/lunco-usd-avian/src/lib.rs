@@ -79,7 +79,7 @@ use lunco_usd_avian_reader::{
 };
 use openusd_schemas::physics::tokens as ptok;
 
-mod material;
+pub mod material;
 use material::read_physics_material;
 
 /// Runtime evidence for one joint-shaped entity, consumed by the generic Rhai
@@ -2333,7 +2333,7 @@ fn apply_physics_material(
 }
 
 /// Realize already validated material values before the next native physics step.
-fn insert_physics_material(
+pub fn insert_physics_material(
     commands: &mut Commands,
     entity: Entity,
     material: Option<material::PhysicsMaterial>,

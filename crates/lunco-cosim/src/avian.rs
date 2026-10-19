@@ -144,7 +144,6 @@ pub fn apply_joint_torque_actuators(
         Query<&mut lunco_port_core::Port>,
     )>,
     q_sleeping: Query<(), With<Sleeping>>,
-    q_child_of: Query<&ChildOf>,
     q_inputs: Query<&lunco_port_core::InputPorts>,
     mut bodies: ParamSet<(
         Query<(&Rotation, &AngularVelocity)>,
@@ -187,7 +186,9 @@ pub fn apply_joint_torque_actuators(
         if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_port_entity) {
             speed_port.value = coordinate_speed;
         }
-        let brake = if lunco_port_core::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
+        let brake = if q_inputs
+            .get(actuator.control_entity)
+            .ok()
             .is_some_and(|inputs| inputs.brake_active)
         {
             bounded_brake_torque(

@@ -779,7 +779,9 @@ Contact projection alternates with the native hard-geometry joint schedule,
 restricted to the affected connected bodies. It does not reintegrate motors or
 repeat compliant channels. Its symmetric sweeps reverse both constraint kinds
 and identities, propagating corrections through the prepared topology in both
-directions. The ordered native passes execute on one thread;
+directions. Multi-axis joint rows solve the coupled mass response in their
+constrained subspace using the existing rank-aware response kernel; free axes
+receive no multiplier. The ordered native passes execute on one thread;
 closure acquires the body query once for all ten forward/reverse native passes
 and does not dispatch workers between sequential constraints.
 Native independent body preparation, integration, inertia refresh and writeback
@@ -800,8 +802,10 @@ certify a clear path directly; uncertain paths retain the extremum search.
 Their SO(3) Jacobian maps corrections to the solved endpoint.
 
 Prepared native contact points supply their own anchors and separation offsets
-to continuous closure. Their trajectories may recover initial penetration but
-cannot deepen it. Projection publishes its applied normal impulse to the same
+to continuous closure. Their trajectories cannot deepen immutable initial
+penetration, and prepared native contacts must end separated within the
+configured tolerance. A cast starting in contact is followed by a fresh native
+endpoint query so rolling surfaces can admit their current material witness. Projection publishes its applied normal impulse to the same
 native point accumulator used by friction, restitution and warm starting;
 velocity projection applies it once. Native contact relaxation follows XPBD
 velocity projection, so friction consumes completed suspension and continuous

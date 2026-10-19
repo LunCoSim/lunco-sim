@@ -17,6 +17,20 @@ topology, limits, and commandable drives. When USD has no material schema for a
 physical concept, use the narrow LunCo applied API that owns that concept. Do
 not add a LunCo schema when standard USD already owns the fact.
 
+For assets intended for Omniverse, independently moving rigid bodies nested
+under another body need `!resetXformStack!` and explicit initial world poses.
+Author both joint local frames explicitly: portable UsdPhysics defaults are
+zero anchors and identity bases; inferred mount poses in a runtime are not USD
+scene facts. Bind a `Material` carrying `PhysicsMaterialAPI` through
+`material:binding:physics` for rigid surface contact. A PhysX wheel attachment's
+`tire` relationship must still resolve to `PhysxVehicleTireAPI`; a physics
+material is not a replacement endpoint. A physical wheel with a bound physics
+material uses the native contact law; do not add the shared slip-force law on
+top of its Coulomb impulses. The raycast realization consumes its vehicle tire
+curve independently of collider materials. Command ownership must remain
+explicit when a reset-stack body leaves its vessel transform subtree; the
+joint actuator stores its authored vehicle command owner.
+
 For a physical landing member, apply `PhysicsDriveAPI:linear` to a
 `PhysicsPrismaticJoint`. Author the drive's `stiffness`, `damping`, `maxForce`,
 and explicit force type; `targetPosition` and `targetVelocity` retain the
@@ -38,7 +52,11 @@ The shared headless/headful physics composition disables `XpbdSolverPlugin`;
 `lunco-physics::DeterministicJointSolverPlugin` owns ordered preparation,
 ordinary joint solving, hard closure and f64 velocity projection
 before contact relaxation. The native contact solver remains installed.
-Joint reactions stage across all types before one validated commit. A fault
+Multi-axis hard rows use a coupled mass response in their authored constrained
+subspace; do not project a vector error using only its scalar directional mass.
+Existing native contact overlap must also close at the solved endpoint; a
+rolling contact needs a current native witness. Joint reactions stage across
+all types before one validated commit. A fault
 holds physics and refuses native body/contact writeback in that same step;
 each guarded phase checks the current fault state separately. Numerical seam
 tests do not replace the authored drive/contact acceptance gates.

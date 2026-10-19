@@ -291,6 +291,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 .map(|shape| shape.aabb(bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY));
             api_value!({
                 "source_path": lunco_usd_avian_contracts::collider_source(world, *collider),
+                "body_relationship_present": world.get::<avian3d::prelude::ColliderOf>(*collider).is_some(),
+                "body_is_query_body": world.get::<avian3d::prelude::ColliderOf>(*collider).is_some_and(|owner|owner.body==entity),
+                "body_usd_prim_path": world.get::<avian3d::prelude::ColliderOf>(*collider).and_then(|owner|world.get::<UsdPrimPath>(owner.body)).map(|path|path.path.as_str()),
                 "physics_position_m": position.map(|p| api_value!([p.0.x, p.0.y, p.0.z])),
                 "physics_rotation_xyzw": rotation.map(|r| api_value!(r.0.to_array())),
                 "body_local_translation_m": transform.map(|t| api_value!([t.translation.x, t.translation.y, t.translation.z])),
@@ -476,6 +479,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "continuous_collision_enabled": world.get::<avian3d::prelude::SweptCcd>(entity).is_some(),
             "collider_source_paths": if collider {Some(collider_source_paths.into_iter().collect::<Vec<_>>())} else {None},
             "collider_local_bounds": collider_local_bounds,
             "colliders": collider_details,

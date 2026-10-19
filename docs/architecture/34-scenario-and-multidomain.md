@@ -259,3 +259,40 @@ scene** and gating tasks on their ports — not authoring the maths.
 - N solvers on one entity (use sub-prims).
 - Rewriting the cosim propagation core or rhai port verbs.
 - A bespoke objective/scoring engine (rhai predicates suffice).
+
+### Terminal physics faults and loading progress
+
+Terminal native physics faults keep integration held and release the transient
+physics-loading progress entry. A fault remains visible through the runtime
+fault owner rather than an indefinitely running scene load. The focused
+regression is `terminal_fault_retires_physics_loading_progress`.
+
+### Physical wheel material ownership
+
+The shared USD material reader resolves a bound `Material` carrying
+`PhysicsMaterialAPI`, retaining static/dynamic friction, restitution and combine
+modes. Both initial physical-wheel projection and live resynchronization reuse
+that reader and projector. Such a material selects native rigid contact;
+`SharedTireContact` and `JointedWheelTire` are absent together. Without a bound
+physics material, the physical-wheel realization uses the authored vehicle tire
+curve with the suppression marker. Raycast tire forces retain their existing
+curve contract. Standard wheel/tire/suspension attachment endpoint validation
+is unchanged. This is LunCoSim's realization of the authored USD data, not a
+claim to reproduce the NVIDIA vehicle solver.
+
+`QueryPhysicsState` exposes continuous collision activation and each collider's
+explicit native body relationship, including whether that body is the queried
+body and its USD identity. These read-only facts distinguish shape presence from
+ownership through the actual engine relationship.
+
+USD reset-stack detachment runs after child admission within the visual
+projection set, before specialized simulation projection can consume a pose.
+The physical-wheel split removes only the analytic cylinder's mesh-axis basis
+from the body transform, retaining the authored rigid-body orientation. The
+visual child carries that geometry basis once. This preserves rotated initial
+states and keeps the hinge and collider in the same body frame.
+
+The solved joint torque boundary stores its explicit vehicle command-surface
+entity. Brake readers use that owner directly; transform-stack resets may
+legitimately detach a wheel or carrier from the vessel's ECS transform tree.
+Mechanical or rendering ancestry must not select the command source.

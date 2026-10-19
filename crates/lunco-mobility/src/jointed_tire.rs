@@ -135,7 +135,6 @@ pub fn apply_jointed_tire_forces(
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     q_ports: Query<&Port>,
     q_inputs: Query<&InputPorts>,
-    q_child_of: Query<&ChildOf>,
     collisions: Collisions,
     fixed_time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -198,7 +197,9 @@ pub fn apply_jointed_tire_forces(
             let Ok(port) = q_ports.get(motor.port_entity) else {
                 continue;
             };
-            let braking = lunco_port_core::owning_input_ports(wheel, &q_child_of, &q_inputs)
+            let braking = q_inputs
+                .get(motor.control_entity)
+                .ok()
                 .is_some_and(|inputs| inputs.brake_active);
             let brake_torque = if braking {
                 bounded_brake_torque(motor.brake_torque, motor.rotational_inertia, omega, full_dt)

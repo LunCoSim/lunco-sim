@@ -188,11 +188,17 @@ impl Plugin for UsdVisualPlugin {
             // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
             // `!resetXformStack!` detachment. In `Update`, so the reparent has
-            // flushed long before `PostUpdate` propagates transforms — a prim
-            // never renders one frame with the ancestor chain still applied.
+            // flushed before simulation projection consumes body poses and
+            // before `PostUpdate` propagates transforms. A body must not be
+            // admitted with its discarded ancestor transform applied.
             // Runs every frame rather than once: the ancestry a prim must be
             // lifted out of is itself spawned asynchronously during load.
-            .add_systems(Update, detach_reset_xform_stack_prims)
+            .add_systems(
+                Update,
+                detach_reset_xform_stack_prims
+                    .after(admit_pending_usd_children)
+                    .in_set(UsdVisualProjectionSet),
+            )
             // Parametric lathes. BOTH are `Changed`-filtered, so on a scene nobody is
             // editing they iterate NOTHING — a nozzle's shape does not change while
             // the engine burns, and re-lathing it per frame is the exact mistake the
