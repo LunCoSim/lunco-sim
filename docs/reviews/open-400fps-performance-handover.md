@@ -1,5 +1,98 @@
 # High-quality realtime performance handover
 
+## Renderer and continuous-contact preparation — 2026-10-19
+
+The current renderer contract is committed as `f24c62ad7`; the CCD preparation
+contract is committed as `452c61cb4`. Canonical ownership and verification are
+in architecture `render-decoupling.md`, `terrain-substrate.md` and the
+`performance-profiling` skill. These application changes use maintained native
+APIs and do not modify dependency source. No application commit is pushed.
+
+Regular `cargo run -j 4 -- --help` succeeds after integrating main
+`4d6530a39`, including its static-mesh internal-edge correction and controller
+changes. The final production binary SHA-256 is
+`779e0ed48ea9b2e01e2a644cbec0812695cb6a454b4dc259ec7b3c07feee6726`.
+The windowed unattended Griffin mission passes all 16 authored checks at tick
+5221 (87.016667 simulated seconds). Readiness is clear, diagnostics contain zero
+errors, and all nine participants share the clock. The clean Twin revision is
+`e4ae2425d1b6a9312ca7e24152d2068ce67195d0`. The inspected screenshot retains
+terrain, the rover and its cast shadow. Earlier missions on the preceding
+collision-cooking source completed at tick 5459; that is a different source
+cohort. Evidence is `target/render-final-windowed-mission.{json,png,log}` and
+`target/render-final-cargo-run.log`.
+
+Both renderer owner tests pass through the production feature graph:
+`cargo test -p lunco-luncosim -p lunco-render-bevy --lib gpu_culling::tests -j 4`.
+The app library has no matching tests; the renderer runs two, with 85 filtered.
+The final continuous-contact production gate passes all 12 checks and exits
+zero (`target/ccd-final-contacts.log`). API ports 4396/4397 are released.
+The four touched Rust files were formatted once after validation. The skill
+catalogue validates all 43 entries. The CCD enumeration seam exhausts all CCD
+subsets through eight colliders and the sparse 100,000-collider case; its focused
+suite has 23 passing checks and the independent pinned-Parry failure described
+below. The final body/leaf indexing is covered by the production contact and
+Griffin gates, not an isolated FPS improvement measurement.
+
+### Performance evidence and limits
+
+The earlier exact frozen-tick-360 comparison retains the same Twin revision,
+1280×720 camera, settled 256 terrain tiles, nine participants and visual quality.
+Native GPU preparation measures 171.76/171.26/171.80 mean FPS; aligned CPU
+preparation measures 205.40/203.99/203.01. Inspected RGB channel differences are
+0.0244/0.0227/0.0177 out of 255. Evidence is
+`target/render-preparation-aligned-comparison.json`. Frozen-state results do
+not qualify the combined running target. A separate running/paused/resumed
+cohort measures 145.63/199.44/144.99 FPS, advances 303/0/304 ticks in roughly
+five seconds each, and records resumed native physics median 1.424 ms and
+full-cycle median 3.641 ms (`target/render-preparation-live-runtime-profile.json`).
+Later cohorts have different GPU clocks or concurrent GPU/CPU workloads. The
+final mission is correctness evidence, not clean FPS acceptance. The 200 FPS
+and sub-millisecond native physics targets remain unmet.
+
+The verified native Tracy capture `target/native-workers.tracy` has 8,643,835
+CPU zones over 86.8 seconds, intact framing, matching compressed payload and
+successful inclusive/self/GPU exports with no malformed rows. Resumed CCD
+preparation is 0.562 ms per call in that instrumented capture; paused CPU shadow
+batching is 1.247 ms per frame. Instrumentation produces catch-up bursts, so
+these are owner-attribution leads rather than normal service-time acceptance.
+`target/native-workers-analysis.json` and `target/native-workers-integrity.json`
+retain the details. This capture precedes the final CCD indexing and joint-clock
+repair. The earlier `target/atomic-griffin-tracy.tracy` also remains valid, but
+its missing shared-shadow spans cannot certify total shadow-pass coverage.
+
+A one-worker application profile and native GPU/direct-draw preparation were
+measured and rejected. The former worsened complete-frame/fixed-cycle timings;
+the latter was contention-affected and did not establish an improvement. Their
+candidate source is removed; decisions and raw evidence remain in
+`target/compute-profile-rejected-comparison.json` and
+`target/direct-render-comparison.json`. A package-scoped application clean
+recovered 6.6 GiB without deleting source, sibling worktrees or shared caches.
+
+### Clock, coupling and remaining correctness scope
+
+`00badd2b3` moves requested joint retirement to the next fixed boundary while
+also servicing paused requests through the same owner. The batched/paused
+production gates pass eight checks in each host. `d29cde401` commits scoped
+input transactions: the named owner counter regression passes, atomic exchange
+passes 10 checks per host, Modelica initialization/shared clock passes 43 and
+the external scalar FMI 3 clock passes 43. Evidence is
+`target/joint-clock-validation-summary.json` and
+`target/port-scoped-commit-summary.json`.
+
+`degenerate_native_triangle_retains_boundary_geometry` still fails inside the
+pinned Parry triangle projection for a collinear triangle. It calls the native
+query directly and does not exercise pair enumeration. The test remains visible;
+additional dependency-source edit approval is pending. This failure is not a
+claim that the tested Griffin mission fails.
+
+The installed OpenModelica 1.27.1 explicitly rejects FMI 3.0 export
+(`target/fmi-openmodelica/export.log`); no dependency source was edited. Its
+maintained exporter helper was removed because that tool could not produce the
+requested artifact. Newer documentation is not qualification of this installed
+version. Scalar Reference-FMU clock checks establish only the supported import
+profile. Direct-feedthrough scheduling, implicit algebraic-loop handling and
+broader external FMU interoperability remain open alongside performance.
+
 ## Runtime-surface input admission — 2026-10-18
 
 The shared exposure preparation owner admits a new policy projection only when
