@@ -252,6 +252,13 @@ existing port adapter performs the explicit f64-to-f32 GPU conversion. Both
 layers return additive integrated RGB with zero alpha; energy fractions
 partition one radiative estimate. Noise warps and attenuates the field.
 
+A raymarched volume declares `//!@capability lunco.volume-depth.v1` to request
+native opaque depth and own its sample clipping. The render adapter supplies
+the camera prepass and disables proxy-face depth rejection for that material;
+the shader must stop each ray at the opaque surface. The bound itself neither
+writes depth nor represents the emitting surface. See the plume architecture's
+occlusion contract for camera-inside, orthographic and MSAA handling.
+
 `computeFreeJetProfile` owns gas expansion; `computePlumePhotometry` owns
 per-nozzle normalization and optical estimates; `PlumePhotometry` and `RCSJet`
 expose their named outputs. Rhai authors connections once and never animates

@@ -123,6 +123,16 @@ Rhai authors connections and test stimuli. Read the
 this contract. The observation horizon is not a physical vacuum plume length,
 and optical defaults are not calibrated Griffin data.
 
+Raymarched volumes also need scene occlusion. Declare the generic
+`//!@capability lunco.volume-depth.v1` and clip each ray against native opaque
+depth. The renderer owns prepass lifetime and proxy pipeline state; shader code
+owns integration up to the surface. A cylinder depth test alone does not clip
+gas behind a leg inside the bound. Verify foreground/embedded/background
+occluders, inside cameras, both projections and MSAA with
+`scripts/api/test_plume_depth.py`; inspect actual vehicle views with their
+authored bloom restored. This is a render-boundary concern, not Modelica math
+or a per-frame Rhai visibility rule.
+
 ### Aggregate propulsion with multiple nozzles
 
 When a propulsion model publishes cluster-total thrust and flow but the vehicle

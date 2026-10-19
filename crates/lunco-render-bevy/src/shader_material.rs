@@ -318,6 +318,8 @@ pub struct ShaderKey {
     vertex_shader: Option<Handle<Shader>>,
     /// `true` → `cull_mode: None` (authored `doubleSided`).
     double_sided: bool,
+    /// The shader clips integrated samples against native opaque depth.
+    scene_depth: bool,
 }
 
 impl From<&ShaderMaterial> for ShaderKey {
@@ -326,6 +328,10 @@ impl From<&ShaderMaterial> for ShaderKey {
             shader: m.shader.clone(),
             vertex_shader: m.vertex_shader.clone(),
             double_sided: m.double_sided,
+            scene_depth: m
+                .schema
+                .capabilities
+                .contains(lunco_materials::dyn_params::VOLUME_DEPTH_CAPABILITY),
         }
     }
 }
@@ -375,6 +381,16 @@ impl Material for ShaderMaterial {
             }
         }
         if !is_prepass {
+            if key.bind_group_data.scene_depth {
+                // A volume bound is not its visible surface. In particular an
+                // inside-camera exit face can lie behind opaque geometry while
+                // foreground gas remains visible. The shader owns depth clipping.
+                if let Some(depth) = descriptor.depth_stencil.as_mut() {
+                    depth.depth_compare =
+                        Some(bevy::render::render_resource::CompareFunction::Always);
+                    depth.depth_write_enabled = Some(false);
+                }
+            }
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader = key.bind_group_data.shader.clone();
             }

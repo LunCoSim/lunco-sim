@@ -5,7 +5,12 @@
 //! authored energy fractions sum to one. Polynomial radial weights integrate
 //! to unit cross-sectional mean, and procedural detail only attenuates power.
 //! Luminous radiance (cd/m2) uses the camera exposure, matching Bevy lighting.
+//!@capability lunco.volume-depth.v1
 #import bevy_pbr::{mesh_functions, forward_io::VertexOutput, mesh_view_bindings::view}
+#ifdef DEPTH_PREPASS
+#import bevy_pbr::prepass_utils::prepass_depth
+#endif
+#import bevy_pbr::view_transformations::{frag_coord_to_ndc, position_ndc_to_world}
 #import lunco::noise::vnoise
 //!@default fuel_color_r 1.0
 //!@default fuel_color_g 1.0
@@ -87,13 +92,38 @@ fn transported_noise(q:vec3<f32>, radial_scale:f32, axial_scale:f32, seed:f32) -
     return mix(vnoise(vec3<f32>(xy,z)),vnoise(vec3<f32>(xy,z-period)),smoothstep(0.0,period,z));
 }
 @fragment
-fn fragment(input: VertexOutput,@builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
+#ifdef MULTISAMPLED
+    @builtin(sample_index) sample_index: u32,
+#endif
+) -> @location(0) vec4<f32> {
+#ifndef DEPTH_PREPASS
+    // The declared scene-depth requirement is pending native camera admission.
+    // Never submit unoccluded volume emission before that texture exists.
+    return vec4<f32>(0.0);
+#else
+#ifndef MULTISAMPLED
+    let sample_index=0u;
+#endif
     if mat.throttle<=0.0 || mat.plume_length_fraction<=0.0 || mat.profile_length_m<=0.0
         || mat.bound_radius_m<=0.0 || mat.radius_m_0<=0.0 { return vec4<f32>(0.0); }
     let inverse=mesh_functions::get_local_from_world(input.instance_index);
-    let surface=(inverse*vec4<f32>(input.world_position.xyz,1.0)).xyz;
-    let eye=(inverse*vec4<f32>(view.world_position,1.0)).xyz;
-    let ray=normalize(surface-eye);
+    let ndc=frag_coord_to_ndc(input.position);
+    let near_world=position_ndc_to_world(vec3<f32>(ndc.xy,1.0));
+    let orthographic=view.clip_from_view[3].w==1.0;
+    let direction=select(near_world-view.world_position,-view.world_from_view[2].xyz,orthographic);
+    // Start at this pixel's near plane, including when it clips the proxy.
+    // Orthographic rays remain parallel instead of converging at the camera.
+    let eye=(inverse*vec4<f32>(near_world,1.0)).xyz;
+    let ray=normalize((inverse*vec4<f32>(direction,0.0)).xyz);
+    let opaque_depth=prepass_depth(input.position,sample_index);
+    var scene_exit=1.0e30;
+    // Bevy uses reverse Z: zero is clear/infinite for perspective views.
+    if opaque_depth>0.0 || orthographic {
+        let opaque_world=position_ndc_to_world(vec3<f32>(ndc.xy,opaque_depth));
+        let opaque_local=(inverse*vec4<f32>(opaque_world,1.0)).xyz;
+        scene_exit=dot(opaque_local-eye,ray);
+    }
     let inside=abs(eye.y)<0.5 && length(eye.xz)<1.0;
     if front==inside {return vec4<f32>(0.0);}
     let inv=1.0/safe_direction(ray);
@@ -117,7 +147,7 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool) -> @location
         let slab0=(lo-eye)*inv;let slab1=(hi-eye)*inv;
         let near=min(slab0,slab1);let far=max(slab0,slab1);
         let entry=max(0.0,max(near.x,max(near.y,near.z)));
-        let exit=min(far.x,min(far.y,far.z));
+        let exit=min(scene_exit,min(far.x,min(far.y,far.z)));
         if exit<=entry {continue;}
         let metres_per_unit=length(ray*vec3<f32>(mat.bound_radius_m,mat.profile_length_m,mat.bound_radius_m));
         let target_step=max(0.00001,radii[station]*sigma*0.08);
@@ -158,4 +188,5 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool) -> @location
     }
     }
     return vec4<f32>(radiance*view.exposure,0.0);
+#endif
 }

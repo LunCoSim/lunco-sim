@@ -22,6 +22,7 @@ mod local_light_shadow_relevance;
 pub mod look_cache;
 mod procedural_sky;
 mod scene_camera;
+mod scene_depth;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
@@ -167,6 +168,7 @@ impl Plugin for LuncoRenderPlugin {
                 .add_systems(PostUpdate, apply_usd_prim_display_modes);
         }
         scene_camera::build(app);
+        scene_depth::build(app);
         gpu_culling::build(app);
         data_texture::build(app);
         light_transform_safety::build(app);
