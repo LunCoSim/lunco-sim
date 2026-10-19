@@ -181,6 +181,15 @@ admission. Live workers pass the exact communication point to the existing
 prediction own their internal steps. Preserve the fixed prediction lattice,
 event handling, input sampling and finite/completion validation when optimizing
 that path. Do not add another worker-side integration grid or catch-up planner.
+For replay divergence, enable
+`RUST_LOG=info,lunco_modelica_worker::step_audit=debug` in a separate diagnostic
+run. Compare session-relative step ids, communication times and ordered input/
+output fingerprints for each exact participant identity. These bounded log
+records locate differences; hash equality cannot prove state equality. Use
+`trace` for complete accepted samples, or `ReadModelicaStepSamples` for selected
+values in the last accepted transaction. Full traces can produce large logs
+and perturb scheduling; check storage and retain an uninstrumented acceptance
+run. Never infer a numerical repair solely because tracing hides a divergence.
 Keep communication-clock checks at floating point roundoff scale, with finite
 timestamps required at both request and completion admission. A solver's state
 tolerance must not loosen its communication endpoint validation. Validate the

@@ -412,6 +412,19 @@ fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> 
     ordered
 }
 
+/// Locate a differing ordered sample without formatting every solver variable.
+/// Full sample traces remain necessary to identify the differing values.
+fn scalar_sample_fingerprint(values: &[(String, f64)]) -> u64 {
+    let mut hash = lunco_hash::Fnv1a::new();
+    hash.write_u64(values.len() as u64);
+    for (name, value) in values {
+        hash.write_u64(name.len() as u64)
+            .write_bytes(name.as_bytes())
+            .write_u64(value.to_bits());
+    }
+    hash.finish()
+}
+
 /// Sends `Step` commands for each active model — **the co-simulation master's
 /// macro-step dispatch**.
 ///
@@ -749,6 +762,7 @@ pub fn handle_modelica_responses(
         Option<&mut ModelicaVariables>,
         Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
+        Option<&lunco_core::GlobalEntityId>,
     )>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
@@ -891,7 +905,9 @@ pub fn handle_modelica_responses(
         {
             continue;
         }
-        if let Ok((_, mut model, variables, source, epoch)) = q_models.get_mut(result.entity) {
+        if let Ok((_, mut model, variables, source, epoch, global_id)) =
+            q_models.get_mut(result.entity)
+        {
             // Terminal participants have no pending lifecycle operation. This
             // also protects participants beyond the first recorded scene fault.
             if lifecycle_result
@@ -1498,14 +1514,36 @@ pub fn handle_modelica_responses(
                 }
             }
             if let Some(in_flight) = accepted_step {
-                model.last_accepted_step = Some(lunco_modelica_runtime::ModelicaStepSample {
+                let sample = lunco_modelica_runtime::ModelicaStepSample {
                     session_id: model.session_id,
                     step_id: in_flight.step_id,
                     input_time_s: in_flight.start_time,
                     output_time_s: result.new_time,
                     inputs: in_flight.sampled_inputs,
                     outputs,
-                });
+                };
+                debug!(
+                    target: "lunco_modelica_worker::step_audit",
+                    entity = ?result.entity,
+                    api_id = ?global_id.map(lunco_core::GlobalEntityId::get),
+                    model = %model.model_name,
+                    session_id = sample.session_id,
+                    step_id = sample.step_id,
+                    input_time_s = sample.input_time_s,
+                    output_time_s = sample.output_time_s,
+                    input_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(&sample.inputs)),
+                    output_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(&sample.outputs)),
+                    "accepted Modelica communication sample"
+                );
+                bevy::log::trace!(
+                    target: "lunco_modelica_worker::step_audit",
+                    entity = ?result.entity,
+                    api_id = ?global_id.map(lunco_core::GlobalEntityId::get),
+                    model = %model.model_name,
+                    sample = ?sample,
+                    "accepted Modelica communication values"
+                );
+                model.last_accepted_step = Some(sample);
             }
             if result.is_new_model && result.error.is_none() && model.is_compiled {
                 session_starts.write(ModelicaSessionStarted {
@@ -1548,7 +1586,7 @@ pub fn handle_modelica_responses(
                     error.clone(),
                 );
             }
-            for (entity, mut model, _, _, _) in &mut q_models {
+            for (entity, mut model, _, _, _, _) in &mut q_models {
                 model.paused = true;
                 model.is_compiling = false;
                 model.is_compiled = false;
@@ -1583,7 +1621,7 @@ pub fn handle_modelica_responses(
     // A result landing is the only release edge for the coupling barrier.
     // Admission precedes clock projection; outstanding participants keep it held.
     if let Some(mut coupling) = coupling {
-        coupling.held = q_models.iter().any(|(entity, model, _, _, _)| {
+        coupling.held = q_models.iter().any(|(entity, model, _, _, _, _)| {
             let shared_clock_participant = participants
                 .as_deref()
                 .is_none_or(|participants| participants.requires_barrier(entity));
@@ -1601,6 +1639,24 @@ pub fn handle_modelica_responses(
 #[cfg(test)]
 mod compile_fault_tests {
     use super::*;
+
+    #[test]
+    fn communication_sample_fingerprint_retains_names_order_and_float_bits() {
+        let sample = vec![("a".to_owned(), 0.0), ("bc".to_owned(), 1.0)];
+        let fingerprint = scalar_sample_fingerprint(&sample);
+        for changed in [
+            vec![("a".to_owned(), -0.0), ("bc".to_owned(), 1.0)],
+            vec![("ab".to_owned(), 0.0), ("c".to_owned(), 1.0)],
+            vec![("bc".to_owned(), 1.0), ("a".to_owned(), 0.0)],
+            vec![
+                ("a".to_owned(), 0.0),
+                ("bc".to_owned(), f64::from_bits(1.0_f64.to_bits() + 1)),
+            ],
+        ] {
+            assert_ne!(fingerprint, scalar_sample_fingerprint(&changed));
+        }
+        assert_eq!(fingerprint, scalar_sample_fingerprint(&sample));
+    }
 
     #[derive(Resource, Default)]
     struct CapturedCompileRequests(Vec<CompileRequested>);

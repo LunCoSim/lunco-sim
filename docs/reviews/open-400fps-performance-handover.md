@@ -1,5 +1,46 @@
 # High-quality realtime performance handover
 
+## Mounted environment input divergence — 2026-10-19
+
+The worker response bridge exposes opt-in accepted-step diagnostics. Debug
+records carry stable API identity, session, step, communication times and
+ordered scalar fingerprints; trace records borrow the complete accepted sample.
+The existing `lunco-hash` substrate folds names and f64 bits without allocations
+or solver access. Disabled logging computes no fingerprints. The named
+fingerprint seam passes, including signed zero, one-ulp changes, names and order;
+regular `cargo run -j 4 -- --help` succeeds without compiler warnings.
+
+Two isolated headless Griffin runs pass 16 checks each and finish at tick 5460.
+Their 49,140 communication records and 2,366 captured input records through
+completion match. Both input captures contain only empty physical intent frames.
+The source is a separate checkout of Twin `bbc0e77b` with an exact copy of its
+ignored DEM (SHA-256 `22905e927ee5786075b8b86729b8abe86a0db1c4f8465a99b8d867a4d1adf1f8`).
+The binary is `78c8cf959dc654e1ad2f1a0f9b2af44eb93a2c28ab187fd7a152a487b700c919`.
+Matching fingerprints locate differences; they do not prove complete
+native-state equality.
+
+The same frozen source and binary pass all 16 checks in the GPU windowless
+host, with no nonempty physical inputs. Its first differing communication
+transaction is step 145. Full sample traces identify only gravity inputs in
+the IMU and solar inputs in the rover at that step; native pose and velocity
+inputs still match. The environment readers use composed hierarchy poses for
+non-physical probes. Native-parent pose composition and ancestor-motion
+invalidation need repair at their shared owners. Celestial frame and physical
+irradiance publication also run in `PreUpdate` behind the presentation angular
+error budget. Their fixed-cycle consumers can therefore read different epochs
+at the same simulation tick; a native mount repair alone does not close this
+authority leak. All these owned sessions release their
+ports. The ordinary windowed comparison is not qualified: one run received a
+manual left intent and its source checkout changed independently. Input
+isolation and recorded asset identity remain required before attributing replay
+differences to the solver. The performance and FMI targets remain open.
+
+The checkout's `target/` directory was subsequently removed during the
+investigation, including the binary and recorded runtime artifacts referenced
+below. Those are observed results, not retained evidence. New evidence belongs
+under `.cache/codex-evidence/` so Cargo cleanup does not remove it; runtime
+qualification of the repair requires a newly built binary and fresh captures.
+
 ## Immutable live-solver fact sharing — 2026-10-19
 
 `ModelicaLiveSolverSnapshot` is shared through `Arc` from the worker plan/cache
