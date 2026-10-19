@@ -1,5 +1,19 @@
 # High-quality realtime performance handover
 
+## Committed-main integration in progress — 2026-10-19
+
+The tutorials branch incorporates committed main `e18a14b1e`, including USD
+unit-scale projection, wheel/contact ownership and native plume depth. The CCD
+merge retains dense pair enumeration and both newer native-contact tests;
+renderer documentation retains native preparation admission and depth lifetime.
+The merged CCD suite passes 25 checks. Its single failure is the unchanged
+`degenerate_native_triangle_retains_boundary_geometry` already on main: direct
+pinned-Parry collinear triangle projection. It is not introduced by this merge;
+the separate dependency-source approval remains pending. Main's uncommitted
+physics and USD runtime changes are preserved. Production rebuilding and
+qualification of the integrated tree are pending; the sampling cohort below
+belongs to its explicitly recorded earlier binary.
+
 ## Physical celestial communication boundaries — 2026-10-19
 
 `lunco-time::CelestialClock` evaluates the existing tick-rooted affine domain

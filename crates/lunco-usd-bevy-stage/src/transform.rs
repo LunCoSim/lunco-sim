@@ -1,5 +1,5 @@
 use bevy::math::{DMat4, DVec3};
-use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
+use bevy::prelude::{EulerRot, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::UsdReadObject;
@@ -102,8 +102,7 @@ pub(crate) fn compose_live_xform_order_at(
         return Ok(None);
     }
     let matrix = local_to_parent_matrix_d_at(reader, path, time)?;
-    let cols: [f32; 16] = matrix.to_cols_array().map(|value| value as f32);
-    let raw = Transform::from_matrix(Mat4::from_cols_array(&cols));
+    let raw = project_transform_matrix_d(matrix, path)?;
     let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
     Ok(Some(convention.local_transform(raw)))
 }
@@ -213,12 +212,36 @@ pub fn world_transform(
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
     let matrix = world_transform_matrix_d_at(reader, path, 0.0)?;
-    // Explicit projection to the render-oriented Transform boundary.
-    let columns = matrix.to_cols_array().map(|value| value as f32);
-    if columns.iter().any(|value| !value.is_finite()) {
+    project_transform_matrix_d(matrix, path)
+}
+
+/// Decompose the canonical matrix before narrowing at the render boundary.
+/// Narrowing matrix columns first turns rotation roundoff into nonuniform
+/// scale, which can change an analytic collision shape into a faceted hull.
+pub fn project_transform_matrix_d(
+    matrix: DMat4,
+    path: &SdfPath,
+) -> Result<Transform, TransformReadError> {
+    if !matrix.is_finite()
+        || matrix.x_axis.truncate().length_squared() == 0.0
+        || matrix.y_axis.truncate().length_squared() == 0.0
+        || matrix.z_axis.truncate().length_squared() == 0.0
+    {
         return Err(malformed_transform(path));
     }
-    Ok(Transform::from_matrix(Mat4::from_cols_array(&columns)))
+    let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
+    let projected = Transform {
+        scale: scale.as_vec3(),
+        rotation: rotation.as_quat(),
+        translation: translation.as_vec3(),
+    };
+    if !projected.scale.is_finite()
+        || !projected.rotation.is_finite()
+        || !projected.translation.is_finite()
+    {
+        return Err(malformed_transform(path));
+    }
+    Ok(projected)
 }
 
 /// Compose canonical f64 geometry through the reader's USD transform stack.
@@ -306,6 +329,24 @@ mod high_precision_grid_translation_tests {
     fn plan(source: &str) -> crate::UsdStageProjectionPlan {
         let recipe = StageRecipe::from_source("high_precision.usda", source);
         crate::UsdStageProjectionPlan::from_recipe(&recipe).expect("compose authored stage")
+    }
+
+    #[test]
+    fn rotation_projection_preserves_scale_without_snapping_authored_changes() {
+        let path = SdfPath::new("/Body").unwrap();
+        for i in 0..300 {
+            let rotation = bevy::math::DQuat::from_euler(
+                EulerRot::XYZ,
+                i as f64 * 0.013,
+                i as f64 * 0.027,
+                i as f64 * 0.043,
+            );
+            for scale in [DVec3::ONE, DVec3::new(1.0, 1.000001, 2.0)] {
+                let matrix = DMat4::from_scale_rotation_translation(scale, rotation, DVec3::ONE);
+                let transform = project_transform_matrix_d(matrix, &path).unwrap();
+                assert_eq!(transform.scale, scale.as_vec3());
+            }
+        }
     }
 
     #[test]

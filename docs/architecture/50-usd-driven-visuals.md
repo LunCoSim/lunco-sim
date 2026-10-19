@@ -244,49 +244,31 @@ into the mesh — so it costs nothing to author and orients the primitive correc
 The transform is the right live channel when the whole prim moves or stretches as one:
 a range beam is exactly as long as the distance it reports.
 
-It is the wrong one when the shape is a *field* rather than a rigid change of size — an
-exhaust plume that shortens, narrows, thins and shimmers at once. Then the prim is a
-FIXED bounding volume and a WGSL shader draws inside it, taking the live value on a
-`inputs:<name>.connect` wire like any other port sink. `assets/shaders/plume.wgsl` is the
-worked example: the cone never moves, and `throttle` shapes what is drawn in it.
+When the shape is a field, use a simple bound and wire physical field samples
+to WGSL. `assets/shaders/plume.wgsl` integrates optically thin combustion
+emission inside a unit Cylinder. Modelica supplies five stations for radius,
+temperature and emissivity, metric bounds, and transported distance. The
+existing port adapter performs the explicit f64-to-f32 GPU conversion. Both
+layers return additive integrated RGB with zero alpha; energy fractions
+partition one radiative estimate. Noise warps and attenuates the field.
 
-The combustion shader clips a camera ray to the unit envelope and integrates
-emission and extinction inside it, using its authored sample count. The proxy
-surface contributes no colour; soft radial and axial density falloffs hide its
-edges. Ray entry is analytic rather than the rasterized surface position, and
-face selection accounts for a camera inside the envelope. Noise is advected
-downstream as a render detail, without adding simulation state.
+A raymarched volume declares `//!@capability lunco.volume-depth.v1` to request
+native opaque depth and own its sample clipping. The render adapter supplies
+the camera prepass and disables proxy-face depth rejection for that material;
+the shader must stop each ray at the opaque surface. The bound itself neither
+writes depth nor represents the emitting surface. See the plume architecture's
+occlusion contract for camera-inside, orthographic and MSAA handling.
 
-Alpha blending returns straight colour and coverage. The hot core's additive
-material uses Bevy's `BLEND_PREMULTIPLIED_ALPHA` pipeline: return integrated
-emission with zero output alpha so the background remains visible. Dividing
-emission by coverage in that pipeline cancels the fade and exposes the proxy
-edge. Keep nozzle-class colour and density choices in USD materials; neither
-blend convention changes delivered thrust, propellant flow or light ownership.
+`computeFreeJetProfile` owns gas expansion; `computePlumePhotometry` owns
+per-nozzle normalization and optical estimates; `PlumePhotometry` and `RCSJet`
+expose their named outputs. Rhai authors connections once and never animates
+the effect. Place the bound at the nozzle exit. Keep its geometry separate from
+force-actuator frames: changing a visual envelope must not move a force source.
 
-`LunCo.Propulsion.computePlumePhotometry` owns the stateless plume equations.
-Its fixed-size result follows the named `PlumePhotometry` output declaration
-order. The model exposes those ports for USD connections; `RCSJet` calls the
-same function directly with static nozzle parameters and delivered engine
-signals. Function-local intermediates do not become component algebraic
-variables in the assembled RCS network. The physical thruster equations and
-public RCS outputs retain their existing contract.
-
-For an engine cluster, `LunCo.Propulsion.PlumePhotometry.engine_count` is the
-number of identical nozzles represented by its aggregate thrust and propellant
-flow inputs. The model divides those extensive quantities by the count when it
-derives each plume's exit pressure and light output. Author one fixed plume pair
-and one simulation-driven light at each nozzle, and connect each to that shared
-photometry result. A single-nozzle vehicle leaves `engine_count` at its default
-of one. Do not fan total cluster light out to every nozzle without this per-nozzle
-normalization.
-
-Place each fixed plume envelope at the measured nozzle exit plane and orient its
-narrow end away from the nozzle. Its initial throttle and light intensity must be
-zero so a paused scene starts with no exhaust; simulation outputs reveal it after
-the model advances. Bind vehicle-specific plume materials in the vehicle
-composition layer, so a shared nozzle component does not depend on one vehicle's
-absolute material paths.
+See [the plume model](propulsion-plume.md) for equations, uncalibrated optical
+assumptions, the finite observation horizon, validity limits and production
+acceptance. Aggregate engines divide extensive inputs by `engine_count`;
+independent engine-out state needs one plume model per engine.
 
 The test is what the number means. If it is a dimension, scale the prim. If it is a
 parameter the appearance is a function of, wire it to a shader —

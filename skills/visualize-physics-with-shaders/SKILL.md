@@ -114,13 +114,24 @@ def SphereLight "PlumeLight"
 }
 ```
 
-The engine plume is the worked example end to end: propulsion and nozzle outputs
-feed `LunCo.Propulsion.PlumePhotometry`, which derives the physical free-jet length,
-visible length fraction, luminous power, and source radius. USD connects that length
-fraction and the light outputs to a fixed-capacity WGSL cone and its child light.
-WGSL owns the perceptual width response and flicker; Modelica owns the physical
-length and photometry; Rhai supplies stimulus and verdicts only. Zero thrust is
-therefore dark without a script-side visual mirror.
+The engine plume is the worked example: Modelica supplies conservative gas
+stations, an energy-bounded optical estimate and transported distance; USD
+connects these to `plume.wgsl` and a local light. A Cylinder bounds the expanding
+field. Modelica owns gas math; WGSL integrates emission and advected detail;
+Rhai authors connections and test stimuli. Read the
+[model and limits](../../docs/architecture/propulsion-plume.md) before changing
+this contract. The observation horizon is not a physical vacuum plume length,
+and optical defaults are not calibrated Griffin data.
+
+Raymarched volumes also need scene occlusion. Declare the generic
+`//!@capability lunco.volume-depth.v1` and clip each ray against native opaque
+depth. The renderer owns prepass lifetime and proxy pipeline state; shader code
+owns integration up to the surface. A cylinder depth test alone does not clip
+gas behind a leg inside the bound. Verify foreground/embedded/background
+occluders, inside cameras, both projections and MSAA with
+`scripts/api/test_plume_depth.py`; inspect actual vehicle views with their
+authored bloom restored. This is a render-boundary concern, not Modelica math
+or a per-frame Rhai visibility rule.
 
 ### Aggregate propulsion with multiple nozzles
 
@@ -135,8 +146,9 @@ the count from the Twin's typed engine-instance configuration and verify the
 authored model parameter against it. Do not send the undivided cluster light to
 every nozzle or calculate per-engine plume state in Rhai.
 
-Set the fixed envelope's nozzle end on the measured bell exit plane and point its
-narrow end down the exhaust axis. Start its throttle and light intensity at zero;
+Place the Cylinder nozzle end at the measured bell exit plane and orient its
+expansion downstream. Preserve an invertible authored scale while idle; shader
+inputs keep it dark. Do not scale a physical force-actuator frame. Start its throttle and light intensity at zero;
 the simulation's live outputs reveal the flame during a burn.
 Keep vehicle-specific material paths in the vehicle composition layer; a reusable
 nozzle component must not point at a particular vehicle's absolute material path.
@@ -148,12 +160,12 @@ simulation-driven flame, confirm the continuous model compiles and produces samp
 then compare an idle sample with a powered sample:
 
 - At zero delivered thrust, `render_throttle`, `visual_length_fraction`, and
-  `intensity` are zero. `radius` may remain at its authored idle value; zero light
+  `intensity` are zero. `radius` remains the physical exit radius; zero light
   intensity and the shader's zero throttle keep the plume dark.
 - During a burn, those three outputs are finite and positive, and the powered
-  values reach the cone and light through the composed USD connections.
+  values reach the volume and light through the composed USD connections.
 - Read the composed ports on the photometry model and at least one flame/light
-  sink, then inspect the rendered vehicle to confirm the cone responds and the
+  sink, then inspect the rendered vehicle to confirm the volume responds and the
   light affects nearby terrain. A solver sample proves the values; a rendered
   inspection proves the visual result.
 
@@ -194,8 +206,8 @@ deferral with a known migration path, not the absence of a standard.
 
 - **A custom additive shader must return integrated emission.** Bevy's Add
   material shares `BLEND_PREMULTIPLIED_ALPHA` with premultiplied blending.
-  For the plume's additive hot core, return premultiplied RGB and zero alpha;
-  its ordinary alpha-blended outer volume returns straight RGB and coverage.
+  For both optically thin plume layers, return integrated RGB and zero alpha.
+  Their energy fractions must sum to one.
   Dividing the additive RGB by coverage leaves a bright hard edge as density
   approaches zero. Check both material modes in a windowed burn and shutdown,
   including an oblique view and a small RCS nozzle.

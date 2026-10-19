@@ -188,11 +188,17 @@ impl Plugin for UsdVisualPlugin {
             // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
             // `!resetXformStack!` detachment. In `Update`, so the reparent has
-            // flushed long before `PostUpdate` propagates transforms — a prim
-            // never renders one frame with the ancestor chain still applied.
+            // flushed before simulation projection consumes body poses and
+            // before `PostUpdate` propagates transforms. A body must not be
+            // admitted with its discarded ancestor transform applied.
             // Runs every frame rather than once: the ancestry a prim must be
             // lifted out of is itself spawned asynchronously during load.
-            .add_systems(Update, detach_reset_xform_stack_prims)
+            .add_systems(
+                Update,
+                detach_reset_xform_stack_prims
+                    .after(admit_pending_usd_children)
+                    .in_set(UsdVisualProjectionSet),
+            )
             // Parametric lathes. BOTH are `Changed`-filtered, so on a scene nobody is
             // editing they iterate NOTHING — a nozzle's shape does not change while
             // the engine burns, and re-lathing it per frame is the exact mistake the
@@ -3564,8 +3570,34 @@ fn detach_reset_xform_stack_prims(
         // ancestor stack.  Keep the entity under the stage root (so its mount
         // and big-space frame remain intact), but express this prim's local
         // matrix in the root entity's frame.
-        let root_inverse = stage_root_local.to_matrix().inverse();
-        let reset_local = Transform::from_matrix(root_inverse * local.to_matrix());
+        // A projected quaternion retains f32 norm roundoff. Normalize it in
+        // f64 before matrix composition so rotation cannot invent scale.
+        let matrix_d = |transform: &Transform| {
+            bevy::math::DMat4::from_scale_rotation_translation(
+                transform.scale.as_dvec3(),
+                transform.rotation.as_dquat().normalize(),
+                transform.translation.as_dvec3(),
+            )
+        };
+        let reset_matrix = matrix_d(stage_root_local).inverse() * matrix_d(local);
+        let path = SdfPath::new(&prim.path).expect("projected USD prim has a valid path");
+        let reset_local =
+            match lunco_usd_bevy_stage::project_transform_matrix_d(reset_matrix, &path) {
+                Ok(transform) => transform,
+                Err(error) => {
+                    let message = error.to_string();
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
+                    lunco_core::trigger_runtime_error(
+                        &mut commands,
+                        "usd-visual-sync-failed",
+                        message,
+                    );
+                    continue;
+                }
+            };
         info!(
             "[usd-bevy] {} resets its transform stack — projecting onto the stage world frame ({anchor:?})",
             prim.path,
@@ -3698,6 +3730,48 @@ mod point_instance_mesh_binding_tests {
 #[cfg(test)]
 mod reset_xform_stack_tests {
     use super::*;
+
+    #[test]
+    fn reset_rotation_does_not_invent_nonuniform_collider_scale() {
+        let mut app = App::new();
+        app.add_systems(Update, detach_reset_xform_stack_prims);
+        let stage = Handle::<UsdStageAsset>::default();
+        let root = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Root".into(),
+                },
+                Transform::IDENTITY,
+            ))
+            .id();
+        let mut bodies = Vec::new();
+        for i in 0..50 {
+            bodies.push(
+                app.world_mut()
+                    .spawn((
+                        UsdPrimPath {
+                            stage_handle: stage.clone(),
+                            path: format!("/Root/Body{i}"),
+                        },
+                        Transform::from_rotation(Quat::from_euler(
+                            EulerRot::XYZ,
+                            i as f32 * 0.13,
+                            i as f32 * 0.27,
+                            i as f32 * 0.43,
+                        )),
+                        UsdResetXformStack,
+                        ChildOf(root),
+                    ))
+                    .id(),
+            );
+        }
+        app.update();
+        for body in bodies {
+            assert_eq!(app.world().get::<Transform>(body).unwrap().scale, Vec3::ONE);
+        }
+    }
 
     #[test]
     fn reset_ignores_stage_root_authored_transform_but_keeps_mount() {

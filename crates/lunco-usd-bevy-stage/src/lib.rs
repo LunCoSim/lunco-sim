@@ -34,8 +34,8 @@ pub use read::{UsdRead, UsdReadObject, UsdReadPrimFacts, UsdReadSource};
 pub(crate) use transform::compose_live_xform_order_at;
 pub use transform::{
     TransformReadError, euler_xyz_deg_to_quat, grid_translation_d_at, local_transform_at,
-    local_transform_matrix_d_at, read_transform_from_usd, read_xform_op_order,
-    transform_in_body_frame, world_transform, world_transform_matrix_d_at,
+    local_transform_matrix_d_at, project_transform_matrix_d, read_transform_from_usd,
+    read_xform_op_order, transform_in_body_frame, world_transform, world_transform_matrix_d_at,
 };
 pub use units::stage_convention;
 pub use view::StageView;

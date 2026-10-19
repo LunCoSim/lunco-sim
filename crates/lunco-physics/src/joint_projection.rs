@@ -7,7 +7,7 @@ use avian3d::dynamics::solver::{
 };
 use avian3d::prelude::*;
 use bevy::{
-    math::{DQuat, DVec3},
+    math::{DMat3, DQuat, DVec3},
     prelude::*,
 };
 
@@ -337,6 +337,8 @@ impl JointProjection {
                 + self.point.center_difference;
             let mut position_error = None;
             let mut angle_error = None;
+            let mut position_space = DMat3::IDENTITY;
+            let mut angle_space = DMat3::IDENTITY;
             match row {
                 GeometryRow::Anchors => position_error = Some(separation),
                 GeometryRow::Distance(limit) => {
@@ -345,6 +347,7 @@ impl JointProjection {
                         return Err("separated distance anchors have no resolved direction");
                     }
                     if length != 0.0 {
+                        position_space = outer(separation / length);
                         position_error = Some(
                             separation * ((length - length.clamp(limit.min, limit.max)) / length),
                         );
@@ -362,9 +365,11 @@ impl JointProjection {
                         }
                         GeometryRow::SliderAlignment(axis) => {
                             let axis = unit(frames[0] * axis)?;
+                            position_space = DMat3::IDENTITY - outer(axis);
                             position_error = Some(separation - axis * separation.dot(axis));
                         }
                         GeometryRow::SliderLimit(axis, limit) => {
+                            position_space = outer(unit(frames[0] * axis)?);
                             position_error =
                                 Some(-limit.compute_correction_along_axis(
                                     separation,
@@ -372,10 +377,12 @@ impl JointProjection {
                                 ))
                         }
                         GeometryRow::AlignedAxes(axis) => {
+                            angle_space = DMat3::IDENTITY - outer(unit(frames[0] * axis)?);
                             angle_error =
                                 Some(axis_error(frames[0] * axis, frames[1] * axis, None)?)
                         }
                         GeometryRow::Angle(axis, limit) => {
+                            angle_space = outer(unit(frames[0] * axis)?);
                             let perpendicular = axis.any_orthonormal_vector();
                             angle_error = Some(angle_error_about(
                                 unit(frames[0] * axis)?,
@@ -403,10 +410,16 @@ impl JointProjection {
                 }
             }
             if let Some(error) = position_error {
-                linear += project_position([&mut a, &mut b], inertias, levers, error)?;
+                linear +=
+                    project_position([&mut a, &mut b], inertias, levers, error, position_space)?;
             }
             if let Some(error) = angle_error {
-                angular -= project_angle([&mut a, &mut b], inertias, error)?;
+                if matches!(row, GeometryRow::Swing(..) | GeometryRow::Twist(..))
+                    && error.length_squared() > 0.0
+                {
+                    angle_space = outer(error.normalize());
+                }
+                angular -= project_angle([&mut a, &mut b], inertias, error, angle_space)?;
             }
         }
         if ![&a, &b].into_iter().all(|body| {
@@ -471,6 +484,7 @@ fn project_position(
     inertias: [&SolverBodyInertia; 2],
     levers: [DVec3; 2],
     error: DVec3,
+    space: DMat3,
 ) -> Result<DVec3, &'static str> {
     if !error.is_finite() {
         return Err("joint positional error is not finite");
@@ -482,21 +496,20 @@ fn project_position(
     if magnitude == 0.0 {
         return Ok(DVec3::ZERO);
     }
-    let direction = error / magnitude;
-    let response: f64 = inertias
-        .into_iter()
-        .zip(levers)
-        .map(|(inertia, lever)| {
-            PositionConstraint::compute_generalized_inverse_mass(
-                &ProjectionKernel,
-                direction.dot(inertia.effective_inv_mass() * direction),
-                inertia.effective_inv_angular_inertia(),
-                lever,
-                direction,
-            )
-        })
-        .sum();
-    let impulse = correction_impulse(error, response)?;
+    // Solve all constrained channels together. A scalar inverse mass along
+    // the current error leaves cross-axis errors for anisotropic bodies.
+    let response = |direction: DVec3| {
+        inertias
+            .into_iter()
+            .zip(levers)
+            .fold(DVec3::ZERO, |sum, (inertia, lever)| {
+                sum + inertia.effective_inv_mass() * direction
+                    + (inertia.effective_inv_angular_inertia() * lever.cross(direction))
+                        .cross(lever)
+            })
+    };
+    let matrix = DMat3::from_cols(response(DVec3::X), response(DVec3::Y), response(DVec3::Z));
+    let impulse = block_correction_impulse(error, matrix, space)?;
     let [a, b] = bodies;
     ProjectionKernel.apply_positional_impulse(
         a,
@@ -514,6 +527,7 @@ fn project_angle(
     bodies: [&mut SolverBody; 2],
     inertias: [&SolverBodyInertia; 2],
     error: DVec3,
+    space: DMat3,
 ) -> Result<DVec3, &'static str> {
     if !error.is_finite() {
         return Err("joint angular error is not finite");
@@ -525,12 +539,13 @@ fn project_angle(
     if magnitude == 0.0 {
         return Ok(DVec3::ZERO);
     }
-    let direction = error / magnitude;
-    let response: f64 = inertias
-        .into_iter()
-        .map(|inertia| direction.dot(inertia.effective_inv_angular_inertia() * direction))
-        .sum();
-    let impulse = correction_impulse(error, response)?;
+    let response = |direction| {
+        inertias.into_iter().fold(DVec3::ZERO, |sum, inertia| {
+            sum + inertia.effective_inv_angular_inertia() * direction
+        })
+    };
+    let matrix = DMat3::from_cols(response(DVec3::X), response(DVec3::Y), response(DVec3::Z));
+    let impulse = block_correction_impulse(error, matrix, space)?;
     let [a, b] = bodies;
     ProjectionKernel.apply_angular_impulse(
         a,
@@ -542,18 +557,34 @@ fn project_angle(
     Ok(impulse)
 }
 
-fn correction_impulse(error: DVec3, response: f64) -> Result<DVec3, &'static str> {
-    if !response.is_finite() || response < 0.0 {
+fn outer(axis: DVec3) -> DMat3 {
+    DMat3::from_cols(axis * axis.x, axis * axis.y, axis * axis.z)
+}
+
+/// Mass-metric projection in the row's authored constrained subspace. The
+/// maintained symmetric eigensolver supplies the pseudoinverse: locked/free
+/// null modes receive no impulse, preserving native locked-axis semantics.
+fn block_correction_impulse(
+    error: DVec3,
+    response: DMat3,
+    space: DMat3,
+) -> Result<DVec3, &'static str> {
+    if !response.is_finite() || !space.is_finite() {
         return Err("joint projection response is invalid");
     }
-    if response == 0.0 {
+    let scale = response
+        .x_axis
+        .abs()
+        .max(response.y_axis.abs())
+        .max(response.z_axis.abs())
+        .max_element();
+    if scale == 0.0 {
         return Ok(DVec3::ZERO);
     }
-    let impulse = error / response;
-    if !impulse.is_finite() {
-        return Err("joint projection impulse is not representable");
-    }
-    Ok(impulse)
+    // Free channels have zero RHS. A positive complementary block preserves
+    // that null-space result without introducing repeated artificial zero roots.
+    let matrix = space * response * space + (DMat3::IDENTITY - space) * scale;
+    Ok(space * crate::joint::responsive_impulse(matrix, space * error)?)
 }
 
 #[cfg(test)]
@@ -592,6 +623,26 @@ mod tests {
 
     fn inertia() -> SolverBodyInertia {
         SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, LockedAxes::new(), 0, true)
+    }
+
+    #[test]
+    fn anisotropic_block_resolves_coupled_channels_and_preserves_free_axis() {
+        let response = DMat3::from_cols(
+            DVec3::new(2.0, 0.6, 0.2),
+            DVec3::new(0.6, 1.0, 0.3),
+            DVec3::new(0.2, 0.3, 3.0),
+        );
+        let error = DVec3::new(0.1, -0.2, 0.3);
+        let impulse = block_correction_impulse(error, response, DMat3::IDENTITY).unwrap();
+        assert!((response * impulse - error).length() < 1e-12);
+        let axis = DVec3::new(0.2, 0.7, -0.4).normalize();
+        let constrained = DMat3::IDENTITY - outer(axis);
+        let impulse = block_correction_impulse(error, response, constrained).unwrap();
+        assert!(impulse.dot(axis).abs() < 1e-12);
+        assert!((constrained * (response * impulse - error)).length() < 1e-12);
+        let impulse = block_correction_impulse(error, response, outer(axis)).unwrap();
+        assert!(impulse.cross(axis).length() < 1e-12);
+        assert!((outer(axis) * (response * impulse - error)).length() < 1e-12);
     }
 
     #[test]
