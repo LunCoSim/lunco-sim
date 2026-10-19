@@ -2,8 +2,8 @@
 
 The review covered the canonical Griffin/FLIP Twin and the complete shared
 `assets/models` source inventory. Repository and source/provenance verification
-passed. All 113 initial Modelica files parsed; the final inventory has 114 files
-including the new physical regression fixture, and all parse successfully.
+passed. All 113 initial Modelica files parsed; the final inventory has 115 files
+including the physical and mechanical regression fixtures, and all parse successfully.
 A production workbench sweep inspected 107 non-negative-test source files and
 89 compile targets. Required-input failures and open physical connectors were
 kept distinct from compiler errors. Closed production networks and explicit
@@ -89,13 +89,13 @@ Existing production gates passed: drivetrain 6, electrical/thermal 6,
 empty battery 4, plume conservation 48, RCS feed starvation 16, Griffin GNC 12,
 engine-out 20, RCS commands 19, fuel exhaustion 11 and oxidizer exhaustion 11
 (153 assertions). The solar rover energy cycle also passes 51 assertions,
-and FLIP route following passes all 16 assertions (220 existing assertions in
-total). The route observer now preserves the route editor's typed `retryable`
+and FLIP route/thermal verification passes 19 assertions (223 scenario
+assertions in total). The route observer now preserves the route editor's typed `retryable`
 status while a point edit projects, bounded by its existing ten-second deadline;
 terminal errors still fail immediately with their diagnostic. The GNC gate uses the unchanged fixed-rk4 solver. All source
 and requirement checks pass (214 typed targets/evidence records, 55 sources).
 The normal surface-operations scene reaches readiness with zero pending holds
-and no fault; all nine Modelica participants advance beyond 0.1 s.
+and no fault; all ten Modelica participants advance beyond 0.1 s.
 The endpoint helper's exact production function and unit test were compiled
 and run directly with rustc; a broad Cargo unit build was stopped when it
 started building another dependency feature set with low disk space. The
@@ -108,17 +108,49 @@ port-release checks. User port 3743 was not controlled. Full MSL compatibility,
 flight qualification and calibrated spacecraft performance are outside this
 review's acceptance scope.
 
+## Passive mechanical losses
+
+`GearRatio` keeps the rigid speed relation and applies the authored mesh
+efficiency according to incoming power direction: `tau_b=-ratio*eta*tau_a`
+when side a drives, and `tau_b=-ratio*tau_a/eta` when side b drives. Its signed
+terminal powers sum to the exposed `heat` output. The constant-efficiency model
+has no stored energy, backlash, slip or static-friction state; at rest it selects
+the forward torque relation with zero power. The authored output torque is a
+rating: exceeding it stops the solve with an owner diagnostic. A torque-limiting
+clutch requires an explicit slip model. `BearingFriction` likewise exposes
+nonnegative `d*w^2` as heat and rejects negative damping.
+
+The [Modelica Association loss model](https://doc.modelica.org/Modelica%204.0.0/Resources/helpWSM/Modelica/Modelica.Mechanics.Rotational.Components.LossyGear.html)
+uses direction-dependent mesh efficiency and distinguishes bearing friction.
+This library uses the reduced constant-efficiency, viscous-only subset and does
+not claim the full sticking/sliding model. FLIP's four gearbox heat outputs feed
+four `HeatLoad` facets in its enabled left/right thermal banks. The
+bank coefficients and lumping remain study assumptions, not FLIP calibration.
+
+Native wheel bearing drag, brakes, tire slip and suspension damping retain their
+existing native force/torque owners. No additional efficiency or bearing element
+is applied to them. Their dissipated energy leaves the modeled mechanical
+subsystem; its distribution into hub, brake, tire and terrain temperatures is
+outside the motor/gear thermal banks. Native numerical dissipation is not
+reported as physical heat. This is not a whole-vehicle thermal qualification.
+
+The maintained `scripts/api/test_mechanical_losses.py` gate passes 41 authored
+checks in both windowed and headless production sessions: four quadrants,
+negative reduction, zero load/speed, unity efficiency, reversal, signed bearing
+drag, motor-to-shaft power and stored-heat balance, invalid parameters, and
+initial/transient overload. The transient rating violation is diagnosed after
+startup. No Rust or third-party source change is needed for these equations.
+Fresh affected gates pass drive 6, thermal 6, empty battery 4, solar energy 51,
+and FLIP route/thermal 19. The route observes actual gear loss at the thermal
+participant and a rising thermal-bank temperature while completing all three
+waypoints. Surface startup advances all ten Modelica participants fault-free.
+Evidence: `/tmp/griffin-mechanical-losses-20261019`.
+
 ## Remaining non-compilation findings
 
 These source-level defects remain open; successful compilation is not evidence
 that the entire component catalogue is physically qualified:
 
-- `LunCo.Mechanics.GearRatio` applies the same torque efficiency in both power
-  directions. In a back-driven case with ratio 10, efficiency 0.8, fast-side
-  torque -1 N.m and shaft speeds 10/1 rad/s, its two terminal powers sum to
-  -2 W. That creates power instead of dissipating it. Its torque cap also lacks
-  a slip/overload energy model. This needs a bidirectional transmission contract
-  and an overload policy, not a relaxed motor energy tolerance.
 - `LunCo.Comms.DataBuffer` and `LunCo.Storage.MassMemory` limit negative storage
   rates but not the upper capacity. Constant net input of one storage unit per
   second fills a one-unit device to 200% at two seconds. Capacity enforcement
@@ -131,5 +163,5 @@ that the entire component catalogue is physically qualified:
 
 This patch repairs the demonstrated compile, sensor/phase-change closure,
 controller, motor and heater defects and establishes their production regression.
-The transmission/storage/RF findings above remain separate plant-model work;
+The storage/RF findings above remain separate plant-model work;
 no claim of full system energy or capacity qualification is made.

@@ -1,35 +1,33 @@
 within LunCo.Mechanics;
-// An ideal reduction with a loss factor: the gearbox, stated as a relation between two
-// flanges rather than as a pair of formulas someone applies by hand.
-//
-//   phi_a = ratio * phi_b          the output turns `ratio` times slower
-//   tau_b = -ratio * eta * tau_a   and correspondingly harder, less what friction took
-//
-// `ratio` > 1 is a REDUCTION (motor fast, wheel slow), matching how every gearbox in this
-// repo is authored as `inputs:ratio` on each gearbox instance.
-//
-// Why this replaces arithmetic in Rust: `axle_peak_torque` and `axle_no_load_speed` are the
-// two halves of the relation above, evaluated once at config time and thereafter carried as
-// derived numbers. Stated as equations they cannot drift apart, and — the part no formula
-// gives you — the SPEED path runs backwards through the same relation, so a motor composed
-// behind this one sees the shaft speed the wheel imposes on it. That is what the causal
-// `inputs:torque.connect` could never do, and what the torque-speed curve needs in order to
-// leave Rust at all.
-//
-// Efficiency is applied on the torque path only: a gearbox loses force to friction, not
-// revolutions. The authored output rating is a physical torque limit, not a runtime
-// fallback or a Rust-side estimate.
+// Rigid, grounded transmission with constant mesh efficiency in either power
+// direction. Positive terminal power enters the gearbox; the sum leaves as heat.
+// This reduced model has no backlash, slip, static friction, or stored energy.
+// The torque rating is an operating-envelope check, not a slipping clutch.
 model GearRatio
   extends LunCo.Icons.Mechanics;
-  parameter Real ratio = 1200.0 "Reduction ratio, driving:driven (>1 reduces speed)";
-  parameter Real eta = 0.85 "Mechanical efficiency, 0..1";
-  parameter Real max_output_torque = 400.0 "Output-shaft torque rating, N.m";
+  parameter Real ratio = 1200.0 "Signed fast/slow shaft speed ratio, nonzero";
+  parameter Real eta = 0.85 "Mesh efficiency in either power direction, 0 < eta <= 1";
+  parameter Real max_output_torque(unit="N.m") = 400.0 "Output-shaft torque rating";
 
-  Flange flange_a "Fast side — the motor";
-  Flange flange_b "Slow side — the wheel";
+  Flange flange_a "Fast side";
+  Flange flange_b "Slow side";
   output Real speed_a(unit="rad/s") "Fast-side shaft speed";
+  output Real power_a_w(unit="W") "Mechanical power entering flange a";
+  output Real power_b_w(unit="W") "Mechanical power entering flange b";
+  output Real heat(unit="W") "Mesh loss available to a thermal HeatLoad";
 equation
+  assert(abs(ratio) > 0.0, "GearRatio requires a nonzero ratio");
+  assert(eta > 0.0 and eta <= 1.0, "GearRatio requires 0 < eta <= 1");
+  assert(max_output_torque > 0.0, "GearRatio requires a positive torque rating");
   flange_a.phi = ratio * flange_b.phi;
-  flange_b.tau = -max(-max_output_torque, min(max_output_torque, ratio * eta * flange_a.tau));
   speed_a = der(flange_a.phi);
+  power_a_w = flange_a.tau * speed_a;
+  // At rest the forward relation selects a stateless torque branch; no power
+  // flows. A finite holding/stiction envelope requires a friction model.
+  flange_b.tau = -ratio * flange_a.tau *
+    (if noEvent(power_a_w >= 0.0) then eta else 1.0 / eta);
+  power_b_w = flange_b.tau * der(flange_b.phi);
+  heat = power_a_w + power_b_w;
+  assert(abs(flange_b.tau) <= max_output_torque,
+    "GearRatio output torque exceeds its rating; model overload or slip explicitly");
 end GearRatio;

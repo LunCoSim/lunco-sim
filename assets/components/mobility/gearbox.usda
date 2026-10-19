@@ -2,14 +2,11 @@
 (
     defaultPrim = "Gearbox"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# A reusable ideal reduction with loss and an authored output torque rating.
-# Both flanges remain in the same Modelica mechanical network as the motor and
-# the Avian shaft boundary, so speed and reaction torque are solved together.
 def Xform "Gearbox" (
-    doc = "Reusable mechanical reduction with authored ratio, efficiency, and output rating."
+    documentation = "Reusable mechanical reduction with authored ratio, efficiency, and output rating."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )
@@ -17,20 +14,20 @@ def Xform "Gearbox" (
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Mechanics/GearRatio.mo@
-
     float physics:mass = 4.0 (
         customData = {
-            double min = 0.2
-            double max = 200
-            string unit = "kg"
-        }
+    double max = 200.0
+    double min = 0.2
+    string unit = "kg"
+}
     )
-
     float inputs:ratio = 200.0
-    float inputs:eta = 0.85
+    float inputs:eta = 0.8500000238418579
     float inputs:max_output_torque = 400.0
     float outputs:speed_a
-
     custom token connectors:flange_a
     custom token connectors:flange_b
+    custom double outputs:power_a_w = 0.0
+    custom double outputs:power_b_w = 0.0
+    custom double outputs:heat = 0.0
 }
