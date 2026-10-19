@@ -37,6 +37,8 @@ pub use shader_look::ShaderLookCache;
 // concrete render type from this crate's public render façade so GUI binaries
 // do not depend on the implementation module directly.
 pub use shader_material::*;
+// Hosts configure native PBR through this renderer boundary.
+pub use bevy::pbr::PbrPlugin;
 
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial, wireframe::Wireframe};

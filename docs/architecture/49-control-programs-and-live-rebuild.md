@@ -37,6 +37,23 @@ route, or react to an event. It must not write throttle/steer/force every tick.
 The task and Modelica paths use the same named-port substrate as the avatar;
 they do not get a second vehicle-specific actuator API.
 
+## Physical held-input lifetime
+
+`lunco-control-core::LunCoControlPlugin` composes Leafwing's public input sets:
+`InputManagerSystem::Tick` precedes `Unify`, then `Update` publishes semantic
+state. Store clearing must finish before physical sources populate that store;
+resource conflicts alone do not establish this order. A held key persists across
+host frames and fixed catch-up cycles until native release or focus-loss handling.
+Key repeat is not a renewal protocol. The controller samples that semantic state
+on the fixed boundary; UI capture gates control without becoming a second
+physical keyboard-state owner.
+
+The low-level composition regression checks the schedule dependency, one native
+press/release without repeats, 480 varying-duration host frames and more than
+500 fixed ticks. Headful acceptance uses `InjectWindowInput` with ordinary
+press/release transitions; this exercises the Bevy event path after event
+creation, not the OS device/compositor path.
+
 ## OBC and FSW are compositions
 
 OBC/FSW is a role made by composing ordinary `LunCoProgramAPI` children onto a

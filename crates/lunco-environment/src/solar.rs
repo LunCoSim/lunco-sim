@@ -190,6 +190,7 @@ fn spatial_rotation(
 }
 
 pub fn project_environment_sun_to_light(
+    poses: lunco_physics::SimulationPoseQuery<Without<bevy::light::DirectionalLight>>,
     sun: Option<Res<SunState>>,
     directions: Option<Res<crate::EnvironmentDirections>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
@@ -222,6 +223,7 @@ pub fn project_environment_sun_to_light(
                 Changed<big_space::prelude::CellCoord>,
                 Changed<ChildOf>,
                 Changed<big_space::prelude::Grid>,
+                Changed<lunco_physics::PrescribedSimulationPose>,
             )>,
         ),
     >,
@@ -293,9 +295,7 @@ pub fn project_environment_sun_to_light(
         source_frame,
         directions.as_deref(),
         &q_targets,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
+        &poses,
     ) {
         Ok(direction) => direction,
         Err(error) => {
@@ -518,6 +518,7 @@ fn sun_light_projection_needed(
                 Changed<big_space::prelude::CellCoord>,
                 Changed<ChildOf>,
                 Changed<big_space::prelude::Grid>,
+                Changed<lunco_physics::PrescribedSimulationPose>,
             )>,
         ),
     >,
@@ -579,9 +580,7 @@ pub fn finalize_sun_render_state(
     directions: Option<Res<crate::EnvironmentDirections>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_targets: Query<(Entity, &crate::DirectionTargetId)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    poses: lunco_physics::SimulationPoseQuery,
     q_frames: Query<&GlobalTransform>,
     q_sun: Query<
         &GlobalTransform,
@@ -615,9 +614,7 @@ pub fn finalize_sun_render_state(
         frame,
         directions.as_deref(),
         &q_targets,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
+        &poses,
     );
     let Ok(expected_direction) = expected_direction else {
         clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());

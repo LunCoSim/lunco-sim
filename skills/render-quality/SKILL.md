@@ -193,7 +193,9 @@ The ordinary render interpolation sample drives unbound USD time-sampled
 animation. Use the body's single physical body-fixed grid for site and globe
 content; do not align a parallel presentation hierarchy or copy a surface
 marker into another frame. Modelica and Avian keep their ordinary fixed-step
-cadence while their celestial-derived inputs change from the shared sample.
+cadence; physical celestial inputs evaluate that same affine domain at exact
+communication boundaries through `CelestialClock`, independently of the render
+solve gate.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
 the behavior. Radius comes from the selected light's authored `inputs:angle`,

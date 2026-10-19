@@ -41,6 +41,13 @@ produce `cosim-connection-contract-invalid` and hold physics. Inspect
 Missing source samples remain pending; targets retain their prior value until
 all fan-in sources are available, unless an explicit hold drives the input.
 A diagnostic `dropped_value = ()` means no numeric write was attempted.
+An attempted value is a `{ kind, value }` map: inspect `kind` before reading its
+finite `value`. The `not_a_number`, `positive_infinity` and `negative_infinity`
+kinds preserve a rejected non-finite sample without breaking the JSON response.
+The [API contract](../../crates/lunco-api/README.md) owns this representation.
+`python3 scripts/api/test_connection_nonfinite.py --port <free-port>` exercises
+both overflow signs through production Rhai and HTTP; `--windowed` uses the same
+test path in the graphical host.
 
 Live exchange is an atomic input batch. `cosim-input-write-rejected` means the
 batch preserved its prior target values and native physics was stopped before

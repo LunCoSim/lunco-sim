@@ -110,18 +110,16 @@ pub enum DirectionResolutionError {
 
 /// Resolve and express a named direction source in `target_frame`.
 ///
-/// Point targets are computed per consumer from BigSpace positions. Framed
+/// Point targets are computed per consumer from authoritative simulation poses. Framed
 /// rays are rotated from their declared frame. A source must resolve to exactly
 /// one of those representations; duplicate identities and mixed point/ray
 /// definitions fail visibly.
-pub fn resolve_direction_for_frame<F: bevy::ecs::query::QueryFilter>(
+pub fn resolve_direction_for_frame<F: bevy::ecs::query::QueryFilter + 'static>(
     source: &DirectionSourceId,
     target_frame: Entity,
     rays: Option<&EnvironmentDirections>,
     q_targets: &Query<(Entity, &DirectionTargetId)>,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&big_space::prelude::Grid>,
-    q_spatial: &Query<(Option<&big_space::prelude::CellCoord>, &Transform), F>,
+    poses: &lunco_physics::SimulationPoseQuery<F>,
 ) -> Result<UnitDirection3, DirectionResolutionError> {
     let mut targets = q_targets
         .iter()
@@ -134,14 +132,14 @@ pub fn resolve_direction_for_frame<F: bevy::ecs::query::QueryFilter>(
     }
 
     if let Some(target) = first_target {
-        let displacement = lunco_spatial::coords::relative_position_to_entity_in_entity_frame(
-            target_frame,
-            target,
-            q_parents,
-            q_grids,
-            q_spatial,
-        )
-        .ok_or(DirectionResolutionError::FrameUnavailable)?;
+        let (observer_position, observer_rotation) = poses
+            .pose(target_frame)
+            .ok_or(DirectionResolutionError::FrameUnavailable)?;
+        let target_position = poses
+            .position(target)
+            .ok_or(DirectionResolutionError::FrameUnavailable)?;
+        let displacement =
+            observer_rotation.0.inverse() * (target_position.0 - observer_position.0);
         return UnitDirection3::normalized(displacement)
             .ok_or(DirectionResolutionError::Coincident);
     }
@@ -149,13 +147,14 @@ pub fn resolve_direction_for_frame<F: bevy::ecs::query::QueryFilter>(
     let ray = rays
         .and_then(|rays| rays.ray(source))
         .ok_or(DirectionResolutionError::Missing)?;
-    lunco_spatial::coords::unit_direction_between_frames(
-        ray.direction,
-        ray.frame,
-        target_frame,
-        q_parents,
-        q_grids,
-        q_spatial,
+    let (_, source_rotation) = poses
+        .pose(ray.frame)
+        .ok_or(DirectionResolutionError::FrameUnavailable)?;
+    let (_, observer_rotation) = poses
+        .pose(target_frame)
+        .ok_or(DirectionResolutionError::FrameUnavailable)?;
+    UnitDirection3::normalized(
+        observer_rotation.0.inverse() * source_rotation.0 * ray.direction.components(),
     )
     .ok_or(DirectionResolutionError::FrameUnavailable)
 }
@@ -175,13 +174,11 @@ fn direction_diagnostic(
 }
 
 /// Publish every demanded direction directly to probe cosim outputs. Each
-/// probe resolves finite target entities in its own BigSpace-relative frame;
+/// probe resolves finite target entities in its own simulation frame;
 /// no body-specific local projection is retained between provider and model.
 pub fn publish_direction_sources_to_cosim(
     rays: Option<Res<EnvironmentDirections>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    poses: lunco_physics::SimulationPoseQuery,
     q_targets: Query<(Entity, &DirectionTargetId)>,
     mut q_probes: Query<
         (
@@ -232,9 +229,7 @@ pub fn publish_direction_sources_to_cosim(
                     probe,
                     rays.as_deref(),
                     &q_targets,
-                    &q_parents,
-                    &q_grids,
-                    &q_spatial,
+                    &poses,
                 ) {
                     Ok(direction) => Some(direction),
                     Err(DirectionResolutionError::Ambiguous) => {
@@ -332,7 +327,7 @@ pub fn publish_direction_sources_to_cosim(
             "direction-frame-invalid",
             source.as_str().to_string(),
             format!(
-                "BigSpace cannot resolve the requested direction between source `{}` and an environment probe",
+                "simulation poses cannot resolve the requested direction between source `{}` and an environment probe",
                 source.as_str()
             ),
         ));

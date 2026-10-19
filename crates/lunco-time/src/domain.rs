@@ -214,6 +214,65 @@ pub struct Clocks {
     pub celestial: Entity,
 }
 
+/// Read the celestial affine domain at an authoritative physics tick.
+/// This is a projection of the existing clock tree, not an accumulated clock.
+/// Fixed-cycle providers cannot use the per-frame ResolvedDomains snapshot:
+/// several admitted ticks may execute before that snapshot is refreshed.
+#[derive(SystemParam)]
+pub struct CelestialClock<'w, 's> {
+    clocks: Option<Res<'w, Clocks>>,
+    mission: Res<'w, crate::MissionClock>,
+    domains: Query<
+        'w,
+        's,
+        (
+            &'static TimeDomain,
+            Option<&'static ClockRoot>,
+            Option<&'static Playback>,
+        ),
+    >,
+}
+
+impl CelestialClock<'_, '_> {
+    pub fn epoch_at_tick(&self, tick: lunco_core_runtime::SimTick) -> Result<f64, &'static str> {
+        let clocks = self
+            .clocks
+            .as_deref()
+            .ok_or("celestial clock handles are unavailable")?;
+        let (root, root_kind, root_playback) = self
+            .domains
+            .get(clocks.sim)
+            .map_err(|_| "simulation clock domain is unavailable")?;
+        let (domain, domain_root, playback) = self
+            .domains
+            .get(clocks.celestial)
+            .map_err(|_| "celestial clock domain is unavailable")?;
+        if !matches!(root_kind, Some(ClockRoot::Tick))
+            || root_playback.is_some()
+            || domain.parent != Some(clocks.sim)
+            || domain_root.is_some()
+            || playback.is_some()
+        {
+            return Err("celestial clock must be an affine child of the simulation tick root");
+        }
+        if !root.offset.is_finite()
+            || !root.scale.is_finite()
+            || !domain.offset.is_finite()
+            || !domain.scale.is_finite()
+            || domain.scale.abs() > crate::MAX_CELESTIAL_TIME_RATE
+        {
+            return Err("celestial clock mapping is invalid");
+        }
+        let parent_s = derived_local_t(root.offset, root.scale, self.mission.sim_secs(tick.0));
+        let local_s = derived_local_t(domain.offset, domain.scale, parent_s);
+        let epoch = self.mission.mission_epoch0_jd + local_s / crate::SECS_PER_DAY;
+        if !parent_s.is_finite() || !local_s.is_finite() || !epoch.is_finite() || epoch == 0.0 {
+            return Err("celestial epoch is outside the finite range");
+        }
+        Ok(epoch)
+    }
+}
+
 /// A [`SystemParam`](bevy::ecs::system::SystemParam) for "seconds of *interaction*
 /// time that passed this frame".
 ///
@@ -519,7 +578,8 @@ pub fn advance_and_resolve_domains(
 }
 
 /// Publish the celestial calendar sample from its resolved world-time child.
-/// Celestial rendering and environment providers consume this same sample.
+/// Rendering consumes this frame snapshot. Physical providers evaluate the
+/// same domain at their communication boundary through `CelestialClock`.
 pub fn write_celestial_time(
     clocks: Option<Res<Clocks>>,
     resolved: Res<ResolvedDomains>,
@@ -1823,6 +1883,72 @@ mod tests {
             next.iter().map(|(&id, sample)| (id, sample.t)).collect();
         let paused = resolve_clocks(&domains, &latest, frozen, roots_after, Some(sim));
         assert_eq!(paused[&celestial].dt, 0.0);
+    }
+
+    #[test]
+    fn fixed_celestial_epoch_uses_tick_and_rejects_unbound_domains() {
+        use bevy::ecs::system::SystemState;
+        let mut world = World::new();
+        let real = world.spawn((TimeDomain::default(), ClockRoot::Wall)).id();
+        let sim = world.spawn((TimeDomain::default(), ClockRoot::Tick)).id();
+        let celestial = world
+            .spawn(TimeDomain::derived(Some(sim), 12.0, 100_000.0))
+            .id();
+        world.insert_resource(Clocks {
+            real,
+            sim,
+            interaction: real,
+            celestial,
+        });
+        let mission = crate::MissionClock::anchored(2_451_545.0, 100);
+        world.insert_resource(mission);
+        // Presentation views deliberately do not advance during this burst.
+        world.insert_resource(WorldTime::default());
+        world.insert_resource(ResolvedDomains::default());
+        let mut state: SystemState<CelestialClock> = SystemState::new(&mut world);
+        for tick in [100, 101, 164, 1000, 1000] {
+            let clock = state.get(&world).unwrap();
+            let snapshots = HashMap::from([
+                (sim, root(ClockRoot::Tick)),
+                (celestial, snap(Some(sim), 12.0, 100_000.0, None)),
+            ]);
+            let roots = RootTimes {
+                sim_secs: mission.sim_secs(tick),
+                wall_secs: 999.0,
+            };
+            let resolved = resolve_clocks(&snapshots, &HashMap::new(), roots, roots, Some(sim));
+            let expected = mission.mission_epoch0_jd + resolved[&celestial].t / crate::SECS_PER_DAY;
+            assert_eq!(
+                clock.epoch_at_tick(lunco_core_runtime::SimTick(tick)),
+                Ok(expected)
+            );
+        }
+        world.get_mut::<TimeDomain>(celestial).unwrap().parent = Some(real);
+        assert!(
+            state
+                .get(&world)
+                .unwrap()
+                .epoch_at_tick(lunco_core_runtime::SimTick(1000))
+                .is_err()
+        );
+        world.get_mut::<TimeDomain>(celestial).unwrap().parent = Some(sim);
+        world.entity_mut(celestial).insert(Playback::default());
+        assert!(
+            state
+                .get(&world)
+                .unwrap()
+                .epoch_at_tick(lunco_core_runtime::SimTick(1000))
+                .is_err()
+        );
+        world.entity_mut(celestial).remove::<Playback>();
+        world.get_mut::<TimeDomain>(celestial).unwrap().scale = f64::NAN;
+        assert!(
+            state
+                .get(&world)
+                .unwrap()
+                .epoch_at_tick(lunco_core_runtime::SimTick(1000))
+                .is_err()
+        );
     }
 
     /// A driven playhead advances by its PARENT's delta — so a pause reaches driven

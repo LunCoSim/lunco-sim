@@ -519,7 +519,10 @@ pub fn collect_body_colliders_from_usd(
             child_tf.translation.y as f64,
             child_tf.translation.z as f64,
         ));
-        let rot = Rotation(child_tf.rotation.as_dquat());
+        // A rendering quaternion widened from f32 is not necessarily unit in
+        // f64. Native rigid poses require a unit rotation, including composed
+        // primitive-axis adjustments on compound collider children.
+        let mut rot = Rotation(child_tf.rotation.as_dquat());
         if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0)
             || !lunco_physics::avian_backend_collider_shape_is_valid(&collider)
         {
@@ -530,6 +533,7 @@ pub fn collect_body_colliders_from_usd(
                         .to_owned(),
             });
         }
+        rot.0 = rot.0.normalize();
         colliders.push(AuthoredBodyCollider {
             source_path: child_path.to_string(),
             position: pos,

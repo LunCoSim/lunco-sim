@@ -25,6 +25,7 @@ pub mod link;
 pub mod placement;
 pub mod pose;
 pub mod queries;
+mod sampling;
 mod soi;
 mod systems;
 pub mod wifi;
@@ -299,17 +300,39 @@ impl Plugin for CelestialPlugin {
         // for Gizmos (Update) and Physics (FixedUpdate).
         // Gravity is handled by GravityPlugin (see above).
         //
-        // System ordering is critical:
-        // 1. big_space propagation runs first (default PreUpdate ordering)
-        // 2. Our systems run AFTER to override GlobalTransform with body rotation
-        // CelestialTime is the scaled child of WorldTime. Body transforms, solar
-        // model inputs, geometry queries, and rendered lighting all use that
-        // same resolved epoch; physics retains its ordinary fixed-step cadence.
+        // The celestial affine domain supplies exact physical boundary samples
+        // and a cadence-gated presentation snapshot. Physical model inputs never
+        // read the rendered body transforms or their solve cursor.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `OrbitalViewPin`).
         app.init_resource::<OrbitalViewPin>();
         app.init_resource::<lunco_environment::SunState>();
+        app.add_observer(sampling::claim_body)
+            .add_observer(sampling::release_body)
+            .add_systems(
+                FixedUpdate,
+                sampling::publish_inputs
+                    .after(lunco_core_runtime::SimTickSet)
+                    .before(lunco_environment::EnvironmentSet::Compute)
+                    .run_if(lunco_time::scene_time_ready),
+            )
+            .add_systems(
+                FixedPostUpdate,
+                sampling::publish_endpoint
+                    .after(avian3d::prelude::PhysicsSystems::Writeback)
+                    .run_if(lunco_time::scene_time_ready),
+            )
+            .add_systems(
+                PreUpdate,
+                sampling::publish_endpoint
+                    .after(CelestialEpochSet)
+                    .run_if(lunco_time::scene_time_ready),
+            )
+            .add_systems(
+                lunco_cosim_core::schedule::InitializationSampling,
+                sampling::publish_endpoint.before(lunco_environment::EnvironmentSet::Compute),
+            );
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }

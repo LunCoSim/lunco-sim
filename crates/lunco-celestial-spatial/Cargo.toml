@@ -55,6 +55,7 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
+lunco-physics = { path = "../lunco-physics" }
 # API query registration uses only the transport-free command/query core.
 lunco-api = { path = "../lunco-api" }
 lunco-hooks = { path = "../lunco-hooks" }

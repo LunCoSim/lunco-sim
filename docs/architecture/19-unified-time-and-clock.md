@@ -4,9 +4,9 @@
 
 `lunco-time` owns the mission-time spine: the fixed simulation tick, transport,
 calendar anchor, causal `WorldTime`, the ordinary render interpolation sample,
-and one `CelestialTime` sample. `CelestialTime` is an affine child of
-`WorldTime`; celestial state and the environment inputs derived from it all use
-that same sample.
+and its affine celestial domain. `CelestialTime` is the presentation snapshot;
+physical celestial inputs evaluate that same domain at explicit master ticks
+through `CelestialClock`.
 
 ## 1. Master time and transport
 
@@ -92,16 +92,23 @@ After the runner, `WorldTime` is published from the latest completed
 another running clock.
 
 `CelestialTime` resolves from the published `WorldTime` in `PreUpdate`. Its
-single angular-error gate commits the exact celestial epoch consumed by body
-placement and rotation, the semantic sun, light and shadow projection, and
-celestial geometry queries. It must not commit an epoch newer than the sample
-those systems read.
+angular-error gate commits the epoch consumed by rendered body placement,
+rotation, light/shadow projection and presentation geometry queries. Physical
+providers use `CelestialClock::epoch_at_tick` to evaluate the same affine domain
+at their exact communication boundary; they do not read this per-frame snapshot.
 
 Fixed-step producers use the shared `SimTickSet` ordering anchor. The scripting
 set runs after that anchor, so lifecycle hooks and event delivery read the tick
 for the step they are changing. Telemetry records the tick and the `MissionClock`
 seconds derived from it, so collection does not use a render or wall-clock
 accumulator.
+
+Native contact impulses describe the last solved master interval. The physics
+owner normalizes that graph through `contact_of`, using the native Duration
+representation of `SECS_PER_TICK`. Port and telemetry readers share this path.
+The live `Time<Physics>` delta is admission state: it becomes zero during holds
+and cannot reinterpret a retained physical sample. Pause, worker latency and
+presentation cadence therefore preserve the reported contact load.
 
 Scene time selection is one application policy: `scene.time.select`, installed
 by `assets/scripting/policy/startup.rhai` from `policy/index.toml`. Startup
@@ -190,12 +197,17 @@ completed physical states, but they do not advance on wall time.
 Celestial frames, body positions, and body rotation use `CelestialTime`. By
 default it has identity rate and zero offset over `WorldTime`; `SetCelestialClock`
 may change its rate or seek its epoch, but it cannot change the parent. At
-100,000×, ephemerides, body rotation, solar irradiance, shadows, and celestial
-queries advance from this one sample. Physics and Modelica continue at their
-ordinary fixed-step cadence; Modelica receives the latest target direction at
-its usual communication points through the shared BigSpace conversion.
-The celestial solve gate applies its certified angular error budget to this
-sample, and stays closed while a mounted scene is waiting for the required
+100,000×, physical ephemerides and irradiance use that mapping at each
+communication boundary while rendering retains its geometric error budget.
+`lunco-celestial-spatial` samples interval-start inputs after `SimTickSet` and
+before environment computation, then refreshes endpoint poses after native
+writeback. The sample carries the admitted cycle tick; its epoch is evaluated
+at the preceding boundary for inputs and the completed boundary for outputs.
+Initialization samples the current boundary. Physics and Modelica keep their
+ordinary fixed cadence. Physical directions and solar visibility use the shared
+`SimulationPoseQuery`, including seeded native poses for moving mounts.
+The celestial presentation gate applies its certified angular error budget and
+stays closed while a mounted scene is waiting for the required
 `scene.time.select` policy to commit its epoch. The first celestial solve then
 uses that selected sample; an unresolved bootstrap epoch must not turn the
 negative-infinity solve sentinel into per-frame celestial work. Hosts without
@@ -207,7 +219,7 @@ Both UI surfaces share one seek draft scoped to the installed
 celestial epoch; neither surface accepts a seek while scene time is pending.
 
 Every direction input selects a source by wiring a target id to an
-EnvironmentProbe output triplet. Finite targets use their composed position;
+EnvironmentProbe output triplet. Finite targets use their simulation pose;
 static directional lights supply a framed ray through the same resolver. An
 authored light is a static `sun` source only when no celestial source owns the
 scene, and only after the active composed root has completed celestial-source
@@ -395,7 +407,8 @@ contract. Coordinate projection and time authority are separate boundaries.
 2. Presentation samples completed physical ticks and never advances beyond the
    latest one.
 3. Ordinary scene animation uses the physical-time sample. Celestial state and
-   its model inputs use the one `CelestialTime` child of `WorldTime`.
+   its model inputs evaluate the one celestial child of the tick root at their
+   declared boundary; presentation uses its `CelestialTime` snapshot.
 4. Causal state advances only on the fixed simulation cadence.
 5. The USD sampler is the shared authored-animation funnel.
 6. Interaction cadence serves camera/avatar/UI response and remains separate

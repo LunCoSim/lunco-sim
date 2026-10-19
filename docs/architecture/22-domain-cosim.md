@@ -20,6 +20,10 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+Avian contact ports consume the physics owner's retained-interval interpretation
+of its native contact graph. A coupling hold changes scheduling permission,
+without changing the duration or load represented by that completed sample.
+
 Native external FMI 3 Co-Simulation import belongs to
 [`lunco-fmi`](../../crates/lunco-fmi/README.md), installed by the shared
 headless/windowed simulation composition. `LoadFmu` admits bounded archives
@@ -68,6 +72,10 @@ certificates fence the effective connection transforms as well as authored
 wiring. A target with an unbound or unavailable source retains its previous
 input until all contributions are available; explicit holds retain priority. Diagnostics
 use an absent `dropped_value` when no numerical write was attempted.
+The diagnostic API adapter classifies attempted IEEE values using the
+[`GetBrokenConnections` numeric contract](../../crates/lunco-api/README.md),
+so a non-finite rejected sum cannot invalidate the JSON response. Simulation
+diagnostics and port validation retain their native `f64` values.
 
 Initial handoff and live exchange use `PortRegistry::input_transaction` to
 preflight their complete eligible input batch and commit under one exclusive

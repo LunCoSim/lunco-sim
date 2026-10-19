@@ -21,6 +21,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   verdict before comparing completed-mission windows. A tick threshold or zero
   process exit does not prove acceptance. Exclude source/API errors, and require
   readiness and diagnostics to pass for the measured cohort.
+  Compare the recorded Twin commits explicitly; two individually clean checkouts
+  can have different revisions. Such runs are different source cohorts, even if
+  their scenario name and application binary match. Initialization-source and
+  milestone equality alone do not prove exact native-state replay.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
@@ -101,12 +105,33 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Architecture checks
 
+When comparing native CPU/GPU instance preparation, retain the same PBR,
+shadows, meshes and quality. Device capability is not active-path evidence:
+camera `NoCpuCulling` requires native `RenderMeshInstances::GpuBuilding` and
+indirect drawing. `NoIndirectDrawing` views need CPU frustum tests. Preserve
+foreign-owned markers when reconciling these structural changes.
+Native camera and shadow batch modes must also match the active builder. CPU
+preparation admits effective `GpuPreprocessingMode::None` after native device
+support initialization on every `RenderStartup`, including recovery. A faster
+cohort with missing geometry is a failed visual comparison, regardless of FPS
+or readiness diagnostics.
+
 For co-simulation input writes, preserve the port owner's live metadata and
 precedence checks. Initial handoff and live exchange use `input_transaction`:
 immutable staging and commit share one exclusive world borrow, so each eligible
 target is validated once. Returning an error rejects the staged batch. A
 retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
+
+For continuous-contact preparation, distinguish candidate enumeration from
+native geometry queries. The physics owner enumerates each unordered pair
+with a CCD owner once in stable collider order, without a candidate tree.
+Step-local body facts and dense collider/leaf slots avoid repeated owner lookups
+and identity hashing; lazy admission retains first-encounter shape order.
+Do not turn these per-step facts into a revision-only geometry/eligibility cache.
+Keep the sparse static-population bound, native body/layer/hook filtering and
+pair order when optimizing this path; current-pose AABBs cannot replace the
+whole solved-trajectory bounds used during each substep.
 
 For synchronous USD edit stalls, inspect compound operation count and native
 composition lifetime. The document owner's `UsdEditSession` shares one current
@@ -123,6 +148,13 @@ Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against
 monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
 a short native physics service time does not certify realtime co-simulation.
+When a coupled sensor changes with host pacing, compare its full input values
+before attributing the difference to solver math. Contact impulses belong to
+the completed master interval; `lunco-physics::contact_of` owns load normalization
+for ports and telemetry. Native admission delta may be zero while that sample
+remains valid. Exercise `scripts/api/test_contact_force_hold.py` through the
+production scene-test host when changing this boundary; its authored observer
+checks loaded contact, held time, retained force and an unavailable surface.
 Physical render easing consumes the time owner's bounded
 `simulation_presentation_fraction`; full queued cycles are never a render
 extrapolation factor. The common application plugin uses native endpoint
@@ -145,6 +177,16 @@ because a presentation component received an equal-value write. Preserve hook
 generation, source lifetime, caller identity and derived vessel invalidation.
 The default communication period is one physics tick; longer periods must be
 authored explicitly.
+Physical celestial sampling uses `CelestialClock::epoch_at_tick`, with
+`celestial_physical_inputs` at interval start before environment computation and
+`celestial_physical_endpoint` after native writeback. The component's tick is
+the admitted cycle, and the sampler owns its phase. Presentation's angular
+error gate never chooses physical inputs. Directions, gravity and solar
+visibility share `SimulationPoseQuery`; do not restore raw hierarchy readers
+for moving probes. Reuse the ephemeris provider's exact-epoch cache. Attribute
+sampling separately from native physics and from the rendered celestial chain;
+its cost must not be hidden inside a physics-only timing number.
+
 For deliberately frozen captures use `StepSimulation` and presentation-timed
 sequencing. Manual demand uses the same fixed runner as paced execution and
 still respects preparation and solver barriers. A native hold gates the entire
@@ -156,6 +198,15 @@ admission. Live workers pass the exact communication point to the existing
 prediction own their internal steps. Preserve the fixed prediction lattice,
 event handling, input sampling and finite/completion validation when optimizing
 that path. Do not add another worker-side integration grid or catch-up planner.
+For replay divergence, enable
+`RUST_LOG=info,lunco_modelica_worker::step_audit=debug` in a separate diagnostic
+run. Compare session-relative step ids, communication times and ordered input/
+output fingerprints for each exact participant identity. These bounded log
+records locate differences; hash equality cannot prove state equality. Use
+`trace` for complete accepted samples, or `ReadModelicaStepSamples` for selected
+values in the last accepted transaction. Full traces can produce large logs
+and perturb scheduling; check storage and retain an uninstrumented acceptance
+run. Never infer a numerical repair solely because tracing hides a divergence.
 Keep communication-clock checks at floating point roundoff scale, with finite
 timestamps required at both request and completion admission. A solver's state
 tolerance must not loosen its communication endpoint validation. Validate the
@@ -436,6 +487,9 @@ For Modelica response retention, reuse observable-variable keys and move the
 worker's input/output buffers into the accepted record after transaction
 validation. Preserve detected-symbol/output precedence and verify reset
 isolation, signed-zero values and stale-result rejection at the owner seam.
+Immutable live solver facts share one `Arc` across the cache, receipt and model;
+do not clone their parameter/input strings on every step. The bridge ownership
+regression checks shared storage as well as terminal metadata rejection.
 Modelica workers return current observations only. Retained samples belong to
 `lunco-modelica-telemetry` and the shared chunked `SignalRegistry`, installed
 through `TelemetryRetentionPlugin`. UI consumers read that same history and
@@ -1293,6 +1347,10 @@ motion alone does not require recomputation. Retain global/frame/provider and
 link-removal invalidation, new-entity admission and unresolved surface cleanup.
 Steady surface work includes linked consumers and existing fields, excluding
 unlinked entities that have neither a field to produce nor one to remove.
+Use `SimulationPoseQuery` for body and mount poses. A parent's native motion
+must invalidate a mounted field without a presentation write; readiness
+withdrawal must remove the field. Retain bounded ancestor change detection
+and per-pass provider-pose reuse when optimizing this path.
 Profile flat and surface owners separately and require unchanged exact replay.
 
 For `sync_local_gravity_to_avian`, keep the comparison against the existing

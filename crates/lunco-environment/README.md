@@ -87,16 +87,26 @@ environment resolves its target bearing in that probe's own BigSpace frame.
 
 ### `LocalGravity(DVec3)`
 
-Gravity vector at an entity's world-space position, in m/s². Computed in
-`FixedUpdate` when gravity, frame, provider, transform, or body-link inputs
-change. Stable ticks return before entity iteration; a global invalidation
-checks all entities. Changed valid values are applied as one deferred batch,
+Gravity vector at an entity's active physics-frame position, in m/s². Computed in
+`FixedUpdate` when gravity, frame, provider, pose, or body-link inputs change.
+`lunco-physics::SimulationPoseQuery` supplies both consumer and provider poses
+in the active physics frame. Mounted probes inherit the nearest seeded body's
+native pose; its presentation transform does not enter the field calculation.
+An unavailable frame or native pose withdraws the surface field. Hierarchy
+change detection includes ancestor native position/rotation and readiness;
+withdrawn readiness invalidates the cache before another value is published.
+Parent/native/spatial component removals invalidate linked surface fields;
+an entity that loses its own transform also loses its cached field. These
+removals do not invalidate position-independent flat fields on other entities.
+This is a shared spatial/readiness invariant, not scenario policy or a Rhai hook.
+Changed valid values are applied as one deferred batch,
 while unresolved surface links remove stale values. In a flat field, steady
 motion does not invalidate gravity: an archetypal query admits only spatial
 entities missing the cached field. Steady surface work selects linked
 consumers and existing fields, excluding unlinked entities with nothing to
-produce or remove. Gravity, frame, provider and link-removal invalidations
-still check all spatial entities. The source is this crate's
+produce or remove, including on provider or frame invalidation. Flat-field
+global invalidations check all spatial entities. Provider-pose changes also
+invalidate linked fields. The source is this crate's
 [`Gravity`](src/gravity_types.rs) resource:
 
 - **`Gravity::Flat`** — same vector for all entities (sandbox / single-body)

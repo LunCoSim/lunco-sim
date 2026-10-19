@@ -3076,6 +3076,22 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             };
+            let continuous_collision =
+                match read_authored_bool_strict(reader, &sdf_path, "physxRigidBody:enableCCD") {
+                    Ok(value) => value.unwrap_or(true),
+                    Err(error) => {
+                        lunco_core::trigger_runtime_error(
+                            commands,
+                            "usd-wheel-ccd-invalid",
+                            format!(
+                                "{} has malformed physxRigidBody:enableCCD: {error}",
+                                prim_path.path
+                            ),
+                        );
+                        commands.entity(entity).try_insert(UsdSimProcessed);
+                        return;
+                    }
+                };
             setup_physical_wheel(
                 commands,
                 entity,
@@ -3107,6 +3123,7 @@ fn process_usd_sim_prim_read(
                 heat_ports,
                 authored_collider,
                 native_material,
+                continuous_collision,
                 control_entity,
             );
         } else {
@@ -3610,6 +3627,7 @@ fn setup_physical_wheel(
     heat_ports: lunco_mobility::WheelHeatPorts,
     authored_collider: Collider,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
+    continuous_collision: bool,
     control_entity: Entity,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
@@ -3700,20 +3718,18 @@ fn setup_physical_wheel(
         // JointTorqueActuator. World-axis damping would also resist steering
         // and chassis rotation and could not supply the same thermal work.
         AngularDamping(0.0),
-        // Continuous collision detection: a thin, fast-falling wheel cylinder can
-        // pass THROUGH the one-sided terrain heightfield in a single step (and once
-        // below a one-sided surface, no contact ever pushes it back — it falls
-        // forever). CCD sweeps the wheel's motion against the collider so it can
-        // never tunnel, even across a one-frame collider-warmup gap. This is what
-        // lets the tunnel-rescue safety net be deleted — the wheel physically
-        // cannot end up below the terrain.
-        // (Non-linear by default. `SweptCcd::LINEAR` was tried while hunting the
-        // parity gap — the rotational sweep runs every substep on a permanently
-        // spinning wheel — and measured as a byte-identical no-op, so the stronger
-        // anti-tunneling guard stays.)
-        avian3d::prelude::SweptCcd::default(),
         wheel_tf,
     ));
+
+    if continuous_collision {
+        commands
+            .entity(entity)
+            .try_insert(avian3d::prelude::SweptCcd::default());
+    } else {
+        commands
+            .entity(entity)
+            .try_remove::<avian3d::prelude::SweptCcd>();
+    }
 
     // Spawn the avian joint. Anchors + axis are derived from the wheel's
     // own transform (which mirrors the USD `physics:localPos0` and
@@ -3835,15 +3851,38 @@ fn setup_physical_wheel(
 /// comes exclusively from `PhysicsCollisionAPI` geometry.
 pub(crate) fn oriented_wheel_collider(collider: Collider, axle_axis: DVec3) -> Collider {
     let axis = axle_axis.normalize_or_zero();
-    let axis_rotation = Quat::from_rotation_arc(Vec3::Y, axis.as_vec3());
-    if axis_rotation.abs_diff_eq(Quat::IDENTITY, 1e-5) {
+    let axis_rotation = DQuat::from_rotation_arc(DVec3::Y, axis);
+    if axis_rotation.abs_diff_eq(DQuat::IDENTITY, 1e-12) {
         collider
     } else {
         Collider::compound(vec![(
             Position(DVec3::ZERO),
-            Rotation(axis_rotation.as_dquat()),
+            Rotation(axis_rotation),
             collider,
         )])
+    }
+}
+
+#[cfg(test)]
+mod physical_wheel_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn wheel_collider_axis_is_a_unit_native_double_rotation() {
+        for axis in [
+            DVec3::X,
+            DVec3::Y,
+            DVec3::Z,
+            DVec3::new(0.2, 0.4, 0.8).normalize(),
+        ] {
+            let collider = oriented_wheel_collider(Collider::cylinder(0.34, 0.25), axis);
+            let rotation = collider
+                .shape_scaled()
+                .as_compound()
+                .map_or(DQuat::IDENTITY, |shape| shape.shapes()[0].0.rotation);
+            assert!((rotation.length_squared() - 1.0).abs() < 1e-14);
+            assert!((rotation * DVec3::Y - axis).length() < 1e-14);
+        }
     }
 }
 

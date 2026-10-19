@@ -1,5 +1,390 @@
 # High-quality realtime performance handover
 
+## Contact samples retain their solved interval — 2026-10-19
+
+The full-value comparison localizes an earlier transient Lander difference to
+`leg_force_pz`: 0 N versus 414.3895340825825 N at communication step 1311.
+The native graph retained its solved impulse while admission had zeroed
+`Time<Physics>::delta`. `lunco-physics::contact_of` now owns normalization using
+the native Duration representation of the canonical master interval. Callers
+cannot supply a scheduling delta. Port reads and rigid-body telemetry share
+that interpretation. Native holds still zero admission delta, and the existing
+clock validator rejects a timestep outside the master contract. This is a
+physical reporting invariant, with no policy hook, new clock/resource, integrator
+or dependency-source change.
+
+The authored `contact_force_hold.rhai` observer uses the existing landing-gear
+fixture through the production scene-test binary. Its negative surface check
+requires an entity without a collider to have no load port. On the preceding
+binary it reports exactly one failure out of six: a positive native impulse
+loses its reported load during the hold. On the repaired binary all six checks
+pass at tick 110, including zero native delta, unchanged elapsed time, retained
+contact/load and the unavailable surface. The wrapper returns zero and verifies
+process/port release. The wrapper awaits the scene-test host's own terminal
+exit before the shared session cleanup.
+
+The repair incorporates committed main `c84097bb1`, including compound-body
+ray exclusion. Regular `cargo run -j 4 -- --help` succeeds without compiler
+warnings. Its production binary SHA-256 is
+`38adc3e15d82c643c71ff413315d8a4df7aaf3c62b9c7446c7a78aa019b01945`.
+The held-contact evidence is under
+`.cache/codex-evidence/celestial-integrated/contact-hold*`; bounded communication
+comparison is under `.cache/codex-evidence/contact-fix/`. The matching frozen
+Twin `64ff99e` and identical DEM produce 11,943 matching named-participant
+communication records through tick 1327 in headless and GPU windowless hosts,
+with no captured external inputs in either bounded cohort. All input/output
+fingerprints and communication times match. Both have clear readiness, zero
+runtime errors and verified API Exit/port release; the GPU validation log is
+clean. This GPU windowless cohort has no fresh inspected screenshot and does
+not qualify headful visual behavior or FPS.
+Fingerprints are not full native-state equality or a mission verdict. Complete
+mission, native geometry failures, full-state replay and performance qualification
+remain separate requirements.
+
+## Local main integration and current qualification — 2026-10-19
+
+Local main fast-forwarded to `e9e194dbe`, incorporating committed main
+`e18a14b1e` and the physical celestial boundary repair `1270c5086`. The merge
+retains dense CCD pair enumeration, newer native-contact tests, native renderer
+preparation admission and plume-depth lifetime. Main's four tracked physics/USD
+edits were stashed, restored with both CCD test groups retained, and left
+uncommitted. Stash `85a58e04a16fcb0b156e0d8e72b1712788379647` remains as a
+backup. Three nonconflicting files match its blobs exactly; the CCD resolution
+preserves the pair-order seam and all three restored test functions. No push
+was performed. Further concurrent main edits are outside this qualified tree.
+
+Regular `cargo run -j 4 -- --help` succeeds on the integrated tree without
+compiler warnings. Its CCD suite passes 25 checks; the single unchanged
+`degenerate_native_triangle_retains_boundary_geometry` failure is direct
+pinned-Parry collinear projection. The application pin remains `83494d280` in
+this committed cohort.
+
+The old frozen Twin `bbc0e77b` supplies plume modifiers absent from the current
+Modelica library and is unsuitable for this integration cohort. The matching
+frozen Twin `64ff99e` clears coupled initialization and readiness with integrated
+binary SHA-256
+`2d88e6564eac38a5c484f3ea22d872510c34e18095ae0edd66c24a1d49a277f0`.
+Its headless mission then faults at the terrain/wheel contact boundary after
+communication step 1419; there is no successful integrated mission verdict.
+The exact standalone query reproducer finds valid geometry through native
+dispatch but `NoIntersection` through the application's finite-feature seed.
+The preceding offset-triangle regression also returns no geometry through native
+dispatch on this same pin. A clean cutover must qualify both cases through one
+native path; neither a conditional query fallback nor removal of the failure
+is acceptable. Newer kernel and application edits present in main's working
+tree are not covered by these results.
+
+Evidence, source guards, query inputs and stash-restoration checks are retained
+under `.cache/codex-evidence/celestial-integrated/`. The prior sampling cohort
+below belongs to its explicitly recorded earlier binary and library revision.
+Integrated headless/rendered replay, complete mission and clean performance
+acceptance remain open.
+
+## Physical celestial communication boundaries — 2026-10-19
+
+`lunco-time::CelestialClock` evaluates the existing tick-rooted affine domain
+at an explicit boundary, without using accumulated durations or a per-frame
+resolved snapshot. `lunco-celestial-spatial` publishes interval-start inputs
+before environment computation and endpoint poses after native writeback.
+Initialization uses the current boundary. Its generic prescribed-pose fact is
+owned by the analytical provider, stamped with the admitted cycle and active
+frame, and consumed through the existing shared simulation-pose reader. Native
+and prescribed ownership cannot coexist on one entity. Pending, stale, invalid
+or differently framed samples remain unavailable. Removal retires ownership;
+entity teardown retires the fact. Continuous frame math and phase/readiness
+invariants belong to these engine owners, without a scenario policy hook.
+
+Physical directions, gravity and solar visibility now use the same reader.
+The visibility owner also converts probe origins and terrain rays through it.
+Shared semantic axes cancel analytically, avoiding epoch-dependent roundoff in
+local fields. The ephemeris provider retains its exact-epoch cache; rendered
+body placement and illuminance retain their angular-error cadence. Physical
+irradiance has one communication-boundary writer. No dependency source changes
+or new integrator are involved.
+
+The boundary seam passes at 100,000x with deliberately unrelated render poses,
+including start/end epochs, exact local-frame cancellation, unchanged sample
+publication and invalid clock withdrawal. Seven shared pose tests pass.
+Regular `cargo run -j 4 -- --help` succeeds without compiler warnings. Production
+initialization/pause/rate/multirate acceptance passes 43 checks at 120 Hz host
+pacing. Solar visibility passes eight checks, and its negative admission gate
+exits successfully on the declared terminal `solar-sample-unavailable` fault.
+
+Fresh headless and GPU windowless Griffin missions pass 16 checks each with
+clear readiness, zero runtime errors and clean API exits. The inspected image
+retains rover, terrain and cast shadow. They use the frozen Twin `bbc0e77b`, the
+same DEM as below, and binary SHA-256
+`30e131970373f50534e610eac11d864e60bc610ff4445898ba5f6901c87dedb4`.
+Through tick 5459, all 2,365 captured empty-input records match. Of 49,131
+compared communication records, the first remaining difference is FLIP at step
+3082, shortly after release at tick 3079; Lander differs from step 5428.
+Completion is 5459 versus 5462. This removes the prior step-1441 divergence,
+but does not qualify complete native-state replay. Full-sample investigation
+of the release interval identifies differing native position, yaw/yaw-rate and
+wheel-speed inputs, together with the resulting mount direction; the first
+difference is not isolated to irradiance. Mechanical release/pose admission
+requires investigation. Hash equality alone is not state proof.
+
+Performance also remains open: the recent full-cycle medians are approximately
+11.01 ms headless and 6.80 ms rendered, with authored-verdict spikes included
+in the tails. These are diagnostic cohorts, with concurrent build activity;
+they are neither native-physics service nor clean FPS acceptance. Evidence is
+retained under `.cache/codex-evidence/celestial-sampling/`. The 200 FPS, sub-1 ms
+native physics, complete presentation isolation and broader FMI qualification
+requirements are not closed by this repair.
+
+## Shared native mount and gravity owner — 2026-10-19
+
+`SimulationPoseQuery` and immutable API reads share one bounded ownership
+walk. Mounted entities compose their local chain below the nearest seeded
+rigid body with its native f64 pose. An unseeded body or missing active frame
+returns unavailable. The environment consumes this same boundary for both
+consumer and provider poses; its independent native/world-position selection
+is removed. Ancestor motion, hierarchy edits and readiness withdrawal
+invalidate mounted fields. Provider poses are reused within the pass. Flat
+fields retain missing-field admission, and surface invalidation visits only
+linked consumers and existing fields. These are spatial/readiness invariants;
+there is no scenario hook, special vehicle rule or dependency-source patch.
+
+The mounted-pose seam fails before the repair and passes afterward. The
+gravity resource seam also fails before cutover, then verifies native
+translation/rotation, render independence, readiness/frame withdrawal and
+restoration. Final review reproduces retained gravity after a mount loses
+its parent; the removal-stream repair also withdraws transformless fields
+without broadening flat-field invalidation. All six pose tests and three
+gravity tests pass. Regular `cargo run -j 4 -- --help` succeeds without
+compiler warnings; the skill
+catalogue validates 43 entries. Evidence is retained under
+`.cache/codex-evidence/mounted-probes/`.
+
+Fresh headless and GPU windowless Griffin missions each pass 16 authored
+checks with clear readiness, zero runtime errors and verified API exit/port
+release. The captured image shows rover, terrain and cast shadow. Both use
+Twin `bbc0e77b`, the pinned DEM below and binary SHA-256
+`83698abec9d9b3258474b9870825dc0102b03596e66b108438beeac5ac1a4709`.
+Through completion at tick 5459 in both hosts, 2,365 captured input records
+match exactly and contain only empty physical intent frames. Across 49,131
+communication records, the first remaining difference is the rover at step
+1441; Lander also differs from step 5428. IMU/gravity fingerprints match
+throughout that interval. Equal completion does not qualify full replay;
+neither does hash equality establish complete native-state equality. These
+diagnostic runs do not establish 200 FPS or native physics below 1 ms.
+
+The physical sampling cutover and current evidence are recorded above.
+
+## Mounted environment input divergence — 2026-10-19
+
+The worker response bridge exposes opt-in accepted-step diagnostics. Debug
+records carry stable API identity, session, step, communication times and
+ordered scalar fingerprints; trace records borrow the complete accepted sample.
+The existing `lunco-hash` substrate folds names and f64 bits without allocations
+or solver access. Disabled logging computes no fingerprints. The named
+fingerprint seam passes, including signed zero, one-ulp changes, names and order;
+regular `cargo run -j 4 -- --help` succeeds without compiler warnings.
+
+Two isolated headless Griffin runs pass 16 checks each and finish at tick 5460.
+Their 49,140 communication records and 2,366 captured input records through
+completion match. Both input captures contain only empty physical intent frames.
+The source is a separate checkout of Twin `bbc0e77b` with an exact copy of its
+ignored DEM (SHA-256 `22905e927ee5786075b8b86729b8abe86a0db1c4f8465a99b8d867a4d1adf1f8`).
+The binary is `78c8cf959dc654e1ad2f1a0f9b2af44eb93a2c28ab187fd7a152a487b700c919`.
+Matching fingerprints locate differences; they do not prove complete
+native-state equality.
+
+The same frozen source and binary pass all 16 checks in the GPU windowless
+host, with no nonempty physical inputs. Its first differing communication
+transaction is step 145. Full sample traces identify only gravity inputs in
+the IMU and solar inputs in the rover at that step; native pose and velocity
+inputs still match. The environment readers use composed hierarchy poses for
+non-physical probes. The shared native mount/gravity repair above closes that
+part of the boundary. Celestial frame and physical
+irradiance publication also run in `PreUpdate` behind the presentation angular
+error budget. Their fixed-cycle consumers can therefore read different epochs
+at the same simulation tick; a native mount repair alone does not close this
+authority leak. All these owned sessions release their
+ports. The ordinary windowed comparison is not qualified: one run received a
+manual left intent and its source checkout changed independently. Input
+isolation and recorded asset identity remain required before attributing replay
+differences to the solver. The performance and FMI targets remain open.
+
+The checkout's `target/` directory was subsequently removed during the
+investigation, including the binary and recorded runtime artifacts referenced
+below. Those are observed results, not retained evidence. New evidence belongs
+under `.cache/codex-evidence/` so Cargo cleanup does not remove it; runtime
+qualification of the repair requires a newly built binary and fresh captures.
+
+## Immutable live-solver fact sharing — 2026-10-19
+
+`ModelicaLiveSolverSnapshot` is shared through `Arc` from the worker plan/cache
+to typed receipts and the admitted model. A normal step no longer deep-copies
+the solver id, parameter bindings and initial input strings at either handoff.
+This is an immutable runtime ownership invariant; no policy hook, solver,
+communication period or numerical operation changes. Session/generation checks
+and terminal snapshot retirement retain their owner. Canonical ownership is
+in architecture 20 and the profiling skill.
+
+The existing bridge seam first fails its new shared-storage assertion
+(`target/solver-snapshot-sharing-baseline.log`), then passes with immutable
+sharing; it also checks stale-session rejection and terminal missing metadata.
+Regular `cargo run -j 4 -- --help` succeeds. The production initialization/clock
+gate passes all 43 checks in both hosts, with clear readiness, zero errors and
+released 4396/4397. Evidence uses `target/solver-snapshot-sharing-*`. This proves
+ownership/clock behavior, not an isolated FPS or service-time improvement.
+The native pre-step audit is a separate diagnostic of the one-tick route
+variation below and does not qualify product performance.
+
+## Combined committed-main assets — 2026-10-19
+
+`tutorials` merges main's committed plume-rendering change `e72a73146` through
+`2b34a8752`, preserving the renderer, CCD and diagnostic repairs. The source
+checkout's regular production binary loads the updated external shader assets;
+no Rust input changes in that merge. The fresh windowed Griffin mission passes
+all 16 checks with clear readiness, nine shared-clock participants, zero
+runtime errors and a clean Twin. Inspected touchdown and completed-mission
+images retain terrain, vehicle and cast shadow. The owned session exits and
+releases 4397. Evidence is `target/integrated-render-api-windowed-mission.*`.
+
+Its completion is tick 5463 on Twin `bbc0e77b`, versus 5221 in the earlier
+artifact on Twin `e4ae2425`. The Twin revision changed between those runs;
+individually clean checkouts do not establish equal admitted inputs. Their
+different generated initialization source hashes and completion ticks cannot
+qualify replay or identify a clock/shader cause. The corrected comparison is
+`target/integrated-render-api-comparison.json`.
+
+Two further runs use the same binary, Twin `bbc0e77b` and temporarily logged
+authored initialization policy. Both emit byte-identical 11,016-byte composite
+source (SHA-256 `672cf3bdf80306cbb6c30365346306a661979d38d912c4fa500af2e571290a59`),
+pass all 16 mission checks and finish at 5463. Intermediate approach/exit/first
+waypoint events differ by one tick. This establishes initialization/completion
+repeatability, not exact native-state replay. The original policy is restored
+byte-for-byte, and both owned sessions exit. Evidence uses
+`target/griffin-initialization-replay-{a,b}.*`; fixed-tick native-state tracing
+remains open alongside performance/FMI qualification.
+Main still contains overlapping uncommitted physics-owner work, so its
+fast-forward is pending; that work has not been modified or incorporated.
+
+## Non-finite exchange diagnostic closure — 2026-10-19
+
+Two finite Modelica sources reproduce an overflowing fan-in. The exchange
+correctly raises `cosim-input-write-rejected` and holds its last accepted input,
+but the original `GetBrokenConnections` response fails HTTP encoding because
+it contains the rejected infinity. The baseline authored verdict fails only
+the two numeric-classification checks (`target/connection-nonfinite-valid-baseline.log`);
+the initial HTTP failure is in `target/nonfinite-exchange-probe-driver.log`.
+
+The API adapter now classifies attempted values through one typed
+`RejectedScalar` conversion. Simulation diagnostics retain their original
+`Option<f64>`. The canonical field shape is in the API README and inspection
+skill. This is an external serialization invariant, not changeable Rhai policy;
+no runtime arithmetic, clock, solver, dependency or global serializer changes.
+The fixture uses explicit double USD port declarations to retain the range
+under test. Its scene-admission pause and initialized `Idle` precondition keep
+presentation cadence out of the live-exchange stimulus.
+
+Regular `cargo run -j 4 -- --help` succeeds with no compiler warnings. The one
+focused encoding test covers NaN, both infinities, maximum finite f64 and
+negative zero. Both overflow signs pass eight authored checks each in headless
+and windowed hosts, followed by successful HTTP diagnostic reads (32 checks).
+The finite rejection/atomicity gate passes 11 in each host (22 checks).
+Evidence uses `target/nonfinite-final-*`, `target/nonfinite-finite-*` and
+`target/nonfinite-encoding-owner-test.log`. All owned sessions exit and release
+4396/4397. The skill catalogue validates 43 entries. These checks extend the
+preceding renderer/CCD qualification; they do not establish 200 FPS, native
+physics below 1 ms, or broader FMI interoperability.
+
+## Renderer and continuous-contact preparation — 2026-10-19
+
+The current renderer contract is committed as `f24c62ad7`; the CCD preparation
+contract is committed as `452c61cb4`. Canonical ownership and verification are
+in architecture `render-decoupling.md`, `terrain-substrate.md` and the
+`performance-profiling` skill. These application changes use maintained native
+APIs and do not modify dependency source. No application commit is pushed.
+
+Regular `cargo run -j 4 -- --help` succeeds after integrating main
+`4d6530a39`, including its static-mesh internal-edge correction and controller
+changes. The final production binary SHA-256 is
+`779e0ed48ea9b2e01e2a644cbec0812695cb6a454b4dc259ec7b3c07feee6726`.
+The windowed unattended Griffin mission passes all 16 authored checks at tick
+5221 (87.016667 simulated seconds). Readiness is clear, diagnostics contain zero
+errors, and all nine participants share the clock. The clean Twin revision is
+`e4ae2425d1b6a9312ca7e24152d2068ce67195d0`. The inspected screenshot retains
+terrain, the rover and its cast shadow. Earlier missions on the preceding
+collision-cooking source completed at tick 5459; that is a different source
+cohort. Evidence is `target/render-final-windowed-mission.{json,png,log}` and
+`target/render-final-cargo-run.log`.
+
+Both renderer owner tests pass through the production feature graph:
+`cargo test -p lunco-luncosim -p lunco-render-bevy --lib gpu_culling::tests -j 4`.
+The app library has no matching tests; the renderer runs two, with 85 filtered.
+The final continuous-contact production gate passes all 12 checks and exits
+zero (`target/ccd-final-contacts.log`). API ports 4396/4397 are released.
+The four touched Rust files were formatted once after validation. The skill
+catalogue validates all 43 entries. The CCD enumeration seam exhausts all CCD
+subsets through eight colliders and the sparse 100,000-collider case; its focused
+suite has 23 passing checks and the independent pinned-Parry failure described
+below. The final body/leaf indexing is covered by the production contact and
+Griffin gates, not an isolated FPS improvement measurement.
+
+### Performance evidence and limits
+
+The earlier exact frozen-tick-360 comparison retains the same Twin revision,
+1280×720 camera, settled 256 terrain tiles, nine participants and visual quality.
+Native GPU preparation measures 171.76/171.26/171.80 mean FPS; aligned CPU
+preparation measures 205.40/203.99/203.01. Inspected RGB channel differences are
+0.0244/0.0227/0.0177 out of 255. Evidence is
+`target/render-preparation-aligned-comparison.json`. Frozen-state results do
+not qualify the combined running target. A separate running/paused/resumed
+cohort measures 145.63/199.44/144.99 FPS, advances 303/0/304 ticks in roughly
+five seconds each, and records resumed native physics median 1.424 ms and
+full-cycle median 3.641 ms (`target/render-preparation-live-runtime-profile.json`).
+Later cohorts have different GPU clocks or concurrent GPU/CPU workloads. The
+final mission is correctness evidence, not clean FPS acceptance. The 200 FPS
+and sub-millisecond native physics targets remain unmet.
+
+The verified native Tracy capture `target/native-workers.tracy` has 8,643,835
+CPU zones over 86.8 seconds, intact framing, matching compressed payload and
+successful inclusive/self/GPU exports with no malformed rows. Resumed CCD
+preparation is 0.562 ms per call in that instrumented capture; paused CPU shadow
+batching is 1.247 ms per frame. Instrumentation produces catch-up bursts, so
+these are owner-attribution leads rather than normal service-time acceptance.
+`target/native-workers-analysis.json` and `target/native-workers-integrity.json`
+retain the details. This capture precedes the final CCD indexing and joint-clock
+repair. The earlier `target/atomic-griffin-tracy.tracy` also remains valid, but
+its missing shared-shadow spans cannot certify total shadow-pass coverage.
+
+A one-worker application profile and native GPU/direct-draw preparation were
+measured and rejected. The former worsened complete-frame/fixed-cycle timings;
+the latter was contention-affected and did not establish an improvement. Their
+candidate source is removed; decisions and raw evidence remain in
+`target/compute-profile-rejected-comparison.json` and
+`target/direct-render-comparison.json`. A package-scoped application clean
+recovered 6.6 GiB without deleting source, sibling worktrees or shared caches.
+
+### Clock, coupling and remaining correctness scope
+
+`00badd2b3` moves requested joint retirement to the next fixed boundary while
+also servicing paused requests through the same owner. The batched/paused
+production gates pass eight checks in each host. `d29cde401` commits scoped
+input transactions: the named owner counter regression passes, atomic exchange
+passes 10 checks per host, Modelica initialization/shared clock passes 43 and
+the external scalar FMI 3 clock passes 43. Evidence is
+`target/joint-clock-validation-summary.json` and
+`target/port-scoped-commit-summary.json`.
+
+`degenerate_native_triangle_retains_boundary_geometry` still fails inside the
+pinned Parry triangle projection for a collinear triangle. It calls the native
+query directly and does not exercise pair enumeration. The test remains visible;
+additional dependency-source edit approval is pending. This failure is not a
+claim that the tested Griffin mission fails.
+
+The installed OpenModelica 1.27.1 explicitly rejects FMI 3.0 export
+(`target/fmi-openmodelica/export.log`); no dependency source was edited. Its
+maintained exporter helper was removed because that tool could not produce the
+requested artifact. Newer documentation is not qualification of this installed
+version. Scalar Reference-FMU clock checks establish only the supported import
+profile. Direct-feedthrough scheduling, implicit algebraic-loop handling and
+broader external FMU interoperability remain open alongside performance.
+
 ## Runtime-surface input admission — 2026-10-18
 
 The shared exposure preparation owner admits a new policy projection only when

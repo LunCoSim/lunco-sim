@@ -8,10 +8,11 @@
 //! Currently implements gravity, solar-direction inputs, lunar lighting, and
 //! horizon self-shadowing. See the README for ownership and extension guidance.
 
-use avian3d::prelude::{ConstantLinearAcceleration, Position, RigidBody};
+use avian3d::prelude::{ConstantLinearAcceleration, Position, RigidBody, Rotation};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_physics::{PhysicsPoseSeeded, PrescribedSimulationPose, SimulationPoseQuery};
 use lunco_spatial::coords::GridPos;
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
 // `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
@@ -172,16 +173,12 @@ fn update_local_gravity_for_entity(
     commands: &mut Commands,
     updates: &mut Vec<(Entity, LocalGravity)>,
     gravity: &Gravity,
-    active_frame: Option<Entity>,
-    native_position: Option<&Position>,
+    poses: &SimulationPoseQuery,
     entity: Entity,
     gravity_body: Option<Ref<GravityBody>>,
     existing: Option<&LocalGravity>,
     body_pose_cache: &mut HashMap<Entity, (GridPos, DQuat)>,
-    q_bodies: &Query<&GravityProvider>,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_bodies: &Query<(Entity, &GravityProvider)>,
 ) {
     let g = match gravity {
         // A flat field is authored by UsdPhysicsScene in the stage's
@@ -196,25 +193,13 @@ fn update_local_gravity_for_entity(
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            let Ok(provider) = q_bodies.get(body_link.body_entity) else {
+            let Ok((_, provider)) = q_bodies.get(body_link.body_entity) else {
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            // Native Position is already in the admitted physics frame. Do
-            // not feed render interpolation or f32 writeback into gravity.
-            let entity_position = match (active_frame, native_position) {
-                (Some(_), Some(position)) => Some(position.0),
-                (Some(frame), None) => lunco_spatial::coords::pose_in_grid(
-                    entity, frame, q_parents, q_grids, q_spatial,
-                )
-                .map(|(p, _)| p),
-                (None, _) => {
-                    lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial)
-                        .ok()
-                        .map(|(p, _)| p.0)
-                }
-            };
-            let Some(entity_position) = entity_position else {
+            // The shared pose owner includes mounted native ancestors and
+            // rejects unseeded state before a field can enter either solver.
+            let Some(GridPos(entity_position)) = poses.position(entity) else {
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
@@ -222,24 +207,8 @@ fn update_local_gravity_for_entity(
                 .get(&body_link.body_entity)
                 .copied()
                 .or_else(|| {
-                    let pose = match active_frame {
-                        Some(frame) => lunco_spatial::coords::pose_in_grid(
-                            body_link.body_entity,
-                            frame,
-                            q_parents,
-                            q_grids,
-                            q_spatial,
-                        )
-                        .map(|(p, r)| (GridPos(p), r)),
-                        None => lunco_spatial::coords::world_pose(
-                            body_link.body_entity,
-                            q_parents,
-                            q_grids,
-                            q_spatial,
-                        )
-                        .ok()
-                        .map(|(p, r)| (p, r.0)),
-                    }?;
+                    let (position, rotation) = poses.pose(body_link.body_entity)?;
+                    let pose = (position, rotation.0);
                     body_pose_cache.insert(body_link.body_entity, pose);
                     Some(pose)
                 });
@@ -272,47 +241,87 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    q_bodies: Query<&GravityProvider>,
+    q_bodies: Query<(Entity, &GravityProvider)>,
     q_changed_providers: Query<(), Changed<GravityProvider>>,
     mut removed_providers: RemovedComponents<GravityProvider>,
     mut removed_body_links: RemovedComponents<GravityBody>,
+    mut removed_prescribed: RemovedComponents<PrescribedSimulationPose>,
+    mut removed_poses: ParamSet<(
+        RemovedComponents<PhysicsPoseSeeded>,
+        RemovedComponents<RigidBody>,
+        RemovedComponents<Position>,
+        RemovedComponents<Rotation>,
+        RemovedComponents<ChildOf>,
+        RemovedComponents<Transform>,
+        RemovedComponents<CellCoord>,
+        RemovedComponents<Grid>,
+    )>,
     mut q_entities: ParamSet<(
         Query<
             (Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>),
-            (
-                With<Transform>,
-                Or<(With<GravityBody>, With<LocalGravity>)>,
-                Or<(
-                    Changed<Transform>,
-                    Changed<Position>,
-                    Changed<GravityBody>,
-                    Without<LocalGravity>,
-                )>,
-            ),
+            (With<Transform>, Or<(With<GravityBody>, With<LocalGravity>)>),
         >,
         Query<(Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>), With<Transform>>,
         Query<Entity, (With<Transform>, Without<LocalGravity>)>,
+        Query<Entity, (With<LocalGravity>, Without<Transform>)>,
     )>,
     q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_native_positions: Query<&Position, With<RigidBody>>,
+    q_changed_poses: Query<
+        (),
+        Or<(
+            Changed<Position>,
+            Changed<Rotation>,
+            Changed<PhysicsPoseSeeded>,
+            Changed<PrescribedSimulationPose>,
+            Changed<RigidBody>,
+            Changed<Transform>,
+            Changed<CellCoord>,
+            Changed<Grid>,
+            Changed<ChildOf>,
+        )>,
+    >,
+    poses: SimulationPoseQuery,
     mut body_pose_cache: Local<HashMap<Entity, (GridPos, DQuat)>>,
 ) {
-    // Surface fields visit changed consumers and existing fields that may need
-    // removal. Unlinked entities without a field cannot produce an update.
-    // A provider edit/removal or a global/frame change
-    // invalidates every cached field and deliberately selects the full query.
-    // This is structural change detection, not a timer: transforms, body links,
-    // provider structure, and the authored gravity/frame resources remain the
-    // invalidation owners.
-    let provider_changed =
-        !q_changed_providers.is_empty() || removed_providers.read().next().is_some();
-    let body_link_removed = removed_body_links.read().next().is_some();
+    // A mount's local Transform stays unchanged while its native body moves.
+    // Follow the shared hierarchy invalidation path before reusing its field.
+    // Readiness withdrawal invalidates descendants as well as the body itself.
+    // Drain each removal stream independently; one invalidation must not defer
+    // another stream's cleanup into a later simulation tick.
+    let provider_removed = removed_providers.read().count() > 0;
+    let transform_removed = removed_poses.p5().read().count() > 0;
+    let pose_input_removed = [
+        removed_poses.p0().read().count() > 0,
+        removed_poses.p1().read().count() > 0,
+        removed_poses.p2().read().count() > 0,
+        removed_poses.p3().read().count() > 0,
+        removed_poses.p4().read().count() > 0,
+        transform_removed,
+        removed_poses.p6().read().count() > 0,
+        removed_poses.p7().read().count() > 0,
+        removed_prescribed.read().count() > 0,
+    ]
+    .into_iter()
+    .any(|removed| removed);
+    if transform_removed {
+        // Entities that lost Transform are outside every spatial work query.
+        // Withdraw their field before the cosimulation publication boundary.
+        for entity in &q_entities.p3() {
+            commands.entity(entity).remove::<LocalGravity>();
+        }
+    }
+    let provider_changed = !q_changed_providers.is_empty()
+        || provider_removed
+        || q_bodies.iter().any(|(entity, _)| {
+            lunco_spatial::coords::world_pose_changed(entity, &q_parents, &q_changed_poses)
+        });
+    let body_link_removed = removed_body_links.read().count() > 0;
     let global_invalidation = gravity.is_changed()
         || active_frame.as_ref().is_some_and(Res::is_changed)
+        || (matches!(gravity.as_ref(), Gravity::Surface) && active_frame.is_none())
         || provider_changed
-        || body_link_removed;
+        || body_link_removed
+        || (matches!(gravity.as_ref(), Gravity::Surface) && pose_input_removed);
     // A flat field has no position dependence. Once admitted, moving entities
     // retain the same vector until an owner-level invalidation. The missing
     // field query is archetypal, so steady motion does not scan change ticks.
@@ -335,44 +344,44 @@ pub fn compute_local_gravity(
         return;
     }
     let mut updates = Vec::new();
-    // Several moving consumers can share one gravity body. Its world pose is
+    // Several moving consumers can share one gravity body. Its active-frame pose is
     // stable for this read-only system pass, so resolve it once per provider.
     body_pose_cache.clear();
-    let frame = active_frame.as_deref().map(|frame| frame.0);
-    if global_invalidation {
+    // A surface field can only exist on a linked consumer. Even a provider
+    // invalidation need not visit unrelated visual entities or terrain tiles.
+    if global_invalidation && matches!(gravity.as_ref(), Gravity::Flat { .. }) {
         for (entity, gravity_body, existing) in q_entities.p1().iter() {
             update_local_gravity_for_entity(
                 &mut commands,
                 &mut updates,
                 gravity.as_ref(),
-                frame,
-                q_native_positions.get(entity).ok(),
+                &poses,
                 entity,
                 gravity_body,
                 existing,
                 &mut body_pose_cache,
                 &q_bodies,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
             );
         }
     } else {
         for (entity, gravity_body, existing) in q_entities.p0().iter() {
+            if !global_invalidation
+                && existing.is_some()
+                && !gravity_body.as_ref().is_some_and(|link| link.is_changed())
+                && !lunco_spatial::coords::world_pose_changed(entity, &q_parents, &q_changed_poses)
+            {
+                continue;
+            }
             update_local_gravity_for_entity(
                 &mut commands,
                 &mut updates,
                 gravity.as_ref(),
-                frame,
-                q_native_positions.get(entity).ok(),
+                &poses,
                 entity,
                 gravity_body,
                 existing,
                 &mut body_pose_cache,
                 &q_bodies,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
             );
         }
     }
@@ -390,11 +399,8 @@ pub fn compute_local_gravity(
 /// Avian's own integrator, so gravity is applied in live physics and rollback
 /// alike without force-accumulator bookkeeping or a per-tick wake-up.
 ///
-/// Replaces the recomputing-each-tick `gravity_system` that previously lived
-/// in `lunco-celestial`. Reading `LocalGravity` instead of recomputing means
-/// every consumer (this system, cosim injection, future systems) sees the same
-/// authoritative value with no duplicated work. Updating the standard
-/// component only when the cached field changes lets Avian's native
+/// Every consumer reads the shared `LocalGravity` sample. Updating the standard
+/// component only when that field changes lets Avian's native
 /// sleeping/waking rules remain authoritative.
 pub fn sync_local_gravity_to_avian(
     mut commands: Commands,
@@ -439,11 +445,8 @@ pub fn sync_local_gravity_to_avian(
 /// that take a gravity input (`g`, `gravity`, …) receive the *real* local value
 /// through an ordinary output→input wire.
 ///
-/// This is the domain half of keeping `lunco-cosim` pure: the master
-/// propagation algorithm has no gravity special-case and no hardcoded constant
-/// (it used to inject Earth's `9.81` for a magic `__gravity__` source, which was
-/// wrong on the Moon). Gravity now flows like any other signal, correct on any
-/// body, because the value comes from the position-dependent `LocalGravity`.
+/// The co-simulation master propagates ordinary signals; the environment owner
+/// supplies position-dependent gravity through the same wired port contract.
 ///
 /// Runs in [`EnvironmentSet::Apply`] (after `LocalGravity` is computed) and
 /// before cosim's propagation, so the freshly-written output is read the same
@@ -626,9 +629,7 @@ fn on_set_environment_light(
     mut directions: ResMut<EnvironmentDirections>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     scene_mount: Option<Res<lunco_core::SceneMountState>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
+    poses: lunco_physics::SimulationPoseQuery<Without<DirectionalLight>>,
     q_direction_targets: Query<(Entity, &DirectionTargetId)>,
     q_source_classifications: Query<&CelestialSourceClassification>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
@@ -698,9 +699,7 @@ fn on_set_environment_light(
                 active_frame.0,
                 Some(&directions),
                 &q_direction_targets,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
+                &poses,
             ) {
                 Ok(direction) => direction,
                 Err(error) => {
@@ -1065,9 +1064,22 @@ mod tests {
             .spawn((
                 RigidBody::Dynamic,
                 Position(position),
+                lunco_physics::PhysicsPoseSeeded,
                 Transform::from_xyz(0.5, 40.0, 0.7),
                 GlobalTransform::default(),
                 ChildOf(frame),
+                GravityBody {
+                    body_entity: planet,
+                },
+            ))
+            .id();
+        let mount_offset = DVec3::new(0.75, 0.5, -0.25);
+        let probe = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(mount_offset.as_vec3()),
+                GlobalTransform::default(),
+                ChildOf(body),
                 GravityBody {
                     body_entity: planet,
                 },
@@ -1079,6 +1091,11 @@ mod tests {
         assert_eq!(
             actual, expected,
             "gravity consumed the rendered pose rather than native Position"
+        );
+        let probe_expected = -(position + mount_offset + DVec3::Y * 1000.0).normalize() * 1.62;
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            probe_expected
         );
         app.world_mut()
             .get_mut::<Transform>(body)
@@ -1092,6 +1109,10 @@ mod tests {
             expected,
             "presentation or an ancestor above the gravity body changed local gravity"
         );
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            probe_expected
+        );
         app.world_mut().get_mut::<Position>(body).unwrap().0.x += 1.0;
         app.update();
         assert_ne!(
@@ -1100,6 +1121,69 @@ mod tests {
             "native movement did not invalidate gravity without a render write"
         );
         let moved = app.world().get::<LocalGravity>(body).unwrap().0;
+        let moved_position = app.world().get::<Position>(body).unwrap().0;
+        let moved_probe = -(moved_position + mount_offset + DVec3::Y * 1000.0).normalize() * 1.62;
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe,
+            "a parent native-position change did not invalidate its mounted probe"
+        );
+        let rotation = DQuat::from_rotation_z(0.3);
+        app.world_mut().get_mut::<Rotation>(body).unwrap().0 = rotation;
+        app.update();
+        let moved_probe =
+            -(moved_position + rotation * mount_offset + DVec3::Y * 1000.0).normalize() * 1.62;
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe,
+            "a parent native-rotation change did not invalidate its mounted probe"
+        );
+        assert_eq!(app.world().get::<LocalGravity>(body).unwrap().0, moved);
+        app.world_mut()
+            .entity_mut(body)
+            .remove::<lunco_physics::PhysicsPoseSeeded>();
+        app.update();
+        assert!(app.world().get::<LocalGravity>(body).is_none());
+        assert!(app.world().get::<LocalGravity>(probe).is_none());
+        app.world_mut()
+            .entity_mut(body)
+            .insert(lunco_physics::PhysicsPoseSeeded);
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe
+        );
+        app.world_mut().entity_mut(probe).remove::<ChildOf>();
+        app.update();
+        assert!(app.world().get::<LocalGravity>(probe).is_none());
+        app.world_mut().entity_mut(probe).insert(ChildOf(body));
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe
+        );
+        app.world_mut().entity_mut(probe).remove::<Transform>();
+        app.update();
+        assert!(app.world().get::<LocalGravity>(probe).is_none());
+        app.world_mut()
+            .entity_mut(probe)
+            .insert(Transform::from_translation(mount_offset.as_vec3()));
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe
+        );
+        app.world_mut()
+            .remove_resource::<lunco_spatial::ActivePhysicsFrame>();
+        app.update();
+        assert!(app.world().get::<LocalGravity>(body).is_none());
+        assert!(app.world().get::<LocalGravity>(probe).is_none());
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalGravity>(probe).unwrap().0,
+            moved_probe
+        );
         app.world_mut().entity_mut(body).remove::<GravityBody>();
         app.update();
         assert!(app.world().get::<LocalGravity>(body).is_none());

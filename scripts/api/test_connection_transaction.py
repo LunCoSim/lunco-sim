@@ -28,7 +28,7 @@ def main():
                                "params": {"path": str(ROOT / "assets/scenes/tests/connection_transaction.usda")}})
         if result.get("error"):
             raise RuntimeError(f"fixture admission failed: {result}")
-        wait_for_authored_verdict(session, title="CONNECTION TRANSACTION", check_count=10,
+        wait_for_authored_verdict(session, title="CONNECTION TRANSACTION", check_count=11,
                                  allow_runtime_fault=True, timeout_s=60)
     print(f"API Exit completed; port {args.port} released", flush=True)
 

@@ -78,17 +78,37 @@ another scripting runtime.
 
 ## Visibility work follows adapter capability
 
+The desktop host selects native CPU mesh-instance preparation through the
+renderer facade's maintained `PbrPlugin` configuration. This changes preparation
+and batching, not the standard PBR materials, textures, lighting, shadows, MSAA
+or authored geometry. Windowed and offscreen hosts use the same plugin group.
+Other hosts can select the native GPU builder; the render boundary derives
+effective preparation and camera-culling eligibility from the actual native
+builder rather than assuming a particular host configuration.
+
 The render boundary opts `SceneCamera` entities into Bevy's camera-level
-`NoCpuCulling` path only when the active adapter reports GPU culling support.
-Bevy then sends camera mesh-frustum work through GPU preprocessing. Keep the
+`NoCpuCulling` path only when native `RenderMeshInstances` uses its GPU builder,
+the active adapter reports GPU culling support and the camera permits indirect
+drawing. A CPU instance builder or `NoIndirectDrawing` retains CPU frustum tests;
+device support alone does not establish an active GPU culler. After native
+`RenderStartup` refreshes device support, this owner caps the effective native
+preprocessing mode to `None` when `RenderMeshInstances::CpuBuilding` is active.
+Camera and shadow phases consume that same mode; they must not request GPU
+batch sets when their instance builder supplies CPU buffers. Device recovery
+repeats the native initialization followed by this active-path admission.
+For eligible GPU views, Bevy sends camera mesh-frustum work through GPU
+preprocessing. Keep the
 marker on cameras, not `Mesh3d` entities: Bevy's per-light visibility systems
 exclude marked meshes from their CPU-built shadow lists. Camera-level opt-in
 therefore preserves the existing per-mesh light and shadow visibility path and
 does not change render layers, authored cameras, or quality settings. Adapter
 capability is published from `RenderStartup` to the main world through one
 shared atomic flag. One reconciliation pass handles scene cameras already
-present; a `SceneCamera` observer handles streamed cameras. Unsupported adapters
-stay on the default CPU-culling path, and a capability transition removes only
+present; structural observers handle `SceneCamera` and `NoIndirectDrawing`
+addition/removal through one reconciliation function. Removal is reconciled
+after the structural operation so it consumes the final component set.
+Unsupported adapters stay on the default CPU-culling path, and a capability
+transition removes only
 markers owned by this adapter.
 
 Keep this optimization in `lunco-render-bevy`. Scene-camera reconciliation

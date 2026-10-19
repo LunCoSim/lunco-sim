@@ -64,6 +64,12 @@ Authored pointer automation uses `// @timing presentation`, so each gesture
 phase occupies a host frame even when one frame admits several simulation
 ticks. Use `execution_context().delta_seconds` for its timeouts.
 
+For held-key regressions, inject one `Pressed` event, advance multiple host
+frames and fixed ticks, then inject one `Released` event. Do not keep a key alive
+with repeat presses. `LunCoControlPlugin` orders the shared input reset before
+unification; release and native focus loss still end the physical hold. Capture
+semantic edges and actuator response across pause/resume and rate changes.
+
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:
 

@@ -145,7 +145,7 @@ fn canonical_parameter_overrides(values: &[(String, f64)]) -> Vec<(String, f64)>
 
 struct LiveBuildPlan {
     spec: solver::SolverSpec,
-    snapshot: ModelicaLiveSolverSnapshot,
+    snapshot: Arc<ModelicaLiveSolverSnapshot>,
     options: rumoca_sim::SimOptions,
     key: PreparedSolveKey,
     #[cfg(not(target_arch = "wasm32"))]
@@ -154,7 +154,7 @@ struct LiveBuildPlan {
 
 type BuiltStepper<S> = (
     S,
-    ModelicaLiveSolverSnapshot,
+    Arc<ModelicaLiveSolverSnapshot>,
     std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
     Vec<(String, f64)>,
 );
@@ -176,7 +176,7 @@ fn live_build_plan(
     options.param_overrides = parameter_overrides.clone();
     let initial_inputs = canonical_parameter_overrides(initial_inputs);
     options.initial_inputs = initial_inputs.clone();
-    let snapshot = ModelicaLiveSolverSnapshot {
+    let snapshot = Arc::new(ModelicaLiveSolverSnapshot {
         solver_id: spec.id.to_string(),
         capabilities: ModelicaSolverCapabilities {
             usable_live: spec.caps.usable_live,
@@ -196,7 +196,7 @@ fn live_build_plan(
         },
         parameter_overrides: parameter_overrides.clone(),
         initial_inputs: initial_inputs.clone(),
-    };
+    });
     let key = PreparedSolveCache::key(source_key, &spec, &parameter_overrides, &initial_inputs);
     Ok(LiveBuildPlan {
         spec,
@@ -220,7 +220,7 @@ fn build_stepper(
 ) -> Result<
     (
         LiveStepper,
-        ModelicaLiveSolverSnapshot,
+        Arc<ModelicaLiveSolverSnapshot>,
         std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
         Vec<(String, f64)>,
     ),
@@ -1634,7 +1634,7 @@ struct CachedModel {
     /// Worker library generation at the time `compiled` was built.
     library_gen: u64,
     /// The resolved solver plan used by the installed or rebuildable stepper.
-    live_solver_snapshot: ModelicaLiveSolverSnapshot,
+    live_solver_snapshot: Arc<ModelicaLiveSolverSnapshot>,
     pending_variable_metadata:
         Option<std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>>,
 }

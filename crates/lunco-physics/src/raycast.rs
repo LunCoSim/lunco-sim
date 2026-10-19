@@ -6,7 +6,9 @@
 //! the raw result. Modelica components decide whether that result is useful as
 //! a range measurement, terrain estimator, optical probe, or something else.
 
-use avian3d::prelude::{Physics, Position, RigidBody, Rotation, SpatialQueryFilter};
+use avian3d::prelude::{
+    Physics, Position, RigidBody, RigidBodyColliders, Rotation, SpatialQueryFilter,
+};
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
 
@@ -73,7 +75,15 @@ pub fn sample_raycast_observations(
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
-    bodies: Query<(&Position, &Rotation, Option<&lunco_core::GlobalEntityId>), With<RigidBody>>,
+    bodies: Query<
+        (
+            &Position,
+            &Rotation,
+            Option<&lunco_core::GlobalEntityId>,
+            Option<&RigidBodyColliders>,
+        ),
+        With<RigidBody>,
+    >,
     mut observations: Query<(Entity, &mut RaycastObservation)>,
 ) {
     // A replacement clears the active root before deferred teardown. Do not
@@ -90,7 +100,7 @@ pub fn sample_raycast_observations(
         let mut mount = Transform::IDENTITY;
         let Some((body_position, body_rotation, body_global_id, excluded_entities)) = (0..64)
             .find_map(|_| {
-                if let Ok((position, rotation, global_id)) = bodies.get(cursor) {
+                if let Ok((position, rotation, global_id, colliders)) = bodies.get(cursor) {
                     let mut excluded = Vec::new();
                     let mut ancestor = entity;
                     while ancestor != cursor {
@@ -98,6 +108,13 @@ pub fn sample_raycast_observations(
                         ancestor = parents.get(ancestor).ok()?.0;
                     }
                     excluded.push(cursor);
+                    // Native spatial filters address collider entities. A
+                    // compound body's owner is not itself every collider:
+                    // exclude the actual attached geometry, including prims
+                    // outside the sensor's ancestor chain.
+                    if let Some(colliders) = colliders {
+                        excluded.extend(colliders);
+                    }
                     return Some((position, rotation, global_id.map(|id| id.get()), excluded));
                 }
                 if let Ok(local) = transforms.get(cursor) {

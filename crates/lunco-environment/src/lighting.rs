@@ -124,9 +124,7 @@ pub fn drive_earthshine_from_phase(
     directions: Option<Res<crate::EnvironmentDirections>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_targets: Query<(Entity, &crate::DirectionTargetId)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    poses: lunco_physics::SimulationPoseQuery,
     mut q_fill: Query<&mut DirectionalLight, With<crate::Earthshine>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
@@ -173,15 +171,7 @@ pub fn drive_earthshine_from_phase(
         return;
     };
     let resolve = |source: &crate::DirectionSourceId| {
-        crate::resolve_direction_for_frame(
-            source,
-            frame,
-            directions.as_deref(),
-            &q_targets,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
+        crate::resolve_direction_for_frame(source, frame, directions.as_deref(), &q_targets, &poses)
     };
     let (earth, sun) = match (resolve(&earth_id), resolve(&sun_id)) {
         (Ok(earth), Ok(sun)) => (earth, sun),

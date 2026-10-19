@@ -17,7 +17,7 @@ lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-storage = { path = "../lunco-storage" }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

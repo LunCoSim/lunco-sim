@@ -167,7 +167,12 @@ is the stable frame identity string or `()`.
 `GetBrokenConnections` includes the port owner's rejection in each `failure`
 field, so a range or writability fault remains distinguishable from a missing
 port without parsing a log message. `dropped_value` is optional: `()` (JSON
-`null` on the wire) means no numerical write was attempted.
+`null` on the wire) means no numerical write was attempted. An attempted write
+is `{ kind, value }`: `kind` is `finite`, `not_a_number`, `positive_infinity` or
+`negative_infinity`. A finite value retains its `f64` payload; the other kinds
+have `value = ()`. This classification happens at the diagnostic API adapter;
+the simulation keeps the original IEEE value. Overflow diagnostics therefore
+remain queryable through JSON without fabricating a finite number.
 
 Data-returning queries use the same `POST /api/commands` envelope as commands.
 `ReadExposures` reads the generic runtime capability registry used by HTML/CSS

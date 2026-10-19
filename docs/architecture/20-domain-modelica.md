@@ -471,6 +471,15 @@ receives a persistent owner in submission order. FIFO mailboxes keep its native
 state, JIT backend, stepping and teardown on that thread. Preparation cannot occupy a live owner thread. Only typed handles, immutable metadata and checked observations
 cross back to the command owner; native sessions never cross threads.
 
+The response bridge retains each accepted transaction as `ModelicaStepSample`;
+`ReadModelicaStepSamples` reads its exact input/output values and communication
+times. The opt-in `lunco_modelica_worker::step_audit` log target records session,
+step and ordered scalar fingerprints at `debug`, or full samples at `trace`.
+Fingerprints fold names and native f64 bits through `lunco-hash` without copying
+or serializing values. They locate a differing transaction; a matching hash is
+not proof of equal state. Disabled audit logs do not compute fingerprints.
+The trace observes accepted transactions and never advances or samples a solver.
+
 A scheduling round dispatches at most one initialized transaction per entity
 before awaiting results. It transfers the complete owned input vector, retaining
 the requested communication point and checked observation path. The selected
@@ -707,6 +716,14 @@ The worker reuses immutable compiled DAE artifacts for the same exact target,
 document URI, assembled source bytes, and source-root revision. Generated
 wrappers use the same cache contract as authored source. Parameter bindings,
 solver instances, live state, and telemetry remain per entity.
+
+`ModelicaLiveSolverSnapshot` is immutable per admitted solver plan. The worker
+cache, typed receipts and admitted `ModelicaModel` share it through `Arc` within
+the host; ordinary steps retain references instead of copying solver names,
+parameter overrides and initial inputs. Session/generation fencing still
+precedes publication, and terminal errors, replacement and teardown clear the
+retained facts with their solver. Serialized worker transports encode the same
+snapshot value through Serde's standard shared-reference support.
 
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
 capacities, captured before worker admission. Both capacities must be positive;
