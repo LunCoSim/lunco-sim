@@ -574,3 +574,25 @@ by scene/editor consumers while a text field owns the keyboard.
 - [**Application Guide**](../README.md#application-guide) — How to run the various binaries and tools.
 - [**API Documentation**](12-api.md) — Detailed list of API endpoints, typed commands, and queries.
 - [**Crates Index**](../crates-index.md) — Navigation guide for the workspace structure.
+
+## Auxiliary actuator controls
+
+`UserIntent::Auxiliary1` through `Auxiliary4` provide four generic held actuator
+channels with canonical names `auxiliary_1` through `auxiliary_4`. The shared
+input settings assign physical keys; a vessel's authored `ControlBinding`
+assigns each channel to a port. The controller records them in the same
+physical semantic frames and applies the same ownership, capture, release and
+fixed-tick ordering as primary controls. They carry no built-in vehicle physics
+or editor/camera action, so a vessel can expose additional actuators without
+borrowing Pause, Cancel or selection commands.
+
+Keyboard settings may author `key_chords` for semantic actions, using a list of
+physical key lists. The input owner projects these through Leafwing's native
+chord resolution. Empty single-key bindings can remove an old shortcut while
+preserving a held actuator key (for example `P` versus `Ctrl+P`). Help labels use
+the same keymap. Chord members should be pressed modifier-first.
+
+Wheel parking support uses the native computed body mass, shared by measured
+contact loads. Surface normal load determines the Coulomb bound, not inferred
+mass; fan preload and wall orientation therefore do not invent inertial mass.
+A locked patch uses one friction cone rather than adding two friction forces.

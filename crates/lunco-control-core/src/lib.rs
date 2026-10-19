@@ -82,6 +82,14 @@ pub enum UserIntent {
     /// Release/detach a dock or coupling (e.g. a lander→rover fixed joint). Routed
     /// through the normal intent→port machinery to a `release` command port.
     Release,
+    /// First generic auxiliary actuator channel; its meaning is authored by the vessel.
+    Auxiliary1,
+    /// Second generic auxiliary actuator channel.
+    Auxiliary2,
+    /// Third generic auxiliary actuator channel.
+    Auxiliary3,
+    /// Fourth generic auxiliary actuator channel.
+    Auxiliary4,
     /// Toggles between different control or view modes.
     SwitchMode,
     /// Pauses or unpauses the simulation state.
@@ -112,6 +120,10 @@ impl std::fmt::Display for UserIntent {
             Self::Thrust => "Vehicle thrust",
             Self::Brake => "Vehicle brake",
             Self::Release => "Release coupling",
+            Self::Auxiliary1 => "Auxiliary actuator 1",
+            Self::Auxiliary2 => "Auxiliary actuator 2",
+            Self::Auxiliary3 => "Auxiliary actuator 3",
+            Self::Auxiliary4 => "Auxiliary actuator 4",
             Self::SwitchMode => "Switch camera mode",
             Self::Pause => "Pause simulation",
             Self::Cancel => "Cancel current tool",
@@ -123,7 +135,7 @@ impl std::fmt::Display for UserIntent {
 
 impl UserIntent {
     /// Every semantic intent in stable enum vocabulary order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 21] = [
         Self::MoveForward,
         Self::MoveBackward,
         Self::MoveLeft,
@@ -141,6 +153,10 @@ impl UserIntent {
         Self::Pause,
         Self::Cancel,
         Self::DeleteSelection,
+        Self::Auxiliary1,
+        Self::Auxiliary2,
+        Self::Auxiliary3,
+        Self::Auxiliary4,
     ];
 
     /// Canonical lower-case name used by authored bindings and event payloads.
@@ -159,6 +175,10 @@ impl UserIntent {
             Self::Thrust => "thrust",
             Self::Brake => "brake",
             Self::Release => "release",
+            Self::Auxiliary1 => "auxiliary_1",
+            Self::Auxiliary2 => "auxiliary_2",
+            Self::Auxiliary3 => "auxiliary_3",
+            Self::Auxiliary4 => "auxiliary_4",
             Self::SwitchMode => "switch_mode",
             Self::Pause => "pause",
             Self::Cancel => "cancel",
@@ -464,6 +484,10 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "thrust" => Some(UserIntent::Thrust),
         "brake" => Some(UserIntent::Brake),
         "release" => Some(UserIntent::Release),
+        "auxiliary_1" => Some(UserIntent::Auxiliary1),
+        "auxiliary_2" => Some(UserIntent::Auxiliary2),
+        "auxiliary_3" => Some(UserIntent::Auxiliary3),
+        "auxiliary_4" => Some(UserIntent::Auxiliary4),
         "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
         "cancel" => Some(UserIntent::Cancel),
@@ -729,6 +753,21 @@ mod tests {
                 .sequence,
             1
         );
+    }
+
+    /// Auxiliary controls use the same semantic names and input pipeline as
+    /// primary controls; no editor or camera intent is borrowed by a vessel.
+    #[test]
+    fn auxiliary_intents_are_canonical_and_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for name in ["auxiliary_1", "auxiliary_2", "auxiliary_3", "auxiliary_4"] {
+            let intent = parse_user_intent(name).expect("auxiliary control must parse");
+            assert_eq!(intent.canonical_name(), name);
+            assert!(UserIntent::ALL.contains(&intent));
+            assert!(seen.insert(intent));
+        }
+        assert!(parse_user_intent("auxiliary_0").is_none());
+        assert!(parse_user_intent("auxiliary_5").is_none());
     }
 
     /// Intent parsing accepts exactly the authored control vocabulary and rejects

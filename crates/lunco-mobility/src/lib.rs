@@ -1107,14 +1107,15 @@ pub fn tire_patch_force(
 /// Resolve the static-friction force for a locked wheel, including the
 /// measured tangential contact velocity.
 ///
-/// The support load gives this wheel's mass share (`N / |g_normal|`), so the
-/// requested impulse is derived from the fixed physics step rather than a tuned
-/// damping constant.  The result is capped by the authored friction cone; an
+/// The caller apportions actual chassis mass by measured contact normal load.
+/// Suction or aerodynamic preload must not be mistaken for additional mass,
+/// and contacts may be vertical. The requested impulse uses the fixed step.  The result is capped by the authored friction cone; an
 /// over-steep or under-gripped surface still slides physically.
 fn parking_brake_force_with_velocity(
     gravity: DVec3,
     contact_normal: DVec3,
     normal_force: f64,
+    supported_mass: f64,
     friction_mu: f64,
     tangential_velocity: DVec3,
     dt: f64,
@@ -1126,14 +1127,16 @@ fn parking_brake_force_with_velocity(
     if normal == DVec3::ZERO {
         return DVec3::ZERO;
     }
-    let normal_accel = -gravity.dot(normal);
-    if normal_force <= 0.0 || friction_mu <= 0.0 || normal_accel <= f64::EPSILON {
+    if normal_force <= 0.0
+        || friction_mu <= 0.0
+        || supported_mass <= 0.0
+        || !supported_mass.is_finite()
+    {
         return DVec3::ZERO;
     }
 
     let tangent_gravity = gravity - normal * gravity.dot(normal);
     let tangent_velocity = tangential_velocity - normal * tangential_velocity.dot(normal);
-    let supported_mass = normal_force / normal_accel;
     let requested_accel = -tangent_gravity - tangent_velocity / dt;
     let requested = requested_accel * supported_mass;
     let available = friction_mu * normal_force;
@@ -1265,6 +1268,7 @@ mod tire_patch_tests {
             gravity,
             DVec3::Y,
             normal_force,
+            normal_force / 1.62,
             1.5,
             DVec3::ZERO,
             1.0 / 60.0,
@@ -1280,12 +1284,57 @@ mod tire_patch_tests {
     }
 
     #[test]
+    fn parking_brake_holds_a_preloaded_vertical_contact() {
+        let force = super::parking_brake_force_with_velocity(
+            DVec3::new(0.0, -9.80665, 0.0),
+            DVec3::Z,
+            10000.0,
+            487.5,
+            1.4,
+            DVec3::ZERO,
+            1.0 / 60.0,
+        );
+        assert!(
+            force.y > 4700.0,
+            "a vertical contact must resist tangential gravity"
+        );
+    }
+
+    #[test]
+    fn parking_preload_does_not_inflate_inertial_mass() {
+        let force = super::parking_brake_force_with_velocity(
+            DVec3::new(0.0, -9.0, -1.0),
+            DVec3::Y,
+            10000.0,
+            100.0,
+            1.4,
+            DVec3::ZERO,
+            1.0 / 60.0,
+        );
+        assert!((force.z - 100.0).abs() < 1.0e-9);
+        let limited = super::parking_brake_force_with_velocity(
+            DVec3::new(0.0, -9.80665, 0.0),
+            DVec3::Z,
+            1000.0,
+            487.5,
+            0.2,
+            DVec3::ZERO,
+            1.0 / 60.0,
+        );
+        assert!(
+            (limited.y - 200.0).abs() < 1.0e-9,
+            "insufficient adhesion must remain friction limited"
+        );
+    }
+
+    #[test]
     fn parking_brake_opposes_residual_contact_velocity() {
         let gravity = DVec3::new(0.0, -1.62, 0.0);
         let force = super::parking_brake_force_with_velocity(
             gravity,
             DVec3::Y,
             400.0,
+            400.0 / 1.62,
             1.5,
             DVec3::new(2.0, 0.0, -1.0),
             0.1,
@@ -1881,6 +1930,7 @@ fn apply_wheel_drive(
         (
             Forces,
             &RigidBody,
+            &ComputedMass,
             Option<&InputPorts>,
             Option<&lunco_environment::LocalGravity>,
         ),
@@ -1910,12 +1960,25 @@ fn apply_wheel_drive(
     };
     let dt = time.delta_secs_f64();
 
+    // Stable summation in the same physics order used to apply contact forces.
+    let mut total_normal_load = std::collections::HashMap::<Entity, f64>::new();
+    for entity in &order {
+        if let Ok((_, _, wheel, _, hits, mount)) = q_wheels.get(*entity) {
+            if hits
+                .iter_sorted()
+                .any(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
+                && wheel.last_normal_force >= 1.0
+            {
+                *total_normal_load.entry(mount.body).or_default() += wheel.last_normal_force;
+            }
+        }
+    }
     for entity in order {
         let Ok((_, _, wheel, susp, hits, mount)) = q_wheels.get(entity) else {
             continue;
         };
         let parent_entity = mount.body;
-        if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body, mass, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
             if fixed_dynamic_bodies.0.contains(&parent_entity) {
                 continue;
             }
@@ -1979,6 +2042,7 @@ fn apply_wheel_drive(
                                     g.0,
                                     hit.normal,
                                     normal_force,
+                                    mass.value() * normal_force / total_normal_load[&parent_entity],
                                     wheel.friction_mu,
                                     forces.velocity_at_point(contact_point),
                                     dt,
@@ -1996,7 +2060,13 @@ fn apply_wheel_drive(
                     // accumulator so a parked rover responds immediately.
                     let commanded =
                         drive_port.value != 0.0 || inputs.is_some_and(|input| input.brake_active);
-                    let force = wheel.tire_force + parking_force;
+                    // A locked patch has one Coulomb cone. Adding the dynamic
+                    // tire force again would count its grip twice.
+                    let force = if inputs.is_some_and(|i| i.brake_active) && gravity.is_some() {
+                        parking_force
+                    } else {
+                        wheel.tire_force
+                    };
                     if commanded {
                         forces.apply_force_at_point(force, contact_point);
                     } else {
@@ -3225,6 +3295,7 @@ mod suspension_visuals_tests {
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_secs_f64(0.1));
         app.insert_resource(time);
+        app.init_resource::<DynamicFixedBodies>();
 
         let chassis = app
             .world_mut()

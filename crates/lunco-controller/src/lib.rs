@@ -245,6 +245,10 @@ fn physical_intent_mask(intent: UserIntent) -> u128 {
         UserIntent::Pause => 14,
         UserIntent::Cancel => 15,
         UserIntent::DeleteSelection => 16,
+        UserIntent::Auxiliary1 => 17,
+        UserIntent::Auxiliary2 => 18,
+        UserIntent::Auxiliary3 => 19,
+        UserIntent::Auxiliary4 => 20,
     };
     1_u128 << index
 }
@@ -562,7 +566,7 @@ fn on_inject_window_input(
 /// streams.
 fn emit_pending_window_input(
     mut pending: MessageReader<PendingWindowInput>,
-    windows: Query<Entity, With<PrimaryWindow>>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     settings: Res<InputBindingsSettings>,
     mut window_events: MessageWriter<WindowEvent>,
     mut cursor_moved: MessageWriter<CursorMoved>,
@@ -572,7 +576,7 @@ fn emit_pending_window_input(
     mut mouse_motion: MessageWriter<MouseMotion>,
     mut pinch_gesture: MessageWriter<PinchGesture>,
 ) {
-    let Ok(window) = windows.single() else {
+    let Ok((window, mut primary)) = windows.single_mut() else {
         return;
     };
     for PendingWindowInput(event) in pending.read() {
@@ -602,6 +606,9 @@ fn emit_pending_window_input(
             }
             WindowInputEvent::PointerMove { x, y } => {
                 let position = Vec2::new(*x, *y);
+                // Winit updates Window's cursor owner before publishing its
+                // messages. Native UI picking reads that owner directly.
+                primary.set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -617,6 +624,7 @@ fn emit_pending_window_input(
                 y,
             } => {
                 let position = Vec2::new(*x, *y);
+                primary.set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -2574,7 +2582,7 @@ mod tests {
                 .get::<Window>(window)
                 .expect("primary window")
                 .cursor_position(),
-            None
+            Some(Vec2::new(12.0, 34.0))
         );
         assert!(matches!(
             observed.aggregate[0],
