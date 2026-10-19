@@ -702,6 +702,14 @@ document URI, assembled source bytes, and source-root revision. Generated
 wrappers use the same cache contract as authored source. Parameter bindings,
 solver instances, live state, and telemetry remain per entity.
 
+`ModelicaLiveSolverSnapshot` is immutable per admitted solver plan. The worker
+cache, typed receipts and admitted `ModelicaModel` share it through `Arc` within
+the host; ordinary steps retain references instead of copying solver names,
+parameter overrides and initial inputs. Session/generation fencing still
+precedes publication, and terminal errors, replacement and teardown clear the
+retained facts with their solver. Serialized worker transports encode the same
+snapshot value through Serde's standard shared-reference support.
+
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
 capacities, captured before worker admission. Both capacities must be positive;
 defaults retain at most 64 compiled artifacts and 64 prepared FMI components per

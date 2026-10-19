@@ -1,5 +1,25 @@
 # High-quality realtime performance handover
 
+## Immutable live-solver fact sharing — 2026-10-19
+
+`ModelicaLiveSolverSnapshot` is shared through `Arc` from the worker plan/cache
+to typed receipts and the admitted model. A normal step no longer deep-copies
+the solver id, parameter bindings and initial input strings at either handoff.
+This is an immutable runtime ownership invariant; no policy hook, solver,
+communication period or numerical operation changes. Session/generation checks
+and terminal snapshot retirement retain their owner. Canonical ownership is
+in architecture 20 and the profiling skill.
+
+The existing bridge seam first fails its new shared-storage assertion
+(`target/solver-snapshot-sharing-baseline.log`), then passes with immutable
+sharing; it also checks stale-session rejection and terminal missing metadata.
+Regular `cargo run -j 4 -- --help` succeeds. The production initialization/clock
+gate passes all 43 checks in both hosts, with clear readiness, zero errors and
+released 4396/4397. Evidence uses `target/solver-snapshot-sharing-*`. This proves
+ownership/clock behavior, not an isolated FPS or service-time improvement.
+The native pre-step audit is a separate diagnostic of the one-tick route
+variation below and does not qualify product performance.
+
 ## Combined committed-main assets — 2026-10-19
 
 `tutorials` merges main's committed plume-rendering change `e72a73146` through
@@ -11,11 +31,22 @@ runtime errors and a clean Twin. Inspected touchdown and completed-mission
 images retain terrain, vehicle and cast shadow. The owned session exits and
 releases 4397. Evidence is `target/integrated-render-api-windowed-mission.*`.
 
-Its completion is tick 5463, versus 5221 in the earlier artifact. Recorded
-mission milestones through route start at 3094 match; generated coupled
-initialization source hashes differ. The comparison does not qualify exact
-replay or identify a clock/shader cause (`target/integrated-render-api-comparison.json`).
-Deterministic replay remains open alongside the performance/FMI scope below.
+Its completion is tick 5463 on Twin `bbc0e77b`, versus 5221 in the earlier
+artifact on Twin `e4ae2425`. The Twin revision changed between those runs;
+individually clean checkouts do not establish equal admitted inputs. Their
+different generated initialization source hashes and completion ticks cannot
+qualify replay or identify a clock/shader cause. The corrected comparison is
+`target/integrated-render-api-comparison.json`.
+
+Two further runs use the same binary, Twin `bbc0e77b` and temporarily logged
+authored initialization policy. Both emit byte-identical 11,016-byte composite
+source (SHA-256 `672cf3bdf80306cbb6c30365346306a661979d38d912c4fa500af2e571290a59`),
+pass all 16 mission checks and finish at 5463. Intermediate approach/exit/first
+waypoint events differ by one tick. This establishes initialization/completion
+repeatability, not exact native-state replay. The original policy is restored
+byte-for-byte, and both owned sessions exit. Evidence uses
+`target/griffin-initialization-replay-{a,b}.*`; fixed-tick native-state tracing
+remains open alongside performance/FMI qualification.
 Main still contains overlapping uncommitted physics-owner work, so its
 fast-forward is pending; that work has not been modified or incorporated.
 

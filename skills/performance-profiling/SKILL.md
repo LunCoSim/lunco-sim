@@ -21,6 +21,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   verdict before comparing completed-mission windows. A tick threshold or zero
   process exit does not prove acceptance. Exclude source/API errors, and require
   readiness and diagnostics to pass for the measured cohort.
+  Compare the recorded Twin commits explicitly; two individually clean checkouts
+  can have different revisions. Such runs are different source cohorts, even if
+  their scenario name and application binary match. Initialization-source and
+  milestone equality alone do not prove exact native-state replay.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
@@ -457,6 +461,9 @@ For Modelica response retention, reuse observable-variable keys and move the
 worker's input/output buffers into the accepted record after transaction
 validation. Preserve detected-symbol/output precedence and verify reset
 isolation, signed-zero values and stale-result rejection at the owner seam.
+Immutable live solver facts share one `Arc` across the cache, receipt and model;
+do not clone their parameter/input strings on every step. The bridge ownership
+regression checks shared storage as well as terminal metadata rejection.
 Modelica workers return current observations only. Retained samples belong to
 `lunco-modelica-telemetry` and the shared chunked `SignalRegistry`, installed
 through `TelemetryRetentionPlugin`. UI consumers read that same history and

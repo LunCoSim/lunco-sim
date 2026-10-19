@@ -502,7 +502,12 @@ pub fn spawn_modelica_requests(
             model.paused = true;
             model.last_error = Some(error.clone());
             if let Some(faults) = faults.as_deref_mut() {
-                faults.raise("modelica-master-clock-invalid", Some(entity), model.model_name.clone(), error);
+                faults.raise(
+                    "modelica-master-clock-invalid",
+                    Some(entity),
+                    model.model_name.clone(),
+                    error,
+                );
             }
             continue;
         }
@@ -565,7 +570,12 @@ pub fn spawn_modelica_requests(
                 model.paused = true;
                 model.last_error = Some(error.clone());
                 if let Some(faults) = faults.as_deref_mut() {
-                    faults.raise("modelica-master-clock-invalid", Some(entity), model.model_name.clone(), error);
+                    faults.raise(
+                        "modelica-master-clock-invalid",
+                        Some(entity),
+                        model.model_name.clone(),
+                        error,
+                    );
                 }
                 continue;
             }
@@ -1595,8 +1605,8 @@ mod compile_fault_tests {
     #[derive(Resource, Default)]
     struct CapturedCompileRequests(Vec<CompileRequested>);
 
-    fn test_solver_snapshot() -> lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
-        lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
+    fn test_solver_snapshot() -> Arc<lunco_modelica_runtime::ModelicaLiveSolverSnapshot> {
+        Arc::new(lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
             solver_id: "rk4".to_owned(),
             capabilities: lunco_modelica_runtime::ModelicaSolverCapabilities {
                 usable_live: true,
@@ -1616,7 +1626,7 @@ mod compile_fault_tests {
             },
             parameter_overrides: vec![("mass".to_owned(), 2.0)],
             initial_inputs: Vec::new(),
-        }
+        })
     }
 
     fn capture_compile_requests(
@@ -2006,7 +2016,18 @@ mod compile_fault_tests {
                 .get::<ModelicaModel>(entity)
                 .unwrap()
                 .live_solver_snapshot,
-            Some(snapshot)
+            Some(snapshot.clone())
+        );
+        let retained = app
+            .world()
+            .get::<ModelicaModel>(entity)
+            .unwrap()
+            .live_solver_snapshot
+            .as_ref()
+            .unwrap();
+        assert!(
+            std::ptr::eq(snapshot.solver_id.as_ptr(), retained.solver_id.as_ptr()),
+            "the accepted lifecycle receipt must share immutable solver facts"
         );
 
         let admitted = app

@@ -325,7 +325,7 @@ pub struct ModelicaResult {
     /// worker for this model session. Present on successful compile, reset,
     /// parameter-update, and step results.
     #[serde(default)]
-    pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
+    pub live_solver_snapshot: Option<Arc<ModelicaLiveSolverSnapshot>>,
 }
 
 impl ModelicaResult {
@@ -425,6 +425,8 @@ pub struct ModelicaSolverParameters {
 /// Parameter overrides are sorted by name and retain their native `f64`
 /// values. The snapshot is emitted by the same worker plan used to construct
 /// the live stepper, so capture cannot recompute a different solver choice.
+/// The worker cache, receipts and admitted model share these immutable facts;
+/// stepping does not copy parameter names or initial samples.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelicaLiveSolverSnapshot {
     /// Canonical id of the registered backend selected for this model.
@@ -591,7 +593,7 @@ pub struct ModelicaModel {
     pub compiled_generation: u64,
     /// Exact live solver plan that produced the installed stepper.
     #[reflect(ignore)]
-    pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
+    pub live_solver_snapshot: Option<Arc<ModelicaLiveSolverSnapshot>>,
     /// Immutable compiled facts admitted with this solver session.
     #[reflect(ignore)]
     pub variable_metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
