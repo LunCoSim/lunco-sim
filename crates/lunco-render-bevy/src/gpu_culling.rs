@@ -2,9 +2,10 @@
 //!
 //! Bevy's camera-level `NoCpuCulling` moves camera frustum tests to GPU
 //! preprocessing while leaving mesh-level light and shadow visibility intact.
-//! This adapter is capability-gated: unsupported devices keep the default CPU
-//! path, and the render-world capability is shared back to the main world
-//! without per-frame entity scans.
+//! GPU culling requires an active native GPU instance builder, device culling
+//! support and an indirect-drawing camera. Other views retain CPU culling.
+//! Render-world eligibility is shared with the main world; structural observers
+//! reconcile view changes without per-frame entity scans.
 
 use std::sync::{
     Arc,
@@ -13,8 +14,13 @@ use std::sync::{
 
 use bevy::{
     camera::visibility::NoCpuCulling,
+    pbr::RenderMeshInstances,
     prelude::*,
-    render::{RenderApp, RenderStartup, batching::gpu_preprocessing::GpuPreprocessingSupport},
+    render::{
+        RenderApp, RenderStartup,
+        batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+        view::NoIndirectDrawing,
+    },
 };
 use lunco_render::camera::SceneCamera;
 
@@ -56,73 +62,74 @@ pub(super) fn build(app: &mut App) {
 
 fn install_main_world(app: &mut App, capability: GpuCullingCapability) {
     app.insert_resource(capability)
-        .add_observer(opt_in_scene_camera)
-        .add_observer(remove_owned_marker_with_scene_camera)
+        .add_observer(on_camera_draw_configuration_added)
+        .add_observer(on_camera_draw_configuration_removed)
         .add_systems(PreUpdate, reconcile_existing_scene_cameras);
 }
 
 fn publish_gpu_culling_capability(
-    support: Option<Res<GpuPreprocessingSupport>>,
+    mut support: Option<ResMut<GpuPreprocessingSupport>>,
     capability: Res<GpuCullingCapability>,
+    mesh_instances: Option<Res<RenderMeshInstances>>,
 ) {
+    // RenderStartup refreshes device support first. Native view phases also
+    // consume this resource, so their effective mode must match the active
+    // instance builder; a CPU builder supplies no GPU preprocessing buffers.
+    let gpu_builder = mesh_instances
+        .as_deref()
+        .is_some_and(|instances| matches!(instances, RenderMeshInstances::GpuBuilding(_)));
+    if mesh_instances
+        .as_deref()
+        .is_some_and(|instances| matches!(instances, RenderMeshInstances::CpuBuilding(_)))
+        && let Some(support) = support.as_deref_mut()
+    {
+        support.max_supported_mode = GpuPreprocessingMode::None;
+    }
     capability.0.store(
-        support.is_some_and(|support| support.is_culling_supported()),
+        gpu_builder && support.is_some_and(|support| support.is_culling_supported()),
         Ordering::Release,
     );
 }
 
-fn opt_in_scene_camera(
-    add: On<Add, SceneCamera>,
-    capability: Res<GpuCullingCapability>,
-    existing: Query<(Has<NoCpuCulling>, Has<LunCoGpuCulledCamera>)>,
+fn on_camera_draw_configuration_added(
+    add: On<Add, (SceneCamera, NoIndirectDrawing)>,
     mut commands: Commands,
 ) {
     let entity = add.entity;
-    let Ok((has_no_cpu_culling, is_ours)) = existing.get(entity) else {
-        return;
-    };
-
-    if capability.is_supported() {
-        if is_ours && !has_no_cpu_culling {
-            commands.entity(entity).try_insert(NoCpuCulling);
-        } else if !is_ours && !has_no_cpu_culling {
-            commands
-                .entity(entity)
-                .try_insert((NoCpuCulling, LunCoGpuCulledCamera));
-        }
-    } else if is_ours {
-        commands
-            .entity(entity)
-            .try_remove::<NoCpuCulling>()
-            .try_remove::<LunCoGpuCulledCamera>();
-    }
+    commands.queue(move |world: &mut World| reconcile_scene_camera(world, entity));
 }
 
-fn remove_owned_marker_with_scene_camera(
-    remove: On<Remove, SceneCamera>,
-    owned: Query<(), With<LunCoGpuCulledCamera>>,
+fn on_camera_draw_configuration_removed(
+    remove: On<Remove, (SceneCamera, NoIndirectDrawing)>,
     mut commands: Commands,
 ) {
     let entity = remove.entity;
-    if owned.get(entity).is_ok() {
-        commands
-            .entity(entity)
-            .try_remove::<NoCpuCulling>()
-            .try_remove::<LunCoGpuCulledCamera>();
+    // Removal observers see the old component set. Read the final state after
+    // the structural operation, including a possible same-frame replacement.
+    commands.queue(move |world: &mut World| reconcile_scene_camera(world, entity));
+}
+
+/// Apply native draw eligibility without taking ownership of another caller's marker.
+fn reconcile_scene_camera(world: &mut World, entity: Entity) {
+    let supported = world.resource::<GpuCullingCapability>().is_supported();
+    let Ok(mut camera) = world.get_entity_mut(entity) else {
+        return;
+    };
+    let eligible =
+        supported && camera.contains::<SceneCamera>() && !camera.contains::<NoIndirectDrawing>();
+    let ours = camera.contains::<LunCoGpuCulledCamera>();
+    if eligible {
+        if !camera.contains::<NoCpuCulling>() {
+            camera.insert((NoCpuCulling, LunCoGpuCulledCamera));
+        }
+    } else if ours {
+        camera.remove::<(NoCpuCulling, LunCoGpuCulledCamera)>();
     }
 }
 
 fn reconcile_existing_scene_cameras(
     capability: Res<GpuCullingCapability>,
-    scene_cameras: Query<
-        (
-            Entity,
-            Has<SceneCamera>,
-            Has<NoCpuCulling>,
-            Has<LunCoGpuCulledCamera>,
-        ),
-        Or<(With<SceneCamera>, With<LunCoGpuCulledCamera>)>,
-    >,
+    scene_cameras: Query<Entity, Or<(With<SceneCamera>, With<LunCoGpuCulledCamera>)>>,
     mut applied: Local<Option<bool>>,
     mut commands: Commands,
 ) {
@@ -132,39 +139,61 @@ fn reconcile_existing_scene_cameras(
         return;
     }
     *applied = Some(supported);
-
-    // CPU culling is already the safe initial path. Avoid scanning all cameras
-    // at startup on devices that cannot use GPU culling.
     if !supported && previous.is_none() {
         return;
     }
-
-    for (entity, has_scene_camera, has_no_cpu_culling, is_ours) in &scene_cameras {
-        if supported {
-            if !has_scene_camera {
-                continue;
-            }
-            if is_ours {
-                if !has_no_cpu_culling {
-                    commands.entity(entity).try_insert(NoCpuCulling);
-                }
-            } else if !has_no_cpu_culling {
-                commands
-                    .entity(entity)
-                    .try_insert((NoCpuCulling, LunCoGpuCulledCamera));
-            }
-        } else if is_ours {
-            commands
-                .entity(entity)
-                .try_remove::<NoCpuCulling>()
-                .try_remove::<LunCoGpuCulledCamera>();
-        }
+    for entity in &scene_cameras {
+        commands.queue(move |world: &mut World| reconcile_scene_camera(world, entity));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_culling_requires_the_active_gpu_instance_builder() {
+        let capability = GpuCullingCapability::default();
+        let mut app = App::new();
+        app.insert_resource(capability.clone())
+            .insert_resource(GpuPreprocessingSupport {
+                max_supported_mode: GpuPreprocessingMode::Culling,
+            })
+            .insert_resource(RenderMeshInstances::CpuBuilding(Default::default()))
+            .add_systems(Update, publish_gpu_culling_capability);
+        app.update();
+        assert!(
+            !capability.is_supported(),
+            "device support cannot replace an inactive GPU builder"
+        );
+        assert!(
+            matches!(
+                app.world()
+                    .resource::<GpuPreprocessingSupport>()
+                    .max_supported_mode,
+                GpuPreprocessingMode::None
+            ),
+            "native render phases must match the active CPU builder"
+        );
+        // RenderStartup supplies fresh device support before each publication.
+        app.world_mut()
+            .resource_mut::<GpuPreprocessingSupport>()
+            .max_supported_mode = GpuPreprocessingMode::Culling;
+        app.insert_resource(RenderMeshInstances::GpuBuilding(Default::default()));
+        app.update();
+        assert!(capability.is_supported());
+        app.world_mut()
+            .resource_mut::<GpuPreprocessingSupport>()
+            .max_supported_mode = GpuPreprocessingMode::PreprocessingOnly;
+        app.update();
+        assert!(!capability.is_supported());
+        app.world_mut()
+            .resource_mut::<GpuPreprocessingSupport>()
+            .max_supported_mode = GpuPreprocessingMode::Culling;
+        app.world_mut().remove_resource::<RenderMeshInstances>();
+        app.update();
+        assert!(!capability.is_supported());
+    }
 
     fn mesh() -> Mesh3d {
         Mesh3d(Handle::<bevy::mesh::Mesh>::default())
@@ -211,6 +240,26 @@ mod tests {
                 .contains::<NoCpuCulling>()
         );
         assert!(!app.world().entity(shadow_caster).contains::<NoCpuCulling>());
+        app.world_mut()
+            .entity_mut(existing)
+            .insert(NoIndirectDrawing);
+        app.update();
+        assert!(!app.world().entity(existing).contains::<NoCpuCulling>());
+        assert!(
+            !app.world()
+                .entity(existing)
+                .contains::<LunCoGpuCulledCamera>()
+        );
+        app.world_mut()
+            .entity_mut(existing)
+            .remove::<NoIndirectDrawing>();
+        app.update();
+        assert!(app.world().entity(existing).contains::<NoCpuCulling>());
+        app.world_mut()
+            .entity_mut(authored)
+            .insert(NoIndirectDrawing);
+        app.update();
+        assert!(app.world().entity(authored).contains::<NoCpuCulling>());
 
         let streamed = app.world_mut().spawn(scene_camera()).id();
         app.update();

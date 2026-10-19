@@ -101,6 +101,17 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Architecture checks
 
+When comparing native CPU/GPU instance preparation, retain the same PBR,
+shadows, meshes and quality. Device capability is not active-path evidence:
+camera `NoCpuCulling` requires native `RenderMeshInstances::GpuBuilding` and
+indirect drawing. `NoIndirectDrawing` views need CPU frustum tests. Preserve
+foreign-owned markers when reconciling these structural changes.
+Native camera and shadow batch modes must also match the active builder. CPU
+preparation admits effective `GpuPreprocessingMode::None` after native device
+support initialization on every `RenderStartup`, including recovery. A faster
+cohort with missing geometry is a failed visual comparison, regardless of FPS
+or readiness diagnostics.
+
 For co-simulation input writes, preserve the port owner's live metadata and
 precedence checks. Initial handoff and live exchange use `input_transaction`:
 immutable staging and commit share one exclusive world borrow, so each eligible
