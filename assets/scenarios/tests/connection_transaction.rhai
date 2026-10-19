@@ -43,6 +43,10 @@ fn task(me, ctx) {
         wait_until(|m| query("GetReadiness").faulted || settled()),
         once(|m| {
             let ready = query("GetReadiness"); let wiring = query("GetBrokenConnections");
+            let rejected = ();
+            for broken in wiring.broken {
+                if broken.port == "mass" { rejected = broken.dropped_value; }
+            }
             this.checks += [
                 t_true(ready.faulted, "a rejected live exchange raises a terminal runtime fault"),
                 t_true(ready.faulted && ready.fault.kind == "cosim-input-write-rejected", "the co-simulation input owner identifies the rejection"),
@@ -50,7 +54,10 @@ fn task(me, ctx) {
                 t_true(value(this.target, "com_x") == this.com, "the rejected batch preserves its otherwise valid companion input"),
                 t_true(query("PhysicsPerformance").step_number == this.native_steps, "native physics does not integrate the failed communication point"),
                 t_true(value(this.source, "sampleTime") == this.source_time, "Modelica does not advance beyond the rejected shared communication point"),
-                t_true(wiring.runtime_fault != () && wiring.runtime_fault.kind == "cosim-input-write-rejected", "the public wiring report retains the terminal failure")
+                t_true(wiring.runtime_fault != () && wiring.runtime_fault.kind == "cosim-input-write-rejected", "the public wiring report retains the terminal failure"),
+                t_true(type_of(rejected) == "map" && rejected.kind == "finite"
+                    && rejected.value == value(this.source, "mass"),
+                    "the diagnostic retains the exact finite rejected sample")
             ];
             this.done = true;
             report_verdict(this.checks, "CONNECTION TRANSACTION", "CONNECTION_TRANSACTION");

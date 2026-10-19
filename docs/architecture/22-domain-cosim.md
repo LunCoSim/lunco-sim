@@ -68,6 +68,10 @@ certificates fence the effective connection transforms as well as authored
 wiring. A target with an unbound or unavailable source retains its previous
 input until all contributions are available; explicit holds retain priority. Diagnostics
 use an absent `dropped_value` when no numerical write was attempted.
+The diagnostic API adapter classifies attempted IEEE values using the
+[`GetBrokenConnections` numeric contract](../../crates/lunco-api/README.md),
+so a non-finite rejected sum cannot invalidate the JSON response. Simulation
+diagnostics and port validation retain their native `f64` values.
 
 Initial handoff and live exchange use `PortRegistry::input_transaction` to
 preflight their complete eligible input batch and commit under one exclusive

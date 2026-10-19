@@ -7,8 +7,43 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryResult};
-use lunco_api_core::{ApiValue, api_value};
+use lunco_api_core::{ApiValue, IntoApiValue, api_value};
 use lunco_cosim_core::CosimDiagnostics;
+
+/// JSON cannot carry an IEEE non-finite scalar. Preserve the rejected numeric
+/// class at this API boundary, while the simulation diagnostic retains its f64.
+enum RejectedScalar {
+    Finite(f64),
+    NotANumber,
+    PositiveInfinity,
+    NegativeInfinity,
+}
+
+impl From<f64> for RejectedScalar {
+    fn from(value: f64) -> Self {
+        if value.is_nan() {
+            Self::NotANumber
+        } else if value == f64::INFINITY {
+            Self::PositiveInfinity
+        } else if value == f64::NEG_INFINITY {
+            Self::NegativeInfinity
+        } else {
+            Self::Finite(value)
+        }
+    }
+}
+
+impl IntoApiValue for RejectedScalar {
+    fn into_api_value(self) -> ApiValue {
+        let (kind, value) = match self {
+            Self::Finite(value) => ("finite", Some(value)),
+            Self::NotANumber => ("not_a_number", None),
+            Self::PositiveInfinity => ("positive_infinity", None),
+            Self::NegativeInfinity => ("negative_infinity", None),
+        };
+        api_value!({ "kind": kind, "value": value })
+    }
+}
 
 /// `GetBrokenConnections` — backs `GET /api/diagnostics`. Reports the co-sim
 /// connection targets after their interface lifecycle has reached a terminal
@@ -54,7 +89,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                         "entity_bits": b.entity.to_bits(),
                         "global_id": b.global_id.map(|g| g.get()),
                         "has_port_surface": b.has_port_surface,
-                        "dropped_value": b.dropped_value,
+                        "dropped_value": b.dropped_value.map(RejectedScalar::from),
                         "failure": b.failure.as_deref(),
                     })
                 })
@@ -83,8 +118,8 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             "broken_count": broken.len(),
             "pending_count": pending.len(),
             "algebraic_loop_count": algebraic_loops.len(),
-            // Keep the historical count semantics: one entry per terminal
-            // connection/runtime fault. A rejected algebraic loop is exposed
+            // Count one entry per terminal connection/runtime fault. A
+            // rejected algebraic loop is exposed
             // in `algebraic_loops` and its terminal effect in `runtime_fault`;
             // counting both would report the same failure twice.
             "fault_count": broken.len() + usize::from(runtime_fault.is_some()),
@@ -93,5 +128,37 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             "algebraic_loops": algebraic_loops,
             "runtime_fault": runtime_fault,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_scalar_encoding_is_transport_safe_and_preserves_numeric_class() {
+        for (input, kind) in [
+            (-0.0, "finite"),
+            (f64::MAX, "finite"),
+            (f64::NAN, "not_a_number"),
+            (f64::INFINITY, "positive_infinity"),
+            (f64::NEG_INFINITY, "negative_infinity"),
+        ] {
+            let encoded = RejectedScalar::from(input).into_api_value();
+            lunco_api_core::validate_reflection_value(&encoded).unwrap();
+            assert_eq!(encoded.get("kind").and_then(ApiValue::as_str), Some(kind));
+            if input.is_finite() {
+                assert_eq!(
+                    encoded
+                        .get("value")
+                        .and_then(ApiValue::as_f64)
+                        .unwrap()
+                        .to_bits(),
+                    input.to_bits()
+                );
+            } else {
+                assert_eq!(encoded.get("value"), Some(&ApiValue::Unit));
+            }
+        }
     }
 }

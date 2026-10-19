@@ -56,6 +56,9 @@ coefficient bits, so repeated sources with different transforms stay
 independent of ECS spawn order. A rejected initial value is a structured
 connection fault. `dropped_value` is optional in diagnostics: no attempted write
 means no numerical value.
+Public diagnostic values use the
+[`GetBrokenConnections` numeric contract](../lunco-api/README.md); internal
+diagnostics retain the rejected `f64`, including non-finite fan-in results.
 
 `python3 scripts/api/test_connection_units.py --port <free-port>` runs the
 authored native length/mass contract gate. Add `--windowed` to use the same

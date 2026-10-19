@@ -1,5 +1,34 @@
 # High-quality realtime performance handover
 
+## Non-finite exchange diagnostic closure — 2026-10-19
+
+Two finite Modelica sources reproduce an overflowing fan-in. The exchange
+correctly raises `cosim-input-write-rejected` and holds its last accepted input,
+but the original `GetBrokenConnections` response fails HTTP encoding because
+it contains the rejected infinity. The baseline authored verdict fails only
+the two numeric-classification checks (`target/connection-nonfinite-valid-baseline.log`);
+the initial HTTP failure is in `target/nonfinite-exchange-probe-driver.log`.
+
+The API adapter now classifies attempted values through one typed
+`RejectedScalar` conversion. Simulation diagnostics retain their original
+`Option<f64>`. The canonical field shape is in the API README and inspection
+skill. This is an external serialization invariant, not changeable Rhai policy;
+no runtime arithmetic, clock, solver, dependency or global serializer changes.
+The fixture uses explicit double USD port declarations to retain the range
+under test. Its scene-admission pause and initialized `Idle` precondition keep
+presentation cadence out of the live-exchange stimulus.
+
+Regular `cargo run -j 4 -- --help` succeeds with no compiler warnings. The one
+focused encoding test covers NaN, both infinities, maximum finite f64 and
+negative zero. Both overflow signs pass eight authored checks each in headless
+and windowed hosts, followed by successful HTTP diagnostic reads (32 checks).
+The finite rejection/atomicity gate passes 11 in each host (22 checks).
+Evidence uses `target/nonfinite-final-*`, `target/nonfinite-finite-*` and
+`target/nonfinite-encoding-owner-test.log`. All owned sessions exit and release
+4396/4397. The skill catalogue validates 43 entries. These checks extend the
+preceding renderer/CCD qualification; they do not establish 200 FPS, native
+physics below 1 ms, or broader FMI interoperability.
+
 ## Renderer and continuous-contact preparation — 2026-10-19
 
 The current renderer contract is committed as `f24c62ad7`; the CCD preparation
