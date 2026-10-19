@@ -139,7 +139,7 @@ fn on_tick(me, ctx) {
         "native vector parameters must produce the same typed raycast result as arrays"));
     checks.push(t_true(ground_height != () && ground_height.hit == true
         && ground_height.height.abs() < 0.1,
-        "production ground-height query did not observe the authored surface"));
+        "production ground-height query did not observe the authored surface: " + ground_height));
 
     let ray_hit = ray != () && ray.hit == true;
     let ground_hit = ground_height != () && ground_height.hit == true;

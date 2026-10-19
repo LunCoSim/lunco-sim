@@ -1,9 +1,10 @@
 # Upstream-only physics integration review
 
 Status: application integration uses public dependency APIs. The existing LunCoSim
-Parry 0.27 fork is pinned locally to `75b6acccdc42151995d0a653c576e65248164447`.
-The user approved the focused thin-simplex correction; publication is not yet
-authorized. The previous published baseline is `83494d280bda8615c812d919e6b7ab30f88a7750`.
+Parry 0.27 fork is pinned to `75b6acccdc42151995d0a653c576e65248164447`.
+The user approved the focused thin-simplex correction and its publication.
+The remote `fix/robust-convex-queries-0.27` branch is verified at that revision.
+The previous published baseline is `83494d280bda8615c812d919e6b7ab30f88a7750`.
 Current collision qualification is recorded below. Sustained performance and
 full FMI qualification remain incomplete. 2026-10-19.
 
@@ -760,13 +761,13 @@ solver tolerance changes are part of this repair.
 
 ## Roadster suspension/contact correction — 2026-10-19
 
-The approved Parry follow-up consists of local commits `e353239` and `75b6acc`.
+The approved Parry follow-up consists of published commits `e353239` and `75b6acc`.
 Thin tetrahedron reduction now retains exterior face witnesses, and tetrahedron
 admission bounds determinant roundoff before accepting an orientation. All six
 recorded triangle/cylinder poses, both shape orders, equivalent local frames,
 and 6,144 nearby queries pass, alongside 60 library tests and seven convex-query
-regressions. The f32 library compiles. These commits have not been published;
-a fresh checkout cannot fetch the new pin until publication is authorized.
+regressions. The f32 library compiles. The maintained remote branch exposes
+the pinned revision for fresh checkouts.
 
 The application removes its feature-seeded contact adapter and consumes default
 native geometry. Fresh endpoint manifolds close rolling overlap on convex and
