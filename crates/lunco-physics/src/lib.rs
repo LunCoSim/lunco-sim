@@ -609,14 +609,16 @@ pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
 ///
 /// `contact_pairs_with` includes pairs whose AABBs overlap without touching;
 /// only pairs for which Avian reports `is_touching()` contribute to the result.
-/// The force conversion uses the master physics interval and the one shared
-/// Avian solver-phase contract in [`contact_force_from_impulse`].
+/// The force conversion uses the native representation of the master physics
+/// interval and the shared solver-phase contract in [`contact_force_from_impulse`].
+/// The graph retains the last solved interval. Admission can zero Avian's
+/// current delta while awaiting a participant or pausing; that scheduling
+/// permission must not change the physical meaning of an already solved impulse.
 pub fn contact_of(
     graph: &ContactGraph,
-    physics_dt: f64,
     colliders: impl IntoIterator<Item = Entity>,
 ) -> (bool, f64) {
-    contact_of_filtered(graph, physics_dt, colliders, |_| false)
+    contact_of_filtered(graph, colliders, |_| false)
 }
 
 /// Read contact while excluding explicitly authored overlap-only colliders.
@@ -624,7 +626,6 @@ pub fn contact_of(
 /// topology, not ECS component semantics.
 fn contact_of_filtered(
     graph: &ContactGraph,
-    physics_dt: f64,
     colliders: impl IntoIterator<Item = Entity>,
     is_sensor: impl Fn(Entity) -> bool,
 ) -> (bool, f64) {
@@ -646,25 +647,22 @@ fn contact_of_filtered(
     }
     (
         touching,
-        contact_force_from_impulse(normal_impulse, physics_dt),
+        contact_force_from_impulse(
+            normal_impulse,
+            Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK).as_secs_f64(),
+        ),
     )
 }
 
 /// Read contact for a caller holding only a `&World`.
 ///
-/// Physics timing comes from the same resource the solver uses, so a port
-/// read and the solver agree about the duration of the solved step. Missing
-/// resources mean physics has not started; the truthful result is then no
-/// contact and zero force.
+/// Contact timing belongs to [`contact_of`], independently of live admission.
+/// A missing graph means physics has not started and has no contact sample.
 pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let Some(graph) = world.get_resource::<ContactGraph>() else {
         return (false, 0.0);
     };
-    let dt = world
-        .get_resource::<Time<Physics>>()
-        .map(|time| time.delta_secs_f64())
-        .unwrap_or(0.0);
-    contact_of_filtered(graph, dt, collider_entities(world, entity), |candidate| {
+    contact_of_filtered(graph, collider_entities(world, entity), |candidate| {
         world.get::<Sensor>(candidate).is_some()
     })
 }

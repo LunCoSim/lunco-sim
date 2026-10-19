@@ -148,6 +148,13 @@ Modelica coupling holds `FixedMain`, while the pacing clock retains running
 demand in `Time<Fixed>::overstep`. Compare completed simulation time against
 monotonic wall time and inspect pending demand through `SimulationTimingProfile`;
 a short native physics service time does not certify realtime co-simulation.
+When a coupled sensor changes with host pacing, compare its full input values
+before attributing the difference to solver math. Contact impulses belong to
+the completed master interval; `lunco-physics::contact_of` owns load normalization
+for ports and telemetry. Native admission delta may be zero while that sample
+remains valid. Exercise `scripts/api/test_contact_force_hold.py` through the
+production scene-test host when changing this boundary; its authored observer
+checks loaded contact, held time, retained force and an unavailable surface.
 Physical render easing consumes the time owner's bounded
 `simulation_presentation_fraction`; full queued cycles are never a render
 extrapolation factor. The common application plugin uses native endpoint

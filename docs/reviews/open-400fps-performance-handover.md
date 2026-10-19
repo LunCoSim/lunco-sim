@@ -1,18 +1,84 @@
 # High-quality realtime performance handover
 
-## Committed-main integration in progress — 2026-10-19
+## Contact samples retain their solved interval — 2026-10-19
 
-The tutorials branch incorporates committed main `e18a14b1e`, including USD
-unit-scale projection, wheel/contact ownership and native plume depth. The CCD
-merge retains dense pair enumeration and both newer native-contact tests;
-renderer documentation retains native preparation admission and depth lifetime.
-The merged CCD suite passes 25 checks. Its single failure is the unchanged
-`degenerate_native_triangle_retains_boundary_geometry` already on main: direct
-pinned-Parry collinear triangle projection. It is not introduced by this merge;
-the separate dependency-source approval remains pending. Main's uncommitted
-physics and USD runtime changes are preserved. Production rebuilding and
-qualification of the integrated tree are pending; the sampling cohort below
-belongs to its explicitly recorded earlier binary.
+The full-value comparison localizes an earlier transient Lander difference to
+`leg_force_pz`: 0 N versus 414.3895340825825 N at communication step 1311.
+The native graph retained its solved impulse while admission had zeroed
+`Time<Physics>::delta`. `lunco-physics::contact_of` now owns normalization using
+the native Duration representation of the canonical master interval. Callers
+cannot supply a scheduling delta. Port reads and rigid-body telemetry share
+that interpretation. Native holds still zero admission delta, and the existing
+clock validator rejects a timestep outside the master contract. This is a
+physical reporting invariant, with no policy hook, new clock/resource, integrator
+or dependency-source change.
+
+The authored `contact_force_hold.rhai` observer uses the existing landing-gear
+fixture through the production scene-test binary. Its negative surface check
+requires an entity without a collider to have no load port. On the preceding
+binary it reports exactly one failure out of six: a positive native impulse
+loses its reported load during the hold. On the repaired binary all six checks
+pass at tick 110, including zero native delta, unchanged elapsed time, retained
+contact/load and the unavailable surface. The wrapper returns zero and verifies
+process/port release. The wrapper awaits the scene-test host's own terminal
+exit before the shared session cleanup.
+
+The repair incorporates committed main `c84097bb1`, including compound-body
+ray exclusion. Regular `cargo run -j 4 -- --help` succeeds without compiler
+warnings. Its production binary SHA-256 is
+`38adc3e15d82c643c71ff413315d8a4df7aaf3c62b9c7446c7a78aa019b01945`.
+The held-contact evidence is under
+`.cache/codex-evidence/celestial-integrated/contact-hold*`; bounded communication
+comparison is under `.cache/codex-evidence/contact-fix/`. The matching frozen
+Twin `64ff99e` and identical DEM produce 11,943 matching named-participant
+communication records through tick 1327 in headless and GPU windowless hosts,
+with no captured external inputs in either bounded cohort. All input/output
+fingerprints and communication times match. Both have clear readiness, zero
+runtime errors and verified API Exit/port release; the GPU validation log is
+clean. This GPU windowless cohort has no fresh inspected screenshot and does
+not qualify headful visual behavior or FPS.
+Fingerprints are not full native-state equality or a mission verdict. Complete
+mission, native geometry failures, full-state replay and performance qualification
+remain separate requirements.
+
+## Local main integration and current qualification — 2026-10-19
+
+Local main fast-forwarded to `e9e194dbe`, incorporating committed main
+`e18a14b1e` and the physical celestial boundary repair `1270c5086`. The merge
+retains dense CCD pair enumeration, newer native-contact tests, native renderer
+preparation admission and plume-depth lifetime. Main's four tracked physics/USD
+edits were stashed, restored with both CCD test groups retained, and left
+uncommitted. Stash `85a58e04a16fcb0b156e0d8e72b1712788379647` remains as a
+backup. Three nonconflicting files match its blobs exactly; the CCD resolution
+preserves the pair-order seam and all three restored test functions. No push
+was performed. Further concurrent main edits are outside this qualified tree.
+
+Regular `cargo run -j 4 -- --help` succeeds on the integrated tree without
+compiler warnings. Its CCD suite passes 25 checks; the single unchanged
+`degenerate_native_triangle_retains_boundary_geometry` failure is direct
+pinned-Parry collinear projection. The application pin remains `83494d280` in
+this committed cohort.
+
+The old frozen Twin `bbc0e77b` supplies plume modifiers absent from the current
+Modelica library and is unsuitable for this integration cohort. The matching
+frozen Twin `64ff99e` clears coupled initialization and readiness with integrated
+binary SHA-256
+`2d88e6564eac38a5c484f3ea22d872510c34e18095ae0edd66c24a1d49a277f0`.
+Its headless mission then faults at the terrain/wheel contact boundary after
+communication step 1419; there is no successful integrated mission verdict.
+The exact standalone query reproducer finds valid geometry through native
+dispatch but `NoIntersection` through the application's finite-feature seed.
+The preceding offset-triangle regression also returns no geometry through native
+dispatch on this same pin. A clean cutover must qualify both cases through one
+native path; neither a conditional query fallback nor removal of the failure
+is acceptable. Newer kernel and application edits present in main's working
+tree are not covered by these results.
+
+Evidence, source guards, query inputs and stash-restoration checks are retained
+under `.cache/codex-evidence/celestial-integrated/`. The prior sampling cohort
+below belongs to its explicitly recorded earlier binary and library revision.
+Integrated headless/rendered replay, complete mission and clean performance
+acceptance remain open.
 
 ## Physical celestial communication boundaries — 2026-10-19
 

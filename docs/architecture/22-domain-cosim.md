@@ -20,6 +20,10 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+Avian contact ports consume the physics owner's retained-interval interpretation
+of its native contact graph. A coupling hold changes scheduling permission,
+without changing the duration or load represented by that completed sample.
+
 Native external FMI 3 Co-Simulation import belongs to
 [`lunco-fmi`](../../crates/lunco-fmi/README.md), installed by the shared
 headless/windowed simulation composition. `LoadFmu` admits bounded archives

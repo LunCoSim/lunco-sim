@@ -4,9 +4,9 @@
 
 `lunco-time` owns the mission-time spine: the fixed simulation tick, transport,
 calendar anchor, causal `WorldTime`, the ordinary render interpolation sample,
-and one `CelestialTime` sample. `CelestialTime` is an affine child of
-`WorldTime`; celestial state and the environment inputs derived from it all use
-that same sample.
+and its affine celestial domain. `CelestialTime` is the presentation snapshot;
+physical celestial inputs evaluate that same domain at explicit master ticks
+through `CelestialClock`.
 
 ## 1. Master time and transport
 
@@ -102,6 +102,13 @@ set runs after that anchor, so lifecycle hooks and event delivery read the tick
 for the step they are changing. Telemetry records the tick and the `MissionClock`
 seconds derived from it, so collection does not use a render or wall-clock
 accumulator.
+
+Native contact impulses describe the last solved master interval. The physics
+owner normalizes that graph through `contact_of`, using the native Duration
+representation of `SECS_PER_TICK`. Port and telemetry readers share this path.
+The live `Time<Physics>` delta is admission state: it becomes zero during holds
+and cannot reinterpret a retained physical sample. Pause, worker latency and
+presentation cadence therefore preserve the reported contact load.
 
 Scene time selection is one application policy: `scene.time.select`, installed
 by `assets/scripting/policy/startup.rhai` from `policy/index.toml`. Startup

@@ -8,7 +8,7 @@
 
 use avian3d::prelude::{
     AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph,
-    LinearVelocity, Physics, PhysicsSystems, Position, RigidBody, Rotation,
+    LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -79,7 +79,6 @@ fn retain_physics_telemetry(
     tick: Res<SimTick>,
     mission_clock: Res<MissionClock>,
     contact_graph: Option<Res<ContactGraph>>,
-    physics_time: Option<Res<Time<Physics>>>,
     mut removed_bodies: RemovedComponents<RigidBody>,
     mut removed_wheels: RemovedComponents<WheelRaycast>,
     mut sample_buffer: Local<Vec<PhysicsSample>>,
@@ -480,13 +479,8 @@ fn retain_physics_telemetry(
             .as_deref()
             .filter(|_| colliders.is_some_and(|colliders| !colliders.is_empty()))
         {
-            let physics_dt = physics_time
-                .as_deref()
-                .map(Time::delta_secs_f64)
-                .unwrap_or(0.0);
             let (contact, contact_force) = lunco_physics::contact_of(
                 graph,
-                physics_dt,
                 colliders.into_iter().flat_map(|colliders| colliders.iter()),
             );
             samples.extend([
