@@ -817,3 +817,20 @@ demand and both drive outputs at 1.0, and Ctrl+P pause/resume. That diagnostic
 run was deliberately stopped at the ramp; it is not a full-course pass. Evidence
 is the Twin's `results/held-input.json`. Native injection exercises the Bevy
 input path after event creation; OS device/compositor delivery is not qualified.
+
+## Resumed-cycle braking — 2026-10-19
+
+`lunco-cosim` bounds joint brake impulse with the current fixed timestep.
+Actuation runs before native integration; the preceding native delta is zero
+after a hold. The low-level actuation regression reproduced zero braking with
+an open zero-delta native clock and passes with the fixed-cycle duration.
+This changes no dependency, motor equation, vehicle parameter or solver limit.
+
+The production keyboard-only Roadster pilot completes the unchanged course in
+39.4167 simulated seconds using native manual fixed cycles and no key repeats.
+It clears three blocks, receives both rolling refills, climbs with fans, turns
+186 degrees in air and lands on four native wheel contacts. Finite inventory,
+native chassis mass and Ctrl+P pause/resume pass. The final speed is below
+2 m/s; all eleven verdicts pass. The Twin's `results/keyboard-course.json`
+records binary identity, key transitions, observations and screenshots. Manual
+admission bounds observation latency; it does not qualify realtime pacing.

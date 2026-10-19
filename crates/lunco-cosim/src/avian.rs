@@ -136,6 +136,7 @@ pub fn sample_solved_acceleration(
 /// command, speed, battery state, motor name, or fixed torque-speed curve.
 pub fn apply_joint_torque_actuators(
     physics_time: Res<Time<Physics>>,
+    fixed_time: Res<Time<Fixed>>,
     virtual_time: Res<Time<Virtual>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     q_actuators: Query<(&JointTorqueActuator, &RevoluteJoint)>,
@@ -195,7 +196,9 @@ pub fn apply_joint_torque_actuators(
                 actuator.brake_torque,
                 actuator.rotational_inertia,
                 coordinate_speed,
-                physics_time.delta_secs_f64(),
+                // Actuation precedes native integration. Its previous delta
+                // can be zero after a hold; bound this cycle's impulse.
+                fixed_time.timestep().as_secs_f64(),
             )
         } else {
             0.0
@@ -1456,6 +1459,69 @@ fn nearest_rigid_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joint_brake_uses_admitted_cycle_after_zero_delta_hold() {
+        use avian3d::dynamics::integrator::VelocityIntegrationData;
+        use avian3d::prelude::forces::AccumulatedLocalAcceleration;
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Physics>::default());
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ));
+        let mut inputs = lunco_port_core::InputPorts::new(&["brake"]);
+        inputs.brake_active = true;
+        let control = world.spawn(inputs).id();
+        let torque = world.spawn(lunco_port_core::Port { value: 0.0 }).id();
+        let speed = world.spawn(lunco_port_core::Port::default()).id();
+        let bodies = [0.0, 1.0].map(|omega| {
+            world
+                .spawn((
+                    RigidBody::Dynamic,
+                    Position::default(),
+                    Rotation::default(),
+                    LinearVelocity::default(),
+                    AngularVelocity(DVec3::X * omega),
+                    ComputedMass::new(1.0),
+                    ComputedAngularInertia::new(DVec3::ONE),
+                    ComputedCenterOfMass::default(),
+                    VelocityIntegrationData::default(),
+                    AccumulatedLocalAcceleration::default(),
+                ))
+                .id()
+        });
+        world.spawn((
+            RevoluteJoint::new(bodies[0], bodies[1]).with_hinge_axis(DVec3::X),
+            JointTorqueActuator {
+                port_entity: torque,
+                speed_port_entity: speed,
+                control_entity: control,
+                brake_torque: 4_000.0,
+                rotational_inertia: 1.0,
+                drive_sign: 1.0,
+            },
+        ));
+
+        // Admission opens the native clock before it has integrated this cycle.
+        assert!(world.resource::<Time<Physics>>().delta().is_zero());
+        world.run_system_once(apply_joint_torque_actuators).unwrap();
+        let expected = 1.0 / world.resource::<Time<Fixed>>().timestep().as_secs_f64();
+        for (body, sign) in bodies.into_iter().zip([1.0, -1.0]) {
+            let acceleration = world
+                .get::<VelocityIntegrationData>(body)
+                .unwrap()
+                .angular_increment;
+            assert!(
+                (acceleration.x - sign * expected).abs() < 1e-10,
+                "{acceleration:?}"
+            );
+        }
+        assert_eq!(
+            world.get::<lunco_port_core::Port>(speed).unwrap().value,
+            1.0
+        );
+    }
 
     #[test]
     fn conventionally_named_force_ports_are_all_declared() {
