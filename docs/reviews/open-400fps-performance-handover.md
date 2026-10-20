@@ -60,6 +60,52 @@ Evidence uses `.cache/codex-evidence/performance-20261020/`, including
 `batched-production-gates.json`, `batched-landing-stability.{json,log}` and
 `{griffin,roadster,summer}-batched/`.
 
+### Construction and settled-solver attribution
+
+The separate Tracy build of `58d55d398` uses production artifact SHA-256
+`5826aba825e53dc7c4f8bd21fe6fb0f8df608cbad73008555c52daffc5edcfaf`.
+Owned PID 3822834/API 4758 connects to collector PID 3822802 on the explicit
+profiler port 4760. The saved capture confirms that PID, a 1,000,000 ns sampling
+period, 358,405 CPU samples and no instrumentation failure. Its 404,010,400 bytes
+contain 403,935,746 compressed payload bytes plus exactly 74,654 bytes of native
+framing across 18,662 blocks, matching the collector's rounded 385.22 MiB report.
+Native CSV export succeeds. All owned processes and ports retire, and the
+adjacent Tracy checkout remains unchanged at `05cceee0df3b8d7c6fa87e9638af311dbabc63cb`.
+
+The coupled Modelica constructor occupies 15.0946 seconds. During that interval,
+`modelica-live-4` contributes 13,322 leaf CPU samples, resolved against the exact
+captured ELF and its saved PIE mapping. Cranelift compiler routines account for 49.20%,
+projection-retention vector operations 6.46%, other Rumoca native-emitter
+routines 0.86%, debug formatting 3.07%, SipHash 3.00%, and other linear-op
+routines 2.75%. These are leaf-sample classifications, not an inclusive call
+tree or wall-time decomposition; parent unwind frames are not used.
+
+A diagnostic using the same checked prepared component and live numerical
+options compares supported interpreter and automatic execution. All 91 initial
+probe values match exactly at t=0. Interpreter construction plus observation
+costs 9.840 + 3.150 seconds, versus 10.202 + 0.00148 seconds automatically.
+Changing execution policy would not repair loading, so no policy change is
+made. The locked Rumoca version exposes prepared FMI components; no persisted
+native-code reuse was found in the searched public construction/emission APIs.
+Dependency-source changes require separate authorization under `AGENTS.md`.
+
+In the settled diagnostic interval 118.420–133.420 seconds, coupled-response
+zones total 10,183.53 ms. Their nested orthogonal factorizations total
+8,993.23 ms across 7,924 calls (1.135 ms/call), about 88.3% of that parent time.
+Do not add nested zone totals or use this instrumented run for FPS acceptance.
+The numerical factorization and native Modelica construction remain separate
+performance owners; no physics cadence, geometry bound or graphics quality is
+relaxed to hide either cost.
+
+Evidence remains under `.cache/codex-evidence/performance-20261020/`:
+`griffin-checkpoint.tracy`, `griffin-tracy-{ownership,integrity}.json`,
+`griffin-tracy-checkpoint/`, `griffin-modelica-zones.csv`,
+`griffin-construction-leaf-attribution.json`,
+`griffin-tracy-construction-thread.resolved.json`,
+`griffin-settled-coupled-attribution.json` and
+`initialization-backend-probe.jsonl`. Native analysis reads the adjacent Tracy
+server library without changing its sources.
+
 ## Initial collider-query admission — 2026-10-20
 
 The first-tick ground-height failure came from child colliders retaining their
