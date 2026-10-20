@@ -532,11 +532,28 @@ fn solve_minimum_residual(
     let mut params = lsmr::LsmrParams::<f64>::default();
     params.initial_guess = InitialGuessStatus::Zero;
     params.max_iters = max_iterations;
-    // Redundant contact/joint rows make the normal equations ill-conditioned.
-    // A 1e-12 relative normal residual resolves native reaction cancellation;
-    // the geometric owner enforces metre/radian bounds before committing a tick.
-    params.rel_tolerance = 1.0e-12;
-    params.abs_tolerance = 1.0e-12;
+    // Resolve the normal residual to f64 precision without demanding a
+    // relative reduction below the absolute arithmetic floor for a small RHS.
+    // Faer's LSMR stopping test consumes rel_tolerance; translate the complete
+    // owner bound through ||A^T b|| using the same native sparse adjoint.
+    let mut normal_rhs = allocate_matrix(n, 1, |_, _| 0.0)?;
+    operator.adjoint_apply(
+        normal_rhs.as_mut(),
+        b.as_ref(),
+        Par::Seq,
+        MemStack::new(&mut memory),
+    );
+    let normal_norm = normal_rhs.norm_l2();
+    if !normal_norm.is_finite() {
+        return Err("coupled normal right-hand side is not finite");
+    }
+    let relative_bound: f64 = 1.0e-12;
+    let absolute_bound: f64 = 1.0e-12;
+    params.rel_tolerance = if normal_norm > 0.0 {
+        relative_bound.max(absolute_bound / normal_norm)
+    } else {
+        relative_bound
+    };
     let info = lsmr::lsmr(
         out.as_mut(),
         preconditioner,
@@ -548,7 +565,12 @@ fn solve_minimum_residual(
         MemStack::new(&mut memory),
     )
     .map_err(|error| {
-        bevy::log::warn!(rows = n, max_iterations, ?error, "coupled Krylov convergence failed");
+        bevy::log::warn!(
+            rows = n,
+            max_iterations,
+            ?error,
+            "coupled Krylov convergence failed"
+        );
         "coupled minimum-residual solve did not converge"
     })?;
     bevy::log::trace!(
