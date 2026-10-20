@@ -315,8 +315,19 @@ of the same bicubic surface and analytic modifiers used by the terrain oracle.
 The raster owner converts Catmull–Rom patches to tensor-product Bézier controls
 and uses their restricted convex hull for conservative bicubic bounds, preserving
 coefficient correlation. If a reusable canonical cell enclosure is unresolved,
-the same oracle bounds are restricted to the actual ray segment's XZ footprint
-before subdivision. Terrain beside that footprint cannot block the ray. Work
+the cache attempts bounded dyadic cuts, preferring a half that contains the
+complete current segment. When the segment crosses both cell midplanes, it
+clips both halves and certifies their complete interval cover. The shared slab
+clipper preserves fresh f64 endpoints for both cache preparation and the outer
+breadth-first traversal. A reusable scratch queue and two child slots avoid
+per-cut allocation. The complete surface key, raster cell and exact
+rectangle-coordinate bits identify each certificate. Nearby rays can share
+these spatial bounds while retaining their full f64 coordinates. The
+`SurfaceOcclusionBudget.max_ray_cache_depth` bound limits this preparation
+(eight cuts by default; zero skips preparatory cuts);
+every attempted cut and classification follows the same order on a hit or miss.
+An unresolved certificate proceeds to the same oracle's exact footprint bounds
+before interval subdivision. Terrain beside that footprint cannot block the ray. Work
 quotas and unavailable/error semantics remain independent of cache residency.
 Actual surface samples certify blockers; clear results require complete
 interval coverage. Raster traversal advances integer cell identities at the
@@ -330,13 +341,17 @@ it changes neither interval budgets nor the classification order. This search
 order keeps an uncertain contact edge from starving a later definite blocker.
 Unsupported bounds, numerical
 ambiguity and exhausted work return unavailable data. `SurfaceOcclusionBudget`
-bounds each ray, total interval work per fixed tick, and retained cell enclosures.
+bounds each ray, total interval work per fixed tick, canonical ray-enclosure
+preparation and retained spatial enclosures.
 Probe admission follows unique composed USD paths; terrain intervals follow
 canonical geometry keys. Scene teardown clears sampled visibility, cell bounds,
 and optical geometry before the next Twin loads.
 Canonical cell subdivisions are shared across sampling points and moving probes, with bounded FIFO
 admission and complete surface-key invalidation. Exact pose, direction, surface
 identity and participating shape revisions fence complete-sample memo reuse.
+Spatial certificates and per-ray point samples use Bevy's maintained hash map
+for exact-key lookup. Neither map is iterated for query decisions; the separate
+FIFO queue and geometric traversal retain admission and evaluation order.
 
 `scenarios/tests/celestial_terrain_clock.rhai` attaches to a settled celestial DEM
 through `RunScenarioAsset`, with the wired environment probe's `probe_id`. Its

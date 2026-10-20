@@ -9551,6 +9551,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "faer",
  "lunco-api",
  "lunco-api-core",
  "lunco-core",

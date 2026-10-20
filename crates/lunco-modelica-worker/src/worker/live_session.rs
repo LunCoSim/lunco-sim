@@ -51,10 +51,11 @@ pub(super) fn construct(
     let session_lane = lane.clone();
     let queued_at = web_time::Instant::now();
     lane.submit(move |sessions| {
+        let queue_wait_ns = queued_at.elapsed().as_nanos() as u64;
         let _span = bevy::log::info_span!(
             "modelica_live_construction_job",
             construction_id = id,
-            queue_wait_us = queued_at.elapsed().as_micros() as u64
+            queue_wait_us = queue_wait_ns / 1000
         )
         .entered();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -70,7 +71,8 @@ pub(super) fn construct(
                 "live session construction panicked: {message}"
             )))
         });
-        let result = built.map(|(stepper, snapshot, metadata, symbols)| {
+        let result = built.map(|(stepper, snapshot, metadata, symbols, mut profile)| {
+            profile.queue_wait_ns = Some(queue_wait_ns);
             let handle = SessionHandle {
                 lane: session_lane,
                 id,
@@ -80,7 +82,7 @@ pub(super) fn construct(
                 last_step_duration_ns: None,
             };
             sessions.insert(id, stepper);
-            (handle, snapshot, metadata, symbols)
+            (handle, snapshot, metadata, symbols, profile)
         });
         let _ = tx.send(WorkerPreparationResult::Live(LiveConstructionResult {
             id,

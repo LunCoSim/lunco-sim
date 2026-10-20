@@ -824,7 +824,14 @@ continuous velocity projection. Unsupported kernels or a convergence failure fau
 block pose writeback in that same tick. See the continuous-contact contract in
 `docs/architecture/terrain-substrate.md`.
 
-Initial and nonlinear contact samples use Parry's default native dispatcher.
+Initial and nonlinear contact samples share one relative-frame native adapter.
+Convex support-map pairs choose the larger native bounding-sphere frame before
+querying, keeping wide features out of a small body's rotated frame. Returned
+native witnesses and normals are flipped back to the admitted shape order.
+Analytic ball and non-support-map pairs retain native dispatch; other convex
+pairs use Parry's parameterized GJK/EPA API with a fresh nearest-feature seed.
+Subtract and normalize projection gaps in the projecting shape's local frame
+before rotating the direction, preserving small gaps near remote geometry.
 Fresh endpoint manifolds supply rolling witnesses for both convex floors and
 meshes, preserving native internal-edge and backface constraints. Additional
 continuous normal reactions supply a Coulomb budget after native relaxation;

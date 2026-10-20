@@ -119,7 +119,15 @@ fn sim_focus_pace(
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
     execution_mode: Option<Res<lunco_core_runtime::SimulationExecutionMode>>,
     pacing_demand: Option<Res<lunco_core_runtime::FramePacingDemand>>,
+    windows: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
+    mut reported: Local<
+        Option<(
+            Option<bool>,
+            bevy::winit::UpdateMode,
+            bevy::winit::UpdateMode,
+        )>,
+    >,
 ) {
     let Some(mut settings) = settings else { return };
     if idle.is_none() {
@@ -151,6 +159,17 @@ fn sim_focus_pace(
     };
     if settings.unfocused_mode != desired {
         settings.unfocused_mode = desired;
+    }
+    let snapshot = (
+        windows.single().ok().map(|window| window.focused),
+        settings.focused_mode,
+        settings.unfocused_mode,
+    );
+    if reported.as_ref() != Some(&snapshot) {
+        bevy::log::info!(focused = ?snapshot.0,
+            focused_mode = ?snapshot.1, unfocused_mode = ?snapshot.2,
+            "[pacing] host frame policy changed");
+        *reported = Some(snapshot);
     }
 }
 

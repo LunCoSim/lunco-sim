@@ -66,10 +66,39 @@ joint preparation, in the same stable per-type order used by the ordinary pass.
 Its fixed-size geometric rows cover fixed, revolute, prismatic, spherical and
 distance joints. Only zero-compliance channels enter repeated closure or CCD;
 motors and compliant channels retain one ordinary integration per substep.
-The shared f64 world-frame rotation displacement and public native impulse
-kernels apply each candidate. Failure leaves both endpoint solver states
-unchanged and faults the operation. Production acceptance must exercise the
-ordinary pass and closure together, not just their isolated numerical kernels.
+Rows retain full, axial or perpendicular constrained subspaces as typed
+geometry. Their current scalar gradients and native inertia responses enter
+`lunco-physics::constraint_response` together with admitted continuous-contact
+inequalities. Responsive body islands bound solver work; row order and
+principal-pivot choices remain deterministic. Two sparse body reductions apply
+the native response and its transpose without forming a dense row matrix.
+Maintained faer LSMR runs with explicit `Par::Seq`, native f64 stopping precision
+and the owner's iteration bound, including rank-deficient hinge/latch rows.
+Each nonlinear correction is checked against the geometric tolerances;
+least-squares convergence alone does not admit a pose. Unilateral rows release
+pulling reactions and redundant slack. Initial unilateral admission and later
+re-admission both require error beyond the row's declared residual tolerance.
+Excluded rows stay in the complete response check and enter if coupled motion
+crosses that bound. Active rows still target zero error; solver precision and
+geometric writeback tolerances do not change. Allocation failure, failed numerical
+convergence or an unresolved native fixed point rejects the operation visibly.
+
+The owner sums every generalized impulse before integrating any body's
+rotation, using the native positional and angular impulse kernels. It validates
+all body candidates before mutation and writes only prepared native solver
+state. Joint and contact reactions use the same solved multipliers. Current
+material trajectories, joint rows and full native geometry are revalidated
+before pose writeback. Any failure faults and holds that writeback boundary.
+Motors, compliant channels, locked axes, dominance and the existing convergence
+tolerances retain their owner contracts.
+
+Hook review: this owner consumes current f64 errors, gradients, native inertia
+and typed convergence bounds and produces coupled numerical corrections and
+reactions. Continuous constrained dynamics stay in Rust, installed in the shared
+headless/headful physics composition with per-substep lifetime. Failure raises
+a structured physics fault and safety hold. Production acceptance includes
+`continuous_articulated_mass`, `continuous_contacts`, the joint-kind and detach
+gates, and the held-contact-load Rhai observer.
 
 Prismatic alignment and travel-limit directions rotate with the first joint
 frame. Their differential includes the attachment separation: the first angular
@@ -77,13 +106,11 @@ lever is `r1 + separation`, matching the coordinate drive's Jacobian. This retai
 angular coupling after free slider travel. A central finite-difference regression
 checks both geometric row types.
 
-Full orientation rows reuse the native symmetric response decomposition across
-closure sweeps while the complete response matrix is exactly unchanged. Joint
-preparation clears that decomposition; a changed response rebuilds it before
-use. Only the eigenbasis, eigenvalues and scale are retained, never a correction
-or impulse. Each demand still follows the same f64 pseudoinverse projection and
-rank policy. Position rows and changing angular subspaces retain their existing
-uncached calculation; convergence bounds, solve ordering and cadence are unchanged.
+Hard orientation and position rows share the coupled response owner above.
+Their current native inertia and constrained directions enter the same solve,
+including interactions with contact rows. The native point-response
+decomposition remains owned by joint damping, with f64 eigenbasis projection
+and its checked rank policy.
 
 The native-drive Rhai gate establishes its analytical mass/inertia baseline
 from the first completed physics step, after native mass preparation, then
@@ -457,6 +484,18 @@ The live Modelica worker exposes per-participant step diagnostics through
 `CosimStatus`: solver-step service duration, dispatch-to-response latency, and
 the native worker's pending-task count when the solver starts. These are
 recorded once per completed solver step and reset with the Modelica session.
+`modelica_construction_profile` separates native construction queue wait from
+solver construction, metadata collection and the initial checked observation.
+The worker measures these at task boundaries and returns them through its
+existing typed preparation lifecycle. The receiver applies the same session
+and source-generation fencing as other preparation facts. Only an installed
+compiled participant exposes the profile; unavailable queue measurements remain
+unavailable. Logs and Modelica notices retain model-attributed construction facts
+even when a temporary initialization participant is subsequently retired.
+Successful coupled certification also retains those timings and worker-issued
+solver identity in scene-scoped `last_coupled_initialization` facts. These
+diagnostics change neither ordered admission nor simulation time; unavailable
+measurements remain unavailable without blocking certification.
 Set `include_values: false` when reading fleet diagnostics to omit complete
 input/output maps and verbose model/error strings while retaining compact model
 status, counts, and step metrics. Rhai profilers can also set
@@ -685,6 +724,15 @@ co-simulation step remains governed by the per-step barrier after activation.
 A terminal Modelica error also releases the preparation key, while the
 readiness owner keeps the failure visible as `program_failed` and applies its
 configured failed-participant action.
+This includes a USD program rejected before it has a `ModelicaModel`: its
+`SimComponent::Error` is already a terminal preparation fact. The USD readiness
+producer derives one ticket per program from the current solver or pre-solver
+state. Removing the program closes that exact ticket even when its physical
+subject survives; removing its source components also retires the ticket.
+This adds no policy hook: `lunco-readiness` still owns `readiness.action`, its
+typed facts, installation and failure semantics, and `ignore_failed_models`.
+The `program_attach_command` production Rhai gate observes valid admission,
+pre-solver rejection, its named readiness fact and removal recovery.
 An initially discovered USD Modelica component network owns a separate
 `UsdDomainProjection` key from root discovery through source-class resolution,
 synthesis, and publication of its `SimComponent` port surface. Its binding
@@ -848,6 +896,14 @@ are cloned after runtime-overlay restoration and serialized away from the main
 schedule; the owner commits the Twin overlay only if the document generation
 still matches. Runtime sidecar reads/parsing remain synchronous, and this USD
 path reports the missing worker transport on wasm rather than blocking the page.
+Modelica parsing derives simulation demand from exact document-registry links
+to non-editor participants. Those documents use `SimulationRequired`, the
+focused editor document uses `Interactive`, and other documents use
+`Background`. Stable priority/document/generation ordering also applies before
+the Modelica owner's local in-flight bound. Editor focus therefore cannot
+demote a source required by scene admission. Queue wait is measured separately
+from parse/install time; result validation and ordered publication retain their
+existing owner boundaries.
 File-backed Rhai assets are parsed and const-folded in the asynchronous Bevy
 asset loader; the source asset publishes its canonical id, exact text, AST, and
 literal import dependencies together. The owner qualifies the default Bevy

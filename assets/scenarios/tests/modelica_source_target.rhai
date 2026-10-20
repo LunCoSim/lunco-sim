@@ -8,11 +8,20 @@ fn simulation_dependencies(me, ctx) {
 const ROOT = "/ModelicaRuntimeContracts";
 const LIBRARY = "lunco://models/tests/SourceLibrary.mo";
 const TARGET = "lunco://models/tests/SourceTargetProbe.mo";
+const STRUCTURAL = "lunco://models/tests/StructuralBindingProbe.mo";
 fn attach(doc, name, source) {
     assembly_edit::attach_program(doc, #{edit_target: "@runtime@", host_path: ROOT,
         name: name, source_asset: source, inputs: [],
         outputs: [#{name: "sample", type_name: "double", connections: []}],
         realtime_safe: false})
+}
+fn attach_structural(doc, name, n, capacity) {
+    assembly_edit::attach_program(doc, #{edit_target: "@runtime@", host_path: ROOT,
+        name: name, source_asset: STRUCTURAL, inputs: [
+            #{name: "n", type_name: "double", default_value: n, connection: ()},
+            #{name: "capacity", type_name: "double", default_value: capacity, connection: ()},
+            #{name: "gain", type_name: "double", default_value: 3.0, connection: ()}],
+        outputs: [#{name: "sample", type_name: "double", connections: []}], realtime_safe: false})
 }
 fn replace_source(doc, source) {
     cmd("ApplyUsdOp", #{doc_id: doc, op: #{SetAttribute: #{
@@ -34,13 +43,19 @@ fn on_start(me, ctx) {
     this.interface_checked = false;
     this.participants = query("CosimStatus").synchronization.active_participants;
     for doc in query("ListOpenDocuments").open_documents {
-        if doc.kind == "usd" && doc.title == "modelica_runtime_contracts" { this.doc = doc.doc_id; }
+        if doc.kind == "usd" && doc.title == "modelica_source_target" { this.doc = doc.doc_id; }
     }
     if this.doc == () { this = finish(this, ["runtime contract document is missing"]); return; }
     for spec in [["NoTarget", LIBRARY], ["Replacement", TARGET]] {
         let admitted = attach(this.doc, spec[0], spec[1]);
         if admitted == () || admitted.ok != true {
             this = finish(this, ["program attachment failed: " + admitted.to_string()]); return;
+        }
+    }
+    for spec in [["StructuralA", 3.0, 20.0], ["StructuralB", 4.0, 40.0]] {
+        let admitted = attach_structural(this.doc, spec[0], spec[1], spec[2]);
+        if admitted == () || admitted.ok != true {
+            this = finish(this, ["structural fixture attachment failed: " + admitted.to_string()]); return;
         }
     }
 }
@@ -68,8 +83,10 @@ fn on_tick(me, ctx) {
     if status == () || status.entities == () { return; }
     let fresh = row(status.entities, ROOT + "/NoTarget");
     let replacement = row(status.entities, ROOT + "/Replacement");
+    let structural_a = row(status.entities, ROOT + "/StructuralA");
+    let structural_b = row(status.entities, ROOT + "/StructuralB");
     if this.phase == "cleanup" {
-        if fresh != () || replacement != ()
+        if fresh != () || replacement != () || structural_a != () || structural_b != ()
             || status.synchronization.active_participants != this.participants { return; }
         this.failures.push(t_true(status.synchronization.active_participants == this.participants,
             "removed source fixtures release live participants"));
@@ -78,13 +95,30 @@ fn on_tick(me, ctx) {
     if fresh == () || replacement == () { return; }
     if this.phase == "admission" {
         if !fresh.status.starts_with("Error:") || replacement.status != "Running" { return; }
+        if structural_a == () || structural_b == () { return; }
+        if structural_a.status != "Running" || structural_b.status != "Running" { return; }
         this.failures += [
             t_true(fresh.status.contains("contains no runnable model, block, or class"),
                 "library-only source is rejected by its admission owner"),
             t_true(fresh.modelica_communication_period_secs == () && fresh.modelica_var_count.to_float() == 0.0,
                 "missing target creates no dummy solver participant"),
+            t_true(fresh.modelica_construction_profile == (),
+                "rejected source has no fabricated construction measurements"),
+            t_true(replacement.modelica_construction_profile != ()
+                && replacement.modelica_construction_profile.session_ns.to_float() > 0.0
+                && replacement.modelica_construction_profile.initial_observation_ns.to_float() > 0.0,
+                "successful construction exposes real solver and observation service measurements"),
             t_true(replacement.outputs.sample == 3.0, "a valid source runs its actual selected class")
         ];
+        this.failures += [
+            t_true(structural_a.outputs.sample == 360.0,
+                "typed integer and real structural bindings combine with tunable lowering"),
+            t_true(structural_b.outputs.sample == 1200.0,
+                "a second structural variant keeps its own compiled dimensions and bindings")
+        ];
+        let compact = row(query("CosimStatus", #{include_values: false}).entities, ROOT + "/Replacement");
+        this.failures.push(t_true(compact.modelica_construction_profile == replacement.modelica_construction_profile,
+            "compact diagnostics retain the same construction measurements"));
         let changed = replace_source(this.doc, LIBRARY);
         if changed == () || changed.ok != true {
             this = finish(this, ["source replacement failed: " + changed.to_string()]); return;
@@ -99,7 +133,9 @@ fn on_tick(me, ctx) {
         t_true(replacement.modelica_communication_period_secs == () && !replacement.modelica_is_stepping,
             "replacement rejection retires the installed solver participant"),
         t_true(replacement.modelica_var_count.to_float() == 0.0,
-            "replacement rejection clears the installed solver observations")
+            "replacement rejection clears the installed solver observations"),
+        t_true(replacement.modelica_construction_profile == (),
+            "replacement rejection retires the old construction measurements")
         ];
         let changed = replace_source(this.doc, TARGET);
         if changed == () || changed.ok != true {
@@ -111,11 +147,15 @@ fn on_tick(me, ctx) {
     this.failures += [
         t_true(replacement.outputs.sample == 3.0, "a valid replacement recovers after source rejection"),
         t_true(replacement.modelica_var_count.to_float() == 1.0 && replacement.modelica_error == (),
-            "the recovered participant exposes only its new checked observations")
+            "the recovered participant exposes only its new checked observations"),
+        t_true(replacement.modelica_construction_profile != (),
+            "source recovery publishes its successful construction measurements")
     ];
     let removed = cmd("ApplyUsdOps", #{doc_id: this.doc, ops: [
         #{RemovePrim: #{edit_target: "@runtime@", path: ROOT + "/NoTarget"}},
-        #{RemovePrim: #{edit_target: "@runtime@", path: ROOT + "/Replacement"}}
+        #{RemovePrim: #{edit_target: "@runtime@", path: ROOT + "/Replacement"}},
+        #{RemovePrim: #{edit_target: "@runtime@", path: ROOT + "/StructuralA"}},
+        #{RemovePrim: #{edit_target: "@runtime@", path: ROOT + "/StructuralB"}}
     ]});
     if removed == () || removed.ok != true { this = finish(this, ["fixture removal failed"]); return; }
     this.phase = "cleanup";

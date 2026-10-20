@@ -45,6 +45,13 @@ history includes the rest of the app update. Clipped simulation-time demand is
 wall time already excluded, distinct from the pending duration that the fixed
 owner retains and drains after admission or budget holds.
 
+Simulation start, user pause/unpause and scene stop are discrete time-owner
+facts, projected by `lunco-telemetry-core` to stamped Info events rather than
+sampled channels. The presentation bridge consumes the typed facts directly
+for Recent Events; other high-volume Info telemetry remains outside that
+history. See [the time-owner lifecycle contract](19-unified-time-and-clock.md#1-master-time-and-transport)
+for admission, teardown and rejection semantics.
+
 ### Identity, ownership, and labels
 
 `SignalRef { entity, path }` is the identity used by the registry, history, APIs, and saved
@@ -303,7 +310,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 |---|---|---|
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. A missing bound domain is an owner-visible error, never an implicit switch to world time. |
 | **Retention / ring buffer** | `lunco_signal::SignalRegistry` — chunked `ScalarHistory` with a bounded mutable tail **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path; use `snapshot()` when bulk history processing belongs on a worker. |
-| **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. The core health publisher exposes the latest facts and a bounded frame-time history in `EngineHealthSnapshot`; `lunco-telemetry` also retains selected samples in the global `SignalRegistry` | **Use typed engine-health facts for app presentation and the retained `SignalRegistry` for telemetry plots, APIs, and recording.** Do not read `DiagnosticsStore` from a UI surface. |
+| **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. The core health publisher exposes the latest facts and a bounded frame-time history in `EngineHealthSnapshot`; `lunco-telemetry` also retains selected samples in the global `SignalRegistry` | **Use typed engine-health facts for app presentation and `EnginePerformance`; use the retained `SignalRegistry` for simulation-clock telemetry plots, queries, and recording.** Do not read `DiagnosticsStore` from a UI surface. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { t_current }` (lifecycle progress), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | Completed dense experiment trajectories use `RunResult`. Telemetry recordings export the retained `SignalRegistry` histories with explicit gaps; they retain their independently sampled time axes. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_port_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
@@ -371,6 +378,19 @@ remains canonical for telemetry plots, APIs, and recording. The headline frame t
 smoothed, while the retained `engine.frame_time` channel keeps the raw diagnostic value so
 short hitches remain visible. `lunco-viz` renders both sources with the same sparkline
 presentation and does not create another history.
+
+`EnginePerformance` reads the same application-owned frame history on demand through
+`lunco-api`. It returns chronological `frame_time_samples_ms`, the retained capacity,
+the latest diagnostic values and `frame_sample_count`. The process-scoped counter
+advances for each retained raw frame observation and wraps at `u64::MAX`; subtract
+the returned history length to identify the observation preceding the first row.
+This is the render-cadence path for automated frame distributions, including while
+simulation is paused. Simulation-clock telemetry can repeat a diagnostic during
+catch-up ticks and must not be treated as one sample per rendered frame. A host
+without frame diagnostics reports `available: false`, missing numeric values and
+an empty history. It does not synthesize an FPS. The production
+`engine_performance.rhai` gate covers a rolling window while paused and the
+unavailable headless host.
 
 ---
 
@@ -770,3 +790,10 @@ Runtime projections use the same contract at their owning boundaries:
 
 This gives every producer one semantic time value for history, rate, deadband, and derivatives,
 while preserving the absolute epoch as a separate presentation field.
+
+The application presentation bridge also projects the first scene-owned
+`RuntimeFaults` entry to an Error in Recent Events: `Simulation stopped`, its
+subject and stable fault kind. Full fault facts remain at the runtime-fault
+owner. Change detection wakes this bridge; a scene resource suppresses duplicate
+publication and resets with status history during teardown. This fixed
+projection carries no selection policy and does not change transport state.

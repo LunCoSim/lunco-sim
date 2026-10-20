@@ -14,6 +14,28 @@ through `CelestialClock`.
 the single authority for play/pause and rate; UI, API, and input surfaces use
 `SetTimeTransport` rather than keeping another pause or rate state.
 
+`SimulationLifecycleChanged` is the discrete time-owner contract for Started,
+Paused, Unpaused and Stopped. The first admitted automatic fixed tick publishes
+Started; accepted mode changes publish Paused/Unpaused only for a simulation
+that has started. Duplicate commands and rate-only changes produce no edge.
+`SetTimeTransport` validates the complete request before mutation and rejects
+invalid rates with a terminal error. Scene resource retirement closes the
+lifecycle and retains only a one-shot Stopped notice until after teardown has
+cleared outgoing presentation state. The next lifecycle service (or an admitted
+replacement tick) publishes that notice once. Single stepping, compilation,
+loading and participant holds do not change this transport lifecycle.
+
+`lunco-telemetry-core` projects these typed facts to the discrete Info channels
+`SIMULATION_STARTED`, `SIMULATION_PAUSED`, `SIMULATION_UNPAUSED` and
+`SIMULATION_STOPPED`, using the existing authoritative telemetry stamping seam.
+`lunco-luncosim-presentation` maps the typed facts to the Simulation source in
+StatusBus; the existing Recent Events reader displays them. This is a fixed
+projection of four owner facts, with no selection, permission or authored policy
+requiring a Rhai hook. The retained application scenario
+`scenarios/tests/simulation_lifecycle.rhai` verifies real command, tick,
+duplicate/rejection, hold and teardown behavior in the production app; the
+private presentation bridge test checks exact history messages across reset.
+
 `lunco-core-runtime::SimTick` owns the integer lattice and its canonical seconds
 projection. `TickClock` admits participant intervals from that master exactly
 once, with checked tick arithmetic. Modelica demand and communication endpoints

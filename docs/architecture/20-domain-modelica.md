@@ -273,6 +273,15 @@ owner before active plots or canvas snapshots consume them.
 deferred structural-edit queue. Headless source edits therefore receive the
 same asynchronous parse/install cycle as workbench edits; the UI plugin only
 adds presentation and pacing hints.
+The driver classifies exact documents linked to non-editor scene participants
+as `SimulationRequired` in the shared bounded admission queue. The focused
+editor document is `Interactive`; remaining documents are `Background`.
+Submission is ordered by priority, document identity and source generation
+within the local parse bound. Scene demand comes from the document registry's
+entity links and the participant's matching document, independently of editor
+visibility. Parse diagnostics report queue wait separately from parsing and
+installation; priority does not preempt an already running task or change
+source-generation validation.
 
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
 It owns `ModelicaModel`, the serialized worker command/result messages, source
@@ -292,6 +301,29 @@ notices, then returns without consuming these messages as solver transactions.
 The UI mirrors all notice severities into Recent status as discrete entries.
 Preparation notifications do not change simulation time, outputs, compile
 completion, or the required participant admission hold.
+Successful construction also reports a typed `ModelicaConstructionProfile`:
+native construction queue wait, solver-session construction, scalar metadata
+collection, and the first checked observation, in nanoseconds. Queue wait is
+unavailable on transports that cannot measure it. The fenced lifecycle receiver
+retains these facts with the participant and emits the existing Modelica notice
+plus a structured log naming the model. `CosimStatus.modelica_construction_profile`
+exposes them only for an installed compiled model, including compact queries.
+Failed or rejected/replaced participants cannot expose the retired profile.
+The production `modelica_source_target` gate covers successful construction,
+compact readback, rejection, replacement and recovery. These measurements are
+diagnostic wall time and do not select simulation transitions.
+
+Numeric instance overrides cross two maintained Rumoca boundaries. The compiler
+host reads checked DAE parameter roles and `is_tunable` facts; translation-time
+parameters become typed root modifiers through `Session::set_structural_overrides`.
+Integer and Boolean modifiers require exact representable literals. The shared
+compiler retains the base artifact for classification and caches structural
+variants by source/library identity and exact override bits. It clears root
+modifiers after each compile, including a rejected compile. Each artifact records
+its incorporated structural bindings; live-plan admission verifies those match
+the requested values and sends only tunable overrides to solver lowering.
+The full requested bindings remain in the solver snapshot and prepared-cache key.
+No source text or checked DAE is patched to change parameter values.
 
 Prepared-solver reuse captures `ModelicaCompiler::compiled_source_content_identity`
 while the successful strict compilation's participating overlays are still
@@ -1328,6 +1360,15 @@ active solver tolerances. Certification releases the members together. A changed
 source or wire cannot release an old certificate; failed certification reports the
 same terminal runtime fault. Scene teardown retires the transient participant and
 its admission state. Settled scenes skip the preparation coordinator.
+
+Successful certification retains a scene-scoped diagnostic receipt in
+`CosimStatus.last_coupled_initialization`: scene generation, solver identity
+and worker construction timings. This is the last completed
+initialization, not a permit for a later graph. Failed or superseded work cannot
+publish a successful receipt; teardown removes it. Missing worker diagnostics
+leave the receipt unavailable and do not change numerical admission. The
+`modelica_initialization_network` production Rhai gate checks the retained receipt
+alongside initial values, communication rates, pause/resume and clock behavior.
 
 `lunco-usd-avian-joints` seats native joint definitions after validated initial
 body poses and installs them disabled. `PhysicsJointPrepared` keeps those

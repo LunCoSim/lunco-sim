@@ -818,10 +818,16 @@ fn on_set_time_transport(
     mut transport: ResMut<crate::TimeTransport>,
     mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
     coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
-) {
+    lifecycle: Res<crate::lifecycle::SimulationLifecycle>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
     let before = *transport;
     let command = trigger.event();
-    apply_time_transport(&mut transport, command);
+    apply_time_transport(&mut transport, command).map_err(|detail| {
+        warn!("[time] rejected SetTimeTransport: {detail}");
+        detail
+    })?;
+    crate::lifecycle::transport_changed(&lifecycle, before.mode, transport.mode, &mut commands);
     if command.playing == Some(false)
         && coordinator.is_some_and(|state| state.active().is_some() || state.has_admitted())
     {
@@ -835,6 +841,7 @@ fn on_set_time_transport(
             before.mode, transport.mode, before.rate, transport.rate
         );
     }
+    Ok(Ack::default())
 }
 
 pub(crate) fn on_scene_transition_started(
@@ -909,7 +916,20 @@ pub(crate) fn on_scene_transition_completed(
     pause_retired_scene(transport, pending_scene_pause);
 }
 
-fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTransport) {
+fn apply_time_transport(
+    transport: &mut crate::TimeTransport,
+    cmd: &SetTimeTransport,
+) -> Result<(), String> {
+    if let Some(rate) = cmd.rate
+        && (!rate.is_finite()
+            || !(crate::MIN_REALTIME_RATE..=crate::MAX_REALTIME_RATE).contains(&rate))
+    {
+        return Err(format!(
+            "live transport rate must be finite and within {}..={}x",
+            crate::MIN_REALTIME_RATE,
+            crate::MAX_REALTIME_RATE
+        ));
+    }
     if let Some(playing) = cmd.playing {
         transport.mode = if playing {
             crate::TransportMode::Playing
@@ -918,17 +938,9 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
         };
     }
     if let Some(rate) = cmd.rate {
-        if rate.is_finite() && (crate::MIN_REALTIME_RATE..=crate::MAX_REALTIME_RATE).contains(&rate)
-        {
-            transport.rate = rate;
-        } else {
-            bevy::log::warn!(
-                "[time] rejected live transport rate {rate:?}; supported range is {}..={}x",
-                crate::MIN_REALTIME_RATE,
-                crate::MAX_REALTIME_RATE
-            );
-        }
+        transport.rate = rate;
     }
+    Ok(())
 }
 
 /// Rate-scale or seek the celestial child of [`WorldTime`]. The command cannot
@@ -1346,7 +1358,8 @@ mod tests {
                 playing: Some(true),
                 rate: Some(8.0),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(transport.mode, TransportMode::Playing);
         assert_eq!(transport.rate, 8.0);
     }
@@ -1360,7 +1373,8 @@ mod tests {
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
             .accumulate_overstep(std::time::Duration::from_millis(20));
-        app.add_observer(on_set_time_transport);
+        app.init_resource::<crate::lifecycle::SimulationLifecycle>()
+            .add_observer(on_set_time_transport);
 
         app.world_mut().trigger(SetTimeTransport {
             playing: Some(false),
@@ -1493,7 +1507,8 @@ mod tests {
             .init_resource::<ResolvedDomains>()
             .init_resource::<LastClockT>()
             .init_resource::<lunco_core::RuntimeFaults>();
-        app.add_observer(on_set_time_transport);
+        app.init_resource::<crate::lifecycle::SimulationLifecycle>()
+            .add_observer(on_set_time_transport);
 
         app.world_mut().trigger(SetTimeTransport {
             playing: Some(false),
@@ -1618,7 +1633,8 @@ mod tests {
                 rate: Some(crate::MIN_REALTIME_RATE),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(transport.rate, crate::MIN_REALTIME_RATE);
 
         apply_time_transport(
@@ -1627,7 +1643,8 @@ mod tests {
                 rate: Some(crate::MIN_REALTIME_RATE / 2.0),
                 ..default()
             },
-        );
+        )
+        .unwrap_err();
         assert_eq!(transport.rate, crate::MIN_REALTIME_RATE);
 
         apply_time_transport(
@@ -1636,7 +1653,8 @@ mod tests {
                 rate: Some(crate::MAX_REALTIME_RATE),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
 
         apply_time_transport(
@@ -1645,7 +1663,8 @@ mod tests {
                 rate: Some(crate::MAX_REALTIME_RATE + 1.0),
                 ..default()
             },
-        );
+        )
+        .unwrap_err();
         assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
 
         apply_time_transport(
@@ -1654,7 +1673,8 @@ mod tests {
                 rate: Some(f64::NAN),
                 ..default()
             },
-        );
+        )
+        .unwrap_err();
         assert_eq!(transport.rate, crate::MAX_REALTIME_RATE);
     }
 

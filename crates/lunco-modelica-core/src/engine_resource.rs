@@ -326,8 +326,10 @@ impl ModelicaEngineHandle {
         };
         let me = self.clone();
         let bytes = source.len();
+        let admitted_at = web_time::Instant::now();
         let accepted = admit_fn(Box::new(move || {
             let t_total = web_time::Instant::now();
+            let wait_ms = admitted_at.elapsed().as_secs_f64() * 1000.0;
             // Lenient parser: always produces a usable tree.
             let t_parse = web_time::Instant::now();
             let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
@@ -349,10 +351,11 @@ impl ModelicaEngineHandle {
             me.install_worker_parse_results(doc_id, syntax);
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
-                "[engine] async parse doc={} gen={} bytes={} parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
+                "[engine] async parse doc={} gen={} bytes={} wait={:.1}ms parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
                 doc_id.raw(),
                 r#gen,
                 bytes,
+                wait_ms,
                 parse_ms,
                 install_ms,
                 t_total.elapsed().as_secs_f64() * 1000.0,
@@ -489,6 +492,10 @@ pub fn drive_engine_sync(
     >,
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
+    scene_models: Query<
+        &lunco_modelica_runtime::ModelicaModel,
+        Without<lunco_modelica_runtime::EditorModelicaActor>,
+    >,
     #[cfg(not(target_arch = "wasm32"))] mut admission: ResMut<
         lunco_core_runtime::AsyncWorkAdmission,
     >,
@@ -504,9 +511,8 @@ pub fn drive_engine_sync(
     for root in completed_roots {
         commands.trigger(SourceRootBecameReady { root });
     }
-    // Active tab's doc id (if any). Used below to prioritise its
-    // reparse over any background tabs queued behind it. `None` until
-    // the UI feeds the hint (headless: always `None` → no reordering).
+    // Editor focus supplies interactive demand; scene demand is resolved below
+    // from the participant's exact document link in every host.
     let active_doc: Option<DocumentId> = pacing.active_document;
     // ── 1. Drain async-parse completions ──────────────────────────────
     // Move one exact worker result at a time. The budget covers the document
@@ -693,16 +699,31 @@ pub fn drive_engine_sync(
     //     the size-adaptive debounce of post-edit silence.
     //     Lets a typing burst settle before paying for a parse.
     let now = web_time::Instant::now();
-    // Stable submission order keeps the per-owner parse cap from depending on
-    // document-registry iteration. Shared dispatch applies the same active-tab
-    // priority across all producers.
-    if let Some(active) = active_doc {
-        async_only.sort_by_key(|(doc_id, r#gen, _)| {
-            (if *doc_id == active { 0 } else { 1 }, doc_id.raw(), *r#gen)
-        });
-    } else {
-        async_only.sort_by_key(|(doc_id, r#gen, _)| (doc_id.raw(), *r#gen));
-    }
+    // The source registry links a scene actor before its source is admitted.
+    // Its compiler waits for this exact syntax revision, independently of which
+    // document is visible in the editor. Share that demand with the global
+    // queue while retaining stable order within each priority class.
+    let required_documents: HashSet<_> = registry
+        .iter_doc_for_entity()
+        .filter_map(|(entity, document)| {
+            scene_models
+                .get(entity)
+                .is_ok_and(|model| model.document == document)
+                .then_some(document)
+        })
+        .collect();
+    let priority = |document: DocumentId| {
+        if required_documents.contains(&document) {
+            lunco_core_runtime::AsyncWorkPriority::SimulationRequired
+        } else if Some(document) == active_doc {
+            lunco_core_runtime::AsyncWorkPriority::Interactive
+        } else {
+            lunco_core_runtime::AsyncWorkPriority::Background
+        }
+    };
+    async_only.sort_by_key(|(document, generation, _)| {
+        (priority(*document), document.raw(), *generation)
+    });
     let max_in_flight = pacing.max_in_flight.max(1);
     let mut next_debounce_at: Option<web_time::Instant> = None;
 
@@ -853,11 +874,7 @@ pub fn drive_engine_sync(
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let priority = if Some(doc_id) == active_doc {
-                lunco_core_runtime::AsyncWorkPriority::Interactive
-            } else {
-                lunco_core_runtime::AsyncWorkPriority::Background
-            };
+            let priority = priority(doc_id);
             // This Modelica handle is application-scoped today; DocumentId is
             // process-unique, and one source revision has one parse operation.
             let key = lunco_core_runtime::AsyncWorkKey::new(
@@ -889,7 +906,7 @@ pub fn drive_engine_sync(
             }
         }
         bevy::log::info!(
-            "[EngineSync] async parse admitted doc={} gen={} src={}B (first_parse={}, target={}{})",
+            "[EngineSync] async parse admitted doc={} gen={} src={}B (first_parse={}, target={}, priority={:?})",
             doc_id.raw(),
             r#gen,
             src_len,
@@ -899,11 +916,7 @@ pub fn drive_engine_sync(
             } else {
                 "native-task"
             },
-            if Some(doc_id) == active_doc {
-                ", priority=interactive"
-            } else {
-                ""
-            },
+            priority(doc_id),
         );
     }
     cursor.registry_revision = registry.revision();
@@ -1007,6 +1020,59 @@ impl Plugin for ModelicaEnginePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_parse_admission_preserves_editor_and_unlinked_document_priorities() {
+        use bevy::ecs::system::RunSystemOnce;
+        use lunco_modelica_runtime::{EditorModelicaActor, ModelicaModel};
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, ModelicaEnginePlugin));
+        app.init_resource::<lunco_doc_bevy::DocumentRegistry<
+            lunco_modelica_document::ModelicaDocument,
+        >>();
+        let documents = {
+            let mut registry = app.world_mut().resource_mut::<lunco_doc_bevy::DocumentRegistry<
+                lunco_modelica_document::ModelicaDocument,
+            >>();
+            ["Scene", "Focused", "Background", "Unlinked"]
+                .map(|name| registry.allocate_untitled(format!("model {name} end {name};")))
+        };
+        for (index, document) in documents.into_iter().enumerate() {
+            let entity = app
+                .world_mut()
+                .spawn(ModelicaModel {
+                    document,
+                    ..default()
+                })
+                .id();
+            if index == 1 || index == 2 {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .insert(EditorModelicaActor);
+            }
+            if index != 3 {
+                app.world_mut().resource_mut::<lunco_doc_bevy::DocumentRegistry<
+                    lunco_modelica_document::ModelicaDocument,
+                >>().link(entity, document).unwrap();
+            }
+        }
+        app.world_mut()
+            .resource_mut::<ParsePacing>()
+            .active_document = Some(documents[1]);
+        // Run only owner admission: workers have not dispatched, so the real
+        // shared queue exposes classification without timing assumptions.
+        app.world_mut().run_system_once(drive_engine_sync).unwrap();
+        let snapshot = app
+            .world()
+            .resource::<lunco_core_runtime::AsyncWorkAdmission>()
+            .snapshot();
+        assert_eq!(
+            snapshot.queued,
+            [1, 1, 2],
+            "only the linked scene participant may request simulation-required parsing"
+        );
+    }
 
     #[test]
     fn parse_completion_moves_the_exact_worker_syntax() {

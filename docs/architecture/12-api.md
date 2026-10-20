@@ -11,6 +11,17 @@ lightweight in-process values and request/response types; `lunco-api` owns
 ECS execution and discovery; `lunco-api-codec` owns JSON conversion at wire
 boundaries; and `lunco-api-transport` exposes HTTP and browser adapters.
 
+`EnginePerformance` exposes the core runtime's bounded render-frame history,
+latest FPS/frame diagnostics, retained capacity and process-scoped sample counter.
+Use this render-cadence query for frame distributions, including while simulation
+is paused. `PhysicsPerformance` reports completed native physics steps;
+`SimulationTimingProfile` reports fixed-loop service and retained demand. Their
+clocks are distinct. See [telemetry ownership](telemetry-subsystem.md#engine-diagnostics-and-generic-visualization).
+`PhysicsPerformance.continuous_projection_time_ms` measures joint/contact row
+preparation, coupled response and reaction application inside the continuous
+solve. The joint-only admission pass precedes that timer. Native total-step
+diagnostics include both phases.
+
 ## Quick Start
 
 ### 1. Start the simulator with API enabled
@@ -572,6 +583,12 @@ propagated wire values by default. For fleet diagnostics, pass
 `{"include_values":false}` to omit input/output maps and verbose model/error
 strings; timing, status, counts, and bounded worker diagnostics remain available.
 Compact error status is `Error`; the default full view includes its reason.
+Both views retain `modelica_construction_profile` with worker task timings.
+Uninstalled values are unavailable. Root `last_coupled_initialization` retains
+the current scene's
+last successful certification receipt (`scene_generation`, `solver_id`,
+`construction_profile`), including after its transient actor
+is retired. It clears with scene teardown and does not authorize another graph.
 `status` exposes `Unbound`, `Compiling`, `Running`, `Paused`, or `Error` for
 source-only and failed participants:
 

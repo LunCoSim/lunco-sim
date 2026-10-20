@@ -35,6 +35,9 @@ def main():
                            extra_args=('--scene', 'scenes/tests/modelica_runtime_contracts.usda'),
                            log_path=output / 'runtime.log') as session:
         executing_image = Path('/proc') / str(session.process.pid) / 'exe'
+        if executing_image.exists():
+            assert executing_image.resolve() == BINARY.resolve()
+            assert (executing_image.parent / 'cwd').resolve() == ROOT
         image = executing_image if executing_image.exists() else BINARY
         binary_sha256 = hashlib.file_digest(image.open('rb'), 'sha256').hexdigest()
         def execute(command, **params):
@@ -78,6 +81,18 @@ def main():
                 elif status['state'] not in ('failed', 'cancelled'):
                     execute('CancelExperiment', experiment_id=run['experiment_id'], all=False)
             execute('CloseDocument', doc_id=doc)
+    # Retain only this session's result artifacts with its evidence, rather than
+    # leaving generated experiment records beside the authored fixture.
+    artifacts = ROOT / 'assets/scenes/tests/results'
+    for run in runs:
+        artifact = artifacts / (str(run['experiment_id']) + '.json')
+        if artifact.is_file():
+            destination = output / 'artifacts' / artifact.name
+            destination.parent.mkdir(exist_ok=True)
+            assert not destination.exists(), destination
+            artifact.rename(destination)
+    if artifacts.is_dir() and not any(artifacts.iterdir()):
+        artifacts.rmdir()
     files = [source, ROOT / 'assets/models/LunCo/Electrical/SolarPanel.mo',
              ROOT / 'assets/models/LunCo/Thermal/LimitedCoolingSink.mo']
     evidence = {'checks': 45, 'runs': runs, 'headless': args.headless,

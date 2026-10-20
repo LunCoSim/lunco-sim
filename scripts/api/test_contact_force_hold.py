@@ -1,22 +1,28 @@
 """Exercise contact reporting across a held cycle through the scene-test host."""
 
+import argparse
 from pathlib import Path
 
 from runtime import BINARY, ROOT, ProductionSession, run_authored_scenario
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=4396)
+    parser.add_argument("--output", type=Path,
+                        default=Path(".cache/codex-evidence/celestial-integrated/contact-hold.log"))
+    args = parser.parse_args()
     with ProductionSession(
-        4396,
+        args.port,
         subcommand="test",
         extra_args=("--scene", "assets/scenes/tests/landing_legs.usda",
                     "--verdict-channel", "CONTACT_HOLD", "--max-ticks", "1200"),
-        log_path=Path(".cache/codex-evidence/celestial-integrated/contact-hold.log"),
+        log_path=args.output,
     ) as session:
         pid = session.process.pid
         assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
         assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
-        print(f"OWNED pid={pid} port=4396 cwd={ROOT}", flush=True)
+        print(f"OWNED pid={pid} port={args.port} cwd={ROOT}", flush=True)
         try:
             run_authored_scenario(
                 session, "lunco://scenarios/tests/contact_force_hold.rhai",

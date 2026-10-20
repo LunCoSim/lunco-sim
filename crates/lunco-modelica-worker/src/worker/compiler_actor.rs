@@ -572,6 +572,7 @@ mod tests {
                 CompileUnit {
                     source: "model ActorCompileProbe\n  ActorLibrary.Rate rate;\n  Real x(start=0);\nequation\n  der(x) = rate.y;\nend ActorCompileProbe;\n".into(),
                     extras: Vec::new(),
+                    parameter_overrides: Vec::new(),
                 },
                 "ActorCompileProbe.mo".into(),
                 0,

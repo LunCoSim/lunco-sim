@@ -244,7 +244,16 @@ resolution, or change quality settings. It considers all active extracted 3D
 cameras, including offscreen capture cameras, rather than assuming the primary
 window is the only output. This removes only irrelevant local-light shadow-view
 preparation and rendering; Bevy's main-world per-light caster visibility pass
-still runs before extraction and remains a separate profiling target.
+runs before extraction whenever any point or spot light exists. The renderer
+installs that native delegate with Bevy's current-population query condition
+through the public schedule replacement API, preserving its implicit type set,
+visibility set and native preparation/visibility ordering edges. With no local
+lights the pass has no output and is skipped;
+adding either light type wakes it on the next update. Directional caster work
+and native shadow-LOD extraction retain their own schedules. The native
+execution-tick regression covers empty and directional-only worlds, point/spot
+addition and removal, and installation into both uninitialized and initialized
+schedules.
 
 An extracted local light and its shadow-view tracker share one lifetime.
 When Bevy removes an invisible `ExtractedPointLight`, the adapter retires its

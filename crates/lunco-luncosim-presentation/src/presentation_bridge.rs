@@ -9,6 +9,11 @@ use lunco_core::{AppSceneExt, SceneResource};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 
 pub(crate) fn register(app: &mut App) {
+    app.add_observer(report_simulation_lifecycle);
+    app.init_scene_resource::<RuntimeFaultStatus>().add_systems(
+        Update,
+        report_runtime_fault_status.run_if(resource_changed::<lunco_core::RuntimeFaults>),
+    );
     app.init_resource::<TerrainStatusMirrorState>().add_systems(
         lunco_core::SceneTeardown,
         reset_terrain_status_mirror_on_scene_teardown,
@@ -65,6 +70,53 @@ pub(crate) fn register(app: &mut App) {
             .in_set(lunco_core::RuntimeCycleSet::Visualization)
             .run_if(authored_env_apply_due),
     );
+}
+
+/// Discrete time-owner facts feed the same history as all other status sources.
+fn report_simulation_lifecycle(
+    trigger: On<lunco_time::SimulationLifecycleChanged>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
+) {
+    use lunco_time::SimulationLifecycleTransition as T;
+    let Some(mut bus) = bus else { return };
+    let message = match trigger.event().transition {
+        T::Started => "Simulation started",
+        T::Paused => "Simulation paused",
+        T::Unpaused => "Simulation unpaused",
+        T::Stopped => "Simulation stopped",
+    };
+    bus.push(
+        "Simulation",
+        lunco_status_core::status_bus::StatusLevel::Info,
+        message,
+    );
+}
+
+/// First-fault publication is scene scoped, like its authoritative owner.
+#[derive(Resource, Default)]
+struct RuntimeFaultStatus {
+    reported: bool,
+}
+impl SceneResource for RuntimeFaultStatus {}
+
+fn report_runtime_fault_status(
+    faults: Res<lunco_core::RuntimeFaults>,
+    mut status: ResMut<RuntimeFaultStatus>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+    let Some(fault) = faults.first.as_ref() else {
+        return;
+    };
+    if status.reported {
+        return;
+    }
+    bus.push(
+        "Simulation",
+        lunco_status_core::status_bus::StatusLevel::Error,
+        format!("Simulation stopped: {} [{}]", fault.subject, fault.kind),
+    );
+    status.reported = true;
 }
 
 /// Scene-derived environment facts retained independently of camera targets.
@@ -1133,5 +1185,109 @@ mod modelica_status_tests {
             bus.history().next().map(|event| event.message.as_str()),
             Some("Modelica ready — 2 participant(s)")
         );
+    }
+}
+
+#[cfg(test)]
+mod simulation_lifecycle_status_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_fault_status_publishes_once_and_rearms_after_scene_retirement() {
+        use lunco_status_core::status_bus::{StatusBus, StatusLevel};
+        let mut app = App::new();
+        app.init_scene_resource::<StatusBus>()
+            .init_scene_resource::<RuntimeFaultStatus>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(
+                Update,
+                report_runtime_fault_status.run_if(resource_changed::<lunco_core::RuntimeFaults>),
+            );
+        app.update();
+        assert_eq!(app.world().resource::<StatusBus>().history_total(), 0);
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise(
+                "contact-invalid",
+                None,
+                "continuous contact solve",
+                "native geometry unavailable",
+            );
+        app.update();
+        app.world_mut().resource_mut::<StatusBus>().push(
+            "Other",
+            StatusLevel::Info,
+            "another source",
+        );
+        assert!(
+            !app.world_mut()
+                .resource_mut::<lunco_core::RuntimeFaults>()
+                .raise("downstream", None, "later owner", "not the first cause")
+        );
+        app.update();
+        let events = app
+            .world()
+            .resource::<StatusBus>()
+            .history()
+            .filter(|event| event.level == StatusLevel::Error)
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].message,
+            "Simulation stopped: continuous contact solve [contact-invalid]"
+        );
+        lunco_core::run_scene_teardown(app.world_mut());
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise(
+                "joint-invalid",
+                None,
+                "joint admission",
+                "invalid endpoints",
+            );
+        app.update();
+        let bus = app.world().resource::<StatusBus>();
+        assert_eq!(bus.history().count(), 1);
+        assert_eq!(
+            bus.history().next().unwrap().message,
+            "Simulation stopped: joint admission [joint-invalid]"
+        );
+    }
+
+    #[test]
+    fn simulation_edges_reach_recent_events_after_history_retirement() {
+        use lunco_status_core::status_bus::StatusBus;
+        use lunco_time::{SimulationLifecycleChanged, SimulationLifecycleTransition as T};
+        let mut app = App::new();
+        app.init_scene_resource::<StatusBus>()
+            .add_observer(report_simulation_lifecycle);
+        for transition in [T::Started, T::Paused, T::Unpaused] {
+            app.world_mut()
+                .trigger(SimulationLifecycleChanged { transition });
+        }
+        let messages = app
+            .world()
+            .resource::<StatusBus>()
+            .history()
+            .map(|event| (event.source, event.message.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            [
+                ("Simulation", "Simulation started"),
+                ("Simulation", "Simulation paused"),
+                ("Simulation", "Simulation unpaused")
+            ]
+        );
+        lunco_core::run_scene_teardown(app.world_mut());
+        app.world_mut().trigger(SimulationLifecycleChanged {
+            transition: T::Stopped,
+        });
+        let bus = app.world().resource::<StatusBus>();
+        assert_eq!(bus.history().count(), 1);
+        assert_eq!(bus.history().next().unwrap().message, "Simulation stopped");
     }
 }

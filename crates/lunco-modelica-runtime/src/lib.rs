@@ -383,6 +383,18 @@ pub enum ModelicaPreparationPhase {
     LoweringEquations,
     CachedSolverLoaded,
     SolverPrepared { elapsed_secs: f64 },
+    LiveSolverConstructed(ModelicaConstructionProfile),
+}
+
+/// Wall-clock service measurements for one successful live construction.
+/// These diagnostics do not participate in solver state or scheduling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelicaConstructionProfile {
+    /// Unavailable when the transport does not expose the construction queue.
+    pub queue_wait_ns: Option<u64>,
+    pub session_ns: u64,
+    pub metadata_ns: u64,
+    pub initial_observation_ns: u64,
 }
 
 /// The registered solver capabilities selected for one live Modelica model.
@@ -597,6 +609,9 @@ pub struct ModelicaModel {
     /// Immutable compiled facts admitted with this solver session.
     #[reflect(ignore)]
     pub variable_metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
+    /// Last successful construction for this participant's admitted session.
+    #[reflect(ignore)]
+    pub construction_profile: Option<ModelicaConstructionProfile>,
     #[reflect(ignore)]
     pub pending_generation: u64,
     #[reflect(ignore)]
@@ -632,6 +647,7 @@ impl Default for ModelicaModel {
             compiled_generation: 0,
             live_solver_snapshot: None,
             variable_metadata: None,
+            construction_profile: None,
             pending_generation: 0,
             resume_after_compile: false,
         }

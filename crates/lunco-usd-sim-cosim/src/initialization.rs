@@ -66,12 +66,29 @@ struct Job {
 struct Certificate {
     plan: Plan,
     values: BTreeMap<Entity, Vec<(String, f64)>>,
+    receipt: Option<CoupledInitializationReceipt>,
+}
+
+/// Worker-issued diagnostics from the current scene's last certified initialization.
+pub struct CoupledInitializationReceipt {
+    pub scene_generation: u64,
+    pub solver: std::sync::Arc<lunco_modelica_runtime::ModelicaLiveSolverSnapshot>,
+    pub construction_profile: lunco_modelica_runtime::ModelicaConstructionProfile,
+}
+
+/// Read the scene-scoped diagnostic receipt; it does not authorize admission.
+pub fn last_coupled_initialization(world: &World) -> Option<&CoupledInitializationReceipt> {
+    world
+        .get_resource::<CoupledInitialization>()?
+        .last_completed
+        .as_ref()
 }
 
 #[derive(Resource, Default)]
 pub(super) struct CoupledInitialization {
     job: Option<Job>,
     certificate: Option<Certificate>,
+    last_completed: Option<CoupledInitializationReceipt>,
 }
 
 fn wire_snapshot(world: &mut World) -> Vec<WireSnapshot> {
@@ -745,6 +762,7 @@ pub(super) fn coordinate(world: &mut World) {
                     "[usd-cosim] certified coupled initialization for {} participant(s)",
                     certificate.plan.members.len()
                 );
+                world.resource_mut::<CoupledInitialization>().last_completed = certificate.receipt;
             }
             Err(error) => fail(world, &certificate.plan, error),
         }
@@ -772,6 +790,13 @@ pub(super) fn coordinate(world: &mut World) {
                     .get::<ModelicaVariables>(job.actor)
                     .map(|vars| vars.values.clone());
                 let outcome = outcome.and_then(|()| {
+                    let receipt = world.get::<ModelicaModel>(job.actor).and_then(|model| {
+                        Some(CoupledInitializationReceipt {
+                            scene_generation: job.plan.generation,
+                            solver: model.live_solver_snapshot.clone()?,
+                            construction_profile: model.construction_profile?,
+                        })
+                    });
                     let values = values.ok_or("initialization result has no observation")?;
                     let mut inputs: BTreeMap<Entity, Vec<(String, f64)>> = BTreeMap::new();
                     for (index, (entity, name, _)) in job.plan.probes.iter().enumerate() {
@@ -801,6 +826,7 @@ pub(super) fn coordinate(world: &mut World) {
                     world.resource_mut::<CoupledInitialization>().certificate = Some(Certificate {
                         plan: job.plan.clone(),
                         values: inputs,
+                        receipt,
                     });
                     Ok(())
                 });

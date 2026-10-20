@@ -168,7 +168,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "step_time_samples_ms": step_time_samples_ms,
             "continuous_solve_time_ms": continuous.solve_time.as_secs_f64()*1000.0,
             "continuous_sweep_time_ms": continuous.sweep_time.as_secs_f64()*1000.0,
-            "continuous_joint_time_ms": continuous.joint_time.as_secs_f64()*1000.0,
+            "continuous_projection_time_ms": continuous.projection_time.as_secs_f64()*1000.0,
             "continuous_substeps": continuous.substeps,
             "continuous_sweep_queries": continuous.sweep_queries,
             "continuous_position_iterations": continuous.position_iterations,

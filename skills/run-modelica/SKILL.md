@@ -45,6 +45,13 @@ When composing a component with bound input defaults, supply replacements as
 instance modifiers. Follow the
 [declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
 and validate the composed participant through its production scene gate.
+For numeric parameter overrides, the compiler host uses Rumoca's checked
+`is_tunable` declaration facts. Structural values enter the maintained typed
+root-modifier API before instantiation; tunable values enter solver lowering.
+The compiled artifact records structural values and the live owner verifies
+them before construction. Do not discard a structural override or mutate a
+compiled DAE to bypass a recompilation diagnostic. Cache identities retain the
+exact authored override bits.
 
 Photovoltaic temperature feedback uses `SolarPanel.cell_temperature_k` and
 `SolarPanel.heat_w`, with `HeatLoad` bridging into an acausal thermal network.
@@ -106,8 +113,20 @@ such as `p.v` alone implies no electrical unit. Use
 Library-only sources remain inspectable documents. USD program admission rejects
 them before creating a solver participant; replacing a live program with such a
 source stops that participant and retains the source diagnostic. Exercise
-`modelica_source_target.rhai` against `modelica_runtime_contracts.usda` for the
+`modelica_source_target.usda` and its attached `modelica_source_target.rhai` for the
 valid-source, missing-target, replacement, recovery and retirement cases.
+Its `CosimStatus.modelica_construction_profile` assertions also cover installed
+construction timings, compact readback and retirement of rejected profiles.
+
+For cyclic initial admission, run `modelica_initialization_network.usda` and
+the inconsistent `modelica_initialization_failure.usda` production gates.
+Inspect the scene-scoped `CosimStatus.last_coupled_initialization` receipt for
+the successful transient initializer's solver identity and construction timings
+after its actor retires. The positive gate observes that retained receipt.
+Missing measurements are unavailable; they do not block numerical admission.
+`scripts/api/test_modelica_initialization_receipt.py --output <evidence-directory>`
+requires both the initialization verdict and the receipt's retirement across a
+scene replacement in one owned production session.
 
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
@@ -271,6 +290,10 @@ same surface is `assembly_edit::attach_program(...)` with
 `assembly_edit::program_output(...)` helpers. Verify the
 result with `ListPorts`, `CosimStatus`, and `GetBrokenConnections`; a source
 without declared ports is reported as source-only and does not step.
+Inspect `GetReadiness` as well: a rejected program has a named `program_failed`
+item even when no solver was created. Removing that program retires its exact
+readiness ticket while preserving its physical host. A terminal `CosimStatus`
+error is a failed admission, not an unfinished compile or a performance sample.
 
 Modelica packages under `assets/models/<Root>/` and inside a Twin use the standard
 `package.mo`/`package.order` layout and members' `within` declarations. A Twin may

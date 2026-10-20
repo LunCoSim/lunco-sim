@@ -80,6 +80,9 @@ fn step_case(state) {
         return state;
     }
     state.failures += [
+        t_true(status.last_coupled_initialization != ()
+            && status.last_coupled_initialization.construction_profile.session_ns.to_float() > 0.0,
+            "the certified one-shot initializer retains its worker-issued execution receipt"),
         t_true(abs(a.outputs.sample - 2.0) < 1.0e-9, "first participant admits the coupled initial state"),
         t_true(abs(b.outputs.sample - 2.0) < 1.0e-9, "second participant admits the same initial coordinate"),
         t_true(a.pending_initial_connections == () && b.pending_initial_connections == (), "all causal edges are real"),

@@ -1062,6 +1062,7 @@ pub fn handle_modelica_responses(
                 use lunco_modelica_runtime::ModelicaPreparationPhase;
                 let detail = match phase {
                     ModelicaPreparationPhase::QueuedForCompilation => {
+                        model.construction_profile = None;
                         "queued for compilation".to_owned()
                     }
                     ModelicaPreparationPhase::CheckingSolverCache => {
@@ -1077,6 +1078,21 @@ pub fn handle_modelica_responses(
                     ModelicaPreparationPhase::SolverPrepared { elapsed_secs } => format!(
                         "solver preparation finished in {elapsed_secs:.2} s; awaiting initialization"
                     ),
+                    ModelicaPreparationPhase::LiveSolverConstructed(profile) => {
+                        model.construction_profile = Some(*profile);
+                        bevy::log::info!(model = %model.model_name,
+                            queue_wait_ns = ?profile.queue_wait_ns,
+                            session_ns = profile.session_ns,
+                            metadata_ns = profile.metadata_ns,
+                            initial_observation_ns = profile.initial_observation_ns,
+                            "[modelica-runtime] live solver construction phases completed");
+                        format!(
+                            "live initialization finished: solver {:.1} ms, metadata {:.1} ms, initial observation {:.1} ms",
+                            profile.session_ns as f64 / 1e6,
+                            profile.metadata_ns as f64 / 1e6,
+                            profile.initial_observation_ns as f64 / 1e6
+                        )
+                    }
                 };
                 notices.write(ModelicaNotice {
                     level: NoticeLevel::Info,
@@ -1099,6 +1115,7 @@ pub fn handle_modelica_responses(
             // system returns. Failures cannot leave facts for a dead stepper.
             if result.error.is_some() {
                 model.live_solver_snapshot = None;
+                model.construction_profile = None;
                 model.variable_metadata = None;
             } else if lifecycle_result {
                 model.live_solver_snapshot = result.live_solver_snapshot.clone();

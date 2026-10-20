@@ -12,6 +12,8 @@ pub mod ports;
 pub use ports::{ReadActuatorStatusProvider, ReadPortsBatchProvider};
 pub mod modelica;
 pub use modelica::ReadModelicaStepSamplesProvider;
+mod performance;
+pub use performance::EnginePerformanceProvider;
 
 pub(crate) fn query_schema(
     name: &'static str,
@@ -848,6 +850,7 @@ pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     registry.register(ReadSessionInputStreamProvider);
     registry.register(ReadSessionInputArchiveExportProvider);
     registry.register(ReadExposuresProvider);
+    registry.register(EnginePerformanceProvider);
 }
 
 // ─── ApiVisibility ─────────────────────────────────────────────────────

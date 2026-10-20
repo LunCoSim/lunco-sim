@@ -28,6 +28,48 @@ use bevy::{
 #[derive(Component)]
 struct LocalLightShadowIntent(bool);
 
+/// Retain the native delegate and its preparation/visibility dependencies.
+fn configure_point_light_visibility(
+    world: &mut World,
+    schedule: &mut bevy::ecs::schedule::Schedule,
+) {
+    use bevy::{
+        camera::visibility::VisibilitySystems,
+        ecs::schedule::{ScheduleCleanupPolicy, common_conditions::any_match_filter},
+        light::{SimulationLightSystems, check_point_light_mesh_visibility},
+        transform::TransformSystems,
+    };
+
+    let removed = schedule
+        .remove_systems_in_set(
+            check_point_light_mesh_visibility,
+            world,
+            ScheduleCleanupPolicy::RemoveSystemsOnly,
+        )
+        .expect("native light schedule must be installed");
+    assert_eq!(
+        removed, 1,
+        "native point/spot visibility must be installed exactly once"
+    );
+    schedule.add_systems(
+        check_point_light_mesh_visibility
+            .run_if(any_match_filter::<Or<(With<PointLight>, With<SpotLight>)>>)
+            .in_set(SimulationLightSystems::CheckLightVisibility)
+            .after(VisibilitySystems::CalculateBounds)
+            .after(TransformSystems::Propagate)
+            .after(SimulationLightSystems::UpdateLightFrusta)
+            .after(VisibilitySystems::CheckVisibility)
+            .before(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible),
+    );
+}
+
+pub(super) fn finish(app: &mut App) {
+    if app.get_sub_app(RenderApp).is_some() {
+        app.world_mut()
+            .schedule_scope(bevy::prelude::PostUpdate, configure_point_light_visibility);
+    }
+}
+
 pub(super) fn build(app: &mut App) {
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
@@ -261,6 +303,86 @@ mod tests {
         conservative_frustum_sphere, frustum_intersects_sphere_conservatively,
         local_light_shadow_is_irrelevant, point_light_influence_sphere,
     };
+
+    #[test]
+    fn native_local_visibility_follows_current_light_population() {
+        use bevy::{
+            ecs::schedule::Schedule,
+            light::check_point_light_mesh_visibility,
+            prelude::{DirectionalLight, IntoSystem, PointLight, SpotLight, World},
+        };
+
+        for initialized in [false, true] {
+            let native_type = check_point_light_mesh_visibility.system_type_id();
+            let mut schedule = Schedule::default();
+            schedule.add_systems(check_point_light_mesh_visibility);
+            let mut world = World::new();
+            if initialized {
+                schedule.initialize(&mut world).unwrap();
+            }
+            super::configure_point_light_visibility(&mut world, &mut schedule);
+            schedule.initialize(&mut world).unwrap();
+            let last_run = |schedule: &Schedule| {
+                schedule
+                    .systems()
+                    .unwrap()
+                    .find(|(_, system)| system.system_type() == native_type)
+                    .unwrap()
+                    .1
+                    .get_last_run()
+            };
+            let initial = last_run(&schedule);
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            assert_eq!(
+                last_run(&schedule),
+                initial,
+                "no local light admits no native caster work"
+            );
+            world.spawn(DirectionalLight::default());
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            assert_eq!(
+                last_run(&schedule),
+                initial,
+                "directional lights have their own native pass"
+            );
+
+            let point = world.spawn(PointLight::default()).id();
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            let point_run = last_run(&schedule);
+            assert_ne!(
+                point_run, initial,
+                "an added point light wakes the native system"
+            );
+            world.despawn(point);
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            assert_eq!(
+                last_run(&schedule),
+                point_run,
+                "removing the last local light retires caster work"
+            );
+
+            let spot = world.spawn(SpotLight::default()).id();
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            let spot_run = last_run(&schedule);
+            assert_ne!(
+                spot_run, point_run,
+                "an added spot light wakes the native system"
+            );
+            world.despawn(spot);
+            world.increment_change_tick();
+            schedule.run(&mut world);
+            assert_eq!(
+                last_run(&schedule),
+                spot_run,
+                "removing the spot light retires caster work"
+            );
+        }
+    }
 
     fn perspective_frustum(position: Vec3, far: f32, fov: f32) -> Frustum {
         PerspectiveProjection {

@@ -1,10 +1,11 @@
-//! Stable ordering for XPBD constraints that mutate shared solver bodies.
+//! Deterministic native joint integration and coupled hard-constraint closure.
 
 use lunco_core::AppSceneExt;
 
 use std::time::Duration;
 
-use crate::joint_projection::{JointDrive, JointProjection, ProjectionJoint};
+use crate::constraint_response::{self, Row};
+use crate::joint_projection::{JointBlock, JointDrive, JointProjection, ProjectionJoint};
 use crate::order::{ordered_physics_entities, report_invalid_physics_order};
 use crate::{PhysicsHolds, PhysicsOrderKey};
 use avian3d::dynamics::integrator::IntegrationSystems;
@@ -43,14 +44,10 @@ pub enum PhysicsJointSolvePass {
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PhysicsJointOrderPreparation;
 
-/// Position-only joint correction pass reused by continuous contact solving.
+/// Position-only hard-joint admission after motor and compliant integration.
 /// Motors are integrated exclusively by the ordinary substep pass.
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PhysicsJointPositionSchedule;
-
-/// Ordered position-only sweeps after the single motor-integration pass.
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct JointPositionSweep(u8);
 
 #[derive(Resource, Default)]
 pub(crate) struct JointSolverOrder {
@@ -123,12 +120,6 @@ ordered_joint!(DistanceJoint, distance);
 /// Replaces Avian's ECS-order-dependent XPBD joint loops with stable-key order.
 pub struct DeterministicJointSolverPlugin;
 
-#[derive(Clone, Copy)]
-enum JointPass {
-    Ordinary,
-    Closure,
-}
-
 impl Plugin for DeterministicJointSolverPlugin {
     fn build(&self, app: &mut App) {
         assert!(
@@ -136,6 +127,7 @@ impl Plugin for DeterministicJointSolverPlugin {
             "disable XpbdSolverPlugin when installing DeterministicJointSolverPlugin"
         );
         app.init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<crate::ContinuousCollisionSettings>();
         // A failed candidate must never reach native body or contact writeback.
         // This boundary applies to both joints and continuous contacts.
         app.configure_sets(
@@ -282,26 +274,18 @@ impl Plugin for DeterministicJointSolverPlugin {
                 .after(SolverSystems::Restitution)
                 .before(SolverSystems::Finalize),
         );
-        app.init_schedule(PhysicsJointPositionSchedule)
-            .add_systems(PhysicsJointPositionSchedule, symmetric_joint_position_sweep);
-        // The symmetric native sweeps are ordered serially. A closure iteration
-        // must execute them directly, without worker dispatch between passes.
+        app.init_schedule(PhysicsJointPositionSchedule).add_systems(
+            PhysicsJointPositionSchedule,
+            coupled_joint_position_projection,
+        );
+        // The coupled numerical boundary runs serially in admitted row order.
         app.get_schedule_mut(PhysicsJointPositionSchedule)
             .expect("position schedule initialized")
             .set_executor(SingleThreadedExecutor::new());
-        // Symmetric hard sweeps propagate corrections in both directions across
-        // the prepared topology. Motors integrate only in the ordinary pass.
-        for index in 0..3 {
-            let sweep = JointPositionSweep(index);
-            app.configure_sets(
-                SubstepSchedule,
-                sweep.in_set(XpbdSolverSystems::SolveUserConstraints),
-            );
-            if index > 0 {
-                app.configure_sets(SubstepSchedule, sweep.after(JointPositionSweep(index - 1)));
-            }
-            app.add_systems(SubstepSchedule, run_position_sweep.in_set(sweep));
-        }
+        app.add_systems(
+            SubstepSchedule,
+            run_position_sweep.in_set(XpbdSolverSystems::SolveUserConstraints),
+        );
     }
 }
 
@@ -336,6 +320,194 @@ pub(crate) fn joint_position_residual(world: &World) -> Result<(f64, f64, Option
     measure!(PrismaticJoint, &order.prismatic);
     measure!(DistanceJoint, &order.distance);
     Ok(residual)
+}
+
+pub(crate) struct LinearizedJoint {
+    entity: Entity,
+    blocks: Vec<JointBlock>,
+}
+
+pub(crate) struct SolverBodySnapshot {
+    pub body: SolverBody,
+    pub inertia: SolverBodyInertia,
+    pub writable: bool,
+}
+
+/// Native preparation omits immovable, disabled and sleeping endpoints. An
+/// active dynamic endpoint must carry its complete prepared solver state.
+pub(crate) fn solver_body_snapshot(
+    world: &World,
+    entity: Entity,
+) -> Result<SolverBodySnapshot, &'static str> {
+    if world.get::<RigidBodyDisabled>(entity).is_none()
+        && let (Some(body), Some(inertia)) = (
+            world.get::<SolverBody>(entity),
+            world.get::<SolverBodyInertia>(entity),
+        )
+    {
+        return Ok(SolverBodySnapshot {
+            body: body.clone(),
+            inertia: inertia.clone(),
+            writable: true,
+        });
+    }
+    if world
+        .get::<RigidBody>(entity)
+        .is_some_and(|body| body.is_dynamic())
+        && world.get::<Sleeping>(entity).is_none()
+        && world.get::<RigidBodyDisabled>(entity).is_none()
+    {
+        return Err("active dynamic body has no complete prepared native solver state");
+    }
+    Ok(SolverBodySnapshot {
+        body: SolverBody::DUMMY,
+        inertia: SolverBodyInertia::DUMMY,
+        writable: false,
+    })
+}
+
+pub(crate) fn linearize_joint_constraints(
+    world: &World,
+    rows: &mut Vec<Row>,
+) -> Result<Vec<LinearizedJoint>, String> {
+    let order = world.resource::<JointSolverOrder>();
+    let settings = world.resource::<crate::ContinuousCollisionSettings>();
+    let mut joints = Vec::new();
+    macro_rules! linearize {
+        ($kind:ty, $ids:expr) => {
+            for &entity in $ids {
+                let joint = world
+                    .get::<$kind>(entity)
+                    .ok_or("coupled joint topology is stale")?;
+                let bodies = joint.entities();
+                let a = solver_body_snapshot(world, bodies[0])?;
+                let b = solver_body_snapshot(world, bodies[1])?;
+                let projection = world
+                    .get::<JointProjection>(entity)
+                    .ok_or("coupled joint geometry is missing")?;
+                let blocks = projection
+                    .linearize(
+                        bodies,
+                        [&a.body, &b.body],
+                        [&a.inertia, &b.inertia],
+                        [
+                            settings.position_tolerance_m,
+                            settings.angular_tolerance_rad,
+                        ],
+                        rows,
+                    )
+                    .map_err(|error| format!("coupled joint {entity:?}: {error}"))?;
+                joints.push(LinearizedJoint { entity, blocks });
+            }
+        };
+    }
+    linearize!(FixedJoint, &order.fixed);
+    linearize!(RevoluteJoint, &order.revolute);
+    linearize!(SphericalJoint, &order.spherical);
+    linearize!(PrismaticJoint, &order.prismatic);
+    linearize!(DistanceJoint, &order.distance);
+    Ok(joints)
+}
+
+pub(crate) fn apply_joint_constraints(
+    world: &mut World,
+    joints: &[LinearizedJoint],
+    multipliers: &[f64],
+) -> Result<(), String> {
+    let mut reactions = Vec::new();
+    for joint in joints {
+        let mut projection = world
+            .get::<JointProjection>(joint.entity)
+            .ok_or("coupled joint reaction owner is missing")?
+            .clone();
+        for block in &joint.blocks {
+            block.record(&mut projection, multipliers)?;
+        }
+        reactions.push((joint.entity, projection));
+    }
+    for (entity, projection) in reactions {
+        *world
+            .get_mut::<JointProjection>(entity)
+            .ok_or("coupled joint reaction owner became stale")? = projection;
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_constraint_corrections(
+    world: &mut World,
+    rows: &[Row],
+    multipliers: &[f64],
+) -> Result<bool, String> {
+    let mut candidates = Vec::new();
+    let mut changed = false;
+    for (entity, impulse) in constraint_response::impulses(rows, multipliers)? {
+        let mut snapshot = solver_body_snapshot(world, entity)?;
+        if !snapshot.writable {
+            continue;
+        }
+        let before = (
+            snapshot.body.delta_position.to_array().map(f64::to_bits),
+            snapshot.body.delta_rotation.0.to_array().map(f64::to_bits),
+        );
+        constraint_response::apply_body_impulse(&mut snapshot.body, &snapshot.inertia, impulse)?;
+        changed |= before
+            != (
+                snapshot.body.delta_position.to_array().map(f64::to_bits),
+                snapshot.body.delta_rotation.0.to_array().map(f64::to_bits),
+            );
+        candidates.push((entity, snapshot.body));
+    }
+    for (entity, candidate) in candidates {
+        if let Some(mut body) = world.get_mut::<SolverBody>(entity) {
+            *body = candidate;
+        }
+    }
+    Ok(changed)
+}
+
+fn coupled_joint_position_projection(world: &mut World) {
+    if world.resource::<lunco_core::RuntimeFaults>().active() {
+        return;
+    }
+    let result = (|| -> Result<(), String> {
+        let settings = world
+            .resource::<crate::ContinuousCollisionSettings>()
+            .clone();
+        settings.validate()?;
+        for iteration in 0..=settings.max_iterations {
+            let residual = joint_position_residual(world)?;
+            if residual.0 <= settings.position_tolerance_m
+                && residual.1 <= settings.angular_tolerance_rad
+            {
+                return Ok(());
+            }
+            if iteration == settings.max_iterations {
+                break;
+            }
+            let mut rows = Vec::new();
+            let joints = linearize_joint_constraints(world, &mut rows)?;
+            let multipliers = constraint_response::solve(&rows, settings.max_iterations)?;
+            if !apply_constraint_corrections(world, &rows, &multipliers)? {
+                return Err("coupled hard joints have no correcting native motion".into());
+            }
+            apply_joint_constraints(world, &joints, &multipliers)?;
+        }
+        Err("coupled hard joint closure did not converge".into())
+    })();
+    if let Err(detail) = result {
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::SAFETY_FAILURE, true);
+        let mut clock = world.resource_mut::<Time<Physics>>();
+        clock.pause();
+        clock.advance_by(Duration::ZERO);
+        world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+            "physics-joint-projection-invalid",
+            None,
+            "coupled joint projection",
+            detail,
+        );
+    }
 }
 
 fn no_solver_fault(faults: Res<lunco_core::RuntimeFaults>) -> bool {
@@ -587,87 +759,24 @@ fn stable_solve_xpbd_joint<C, D>(
         + XpbdConstraint<2, SolverData = D>,
     D: Component<Mutability = Mutable>,
 {
-    solve_ordered_joint::<C, D, false>(
+    solve_ordered_joint::<C, D>(
         &bodies,
         &mut joints,
         &mut projections,
         &order,
         time.delta_secs_f64(),
-        JointPass::Ordinary,
         &mut holds,
         faults.as_deref_mut(),
         &mut physics_time,
     );
 }
 
-/// One native query acquisition and one serial system boundary for the entire
-/// symmetric sweep. Constraint type order and per-type entity order are the
-/// same in both directions; ordinary passes retain their extension-point sets.
-fn symmetric_joint_position_sweep(
-    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
-    mut fixed: Query<
-        (&mut FixedJoint, &mut FixedJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    mut revolute: Query<
-        (&mut RevoluteJoint, &mut RevoluteJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    mut spherical: Query<
-        (&mut SphericalJoint, &mut SphericalJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    mut prismatic: Query<
-        (&mut PrismaticJoint, &mut PrismaticJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    mut distance: Query<
-        (&mut DistanceJoint, &mut DistanceJointSolverData),
-        (Without<RigidBody>, Without<JointDisabled>),
-    >,
-    mut projections: Query<&mut JointProjection>,
-    order: Res<JointSolverOrder>,
-    time: Res<Time>,
-    mut holds: ResMut<PhysicsHolds>,
-    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    mut physics_time: ResMut<Time<Physics>>,
-) {
-    macro_rules! pass {
-        ($kind:ty, $data:ty, $query:ident, $reverse:literal) => {
-            if !solve_ordered_joint::<$kind, $data, $reverse>(
-                &bodies,
-                &mut $query,
-                &mut projections,
-                &order,
-                time.delta_secs_f64(),
-                JointPass::Closure,
-                &mut holds,
-                faults.as_deref_mut(),
-                &mut physics_time,
-            ) {
-                return;
-            }
-        };
-    }
-    pass!(FixedJoint, FixedJointSolverData, fixed, false);
-    pass!(RevoluteJoint, RevoluteJointSolverData, revolute, false);
-    pass!(SphericalJoint, SphericalJointSolverData, spherical, false);
-    pass!(PrismaticJoint, PrismaticJointSolverData, prismatic, false);
-    pass!(DistanceJoint, DistanceJointSolverData, distance, false);
-    pass!(DistanceJoint, DistanceJointSolverData, distance, true);
-    pass!(PrismaticJoint, PrismaticJointSolverData, prismatic, true);
-    pass!(SphericalJoint, SphericalJointSolverData, spherical, true);
-    pass!(RevoluteJoint, RevoluteJointSolverData, revolute, true);
-    pass!(FixedJoint, FixedJointSolverData, fixed, true);
-}
-
-fn solve_ordered_joint<C, D, const REVERSE: bool>(
+fn solve_ordered_joint<C, D>(
     bodies: &Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
     joints: &mut Query<(&mut C, &mut D), (Without<RigidBody>, Without<JointDisabled>)>,
     projections: &mut Query<&mut JointProjection>,
     order: &JointSolverOrder,
     delta_secs: f64,
-    pass: JointPass,
     holds: &mut PhysicsHolds,
     mut faults: Option<&mut lunco_core::RuntimeFaults>,
     physics_time: &mut Time<Physics>,
@@ -690,11 +799,7 @@ where
     let mut dummy_body2 = SolverBody::default();
 
     for index in 0..ordered.len() {
-        let entity = &ordered[if REVERSE {
-            ordered.len() - 1 - index
-        } else {
-            index
-        }];
+        let entity = &ordered[index];
         let Ok((joint, mut solver_data)) = joints.get_mut(*entity) else {
             report_stale_joint_order(
                 holds,
@@ -736,68 +841,43 @@ where
             std::cmp::Ordering::Equal => {}
         }
 
-        if matches!(pass, JointPass::Closure) {
-            let Ok(mut projection) = projections.get_mut(*entity) else {
-                report_stale_joint_order(
-                    holds,
-                    faults.as_deref_mut(),
-                    physics_time,
-                    *entity,
-                    std::any::type_name::<C>(),
-                );
-                return false;
-            };
-            if let Err(detail) = projection.solve([body1, body2], [inertia1, inertia2]) {
-                report_joint_solver_fault(
-                    holds,
-                    faults.as_deref_mut(),
-                    physics_time,
-                    *entity,
-                    std::any::type_name::<C>(),
-                    "physics-joint-projection-invalid",
-                    detail,
-                );
-                return false;
-            }
-        } else {
-            let Ok(mut projection) = projections.get_mut(*entity) else {
-                report_stale_joint_order(
-                    holds,
-                    faults.as_deref_mut(),
-                    physics_time,
-                    *entity,
-                    std::any::type_name::<C>(),
-                );
-                return false;
-            };
-            if let Some(drive) = joint.drive()
-                && let Err(detail) = projection.integrate_drive(
-                    drive,
-                    [&mut *body1, &mut *body2],
-                    [inertia1, inertia2],
-                    delta_secs,
-                )
-            {
-                report_joint_solver_fault(
-                    holds,
-                    faults.as_deref_mut(),
-                    physics_time,
-                    *entity,
-                    std::any::type_name::<C>(),
-                    "physics-joint-drive-invalid",
-                    detail,
-                );
-                return false;
-            }
-            let mut native = (*joint).clone();
-            native.disable_drive();
-            native.solve(
-                [body1, body2],
-                [inertia1, inertia2],
-                &mut solver_data,
-                delta_secs,
+        let Ok(mut projection) = projections.get_mut(*entity) else {
+            report_stale_joint_order(
+                holds,
+                faults.as_deref_mut(),
+                physics_time,
+                *entity,
+                std::any::type_name::<C>(),
             );
+            return false;
+        };
+        if let Some(drive) = joint.drive()
+            && let Err(detail) = projection.integrate_drive(
+                drive,
+                [&mut *body1, &mut *body2],
+                [inertia1, inertia2],
+                delta_secs,
+            )
+        {
+            report_joint_solver_fault(
+                holds,
+                faults.as_deref_mut(),
+                physics_time,
+                *entity,
+                std::any::type_name::<C>(),
+                "physics-joint-drive-invalid",
+                detail,
+            );
+            return false;
         }
+        let mut native = (*joint).clone();
+        native.disable_drive();
+        native.solve(
+            [body1, body2],
+            [inertia1, inertia2],
+            &mut solver_data,
+            delta_secs,
+        );
     }
     true
 }
@@ -1091,6 +1171,58 @@ fn report_joint_solver_fault(
 mod tests {
     use super::*;
     use bevy::math::DVec3;
+
+    #[test]
+    fn coupled_candidates_preserve_unwritable_native_state_and_reject_missing_dynamic_preparation()
+    {
+        use crate::constraint_response::Gradient;
+        let mut world = World::new();
+        let inertia = SolverBodyInertia::new(
+            1.0,
+            avian3d::math::SymmetricMatrix::IDENTITY,
+            LockedAxes::new(),
+            0,
+            true,
+        );
+        let disabled = world
+            .spawn((
+                RigidBody::Dynamic,
+                RigidBodyDisabled,
+                SolverBody {
+                    delta_position: DVec3::X,
+                    ..default()
+                },
+                inertia.clone(),
+            ))
+            .id();
+        let fixed = world.spawn_empty().id();
+        let rows = [Row::new(
+            [disabled, fixed],
+            [
+                Gradient {
+                    linear: DVec3::X,
+                    ..default()
+                },
+                Gradient {
+                    linear: -DVec3::X,
+                    ..default()
+                },
+            ],
+            [&inertia, &SolverBodyInertia::DUMMY],
+            1.0,
+            1e-6,
+            true,
+        )
+        .unwrap()];
+        assert!(!solver_body_snapshot(&world, disabled).unwrap().writable);
+        apply_constraint_corrections(&mut world, &rows, &[1.0]).unwrap();
+        assert_eq!(
+            world.get::<SolverBody>(disabled).unwrap().delta_position,
+            DVec3::X
+        );
+        let missing = world.spawn(RigidBody::Dynamic).id();
+        assert!(solver_body_snapshot(&world, missing).is_err());
+    }
 
     /// Exercises the native schedule/finalization seam, including a failure
     /// after one valid reaction has already been staged for the same step.
