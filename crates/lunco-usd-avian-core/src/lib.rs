@@ -44,8 +44,10 @@
 //!
 //! Standalone colliders (a `Collider` with no rigid-body ancestor, e.g. a
 //! world-fixed sensor zone) are covered by the same READ pass.
-//! Body-attached child colliders keep avian's own `ColliderTransform` path
-//! (`update_child_collider_position` — `Position`-based, unaffected).
+//! Body-attached child colliders are initialized from the admitted native body
+//! and `ColliderTransform`, then keep Avian's fixed-step propagation path.
+//! Admission refreshes the maintained native collider-tree bounds too, so a
+//! spatial query before the first solver step observes the authored geometry.
 //!
 //! WRITEBACK (`position_to_pose`, Writeback): Dynamic bodies only — the
 //! solver owns their `Position`. The world pose is converted to the parent
@@ -345,6 +347,25 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .after(validate_physics_frame_contract)
+                .before(lunco_physics::apply_physics_holds),
+        );
+        // Spatial queries may run before the first fixed physics step. Admit
+        // attached collider poses and refresh native tree bounds at that same
+        // preparation boundary, rather than exposing their spawn-origin pose.
+        app.add_systems(
+            PreUpdate,
+            (
+                reconcile_collider_body_state,
+                propagate_collider_transforms_rootless,
+                seed_attached_collider_poses,
+                validate_physics_backend_state,
+                avian3d::collider_tree::update_moved_collider_aabbs::<Collider>
+                    .run_if(physics_backend_state_ready),
+            )
+                .chain()
+                .run_if(physics_frame_contract_ready)
+                .run_if(physics_query_admission_needed)
+                .after(PhysicsBridgeSystems::Read)
                 .before(lunco_physics::apply_physics_holds),
         );
         // Update can admit or reparent physical entities after the lifecycle
@@ -699,6 +720,58 @@ fn exact_big_space_resplit(
 /// body (`ColliderOf` present, no own `RigidBody`) are excluded — avian's
 /// `update_child_collider_position` derives their pose from the body.
 type BridgeSynced = Or<(With<RigidBody>, Without<ColliderOf>)>;
+
+/// Wake spatial preparation only for newly admitted poses or attached shapes.
+fn physics_query_admission_needed(
+    seeded: Query<(), Added<lunco_physics::PhysicsPoseSeeded>>,
+    pending: Query<
+        (),
+        (
+            With<Collider>,
+            With<ColliderOf>,
+            Without<RigidBody>,
+            Without<lunco_physics::PhysicsPoseSeeded>,
+        ),
+    >,
+) -> bool {
+    !seeded.is_empty() || !pending.is_empty()
+}
+
+/// Initialize a child collider from its admitted body and native local mount.
+/// Avian owns subsequent fixed-step propagation; this admission write makes
+/// the initial geometry queryable without advancing the physics clock.
+fn seed_attached_collider_poses(
+    mut commands: Commands,
+    bodies: Query<
+        (&Position, &Rotation),
+        (With<RigidBody>, With<lunco_physics::PhysicsPoseSeeded>),
+    >,
+    mut colliders: Query<
+        (
+            Entity,
+            &ColliderOf,
+            &ColliderTransform,
+            &mut Position,
+            &mut Rotation,
+        ),
+        (
+            With<Collider>,
+            Without<RigidBody>,
+            Without<lunco_physics::PhysicsPoseSeeded>,
+        ),
+    >,
+) {
+    for (entity, owner, mount, mut position, mut rotation) in &mut colliders {
+        let Ok((body_position, body_rotation)) = bodies.get(owner.body) else {
+            continue;
+        };
+        position.0 = body_position.0 + body_rotation.0 * mount.translation;
+        rotation.0 = (body_rotation.0 * mount.rotation.0).normalize();
+        commands
+            .entity(entity)
+            .insert(lunco_physics::PhysicsPoseSeeded);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PoseToPositionPolicy {

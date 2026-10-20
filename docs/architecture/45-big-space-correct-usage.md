@@ -256,6 +256,16 @@ runtime-state path, while the production
 Scene teardown clears the fault and safety hold together, so a valid
 replacement scene can be admitted by the existing lifecycle owner.
 
+Initial spatial-query readiness includes attached collider poses and native
+tree bounds. After seeding a body, the bridge initializes each new child
+collider from that native pose and its `ColliderTransform`, validates the
+backend state, and calls Avian's maintained AABB/tree update. This preparation
+does not advance physics time. It runs for newly admitted poses and shapes;
+Avian retains subsequent fixed-step collider propagation. The authored
+`authored_runtime_contracts` gate observes ground, attached payload and
+standalone obstacle heights on the first tick, before any solver step can
+conceal an incomplete initial query state.
+
 The local avatar is a kinematic camera embodiment, not an authored rigid body.
 Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
 shape against the standard colliders projected from the composed USD stage.

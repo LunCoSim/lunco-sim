@@ -1,5 +1,30 @@
 # High-quality realtime performance handover
 
+## Initial collider-query admission — 2026-10-20
+
+The first-tick ground-height failure came from child colliders retaining their
+spawn-origin poses before Avian's first solver invocation. Native tree bounds
+also retained those initial locations for standalone obstacles. The expanded
+production baseline fails three of 16 checks at tick 1: ground reports 0.5 m,
+while rays at the authored payload and ramp stations miss those shapes.
+
+The existing physics bridge now seeds new attached collider poses from the
+admitted body and `ColliderTransform`, validates the backend state, and calls
+Avian's public `update_moved_collider_aabbs` before query consumers are admitted.
+No physics tick is advanced for preparation, and Avian retains fixed-step
+propagation. The preparation wakes on newly seeded poses or pending attached
+colliders, rather than running a second continuous transform writer.
+
+The production build passes all 16 positive checks at tick 1 and all eight
+negative checks. The original UI preparation driver passes in both headless
+and windowed sessions, with nine UI checks and all 16 scene checks per run.
+The driver now requires the scene verdict before shutdown. Griffin's mapped
+Sun-pointing descent still passes at tick 1412 with qualified landing handoff.
+All owned ports are released. Evidence is under
+`.cache/codex-evidence/ground-contract-20261020/`: `expanded-baseline.log`,
+`fixed-positive.log`, `fixed-negative.log`, `ui-{headless,windowed}*.log`,
+`griffin-sun-landing.log` and `build.log`.
+
 ## Griffin presentation and merged mission qualification — 2026-10-20
 
 The tutorials integration includes main's certified cuboid-face contacts,
@@ -31,10 +56,10 @@ it does not claim an exact MOON_ME or MOON_PA realization. Evidence is under
 `analytic-driver.log` and `griffin-sun-facing-1024x1024.png`.
 
 These are bounded simulation checks. Public-data reconstruction, thermal
-qualification and open transit requirements remain separate. The optional UI
-preparation harness's nine policy checks pass, but its aggregate run retains a
-pre-existing ground-height fixture mismatch (0.5 m versus 0 m), reproduced on
-the older optimization executable. That harness is not reported as passing.
+qualification and open transit requirements remain separate. This earlier
+artifact's UI preparation run retained a ground-height mismatch (0.5 m versus
+0 m), also reproduced on the older optimization executable. The admission
+repair and complete headless/windowed passes are recorded above.
 Loading/FPS targets and external FMU interoperability remain open.
 
 ## Lunar Modelica heading interface alignment — 2026-10-20

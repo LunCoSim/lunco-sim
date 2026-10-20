@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession
+from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession, wait_for_authored_verdict
 
 
 def main() -> int:
@@ -53,6 +53,10 @@ def main() -> int:
                 time.sleep(POLL_INTERVAL_S)
             else:
                 raise RuntimeError("no authored UI preparation verdict before timeout")
+            # The held-clock UI observer releases the fixture's first tick.
+            # Require that scene verdict too before Exit can stop its observer.
+            wait_for_authored_verdict(session, title="AUTHORED RUNTIME CONTRACTS",
+                                     check_count=16, timeout_s=args.timeout)
             response = session.post({"type": "ExecuteCommand", "command": "Exit",
                                      "params": {"force": True}})
             if response.get("error"):
@@ -61,7 +65,7 @@ def main() -> int:
     except Exception as error:
         print(f"FAIL — {error}; log={args.log}", file=sys.stderr)
         return 1
-    print("PASS — nine authored checks; API Exit and port release verified")
+    print("PASS — nine UI and 16 scene checks; API Exit and port release verified")
     return 0
 
 

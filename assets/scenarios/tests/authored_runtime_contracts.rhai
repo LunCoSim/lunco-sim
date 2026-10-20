@@ -37,7 +37,7 @@ fn on_tick(me, ctx) {
     });
     let payload = query("QueryUsdPrim", #{
         path: ROOT + "/Payload",
-        attrs: ["size", "physics:mass", "physics:collisionEnabled"],
+        attrs: ["size", "xformOp:translate", "physics:mass", "physics:collisionEnabled"],
     });
     let joint = query("QueryUsdPrim", #{
         path: ROOT + "/PayloadJoint",
@@ -45,7 +45,7 @@ fn on_tick(me, ctx) {
     });
     let ramp = query("QueryUsdPrim", #{
         path: ROOT + "/Ramp",
-        attrs: ["xformOp:scale", "physics:collisionEnabled"],
+        attrs: ["size", "xformOp:translate", "xformOp:scale", "physics:collisionEnabled"],
     });
     let topology = query("QueryUsdPrim", #{
         path: ROOT,
@@ -82,6 +82,15 @@ fn on_tick(me, ctx) {
         z: 0.0,
         from: 10.0,
         max: 20.0,
+    });
+    let payload_pose = payload.attrs["xformOp:translate"];
+    let payload_ray = query("Raycast", #{
+        origin: [payload_pose[0], 10.0, payload_pose[2]],
+        dir: [0.0, -1.0, 0.0], max: 20.0,
+    });
+    let ramp_pose = ramp.attrs["xformOp:translate"];
+    let ramp_height = query("GroundHeight", #{
+        x: ramp_pose[0], z: ramp_pose[2], from: 10.0, max: 20.0,
     });
     let checks = [];
     checks.push(t_true(query_ok(camera) && camera.type_name == "Camera"
@@ -140,10 +149,17 @@ fn on_tick(me, ctx) {
     checks.push(t_true(ground_height != () && ground_height.hit == true
         && ground_height.height.abs() < 0.1,
         "production ground-height query did not observe the authored surface: " + ground_height));
+    checks.push(t_true(payload_ray != () && payload_ray.hit == true
+        && abs(payload_ray.point[1] - payload_pose[1] - payload.attrs["size"] / 2.0) < 1.0e-6,
+        "first query did not observe the attached payload collider at its authored pose: " + payload_ray));
+    checks.push(t_true(ramp_height != () && ramp_height.hit == true
+        && abs(ramp_height.height - ramp_pose[1]
+            - ramp.attrs["size"] * ramp.attrs["xformOp:scale"][1] / 2.0) < 1.0e-6,
+        "first query did not observe the standalone ramp collider at its authored pose: " + ramp_height));
 
     let ray_hit = ray != () && ray.hit == true;
     let ground_hit = ground_height != () && ground_height.hit == true;
-    print("[authored-runtime] camera_track_present=" + query_ok(camera_track)
+    print("[authored-runtime] tick=" + sim_tick() + " camera_track_present=" + query_ok(camera_track)
         + " ray_hit=" + ray_hit + " ground_hit=" + ground_hit);
     this.done = true;
     report_verdict(checks, "AUTHORED RUNTIME CONTRACTS", "AUTHORED_RUNTIME_CONTRACTS");
