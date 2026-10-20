@@ -748,11 +748,17 @@ contact. Only advisory separation directions survive; all pair caches expire
 when the next physics step rebuilds its admitted geometry. A cached
 minimum translation depth beyond tolerance rules out a clear separating axis at
 the initial pose, so closure need not repeat other separation-only axes.
-Initial contacts and nonlinear re-samples use Parry's default native dispatcher.
-The native GJK/EPA, cast and bisection kernels own contact geometry. Conservative
-finite-feature directions remain only in support-bound proofs; they do not seed
-or replace the native contact query.
-Native dispatcher witnesses retain their respective local frames until the initial
+Initial contacts and nonlinear re-samples share one native contact adapter.
+Analytic ball and non-support-map pairs retain Parry's default dispatcher;
+other convex leaves use its public seeded GJK/EPA entry point. The seed comes
+from a native surface projection in the relative pose frame, rather than the
+offset between potentially distant shape origins. Surface queries use the
+hollow boundary contract, including for zero-volume triangles. The native
+kernel still determines every witness, depth and normal. There is no query
+retry or alternate geometry after a missing result. Regressions retain both
+the recorded Cylinder/Cuboid failure and the older distant-origin terrain
+contact in both shape orders. Native casts and bisection remain unchanged.
+Native witnesses retain their respective local frames until the initial
 contact owner transforms them to world space. Nonfinite witnesses, invalid
 normals, unsupported queries, or missing geometry from an unbounded cast query
 or an enclosing initial query fault the

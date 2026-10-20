@@ -88,13 +88,32 @@ execution requirements: `live` identifies incremental co-simulation, and
 solvability checks; algebraic-variable presence does not select a solver.
 
 The electrical storage boundary follows the same ownership rule. `Battery.mo`
-authors the initial `soc` as a fixed state inside the physical `[0, 1]` storage
-interval. At `soc = 0`, its solved terminal potential is zero; the circuit still
-contains every authored source, including solar generation, and Kirchhoff's laws
-determine whether another source can energize a load. Its `drained` output covers
-the authored 0.1% usable-storage reserve interval so event detection remains
-well-conditioned at the constrained boundary. No Rust actuator policy,
-drained-state recovery, or source-disabling branch is part of this contract.
+uses charge-based SOC with a flat idealized internal voltage and a linear taper
+only across its authored empty reserve. The voltage curve's charge integral is
+normalized so full stored energy is exactly `capacity * voltage_nom` Wh.
+This is a mission-level approximation, not a measured cell OCV curve. Series
+resistance preserves its signed voltage drop; at empty an externally forced
+reverse bus absorbs resistor power rather than supplying storage energy.
+
+Storage current is limited at the actual empty/full bounds. The continuous
+`stored_energy_j`, `stored_power_w` and `heat_w` outputs close terminal energy
+balance, including an explicit ideal shunt for rejected charging power at full.
+The model does not represent a calibrated BMS, charge controller or thermal pack.
+The `drained` output retains the authored 0.1% charge-reserve interval. All sources
+remain in the acausal circuit; no Rust actuator or source-disable policy owns
+battery depletion. `scripts/api/test_battery_energy.py` exercises full storage,
+series loss, depletion/recharge, full-charge shunting, passive empty loads,
+connected motor regeneration and invalid parameter diagnostics through the
+production Modelica API and authored Rhai assertions.
+
+For the maintained coupled-rover fixture, run:
+
+```bash
+LUNCOSIM_BIN="$PWD/target/debug/luncosim" python3 scripts/api/test_battery_energy.py \
+  --port 4193 --output target/battery-energy \
+  --scene assets/scenes/tests/thermal_with_battery.usda \
+  --battery-path /ThermalWithBatteryTest/Rover/Battery
+```
 
 ### The registry is the vocabulary
 

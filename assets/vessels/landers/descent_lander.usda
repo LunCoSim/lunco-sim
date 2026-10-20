@@ -1939,7 +1939,9 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/Nozzle_Mat>
         bool physics:collisionEnabled = false
         custom float3 lunco:forceActuator:direction = (0.0, 1.0, 0.0)
-        custom double lunco:forceActuator:maxForce = 60000.0
+        custom double lunco:forceActuator:maxForce = 89611.1979970336 (
+            documentation = "Reduced-model design envelope: MainChamber nominal_flow_kgs (31.75 kg/s) * effective_exhaust_velocity_mps (2940 m/s) * authored combustion_efficiency, matching CombustionChamber.maximum_thrust_n. This reusable lander is a simulation study; this envelope is not a Griffin flight-engine rating."
+        )
         float inputs:force_command
         float inputs:force_command.connect = </DescentLander/MainPropulsion.outputs:thrust_n>
         def Scope "Design" (

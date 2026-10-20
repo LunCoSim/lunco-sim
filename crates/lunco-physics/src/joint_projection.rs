@@ -156,6 +156,9 @@ pub(crate) struct JointProjection {
     bases: Option<[DQuat; 2]>,
     rows: [Option<GeometryRow>; 3],
     prepared: bool,
+    // Full orientation rows have an unchanged angular response across closure
+    // sweeps. Keep its native decomposition, never a correction/impulse.
+    orientation_response: Option<(DMat3, crate::joint::PreparedPointResponse)>,
     pub(crate) position_lagrange: DVec3,
     pub(crate) rotation_lagrange: DVec3,
     pub(crate) motor_impulse: f64,
@@ -179,6 +182,7 @@ impl JointProjection {
         bodies: [&RigidBodyQueryReadOnlyItem; 2],
     ) -> Result<(), &'static str> {
         self.prepared = false;
+        self.orientation_response = None;
         if !geometry.anchors.into_iter().all(DVec3::is_finite)
             || !bodies.iter().all(|body| {
                 body.position.0.is_finite()
@@ -329,7 +333,7 @@ impl JointProjection {
         row: GeometryRow,
         bodies: [&SolverBody; 2],
     ) -> Result<GeometryError, &'static str> {
-        let levers = [
+        let mut levers = [
             bodies[0].delta_rotation * self.point.world_r1,
             bodies[1].delta_rotation * self.point.world_r2,
         ];
@@ -370,13 +374,19 @@ impl JointProjection {
                         let axis = unit(frames[0] * axis)?;
                         position_space = DMat3::IDENTITY - outer(axis);
                         position_error = Some(separation - axis * separation.dot(axis));
+                        // The constrained directions rotate with frame 1.
+                        // Their differential includes n × separation, just as
+                        // the coordinate drive does. Apply the first reaction
+                        // at the second attachment's station along the slider.
+                        levers[0] += separation;
                     }
                     GeometryRow::SliderLimit(axis, limit) => {
                         position_space = outer(unit(frames[0] * axis)?);
                         position_error = Some(
                             -limit
                                 .compute_correction_along_axis(separation, unit(frames[0] * axis)?),
-                        )
+                        );
+                        levers[0] += separation;
                     }
                     GeometryRow::AlignedAxes(axis) => {
                         angle_space = DMat3::IDENTITY - outer(unit(frames[0] * axis)?);
@@ -466,7 +476,17 @@ impl JointProjection {
                 {
                     angle_space = outer(error.normalize());
                 }
-                angular -= project_angle([&mut a, &mut b], inertias, error, angle_space)?;
+                angular -= project_angle(
+                    [&mut a, &mut b],
+                    inertias,
+                    error,
+                    angle_space,
+                    if matches!(row, GeometryRow::Orientation) {
+                        Some(&mut self.orientation_response)
+                    } else {
+                        None
+                    },
+                )?;
             }
         }
         if ![&a, &b].into_iter().all(|body| {
@@ -556,7 +576,7 @@ fn project_position(
             })
     };
     let matrix = DMat3::from_cols(response(DVec3::X), response(DVec3::Y), response(DVec3::Z));
-    let impulse = block_correction_impulse(error, matrix, space)?;
+    let impulse = block_correction_impulse(error, matrix, space, None)?;
     let [a, b] = bodies;
     ProjectionKernel.apply_positional_impulse(
         a,
@@ -575,6 +595,7 @@ fn project_angle(
     inertias: [&SolverBodyInertia; 2],
     error: DVec3,
     space: DMat3,
+    prepared_response: Option<&mut Option<(DMat3, crate::joint::PreparedPointResponse)>>,
 ) -> Result<DVec3, &'static str> {
     if !error.is_finite() {
         return Err("joint angular error is not finite");
@@ -592,7 +613,7 @@ fn project_angle(
         })
     };
     let matrix = DMat3::from_cols(response(DVec3::X), response(DVec3::Y), response(DVec3::Z));
-    let impulse = block_correction_impulse(error, matrix, space)?;
+    let impulse = block_correction_impulse(error, matrix, space, prepared_response)?;
     let [a, b] = bodies;
     ProjectionKernel.apply_angular_impulse(
         a,
@@ -615,6 +636,7 @@ fn block_correction_impulse(
     error: DVec3,
     response: DMat3,
     space: DMat3,
+    prepared_response: Option<&mut Option<(DMat3, crate::joint::PreparedPointResponse)>>,
 ) -> Result<DVec3, &'static str> {
     if !response.is_finite() || !space.is_finite() {
         return Err("joint projection response is invalid");
@@ -631,7 +653,23 @@ fn block_correction_impulse(
     // Free channels have zero RHS. A positive complementary block preserves
     // that null-space result without introducing repeated artificial zero roots.
     let matrix = space * response * space + (DMat3::IDENTITY - space) * scale;
-    Ok(space * crate::joint::responsive_impulse(matrix, space * error)?)
+    let change = space * error;
+    let impulse = if let Some(cached) = prepared_response {
+        if cached
+            .as_ref()
+            .is_none_or(|(previous, _)| *previous != matrix)
+        {
+            *cached = Some((matrix, crate::joint::PreparedPointResponse::new(matrix)?));
+        }
+        cached
+            .as_ref()
+            .expect("response admitted above")
+            .1
+            .impulse(change)?
+    } else {
+        crate::joint::responsive_impulse(matrix, change)?
+    };
+    Ok(space * impulse)
 }
 
 #[cfg(test)]
@@ -688,7 +726,8 @@ mod tests {
                 for axis in [DVec3::X, q * DVec3::Y] {
                     for space in [DMat3::IDENTITY, outer(axis), DMat3::IDENTITY - outer(axis)] {
                         let error = space * DVec3::new(0.001, -0.002, 0.003);
-                        let impulse = block_correction_impulse(error, response, space).unwrap();
+                        let impulse =
+                            block_correction_impulse(error, response, space, None).unwrap();
                         assert!(
                             (space * (response * impulse - error)).length() < 1e-9,
                             "i={i}, delta={delta}, remaining={:?}",
@@ -698,6 +737,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn reused_response_tracks_new_demand_inertia_and_locked_axes() {
+        let mut prepared = None;
+        for (diagonal, error, expected) in [
+            (
+                DVec3::new(2.0, 4.0, 8.0),
+                DVec3::new(0.2, -0.4, 0.8),
+                DVec3::new(0.1, -0.1, 0.1),
+            ),
+            (
+                DVec3::new(2.0, 4.0, 8.0),
+                DVec3::new(-0.4, 0.8, 1.6),
+                DVec3::new(-0.2, 0.2, 0.2),
+            ),
+            (
+                DVec3::new(4.0, 2.0, 0.0),
+                DVec3::new(0.2, -0.4, 0.8),
+                DVec3::new(0.05, -0.2, 0.0),
+            ),
+            (DVec3::ZERO, DVec3::ONE, DVec3::ZERO),
+            (
+                DVec3::new(2.0, 4.0, 8.0),
+                DVec3::new(0.2, -0.4, 0.8),
+                DVec3::new(0.1, -0.1, 0.1),
+            ),
+        ] {
+            let response = DMat3::from_diagonal(diagonal);
+            let impulse =
+                block_correction_impulse(error, response, DMat3::IDENTITY, Some(&mut prepared))
+                    .unwrap();
+            assert!((impulse - expected).length() < 1e-12);
+            assert_eq!(
+                impulse,
+                block_correction_impulse(error, response, DMat3::IDENTITY, None).unwrap()
+            );
+        }
+        assert!(
+            block_correction_impulse(
+                DVec3::ONE,
+                -DMat3::IDENTITY,
+                DMat3::IDENTITY,
+                Some(&mut prepared)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -724,6 +810,50 @@ mod tests {
     }
 
     #[test]
+    fn slider_differential_tracks_the_rotating_frame_after_free_travel() {
+        let projection = prepared(
+            |a, b| PrismaticJoint::new(a, b).with_slider_axis(DVec3::Y),
+            [DQuat::IDENTITY; 2],
+        );
+        let first = SolverBody::default();
+        let second = SolverBody {
+            delta_position: DVec3::new(0.02, 0.4, 0.03),
+            ..default()
+        };
+        for (row, direction) in [
+            (GeometryRow::SliderAlignment(DVec3::Y), DVec3::X),
+            (
+                GeometryRow::SliderLimit(DVec3::Y, DistanceLimit::new(-0.1, 0.1)),
+                DVec3::Y,
+            ),
+        ] {
+            let error = projection.row_error(row, [&first, &second]).unwrap();
+            let normal = direction;
+            let analytic = -error.levers[0].cross(normal).z;
+            let epsilon = 1.0e-6;
+            let coordinate = |angle: f64| {
+                let rotated = SolverBody {
+                    delta_rotation: Rotation(DQuat::from_rotation_z(angle)),
+                    ..first.clone()
+                };
+                let normal = rotated.delta_rotation * direction;
+                normal.dot(
+                    projection
+                        .row_error(row, [&rotated, &second])
+                        .unwrap()
+                        .position_error
+                        .unwrap(),
+                )
+            };
+            let numerical = (coordinate(epsilon) - coordinate(-epsilon)) / (2.0 * epsilon);
+            assert!(
+                (analytic - numerical).abs() < 1.0e-9,
+                "slider angular differential: analytic={analytic}, numerical={numerical}"
+            );
+        }
+    }
+
+    #[test]
     fn anisotropic_block_resolves_coupled_channels_and_preserves_free_axis() {
         let response = DMat3::from_cols(
             DVec3::new(2.0, 0.6, 0.2),
@@ -731,14 +861,14 @@ mod tests {
             DVec3::new(0.2, 0.3, 3.0),
         );
         let error = DVec3::new(0.1, -0.2, 0.3);
-        let impulse = block_correction_impulse(error, response, DMat3::IDENTITY).unwrap();
+        let impulse = block_correction_impulse(error, response, DMat3::IDENTITY, None).unwrap();
         assert!((response * impulse - error).length() < 1e-12);
         let axis = DVec3::new(0.2, 0.7, -0.4).normalize();
         let constrained = DMat3::IDENTITY - outer(axis);
-        let impulse = block_correction_impulse(error, response, constrained).unwrap();
+        let impulse = block_correction_impulse(error, response, constrained, None).unwrap();
         assert!(impulse.dot(axis).abs() < 1e-12);
         assert!((constrained * (response * impulse - error)).length() < 1e-12);
-        let impulse = block_correction_impulse(error, response, outer(axis)).unwrap();
+        let impulse = block_correction_impulse(error, response, outer(axis), None).unwrap();
         assert!(impulse.cross(axis).length() < 1e-12);
         assert!((outer(axis) * (response * impulse - error)).length() < 1e-12);
     }
@@ -867,7 +997,15 @@ mod tests {
             delta_position: DVec3::new(1.0, 0.4, 0.0),
             ..default()
         };
-        let inertia = inertia();
+        // Isolate translation-channel compliance from the moving frame's
+        // angular coupling, which has its own finite-difference regression.
+        let inertia = SolverBodyInertia::new(
+            1.0,
+            SymmetricMatrix::IDENTITY,
+            LockedAxes::ROTATION_LOCKED,
+            0,
+            true,
+        );
         projection
             .solve([&mut a, &mut b], [&inertia, &inertia])
             .unwrap();

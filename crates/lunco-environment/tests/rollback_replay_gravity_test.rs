@@ -65,7 +65,7 @@ fn rollback_replay_applies_local_gravity() {
             RigidBody::Dynamic,
             Collider::sphere(0.5),
             Mass(10.0),
-            LocalGravity(DVec3::new(0.0, -1.62, 0.0)),
+            LocalGravity::new(DVec3::new(0.0, -1.62, 0.0)),
             Transform::default(),
         ))
         .id();

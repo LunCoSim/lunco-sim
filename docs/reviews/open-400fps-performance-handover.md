@@ -1,5 +1,40 @@
 # High-quality realtime performance handover
 
+## Griffin unit metadata storage — tutorials, 2026-10-20
+
+`UnitReference` now shares immutable identity/definition storage, and Avian
+reuses its fixed unit references. Complete equality and serialized values are
+preserved. Live port ownership, direction, bounds, frame, permission and topology
+checks remain unchanged. This is generic storage, without a policy hook.
+Bounded debug spans separate input staging and commit.
+
+Qualified normal binary `382460f1eea7975123dfc57a5bf30e8e45c0f93a6da9b55c7547bdbf8961caee`
+passes 35 engineering-value/registry tests, production unit/transaction gates
+(5/11 checks), the 19-check Griffin GNC gate and the rendered 16-gate mission.
+GNC selection/first input/neutral/reconnect behavior passes at SysML source
+`7188239926208515743`.
+
+Retained baseline `5a9aa0c5…` and qualified `382460f1…` use the same Twin,
+active-frame camera, fully resident terrain and High / standard PBR 1280 × 720.
+Completed-mission 25-second windows yield 97.5206/110.6446 FPS. Retained fixed-tick
+p50/p95/p99 are 4.7922/5.4548/6.1519 ms and 4.7519/5.3197/5.6056 ms. Paused
+diagnostic FPS is 151.3388/156.6435; its fixed-tick samples are retained history.
+Sampled process audits contain only the owned simulator. GPU audits and inspected
+images are retained. These short observations do not prove a repeatable causal
+gain or sustained full-mission real-time acceptance.
+
+The later owned Tracy file passes TCP identity, framing, native export and event
+counts, but its playing window drains 35.3201 to 31.5052 seconds of queued
+simulation. Its 722 transactions are not cadence-matched to the earlier 490;
+the 1.15465 versus 1.32975 ms staging means are descriptive only. Another capture
+lacks live socket proof and is excluded. A settled repeat could not launch while
+a separate process replaced this checkout's target executable. That later build
+is outside this qualification; preserve its source and artifacts.
+
+Evidence, source snapshots, scripts, rejection notes, traces and normal binaries:
+`.cache/codex-evidence/griffin-perf-20261020/`. Sustained throughput, awake contact
+precision and hardware qualification remain open.
+
 ## Contact samples retain their solved interval — 2026-10-19
 
 The full-value comparison localizes an earlier transient Lander difference to

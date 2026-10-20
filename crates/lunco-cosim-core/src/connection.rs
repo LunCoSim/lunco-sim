@@ -213,6 +213,15 @@ impl PortHold {
 }
 
 impl PortHolds {
+    /// Whether this endpoint has accepted controller input. A neutral setpoint
+    /// still owns the stick until explicit release; authored program setpoints
+    /// do not establish manual authority.
+    pub fn has_control(&self, entity: Entity) -> bool {
+        self.holds
+            .get(&entity)
+            .is_some_and(|ports| ports.values().any(|hold| hold.control.is_some()))
+    }
+
     /// Set a persistent control intent for `port` on `entity`.
     pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64) {
         self.set(entity, port.into(), value, false);

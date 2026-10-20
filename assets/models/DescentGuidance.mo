@@ -36,7 +36,7 @@ model DescentGuidance
   input Real vehicle_mass = 2000.0 "Vehicle mass (kg) — wired from the body";
 
   // ── Authority ──
-  input Real piloted = 0.0 "1 = a session holds the stick. WIRED from possession; the autopilot stands down";
+  input Real piloted = 0.0 "1 = an owning session has accepted stick input; the autopilot stands down";
   input Real engage = 1.0 "1 = fly the descent, 0 = stand by. A script owns this: it is the WHEN of the autopilot, and the when is a mission decision";
 
   // ── Output ──

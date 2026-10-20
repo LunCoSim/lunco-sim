@@ -40,6 +40,11 @@ that immutable live contract; Modelica provenance remains in
 `ModelicaSignalLayout`. The shared backend reads units, bounds and frame from
 one component. Topology fingerprints include complete unit definitions and
 bounds, update at contract mutation, and exclude changing scalar samples.
+`UnitReference` shares its immutable identity and complete definition across
+metadata clones. Equality and serialized values retain the full unit contract;
+owner replacement creates a distinct reference. Avian's fixed unit definitions
+are initialized once from its port table vocabulary. Owner precedence, group
+membership, direction, bounds, frame and topology are still checked live.
 FMI unit lowering retains the separate radian exponent and relative-quantity
 semantics as required by the [FMI unit contract](https://fmi-standard.org/docs/3.0.2/#_unit_definitions).
 

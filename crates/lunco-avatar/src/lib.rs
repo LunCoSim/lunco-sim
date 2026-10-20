@@ -159,6 +159,7 @@ impl Plugin for LunCoAvatarPlugin {
         // Possession and release commands own both authority bookkeeping and
         // local binding, so the registry and `ControlLink` commit together.
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
+        app.add_systems(Update, sync_flight_authority);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
         // global `Pointer<Click>` observer (egui occlusion handled by the
         // framework), replacing the old `ScenePointer`-gated Update system.
@@ -456,7 +457,6 @@ fn on_release_command(
     q_avatar: Query<Option<&ControlLink>, (With<Embodiment>, With<LocalEmbodiment>)>,
     guard: Res<lunco_core_session::SyncApplyGuard>,
     role: Res<lunco_core_session::NetworkRole>,
-    mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
     local: Res<lunco_core_session::LocalSession>,
     mut registry: ResMut<lunco_core_session::SessionRegistry>,
 ) {
@@ -499,11 +499,6 @@ fn on_release_command(
         if released > 0 {
             info!("[auth] session {} released {} vessel(s)", local.0, released);
         }
-    }
-    // The stick goes back to the guidance law — publish it for the UI that
-    // shows WHO is flying (the overlay's AUTO/MANUAL badge).
-    if let Some(a) = authority.as_mut() {
-        a.piloted = false;
     }
     let avatar_ent = cmd.source;
     commands.entity(avatar_ent).remove::<ControlLink>();
@@ -550,7 +545,6 @@ fn on_possess_command(
     q_input_ports: Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
-    mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
     local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
 ) {
     let cmd = trigger.event();
@@ -591,15 +585,9 @@ fn on_possess_command(
             commands
                 .entity(requested)
                 .try_insert(ControlLink { target: cmd.target });
-            if let Some(a) = authority.as_mut() {
-                a.piloted = true;
-            }
-        } else if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
-            .is_some()
-        {
-            if let Some(a) = authority.as_mut() {
-                a.piloted = true;
-            }
+        } else {
+            let _ =
+                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target);
         }
         return;
     }
@@ -622,9 +610,6 @@ fn on_possess_command(
     if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target).is_none() {
         return;
     }
-    if let Some(a) = authority.as_mut() {
-        a.piloted = true;
-    }
     commands
         .entity(avatar_ent)
         .try_insert(ControlLink { target: cmd.target });
@@ -633,6 +618,30 @@ fn on_possess_command(
             camera: avatar_ent,
             target: cmd.target,
         });
+    }
+}
+
+/// Presentation reads the same live authority port as the vehicle model.
+/// Binding a camera does not establish manual input authority.
+fn sync_flight_authority(world: &mut World) {
+    if !world.contains_resource::<lunco_core::markers::FlightAuthority>() {
+        return;
+    }
+    let target = world
+        .get_resource::<lunco_embodiment_core::roles::TheLocalEmbodiment>()
+        .and_then(|local| local.0)
+        .and_then(|avatar| world.get::<ControlLink>(avatar))
+        .map(|link| link.target);
+    let piloted = target
+        .and_then(|target| {
+            world
+                .get_resource::<lunco_port_core::ports::PortRegistry>()
+                .and_then(|ports| ports.read_output_port(world, target, "piloted"))
+        })
+        .is_some_and(|value| value >= 0.5);
+    let mut authority = world.resource_mut::<lunco_core::markers::FlightAuthority>();
+    if authority.piloted != piloted {
+        authority.piloted = piloted;
     }
 }
 
@@ -1292,8 +1301,8 @@ mod tests {
 /// Diagnostic read-out of every **commandable** vessel's *control authority* state —
 /// the chain that decides whether the stick actually flies it:
 /// `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
-/// `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
-/// the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
+/// `ControlBinding` (intent→port map from the USD `Controls` scope), alongside
+/// the `SessionRegistry` owner and live `piloted` manual-input authority. Logs one
 /// `[inspect]` line per vessel at INFO. API-driven: `{"type":"ExecuteCommand","command":"InspectVessels"}`.
 #[lunco_core::Command(default)]
 pub struct InspectVessels {}
@@ -1331,10 +1340,13 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                     .get_resource::<lunco_core_session::SessionRegistry>()
                     .and_then(|r| r.owner_of(g))
             });
+            let piloted = world
+                .get_resource::<lunco_port_core::ports::PortRegistry>()
+                .and_then(|ports| ports.read_output_port(world, e, "piloted"));
             info!(
                 "[inspect] {e:?} name={name:?} gid={gid:?} cmd_surface={has_cmd} sim={has_sim} \
                  selectable={has_sel} binding={binding:?} owner={owner:?} piloted={}",
-                owner.is_some() as u8
+                piloted.map_or_else(|| "unavailable".to_string(), |value| value.to_string())
             );
         }
     });

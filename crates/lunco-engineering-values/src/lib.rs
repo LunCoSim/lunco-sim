@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 
 /// Stable, typed identity for a coordinate frame.
 ///
@@ -80,18 +81,36 @@ impl std::error::Error for FrameIdError {}
 /// retain an authored identifier without pretending that its dimension or
 /// scale is known. Consumers may compare unresolved values only when their
 /// identifiers match; they cannot convert them.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnitReference {
-    id: String,
-    definition: Option<Unit>,
-}
+/// Clones share the immutable identity and definition. Replacing an owner's
+/// reference publishes a new value; equality still compares the full definition.
+#[derive(Clone, PartialEq)]
+pub struct UnitReference(Arc<UnitReferenceFields>);
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(PartialEq, Serialize, Deserialize)]
+#[serde(rename = "UnitReference", deny_unknown_fields)]
 struct UnitReferenceFields {
     id: String,
     #[serde(default)]
     definition: Option<Unit>,
+}
+
+impl fmt::Debug for UnitReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnitReference")
+            .field("id", &self.0.id)
+            .field("definition", &self.0.definition)
+            .finish()
+    }
+}
+
+impl Serialize for UnitReference {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.as_ref().serialize(serializer)
+    }
 }
 
 impl<'de> Deserialize<'de> for UnitReference {
@@ -117,16 +136,16 @@ impl UnitReference {
         if definition.as_ref().is_some_and(|unit| unit.symbol() != id) {
             return Err(UnitReferenceError::DefinitionIdMismatch);
         }
-        Ok(Self { id, definition })
+        Ok(Self(Arc::new(UnitReferenceFields { id, definition })))
     }
 
     /// Construct a resolved identity using the unit's symbol as its id.
     pub fn resolved(definition: Unit) -> Self {
         let id = definition.symbol().to_owned();
-        Self {
+        Self(Arc::new(UnitReferenceFields {
             id,
             definition: Some(definition),
-        }
+        }))
     }
 
     /// Construct an explicitly unresolved authored unit identity.
@@ -136,18 +155,18 @@ impl UnitReference {
 
     /// Stable unit identity used for source matching and display.
     pub fn id(&self) -> &str {
-        &self.id
+        &self.0.id
     }
 
     /// Resolved dimension and conversion data, if supplied by the unit owner.
     pub fn definition(&self) -> Option<&Unit> {
-        self.definition.as_ref()
+        self.0.definition.as_ref()
     }
 
     /// Convert a value to another unit reference when both definitions are
     /// resolved and dimension-compatible, or preserve it when identities match.
     pub fn convert_value_to(&self, value: f64, target: &Self) -> Result<f64, UnitReferenceError> {
-        if let (Some(source), Some(target_unit)) = (&self.definition, &target.definition) {
+        if let (Some(source), Some(target_unit)) = (self.definition(), target.definition()) {
             let quantity = Quantity::with_unit(value, source.clone())
                 .map_err(|_| UnitReferenceError::NonFiniteValue)?;
             return quantity
@@ -1309,6 +1328,51 @@ mod tests {
             UnitReference::resolved(Unit::new("cm", Dimension::LENGTH, 0.01, 0.0).unwrap());
         let metres = UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap());
         assert_eq!(centimetres.convert_value_to(125.0, &metres).unwrap(), 1.25);
+    }
+
+    #[test]
+    fn unit_reference_clones_share_immutable_definitions_and_compare_values() {
+        let original =
+            UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap());
+        let cloned = original.clone();
+        assert!(Arc::ptr_eq(&original.0, &cloned.0));
+        let independent =
+            UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap());
+        assert_eq!(original, independent);
+        let changed = UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 2.0, 0.0).unwrap());
+        assert_ne!(original, changed);
+        assert_eq!(cloned.definition().unwrap().scale_to_si(), 1.0);
+    }
+
+    #[test]
+    fn unit_reference_wire_values_round_trip_and_reject_invalid_definitions() {
+        let reference =
+            UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap());
+        let wire = serde_json::to_value(&reference).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "id": "m", "definition": {
+                    "symbol": "m", "dimension": [1, 0, 0, 0, 0, 0, 0],
+                    "scale_to_si": 1.0, "offset_to_si": 0.0,
+                    "scale_exactness": "unspecified", "angle_power": 0, "relative_quantity": false
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<UnitReference>(wire.clone()).unwrap(),
+            reference
+        );
+        let mut invalid = wire;
+        invalid["definition"]["symbol"] = serde_json::json!("s");
+        assert!(serde_json::from_value::<UnitReference>(invalid).is_err());
+        assert!(serde_json::from_str::<UnitReference>(r#"{"id":""}"#).is_err());
+        assert!(serde_json::from_str::<UnitReference>(r#"{"id":"m","extra":0}"#).is_err());
+        let unresolved: UnitReference = serde_json::from_str(r#"{"id":"vendor:unit"}"#).unwrap();
+        assert_eq!(
+            serde_json::to_value(unresolved).unwrap(),
+            serde_json::json!({"id":"vendor:unit","definition":null})
+        );
     }
 
     #[test]

@@ -415,6 +415,16 @@ the terrain binder fills, so they would render black on a prop.
 `is_prop_pickable_source` asks the registry; registering a new prop-fillable
 provider automatically widens the test.
 
+### Foil fold shading
+
+`mli_foil.wgsl` uses the shared analytic noise gradient to perturb the surface
+normal through `pbr_lit::lit_n`. Folds remain attached to object-space metric
+coordinates and their highlights respond to lighting and view direction.
+Each octave fades with its pixel footprint; unresolved detail adds roughness.
+The existing USD colour, density, axial scale, fold-strength and sheen inputs
+remain artistic controls, not measured blanket or thermal properties. This
+changes shading only, with no extra geometry, texture allocation or draw call.
+
 ### Colour is authored ONCE, as `primvars:displayColor`
 
 `primvars:displayColor` is **the** place a colour is authored — shader-bound or not.

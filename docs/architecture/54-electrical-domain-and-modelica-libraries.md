@@ -250,7 +250,7 @@ With no `Ground`, **`v` at the node is set by whichever device states it.** `Bat
 that device:
 
 ```modelica
-p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;   // sets the node potential
+p.v = open_circuit_voltage_v + p.i * R_internal;   // sets the node potential
 ```
 
 Every other device must *read* `p.v` and state its **current**, never its voltage. Two
@@ -389,6 +389,40 @@ it is not the Rhai entity id. A positive panel output together with a
 matching battery current proves the source is electrically connected rather
 than merely compiled. For a fixed +Y panel, test generation under a known sun
 vector; do not require a tracker yaw response from a component that has no joint.
+
+### 2c. Cell temperature, panel heat and bounded cooling
+
+`SolarPanel` accepts `cell_temperature_k` as a prescribed input or feedback
+from a thermal network. The reference temperature is 298.15 K. With relative
+coefficient `gamma = power_temperature_coefficient_per_k`, it uses
+`f = max(0, 1 + gamma * (T - Tref))`. Both reference efficiency and nameplate
+power change with `f`; conversion efficiency is bounded by solar absorptivity.
+The reference nameplate is a rating at `Tref`, not an all-temperature ceiling.
+The default -0.0037/K means -0.37 percent per kelvin, from the
+[PVWatts standard crystalline-silicon model](https://samrepo.nlr.gov/help/pvwatts_system_design.html).
+It is a configurable study default; it does not identify FLIP's cell technology.
+
+The reduced I-V source has a current plateau below `v_mp` and a power limit
+above it. `absorbed_power_w = solar_absorptivity * incident_power_w` and
+`heat_w = absorbed_power_w - power_out` use actual electrical delivery.
+Unabsorbed radiation is reported as `reflected_power_w`. Default absorptivity
+1 is an ideal opaque absorber, not measured optical data. Every output is in
+the reusable USD interface. Route `heat_w` through `LunCo.Thermal.HeatLoad`
+into a thermal mass and connect that mass's temperature back to the panel.
+
+`LimitedCoolingSink` provides one acausal `HeatPort`, maximum heat rejection
+in W (= J/s), minimum reservoir temperature in K, and conductance in W/K.
+Its heat extraction is `min(Qmax, G * max(0, T - Tmin))`: it saturates at
+capacity and stops below the reservoir temperature. It exports rejected
+energy to an ideal external reservoir. Pump power and a finite coolant loop
+require their own models. The reusable facet is
+`components/thermal/limited_cooling_sink.usda`.
+
+Run `python3 scripts/api/test_solar_temperature.py --headless --output <dir>`
+for 45 authored production checks. They cover hot/cold ratings, high bus voltage,
+power/energy conservation, bounded cooling, the sink floor, invalid parameters,
+and a disconnected heat-path counterexample. The 300-second coupled benches
+use explicitly synthetic heat capacities and cooling ratings.
 
 ## 3. Why library loading looks the way it does
 

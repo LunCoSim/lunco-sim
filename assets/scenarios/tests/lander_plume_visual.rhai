@@ -27,16 +27,10 @@ fn on_start(me, ctx) {
     this.momentum_flux = 0.0;
     this.exit_dynamic_pressure = 0.0;
     if this.lander >= 0 {
-        let possession = cmd("AcquireControl", #{
-            target: this.lander,
-            bind_camera: false,
-        });
         let review_camera = find_path("/LanderPlumeVisual/VisualCamera");
-        if possession.ok && review_camera >= 0 {
-            // Keep the review camera independent from the control handoff,
-            // then reassert its authored absolute pose through the public
-            // camera command so the offscreen avatar clone has the same view
-            // as the interactive review camera.
+        if review_camera >= 0 {
+            // Reassert the authored review pose so the offscreen avatar clone
+            // has the same view as the interactive camera.
             let camera = cmd("SetCameraLookAt", #{
                 camera: review_camera,
                 eye: [14.0, 12.0, 20.0],
@@ -45,7 +39,7 @@ fn on_start(me, ctx) {
             let active = cmd("SetActiveCamera", #{name: "VisualCamera"});
             let command = cmd("SetPorts", #{
                 target: this.lander,
-                writes: [["external_throttle", 1.0]],
+                writes: [["guidance_throttle", 1.0]],
             });
             this.command_ok = camera.ok && active.ok && command.ok;
         }

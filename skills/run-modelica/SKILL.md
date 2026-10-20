@@ -46,6 +46,14 @@ instance modifiers. Follow the
 [declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
 and validate the composed participant through its production scene gate.
 
+Photovoltaic temperature feedback uses `SolarPanel.cell_temperature_k` and
+`SolarPanel.heat_w`, with `HeatLoad` bridging into an acausal thermal network.
+`LimitedCoolingSink` supplies configurable heat-rejection capacity, minimum
+reservoir temperature and conductance. Use
+`scripts/api/test_solar_temperature.py` to verify the coupled equations and
+negative cases; prescribed-temperature operation does not qualify a vehicle's
+thermal design or supplier temperature coefficient.
+
 Automatic target selection requires a runnable model, block, or class. A file
 containing only packages, records, connectors, types, or functions has no
 simulation target. Component metadata uses Rumoca's complete expression

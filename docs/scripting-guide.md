@@ -1420,13 +1420,14 @@ loops), and **structure/authority in USD**. Full recipe + gotchas:
 [`skills/authoring-vessel-controllers`](../skills/authoring-vessel-controllers/SKILL.md).
 
 **Control authority is the wired `piloted` signal.** The GNC is *internal* to the
-vessel model; a user and an authored program are both *external sessions* that **possess**
-the vessel (arbitrated by possession + RBAC). The internal controller yields to
-whoever possesses by reading the read-only **`piloted`** cosim port (`1.0` when any
-session owns the vessel — `SessionRegistry::owner_of(...).is_some()`), wired into the
-model (`piloted:piloted`) and gating `cmd = piloted ? stick : gnc`. No in-model flag,
-no rhai toggle, no per-tick check — possession is the single source of truth. Ride the
-camera along without taking control via `follow(entity)`.
+vessel model. Possession and RBAC authorize external sessions to command it.
+The read-only **`piloted`** port becomes `1.0` when an owning session has accepted
+controller input in `PortHolds`. Selection alone leaves guidance active; the
+first accepted flight input selects the stick. Its neutral release retains
+manual authority until explicit control release. Authored program setpoints
+do not select manual authority. Wire this signal into the model
+(`piloted:piloted`) to select `cmd = piloted ? stick : gnc`. Camera following
+through `follow(entity)` does not acquire a command endpoint.
 
 > [!IMPORTANT]
 > **`piloted` selects the setpoint SOURCE — it is not a permission gate on attitude.**

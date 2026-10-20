@@ -8,8 +8,8 @@
 
 #import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::mesh_functions
-#import lunco::noise::fbm
-#import lunco::pbr_lit::lit
+#import lunco::noise::{fbm_rot_gradient, noise_footprint_weight}
+#import lunco::pbr_lit::lit_n
 
 //!@ui      foil_color  color "Bright foil colour"
 //!@default foil_color  0.83,0.62,0.18
@@ -17,7 +17,7 @@
 //!@default shade_color 0.45,0.30,0.08
 //!@ui      crinkle     0 64 "Crinkle cell density"
 //!@default crinkle     26.0
-//!@ui      facet_depth 0 1 "Facet contrast"
+//!@ui      facet_depth 0 1 "Fold strength"
 //!@default facet_depth 0.55
 //!@ui      sheen       0 1 "Reflective sheen"
 //!@default sheen       0.85
@@ -45,18 +45,27 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let p_local = transpose(R) * (input.world_position.xyz - m[3].xyz);
     let n_local = normalize(transpose(R) * normalize(input.world_normal));
 
-    let grain_pos = p_local * vec3<f32>(mat.crinkle, mat.crinkle * mat.v_scale, mat.crinkle);
-    let grain = fbm(grain_pos, 3, 0.55);
-    let facet = clamp(0.5 + (grain - 0.5) * mat.facet_depth, 0.0, 1.0);
+    let pattern_scale = vec3<f32>(1.0, mat.v_scale, 1.0);
+    let grain_pos = p_local * mat.crinkle * pattern_scale;
+    let footprint = max(length(dpdx(grain_pos)), length(dpdy(grain_pos)));
+    let grain = fbm_rot_gradient(grain_pos, 3, 0.55, footprint, vec2(2.0, 2.0));
+    let facet = clamp(0.5 + (grain.x - 0.5) * mat.facet_depth, 0.0, 1.0);
 
-    // A grazing facet catches less light than a face turned toward the scene;
-    // the foil colour remains authored while the shade colour supplies the
-    // folded valleys.
-    let lightness = 0.55 + 0.45 * abs(n_local.y);
-    let fold = clamp(facet * lightness, 0.0, 1.0);
+    // The analytic gradient bends the shading normal, so folds move their
+    // specular highlights with the light/view instead of baking shade into
+    // object-axis colour. Project onto the surface tangent plane; amplitude
+    // scales with the cell size, keeping slope independent of cell density.
+    let gradient = grain.yzw * pattern_scale;
+    let tangent_gradient = gradient - n_local * dot(n_local, gradient);
+    let normal = normalize(R * normalize(n_local - mat.facet_depth * tangent_gradient));
+    let fold = 0.65 + 0.35 * facet;
     let albedo = mix(mat.shade_color, mat.foil_color, fold);
-    let roughness = clamp(0.32 - mat.sheen * 0.20 + (1.0 - facet) * 0.18, 0.08, 0.75);
+    // Unresolved folds become roughness as their normal detail fades. The
+    // shared octave filter prevents distant foil from sparkling or swimming.
+    let resolved = noise_footprint_weight(footprint, vec2(2.0, 2.0));
+    let roughness = clamp(0.32 - mat.sheen * 0.20 + (1.0 - facet) * 0.18
+        + (1.0 - resolved) * mat.facet_depth * 0.18, 0.08, 0.75);
     let metallic = clamp(0.55 + mat.sheen * 0.4, 0.0, 1.0);
 
-    return lit(input, is_front, albedo, roughness, metallic, vec3<f32>(0.0));
+    return lit_n(input, is_front, normal, albedo, roughness, metallic, vec3<f32>(0.0));
 }

@@ -71,6 +71,27 @@ kernels apply each candidate. Failure leaves both endpoint solver states
 unchanged and faults the operation. Production acceptance must exercise the
 ordinary pass and closure together, not just their isolated numerical kernels.
 
+Prismatic alignment and travel-limit directions rotate with the first joint
+frame. Their differential includes the attachment separation: the first angular
+lever is `r1 + separation`, matching the coordinate drive's Jacobian. This retains
+angular coupling after free slider travel. A central finite-difference regression
+checks both geometric row types.
+
+Full orientation rows reuse the native symmetric response decomposition across
+closure sweeps while the complete response matrix is exactly unchanged. Joint
+preparation clears that decomposition; a changed response rebuilds it before
+use. Only the eigenbasis, eigenvalues and scale are retained, never a correction
+or impulse. Each demand still follows the same f64 pseudoinverse projection and
+rank policy. Position rows and changing angular subspaces retain their existing
+uncached calculation; convergence bounds, solve ordering and cadence are unchanged.
+
+The native-drive Rhai gate establishes its analytical mass/inertia baseline
+from the first completed physics step, after native mass preparation, then
+compares twenty consecutive samples. Tick-zero scenario initialization does
+not supply prepared native mass properties. Its angular-momentum tolerance
+accounts for the native shape mass properties' f32 source precision; the
+coordinate-law and completed-reaction checks retain their dimensional bounds.
+
 The shared headless/headful physics composition disables Avian's XPBD plugin.
 The application joint owner composes its public preparation and impulse kernels
 with ordered drive, geometric and closure passes, f64 velocity projection

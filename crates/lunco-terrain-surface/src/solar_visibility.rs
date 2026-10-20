@@ -11,8 +11,8 @@ use lunco_cosim_core::{
     SUN_IRRADIANCE_SOURCE_CONNECTOR, SUN_VISIBILITY_SOURCE_CONNECTOR, SimComponent, SimConnection,
 };
 use lunco_environment::{
-    DirectionSourceId, DirectionTargetId, EnvironmentDirections, EnvironmentProbe,
-    ProbeOccluderPaths, ProbeSampling, resolve_direction_for_frame,
+    DirectionResolutionError, DirectionSourceId, DirectionTargetId, EnvironmentDirections,
+    EnvironmentProbe, ProbeOccluderPaths, ProbeSampling, resolve_direction_for_frame,
 };
 
 #[derive(Clone, PartialEq)]
@@ -66,8 +66,36 @@ pub(crate) fn initialization_sample_ready(
             Without<DemHeightField>,
         ),
     >,
+    rays: Option<Res<EnvironmentDirections>>,
+    poses: lunco_physics::SimulationPoseQuery,
+    targets: Query<(Entity, &DirectionTargetId)>,
+    probes: Query<Entity, With<EnvironmentProbe>>,
+    connections: Query<&SimConnection>,
 ) -> bool {
-    sun.irradiance_w_m2.is_some() && frame.is_some() && preparing.is_empty()
+    if sun.irradiance_w_m2.is_none() || frame.is_none() || !preparing.is_empty() {
+        return false;
+    }
+    // Irradiance can be published before the celestial provider has resolved
+    // the active physical frame. Initialization must not latch a runtime fault
+    // for that preparation state. Other resolution errors remain terminal.
+    let source = DirectionSourceId::parse(lunco_environment::SUN_DIRECTION_SOURCE)
+        .expect("canonical Sun source id");
+    probes.iter().all(|probe| {
+        !solar_sample_demanded(probe, &connections)
+            || resolve_direction_for_frame(&source, probe, rays.as_deref(), &targets, &poses)
+                != Err(DirectionResolutionError::FrameUnavailable)
+    })
+}
+
+fn solar_sample_demanded(probe: Entity, connections: &Query<&SimConnection>) -> bool {
+    connections.iter().any(|wire| {
+        wire.start_element == probe
+            && !wire.start_is_input
+            && matches!(
+                wire.start_connector.as_str(),
+                SUN_VISIBILITY_SOURCE_CONNECTOR | SUN_IRRADIANCE_SOURCE_CONNECTOR
+            )
+    })
 }
 
 /// Publish only demanded visibility ports, before cosimulation propagates wires.
@@ -156,14 +184,7 @@ pub(crate) fn publish_sun_visibility(
             continue;
         };
 
-        let demanded = connections.iter().any(|wire| {
-            wire.start_element == probe
-                && !wire.start_is_input
-                && matches!(
-                    wire.start_connector.as_str(),
-                    SUN_VISIBILITY_SOURCE_CONNECTOR | SUN_IRRADIANCE_SOURCE_CONNECTOR
-                )
-        });
+        let demanded = solar_sample_demanded(probe, &connections);
         if !demanded {
             memo.samples.remove(&probe);
             if sim
@@ -394,4 +415,76 @@ pub(crate) fn publish_sun_visibility(
 /// Scene-owned samples and geometry must retire before another Twin loads.
 pub(crate) fn clear_solar_visibility(mut memo: ResMut<VisibilityMemo>) {
     *memo = VisibilityMemo::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use lunco_core_runtime::SimTick;
+    use lunco_physics::{PhysicsPoseSeeded, PrescribedSimulationPose};
+    use lunco_spatial::coords::{GridPos, GridRot};
+
+    #[test]
+    fn initialization_waits_for_physical_frames_without_hiding_invalid_sources() {
+        let mut world = World::new();
+        let frame = world
+            .spawn((
+                lunco_spatial::WorldGridConfig::default().grid(),
+                Transform::default(),
+            ))
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        world.insert_resource(SimTick(0));
+        let mut sun = lunco_environment::SunState::default();
+        sun.publish_physical(Some(1361.0)).unwrap();
+        world.insert_resource(sun);
+        let source = world
+            .spawn((
+                DirectionTargetId::new("sun").unwrap(),
+                PrescribedSimulationPose::Pending,
+                Transform::default(),
+                ChildOf(frame),
+            ))
+            .id();
+        let probe = world
+            .spawn((EnvironmentProbe, Transform::default(), ChildOf(frame)))
+            .id();
+        world.spawn(SimConnection {
+            start_element: probe,
+            start_connector: SUN_VISIBILITY_SOURCE_CONNECTOR.into(),
+            start_is_input: false,
+            end_element: probe,
+            end_connector: "visibility".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+        assert!(
+            !world.run_system_once(initialization_sample_ready).unwrap(),
+            "pending celestial pose must keep initialization pending"
+        );
+        world
+            .entity_mut(source)
+            .insert(PrescribedSimulationPose::Sample {
+                frame,
+                tick: SimTick(0),
+                position: GridPos(DVec3::X * 100.0),
+                rotation: GridRot(bevy::math::DQuat::IDENTITY),
+            });
+        assert!(world.run_system_once(initialization_sample_ready).unwrap());
+        world
+            .entity_mut(probe)
+            .insert(avian3d::prelude::RigidBody::Dynamic);
+        assert!(
+            !world.run_system_once(initialization_sample_ready).unwrap(),
+            "unseeded native observer must keep initialization pending"
+        );
+        world.entity_mut(probe).insert(PhysicsPoseSeeded);
+        assert!(world.run_system_once(initialization_sample_ready).unwrap());
+        world.entity_mut(source).remove::<DirectionTargetId>();
+        assert!(
+            world.run_system_once(initialization_sample_ready).unwrap(),
+            "missing authored source must reach the publisher's diagnostic, not wait forever"
+        );
+    }
 }

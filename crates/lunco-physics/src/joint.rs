@@ -283,56 +283,90 @@ pub(crate) fn integrate_joint_damping(
     })
 }
 
-pub(crate) fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {
+/// Native symmetric response decomposition, independent of the requested change.
+/// Reusing it preserves the original eigenbasis projection and rank policy.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PreparedPointResponse {
+    scale: f64,
+    values: DVec3,
+    vectors: DMat3,
+}
+
+impl PreparedPointResponse {
     const RANK_TOLERANCE: f64 = 32.0 * f64::EPSILON;
-    if !response.is_finite() || !change.is_finite() {
-        return Err("joint damping point response is not representable");
-    }
-    let scale = response
-        .x_axis
-        .abs()
-        .max(response.y_axis.abs())
-        .max(response.z_axis.abs())
-        .max_element();
-    if scale == 0.0 {
-        return Ok(DVec3::ZERO);
-    }
-    // The maintained f64 symmetric eigensolver supplies a pseudoinverse for
-    // constrained point responses, whose nullspace need not follow world axes.
-    use avian3d::parry::utils::SymmetricEigen3;
-    let normalized = response / scale;
-    let values = SymmetricEigen3::eigenvalues(normalized);
-    if !values.is_finite() || values.min_element() < -RANK_TOLERANCE {
-        return Err("joint damping point response is not positive semidefinite");
-    }
-    // eigenvector1 requires an isolated root. Start at the end separated by
-    // the larger gap, then let the public second-vector kernel handle the
-    // remaining eigenspace, including its repeated roots.
-    let values = if values.z - values.y > values.y - values.x {
-        DVec3::new(values.z, values.y, values.x)
-    } else {
-        values
-    };
-    let first = SymmetricEigen3::eigenvector1(normalized, values.x);
-    let second = SymmetricEigen3::eigenvector2(normalized, first, values.y);
-    let third = SymmetricEigen3::eigenvector3(first, second);
-    let vectors = DMat3::from_cols(first, second, third);
-    if !vectors.is_finite() {
-        return Err("joint damping point response eigenspace is not representable");
-    }
-    let coordinates = vectors.transpose() * change;
-    let impulse = DVec3::from_array(std::array::from_fn(|i| {
-        if values[i] <= RANK_TOLERANCE {
-            0.0
-        } else {
-            coordinates[i] / values[i] / scale
+
+    pub(crate) fn new(response: DMat3) -> Result<Self, &'static str> {
+        if !response.is_finite() {
+            return Err("joint damping point response is not representable");
         }
-    }));
-    let impulse = vectors * impulse;
-    if !impulse.is_finite() {
-        return Err("joint damping point impulse is not representable");
+        let scale = response
+            .x_axis
+            .abs()
+            .max(response.y_axis.abs())
+            .max(response.z_axis.abs())
+            .max_element();
+        if scale == 0.0 {
+            return Ok(Self {
+                scale,
+                values: DVec3::ZERO,
+                vectors: DMat3::IDENTITY,
+            });
+        }
+        // The maintained f64 symmetric eigensolver supplies a pseudoinverse for
+        // constrained point responses, whose nullspace need not follow world axes.
+        use avian3d::parry::utils::SymmetricEigen3;
+        let normalized = response / scale;
+        let values = SymmetricEigen3::eigenvalues(normalized);
+        if !values.is_finite() || values.min_element() < -Self::RANK_TOLERANCE {
+            return Err("joint damping point response is not positive semidefinite");
+        }
+        // eigenvector1 requires an isolated root. Start at the end separated by
+        // the larger gap, then let the public second-vector kernel handle the
+        // remaining eigenspace, including its repeated roots.
+        let values = if values.z - values.y > values.y - values.x {
+            DVec3::new(values.z, values.y, values.x)
+        } else {
+            values
+        };
+        let first = SymmetricEigen3::eigenvector1(normalized, values.x);
+        let second = SymmetricEigen3::eigenvector2(normalized, first, values.y);
+        let third = SymmetricEigen3::eigenvector3(first, second);
+        let vectors = DMat3::from_cols(first, second, third);
+        if !vectors.is_finite() {
+            return Err("joint damping point response eigenspace is not representable");
+        }
+        Ok(Self {
+            scale,
+            values,
+            vectors,
+        })
     }
-    Ok(impulse)
+
+    pub(crate) fn impulse(self, change: DVec3) -> Result<DVec3, &'static str> {
+        if !change.is_finite() {
+            return Err("joint damping point response is not representable");
+        }
+        if self.scale == 0.0 {
+            return Ok(DVec3::ZERO);
+        }
+        let coordinates = self.vectors.transpose() * change;
+        let impulse = DVec3::from_array(std::array::from_fn(|i| {
+            if self.values[i] <= Self::RANK_TOLERANCE {
+                0.0
+            } else {
+                coordinates[i] / self.values[i] / self.scale
+            }
+        }));
+        let impulse = self.vectors * impulse;
+        if !impulse.is_finite() {
+            return Err("joint damping point impulse is not representable");
+        }
+        Ok(impulse)
+    }
+}
+
+pub(crate) fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {
+    PreparedPointResponse::new(response)?.impulse(change)
 }
 
 fn inverse_unlocked_inertia(matrix: SymmetricMatrix) -> Result<SymmetricMatrix, &'static str> {
