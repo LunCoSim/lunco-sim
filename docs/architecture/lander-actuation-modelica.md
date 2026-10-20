@@ -84,6 +84,27 @@ The lander model does not instantiate an RCS cluster and does not calculate a
 world-frame wrench. The controller sees local sensors and asks for local body
 torque. USD decides which physical devices provide that authority.
 
+`LunCo.Sensors.AttitudeReference` retains the commanded thrust-vector tilt
+and optionally accepts a heading target measured in body coordinates. It
+uses the shared quaternion transform to compare target and forward-face
+azimuths in the navigation horizontal plane. The signed `atan2` error also
+recovers from a target directly behind the vehicle. A vertical target has no
+azimuth (`heading_valid=0`); heading authority yields while thrust points away
+from its commanded hemisphere. `heading_enable=0` leaves yaw free apart from
+the airframe's existing rate damping. Wire the autonomous guidance authority
+to this input so a pilot's first accepted flight input releases heading hold.
+The production analytic gate is `scripts/api/test_attitude_heading.py`.
+
+The reference's `heading_ready` requires both azimuth error and measured yaw
+rate inside the authored envelopes. A mission can wire this to
+`PositionPID3D.descent_enable`. With permission zero, guidance removes downward
+position and rate demand while retaining measured vertical-velocity damping
+and gravity compensation. The input defaults to one for missions without this
+interlock. Griffin uses the gate to acquire solar azimuth before descending;
+it also suspends descent if automatic tracking leaves its envelope. This is
+continuous Modelica guidance, with the existing manual and contact authority
+boundaries. It does not reposition or freeze the physical body.
+
 The production lander uses four physical RCS pods at the diagonal body-frame
 hardpoints `(±1.8, 0.65, ±1.8)`, between the four raked landing-leg rails. The
 pod height remains within the hull's body envelope while its diagonal radius

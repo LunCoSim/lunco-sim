@@ -145,6 +145,25 @@ the active `scene_interaction` hook through native window input for UI acceptanc
 
 ## 2. High-level logic → rhai, event-driven
 
+For a thrust-stabilized vehicle that also needs a heading, reuse
+`LunCo.Sensors.AttitudeReference`: connect an environment probe's target
+direction to `heading_target_body_x/y/z`, choose the forward face through
+`heading_forward_body_x/z`, and connect `heading_enable` to the guidance
+authority gate. The reference compares horizontal azimuths through the shared
+quaternion transform; thrust tilt retains recovery priority, and a vertical
+target reports `heading_valid=0`. Keep this continuous reference in Modelica.
+Run `scripts/api/test_attitude_heading.py --output <evidence-dir>` for signed,
+antipodal, tilted, vertical-target and disabled-authority witnesses, then run
+the vehicle's own descent and manual-handoff gates.
+
+For acquisition before landing, wire the reference's `heading_ready` to
+`PositionPID3D.descent_enable` and connect the measured IMU yaw rate to
+`heading_rate_body_y`. Author angle/rate qualification limits on the reference.
+Zero descent permission removes downward position and rate commands while
+retaining hover and vertical-rate damping; one enables the normal descent
+schedule. Validate both the inhibited and enabled reference, then prove the
+vehicle stays airborne during acquisition and lands with the heading held.
+
 A a `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario
 (`uniform asset info:sourceAsset = @scenarios/my_supervisor.rhai@`), does
 supervision and sequencing — **never a control loop**. React to events; don't poll or
