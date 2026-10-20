@@ -792,11 +792,6 @@ impl DrivenVesselPose {
             Self::World { .. } => None,
         }
     }
-
-    fn altitude(self) -> f64 {
-        self.geodetic()
-            .map_or_else(|| self.display_position().y, |geo| geo.height_m)
-    }
 }
 
 /// The optional geographic datum is one system parameter so the HUD remains
@@ -3036,7 +3031,6 @@ fn publish_vessel_values(
         v.speed
             .map_or_else(|| "—".into(), |speed| format!("{speed:.1}")),
     );
-    ui.set_property("altitude", format!("{:.1}", v.pose.altitude()));
     ui.set_property("roll", format!("{:+.0}°", v.roll_deg));
     ui.set_property("pitch", format!("{:+.0}°", v.pitch_deg));
     ui.set_property("heading", format!("{:.0}°", v.heading_deg));

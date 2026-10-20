@@ -838,8 +838,11 @@ its transport waiting.
 
 Subject surface facts include `coordinates` from `SurfacePoseQuery`: IAU/WGCCRE
 body-fixed latitude (north positive), longitude (east positive), and height above
-the body's mean sphere, all f64. The compact vehicle HUD formats degrees and
-hemispheres and labels the height datum. It must not label these coordinates
+the body's mean sphere, all f64. Compact and detailed vessel HUDs share the
+coordinate-formatting policy, including degrees, hemispheres and height datum.
+The detailed HUD binds its frame label and numeric height from that policy;
+it does not replace an unavailable coordinate with a native world-Y value.
+It must not label these coordinates
 `MOON_ME` or `MOON_PA`: those require an explicit frame transform. In a scene
 without a site anchor the coordinate mode is explicitly world metres; an
 unresolvable or ambiguous site frame publishes coordinates as unavailable.

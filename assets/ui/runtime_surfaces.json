@@ -131,6 +131,8 @@
         "tilt_limits": { "source": "tilt_limits" },
         "speed": { "source": "speed" },
         "altitude": { "source": "altitude" },
+        "height_reference": { "source": "height_reference" },
+        "coordinate_frame": { "source": "coordinate_frame" },
         "roll": { "source": "roll" },
         "pitch": { "source": "pitch" },
         "heading": { "source": "heading" },

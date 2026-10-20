@@ -2138,7 +2138,7 @@ impl SysmlRequirementsPanel {
                                 let response = ui
                                     .small_button(format!("{label}{marker}"))
                                     .on_hover_text(
-                                        format!("{}\n\nClick to sort. Drag the dotted handle to move; drag the divider to resize, or double-click it to fit.", requirement_column_hint(column)),
+                                        format!("{}\n\nClick to sort. Drag the dotted handle to move. Resize result columns at their dividers; the requirement fills the remaining space.", requirement_column_hint(column)),
                                     );
                                 if let Some(dropped) =
                                     response.dnd_release_payload::<RequirementSortColumn>()
@@ -3927,7 +3927,15 @@ fn requirement_column_layout(
     } else {
         share
     };
-    Column::initial((table_width * share).max(0.0))
+    // Native remainder sizing follows dock/window changes even after the
+    // table has retained user widths for the result columns. A resizable
+    // remainder would retain its old width too, leaving statement space idle.
+    let layout = if column == RequirementSortColumn::Id {
+        Column::remainder().resizable(false)
+    } else {
+        Column::initial((table_width * share).max(0.0))
+    };
+    layout
         .at_least(minimum_width * minimum_width_scale)
         .clip(true)
 }

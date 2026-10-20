@@ -111,7 +111,9 @@ statement and keeps evidence, test execution and model coverage separate. Usage
 statements inherit only from their uniquely resolved definition when the usage
 has no documentation; the prepared view model supplies the same text to search,
 the list and traceability. **All columns** adds declaration kind, source and
-overall status. Both column sets retain sorting, resizing and reordering.
+overall status. The requirement column fills the available dock width and
+follows window and dock changes. Result columns retain their user-resized
+widths; both column sets support sorting and reordering.
 **Passed first** defaults to current-revision passing requirement evidence, with
 column sorting within each group; **Column order** applies column sorting to the
 entire list. Ordering does not alter the independent status dimensions. Summary

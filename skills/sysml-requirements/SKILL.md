@@ -45,7 +45,9 @@ criteria, resolved `verify` cases, parser diagnostics, and source locations.
 Selecting **SysML Requirements** from another perspective opens its owning
 Editor perspective. The panel starts with applied requirement usages and a
 compact statement-led list. **Definitions** includes reusable declarations; **All columns** adds source,
-kind and overall status. Search and independent status filters narrow the list.
+kind and overall status. The requirement column expands with its dock; resize
+the result columns to adjust the space available for statements. Search and
+independent status filters narrow the list.
 **Passed first** is the default ordering: current-revision passing requirement
 evidence comes first, with column sorting within each group. **Column order**
 sorts the entire list by its selected column. Neither option changes evidence,

@@ -132,15 +132,19 @@ fn angle_text(value, positive, negative) {
 
 fn coordinate_properties(coordinates, world_position) {
     if coordinates == () {
-        return #{position: "COORDINATES UNAVAILABLE", height: "—", coordinate_frame: "FRAME UNAVAILABLE"};
+        return #{position: "COORDINATES UNAVAILABLE", height: "—", height_value: "—",
+            height_reference: "DATUM UNAVAILABLE", coordinate_frame: "FRAME UNAVAILABLE"};
     }
     if coordinates.system == "world" {
-        return #{position: vector_text(world_position, 100.0) + " m", height: "—", coordinate_frame: "WORLD · metres"};
+        return #{position: vector_text(world_position, 100.0) + " m", height: "—",
+            height_value: number_text(world_position[1], 10.0), height_reference: "world Y = 0",
+            coordinate_frame: "WORLD · metres"};
     }
     let body = if coordinates.body == 301 { "MOON" } else { "BODY " + coordinates.body };
     #{position: angle_text(coordinates.latitude_deg, "N", "S") + "  ·  "
         + angle_text(coordinates.longitude_deg, "E", "W"),
       height: number_text(coordinates.height_m, 10.0) + " m · mean sphere",
+      height_value: number_text(coordinates.height_m, 10.0), height_reference: "mean sphere",
       coordinate_frame: body + " · " + coordinates.system + " · east positive"}
 }
 
@@ -173,6 +177,8 @@ fn runtime_ui_properties(facts) {
     let coordinates = coordinate_properties(facts.coordinates, facts.position);
     result.position = coordinates.position;
     result.height = coordinates.height;
+    result.altitude = coordinates.height_value;
+    result.height_reference = coordinates.height_reference;
     result.coordinate_frame = coordinates.coordinate_frame;
     result.angular_velocity = angular_speed_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);

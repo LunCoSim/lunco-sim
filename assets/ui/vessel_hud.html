@@ -7,6 +7,8 @@
   <property name="tilt_limits">generic limits</property>
   <property name="speed">—</property>
   <property name="altitude">—</property>
+  <property name="height_reference">DATUM UNAVAILABLE</property>
+  <property name="coordinate_frame">FRAME UNAVAILABLE</property>
   <property name="roll">—</property>
   <property name="pitch">—</property>
   <property name="heading">—</property>
@@ -61,11 +63,12 @@
         </button>
       </node>
       <text id="vessel-hud-runtime-status">{runtime_status}</text>
-      <text id="vessel-hud-frame">site frame · metres</text>
+      <text id="vessel-hud-frame">{coordinate_frame}</text>
       <node id="vessel-hud-nav-details">
         <node id="vessel-hud-altitude-block">
-          <text id="vessel-hud-altitude-label">ALT</text>
+          <text id="vessel-hud-altitude-label">HEIGHT</text>
           <text id="vessel-hud-altitude">{altitude} m</text>
+          <text id="vessel-hud-height-reference">{height_reference}</text>
         </node>
         <node id="vessel-hud-position-block">
           <node id="vessel-hud-geo">
