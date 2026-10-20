@@ -446,7 +446,22 @@ fn solve_island(
             .map(|(i, &row)| rows[indices[row]].error * scales[i])
             .collect::<Vec<_>>();
         let operator = prepared.operator(&selected, &scales);
-        let solved = solve_minimum_residual(&operator, &rhs, max_iterations)?;
+        let solved = if selected.is_empty() {
+            Vec::new()
+        } else {
+            // Reserve three orders below the tightest scaled row tolerance.
+            // The nonlinear owner validates native geometry before writeback.
+            let absolute_bound = selected
+                .iter()
+                .enumerate()
+                .map(|(i, &row)| rows[indices[row]].tolerance * scales[i])
+                .fold(f64::INFINITY, f64::min)
+                * 1.0e-3;
+            if !absolute_bound.is_finite() || absolute_bound <= 0.0 {
+                return Err("coupled scaled row tolerance is not finite and positive");
+            }
+            solve_minimum_residual(&operator, &rhs, absolute_bound, max_iterations)?
+        };
         let mut multipliers = vec![0.0; n];
         for (i, &row) in selected.iter().enumerate() {
             multipliers[row] = solved[i] * scales[i];
@@ -513,6 +528,7 @@ fn allocate_matrix(
 fn solve_minimum_residual(
     operator: &ResponseOperator,
     rhs: &[f64],
+    absolute_bound: f64,
     max_iterations: usize,
 ) -> Result<Vec<f64>, &'static str> {
     let _span = bevy::log::debug_span!("coupled_response_krylov").entered();
@@ -526,7 +542,12 @@ fn solve_minimum_residual(
     let b = allocate_matrix(n, 1, |i, _| rhs[i])?;
     let mut out = allocate_matrix(n, 1, |_, _| 0.0)?;
     let preconditioner = IdentityPrecond { dim: n };
-    let scratch = lsmr::lsmr_scratch::<f64>(preconditioner, operator, 1, Par::Seq);
+    // LSMR retains an n-by-RHS search-history column during sparse products.
+    // Its live storage must coexist with the published solver workspace.
+    let scratch = StackReq::all_of(&[
+        lsmr::lsmr_scratch::<f64>(preconditioner, operator, 1, Par::Seq),
+        faer::linalg::temp_mat_scratch::<f64>(n, 1),
+    ]);
     let mut memory =
         MemBuffer::try_new(scratch).map_err(|_| "coupled Krylov workspace allocation failed")?;
     let mut params = lsmr::LsmrParams::<f64>::default();
@@ -548,7 +569,6 @@ fn solve_minimum_residual(
         return Err("coupled normal right-hand side is not finite");
     }
     let relative_bound: f64 = 1.0e-12;
-    let absolute_bound: f64 = 1.0e-12;
     params.rel_tolerance = if normal_norm > 0.0 {
         relative_bound.max(absolute_bound / normal_norm)
     } else {
@@ -756,6 +776,72 @@ mod tests {
         assert_eq!(result[3], 0.0);
         assert!((result[0] * 0.001 + 2.1).abs() < 1e-10);
         assert!((result[0] + result[1] - 2.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn normal_stopping_budget_preserves_small_scale_heavy_attachment_response() {
+        let a = Entity::from_bits(1);
+        let b = Entity::from_bits(2);
+        let wall = Entity::from_bits(3);
+        let heavy = inertia(0.001);
+        let light = inertia(1.0);
+        let fixed = SolverBodyInertia::DUMMY;
+        for scale in [1.0, 1e-6, 1e-9] {
+            let rows = [
+                Row::new(
+                    [a, b],
+                    [linear(-1.0), linear(1.0)],
+                    [&heavy, &light],
+                    0.0,
+                    1e-9 * scale,
+                    false,
+                )
+                .unwrap(),
+                Row::new(
+                    [b, wall],
+                    [linear(1.0), linear(-1.0)],
+                    [&light, &fixed],
+                    2.1 * scale,
+                    1e-9 * scale,
+                    true,
+                )
+                .unwrap(),
+            ];
+            let result = solve(&rows, 64).unwrap();
+            assert!((result[0] / scale + 2100.0).abs() < 1e-8);
+            assert!((result[1] / scale - 2102.1).abs() < 1e-8);
+            assert!((result[0] + result[1] - 2.1 * scale).abs() < 1e-10 * scale);
+        }
+    }
+
+    #[test]
+    fn sparse_krylov_workspace_covers_many_rows_over_few_bodies() {
+        let body = inertia(1.0);
+        for count in 18..200 {
+            let rows = (0..count)
+                .map(|i| {
+                    let branch = i % 17;
+                    Row::new(
+                        [Entity::from_bits(1), Entity::from_bits(branch + 2)],
+                        [linear(-1.0), linear(1.0)],
+                        [&body, &body],
+                        1.0 + branch as f64 * 0.03,
+                        1e-9,
+                        false,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let result = solve(&rows, 128).unwrap();
+            for row in &rows {
+                let response = rows
+                    .iter()
+                    .zip(&result)
+                    .map(|(other, &impulse)| row.response_to(other) * impulse)
+                    .sum::<f64>();
+                assert!((response - row.error).abs() <= row.tolerance);
+            }
+        }
     }
 
     #[test]
