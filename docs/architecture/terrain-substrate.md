@@ -818,9 +818,9 @@ thickness criterion cannot be reached. That proof omits only impossible initial
 overlap sampling; positive-time casts and zero-thickness shapes retain their
 native queries. Development builds explicitly optimise the workspace math and
 physics owners while retaining assertions and overflow checks.
-Contact inequalities and hard joint rows share the matrix-free f64 response
+Contact inequalities and hard joint rows share the f64 response
 owner in `lunco-physics::constraint_response`. Responsive islands, stable row
-order, serial maintained faer LSMR and principal pivots determine the coupled
+order and serial maintained faer kernels determine the coupled
 correction. The sparse operator packs selected terms by body, gathers typed
 linear/angular sums locally and stores endpoint dot products in its stack
 workspace. It retains row, endpoint and component addition order for both the
@@ -829,6 +829,12 @@ joint geometry, material trajectories and complete native sweeps validate
 writeback. Motors and compliant channels retain one integration per substep.
 The numerical contract, failure boundary and production gates are specified in
 [deterministic runtime](62-deterministic-runtime-and-async-boundaries.md).
+Permanent hard rows above native response component support certify a singular
+island. When its native dominance masks retain a PSD response, complete
+orthogonal decomposition and feasible contact-bound pivots retain scaled
+minimum-norm reactions. Other islands use sparse LSMR with reaction precision
+independent of geometric writeback slack. Both kernels retain the full native
+residual and geometric admission checks.
 Fresh endpoint manifolds close initial rolling overlap, including when a whole-arc
 certificate omits a cast. Native composite manifold dispatch owns mesh traversal,
 internal-edge rules and local witness frames. Additional continuous normal

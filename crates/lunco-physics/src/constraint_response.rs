@@ -1,5 +1,7 @@
 //! Coupled f64 response of prepared geometric equality and unilateral rows.
 
+mod factorization;
+
 use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
     xpbd::{AngularConstraint, PositionConstraint},
@@ -248,6 +250,8 @@ struct PreparedResponse<'a> {
     rows: Vec<&'a Row>,
     bodies: Vec<[usize; 2]>,
     body_count: usize,
+    response_rank_ceiling: usize,
+    self_adjoint: bool,
 }
 
 impl<'a> PreparedResponse<'a> {
@@ -258,12 +262,29 @@ impl<'a> PreparedResponse<'a> {
         let bodies = rows
             .iter()
             .map(|row| {
-                row.bodies.map(|entity| {
-                    *body_map.entry(entity).or_insert_with(|| {
-                        let index = body_count;
-                        body_count += 1;
-                        index
-                    })
+                std::array::from_fn(|end| {
+                    let (index, support, masks) =
+                        body_map.entry(row.bodies[end]).or_insert_with(|| {
+                            let index = body_count;
+                            body_count += 1;
+                            (index, 0u8, 0u8)
+                        });
+                    if row.gradients[end].responds() {
+                        *masks |= if row.applied_gradients[end].responds() {
+                            1
+                        } else {
+                            2
+                        };
+                    }
+                    for axis in 0..3 {
+                        if row.responses[end].linear[axis] != 0.0 {
+                            *support |= 1 << axis;
+                        }
+                        if row.responses[end].angular[axis] != 0.0 {
+                            *support |= 1 << (axis + 3);
+                        }
+                    }
+                    *index
                 })
             })
             .collect();
@@ -275,6 +296,14 @@ impl<'a> PreparedResponse<'a> {
             rows,
             bodies,
             body_count,
+            response_rank_ceiling: body_map
+                .values()
+                .map(|(_, support, _)| support.count_ones() as usize)
+                .sum(),
+            // A common mask per responsive body retains the PSD J M^-1 J^T.
+            self_adjoint: body_map
+                .values()
+                .all(|(_, support, masks)| *support == 0 || *masks != 3),
         })
     }
 
@@ -457,6 +486,35 @@ fn solve_island(
     let mut full_output = allocate_matrix(n, 1, |_, _| 0.0)?;
     let mut full_memory = MemBuffer::try_new(full.scratch)
         .map_err(|_| "coupled response workspace allocation failed")?;
+    // Permanent hard rows above the native response rank ceiling certify that
+    // every active face is singular. Its serial orthogonal solve retains the
+    // same scaled minimum-norm reactions without a Krylov iteration cap.
+    let coefficients = if prepared.self_adjoint
+        && indices.iter().filter(|&&i| !rows[i].unilateral).count() > prepared.response_rank_ceiling
+    {
+        let mut matrix = allocate_matrix(n, n, |_, _| 0.0)?;
+        for j in 0..n {
+            full_input.fill(0.0);
+            full_input[(j, 0)] = diagonal_scales[j];
+            full.apply(
+                matrix.as_mut().subcols_mut(j, 1),
+                full_input.as_ref(),
+                Par::Seq,
+                MemStack::new(&mut full_memory),
+            );
+            for i in 0..n {
+                matrix[(i, j)] *= diagonal_scales[i];
+            }
+        }
+        Some(matrix)
+    } else {
+        None
+    };
+    let mut feasible = allocate_matrix(if coefficients.is_some() { n } else { 0 }, 1, |_, _| 0.0)?;
+    let unilateral = indices
+        .iter()
+        .map(|&i| rows[i].unilateral)
+        .collect::<Vec<_>>();
     // Admission and later re-admission use the same residual bound. Excluded
     // inequalities remain in the full response check after every correction.
     let mut active = indices
@@ -479,41 +537,37 @@ fn solve_island(
             .enumerate()
             .map(|(i, &row)| rows[indices[row]].error * scales[i])
             .collect::<Vec<_>>();
-        let operator = prepared.operator(&selected, &scales)?;
-        let solved = if selected.is_empty() {
-            Vec::new()
+        let (solved, orthogonal_residual) = if let Some(matrix) = &coefficients {
+            let face = allocate_matrix(selected.len(), selected.len(), |i, j| {
+                matrix[(selected[i], selected[j])]
+            })?;
+            let solution = factorization::minimum_norm(face, &rhs, prepared.response_rank_ceiling)?;
+            (solution.multipliers, Some(solution.residual))
         } else {
-            // Reserve three orders below the tightest scaled row tolerance.
-            // The nonlinear owner validates native geometry before writeback.
-            let absolute_bound = selected
-                .iter()
-                .enumerate()
-                .map(|(i, &row)| rows[indices[row]].tolerance * scales[i])
-                .fold(f64::INFINITY, f64::min)
-                * 1.0e-3;
-            if !absolute_bound.is_finite() || absolute_bound <= 0.0 {
-                return Err("coupled scaled row tolerance is not finite and positive");
-            }
-            solve_minimum_residual(&operator, &rhs, absolute_bound, max_iterations)?
+            let operator = prepared.operator(&selected, &scales)?;
+            (
+                solve_minimum_residual(&operator, &rhs, max_iterations)?,
+                None,
+            )
         };
 
         let mut multipliers = vec![0.0; n];
         for (i, &row) in selected.iter().enumerate() {
-            multipliers[row] = solved[i] * scales[i];
+            multipliers[row] = solved[i];
         }
-        if multipliers.iter().any(|x| !x.is_finite()) {
-            return Err("coupled constraint multiplier exceeded its finite numeric range");
+        for i in 0..n {
+            full_input[(i, 0)] = multipliers[i] * diagonal_scales[i];
+            if !full_input[(i, 0)].is_finite() {
+                return Err("coupled constraint multiplier exceeded its finite numeric range");
+            }
         }
-        // Stable principal pivots release pulling unilateral reactions before
-        // admitting an inactive inequality disturbed by the coupled solution.
-        if let Some(i) =
-            (0..n).find(|&i| active[i] && rows[indices[i]].unilateral && multipliers[i] < 0.0)
+        let pulling =
+            (0..n).find(|&i| active[i] && rows[indices[i]].unilateral && multipliers[i] < 0.0);
+        if coefficients.is_none()
+            && let Some(i) = pulling
         {
             active[i] = false;
             continue;
-        }
-        for i in 0..n {
-            full_input[(i, 0)] = multipliers[i];
         }
         full.apply(
             full_output.as_mut(),
@@ -530,19 +584,44 @@ fn solve_island(
         // Redundant inequalities may have different slack. An oversatisfied
         // active row is released even when the least-squares multiplier is
         // positive; its boundary need not remain an equality.
-        if let Some(i) = (0..n).find(|&i| {
+        let oversatisfied = (0..n).find(|&i| {
             active[i] && rows[indices[i]].unilateral && residual[i] < -rows[indices[i]].tolerance
-        }) {
+        });
+        let violated = (0..n).find(|&i| !active[i] && residual[i] > rows[indices[i]].tolerance);
+        if pulling.is_none() && oversatisfied.is_none() && violated.is_none() {
+            // Nonlinear hard rows can have an inconsistent linearized RHS.
+            // A finished native face keeps its selected minimum-norm reactions;
+            // the geometric owner revalidates the resulting body correction.
+            for i in 0..n {
+                multipliers[i] = full_input[(i, 0)];
+            }
+            return Ok(multipliers);
+        }
+        if let Some(residual) = &orthogonal_residual {
+            let blocked = factorization::blocking_rows(
+                &selected,
+                residual,
+                &unilateral,
+                &active,
+                &multipliers,
+                &mut feasible,
+            )?;
+            if !blocked.is_empty() {
+                for i in blocked {
+                    active[i] = false;
+                }
+                continue;
+            }
+        }
+        if let Some(i) = oversatisfied {
             active[i] = false;
             continue;
         }
-        if let Some(i) = (0..n).find(|&i| !active[i] && residual[i] > rows[indices[i]].tolerance) {
+        if let Some(i) = violated {
             active[i] = true;
             continue;
         }
-        // Redundant nonlinear rows can have an inconsistent linearized RHS.
-        // Their least-squares correction is revalidated by the geometric owner.
-        return Ok(multipliers);
+        return Err("coupled pulling reaction has no feasible blocking bound");
     }
     Err("coupled unilateral constraint pivots did not converge")
 }
@@ -552,6 +631,11 @@ fn allocate_matrix(
     ncols: usize,
     value: impl FnMut(usize, usize) -> f64,
 ) -> Result<Mat<f64>, &'static str> {
+    nrows
+        .checked_mul(ncols)
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f64>()))
+        .filter(|&size| size <= isize::MAX as usize)
+        .ok_or("coupled constraint matrix size overflow")?;
     let mut matrix = Mat::<f64>::new();
     matrix
         .try_reserve(nrows, ncols)
@@ -563,7 +647,6 @@ fn allocate_matrix(
 fn solve_minimum_residual(
     operator: &ResponseOperator,
     rhs: &[f64],
-    absolute_bound: f64,
     max_iterations: usize,
 ) -> Result<Vec<f64>, &'static str> {
     let _span = bevy::log::debug_span!("coupled_response_krylov").entered();
@@ -588,27 +671,9 @@ fn solve_minimum_residual(
     let mut params = lsmr::LsmrParams::<f64>::default();
     params.initial_guess = InitialGuessStatus::Zero;
     params.max_iters = max_iterations;
-    // Resolve the normal residual to f64 precision without demanding a
-    // relative reduction below the absolute arithmetic floor for a small RHS.
-    // Faer's LSMR stopping test consumes rel_tolerance; translate the complete
-    // owner bound through ||A^T b|| using the same native sparse adjoint.
-    let mut normal_rhs = allocate_matrix(n, 1, |_, _| 0.0)?;
-    operator.adjoint_apply(
-        normal_rhs.as_mut(),
-        b.as_ref(),
-        Par::Seq,
-        MemStack::new(&mut memory),
-    );
-    let normal_norm = normal_rhs.norm_l2();
-    if !normal_norm.is_finite() {
-        return Err("coupled normal right-hand side is not finite");
-    }
-    let relative_bound: f64 = 1.0e-12;
-    params.rel_tolerance = if normal_norm > 0.0 {
-        relative_bound.max(absolute_bound / normal_norm)
-    } else {
-        relative_bound
-    };
+    // Resolve reactions independently of geometric writeback slack. Relaxing
+    // this bound with row tolerances can reverse contact signs and cycle pivots.
+    params.rel_tolerance = 1.0e-12;
     let info = lsmr::lsmr(
         out.as_mut(),
         preconditioner,
@@ -728,6 +793,7 @@ mod tests {
         let indices = [0, 1, 2];
         let scales = [0.75, 1.25, 0.5];
         let prepared = PreparedResponse::new(&rows, &indices).unwrap();
+        assert!(!prepared.self_adjoint);
         let op = prepared.operator(&indices, &scales).unwrap();
         let rhs = allocate_matrix(3, 2, |i, j| (i as f64 - 1.0) * (j as f64 + 2.0) + 0.25).unwrap();
         let mut out = allocate_matrix(3, 2, |_, _| 0.0).unwrap();
@@ -855,6 +921,158 @@ mod tests {
             assert!((result[0] / scale + 2100.0).abs() < 1e-8);
             assert!((result[1] / scale - 2102.1).abs() < 1e-8);
             assert!((result[0] + result[1] - 2.1 * scale).abs() < 1e-10 * scale);
+        }
+    }
+
+    #[test]
+    fn minimum_norm_reaction_does_not_inherit_geometric_slack() {
+        let a = Entity::from_bits(1);
+        let b = Entity::from_bits(2);
+        let wall = Entity::from_bits(3);
+        let heavy = inertia(0.001);
+        let light = inertia(1.0);
+        let fixed = SolverBodyInertia::DUMMY;
+        let error = 0.0009091893891588071;
+        let rows = [
+            Row::new(
+                [a, b],
+                [linear(-1.0), linear(1.0)],
+                [&heavy, &light],
+                0.0,
+                0.002,
+                false,
+            )
+            .unwrap(),
+            Row::new(
+                [b, wall],
+                [linear(1.0), linear(-1.0)],
+                [&light, &fixed],
+                error,
+                0.0005,
+                true,
+            )
+            .unwrap(),
+        ];
+        let result = solve(&rows, 64).unwrap();
+        assert!((result[0] + error / 0.001).abs() < 1e-9, "{result:?}");
+        assert!(
+            (result[1] - error * 1.001 / 0.001).abs() < 1e-9,
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn permanently_singular_response_recovers_a_weak_unilateral_direction() {
+        let body = Entity::from_bits(1);
+        let wall = Entity::from_bits(2);
+        let moving = inertia(1.0);
+        let fixed = SolverBodyInertia::DUMMY;
+        let make_row = |direction: DVec3, error, unilateral| {
+            Row::new(
+                [body, wall],
+                [
+                    Gradient {
+                        linear: direction,
+                        ..Default::default()
+                    },
+                    Gradient {
+                        linear: -direction,
+                        ..Default::default()
+                    },
+                ],
+                [&moving, &fixed],
+                error,
+                1e-9,
+                unilateral,
+            )
+            .unwrap()
+        };
+        let mut rows = Vec::new();
+        for direction in [DVec3::X, DVec3::Y] {
+            for _ in 0..3 {
+                rows.push(make_row(direction, 0.0, false));
+            }
+        }
+        rows.push(make_row(DVec3::Y + 1e-4 * DVec3::Z, 1e-6, true));
+        let solved = solve(&rows, 1).unwrap();
+        assert!((solved[6] - 100.0).abs() < 1e-4, "{solved:?}");
+        for lambda in &solved[3..6] {
+            assert!((*lambda + 100.0 / 3.0).abs() < 1e-4);
+        }
+        let response = impulses(&rows, &solved).unwrap();
+        let motion = response
+            .iter()
+            .find(|(entity, _)| *entity == body)
+            .unwrap()
+            .1;
+        assert!(motion.linear.x.abs() < 1e-6 && motion.linear.y.abs() < 1e-6);
+        assert!((motion.linear.z + 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn singular_faces_preserve_native_slack_and_minimum_norm_reactions() {
+        let a = Entity::from_bits(1);
+        let b = Entity::from_bits(2);
+        let wall = Entity::from_bits(3);
+        let heavy = inertia(0.001);
+        let light = inertia(1.0);
+        let fixed = SolverBodyInertia::DUMMY;
+        let mut rows = (0..3)
+            .map(|_| {
+                Row::new(
+                    [a, b],
+                    [linear(-1.0), linear(1.0)],
+                    [&heavy, &light],
+                    0.0,
+                    1e-9,
+                    false,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        for error in [2.1, 1.0] {
+            rows.push(
+                Row::new(
+                    [b, wall],
+                    [linear(1.0), linear(-1.0)],
+                    [&light, &fixed],
+                    error,
+                    1e-9,
+                    true,
+                )
+                .unwrap(),
+            );
+        }
+        let prepared = PreparedResponse::new(&rows, &[0, 1, 2, 3, 4]).unwrap();
+        assert!(prepared.self_adjoint && prepared.response_rank_ceiling == 2);
+        let solved = solve(&rows, 64).unwrap();
+        for lambda in &solved[..3] {
+            assert!((*lambda + 700.0).abs() < 1e-7);
+        }
+        assert!((solved[3] - 2102.1).abs() < 1e-7);
+        assert_eq!(solved[4], 0.0);
+
+        // Nonlinear hard rows can disagree inside the native geometric bound.
+        // That slack must retain the contact's minimum-norm reaction share.
+        let make_row = |error, unilateral| {
+            Row::new(
+                [b, wall],
+                [linear(1.0), linear(-1.0)],
+                [&light, &fixed],
+                error,
+                1e-6,
+                unilateral,
+            )
+            .unwrap()
+        };
+        let rows = [
+            make_row(1.0, false),
+            make_row(1.0 + 1e-9, false),
+            make_row(1.0, true),
+        ];
+        let solved = solve(&rows, 64).unwrap();
+        for lambda in solved {
+            assert!((lambda - (3.0 + 1e-9) / 9.0).abs() < 1e-12);
         }
     }
 

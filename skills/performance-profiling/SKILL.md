@@ -1285,6 +1285,11 @@ native dominance, signed joint reactions, nonnegative contact reactions and
 convergence tolerances. Preserve the native zero-guess solve's scaled
 minimum-norm reaction selection in rank-deficient systems. A matching body
 correction is insufficient: contact multipliers also feed native friction.
+Keep the linear normal-residual precision independent of geometric writeback
+slack. A tolerance-scaled normal-residual floor can reverse reaction signs in
+weak directions and cycle otherwise feasible unilateral pivots. Qualify both
+small-scale and loose-tolerance heavy-attachment reactions, then replay the
+captured active sets at the production iteration limit.
 The response operator gathers packed selected terms by body. Preserve admitted
 row/endpoint order within each body, component dot grouping, endpoint combination
 order and scaling placement. Qualify layout changes against complete captured
@@ -1303,6 +1308,22 @@ Profile `coupled_constraint_response`, `coupled_island_response`,
 geometry corrections, active-set pivots and inner Krylov work: nested span
 totals overlap. Resolve sampled native addresses against the exact captured
 ELF and its recorded symbol relocation before attributing sparse-product cost.
+`coupled_response_factorization` identifies islands whose permanent hard rows
+exceed their supported native response components and whose dominance masks
+retain a PSD response. Preserve both certificates, native coefficient
+construction, scaled minimum-norm reactions and serial maintained QR kernels.
+Feasible multiplier updates retire all contacts attaining the first blocking
+ratio together at the same feasible point, in admitted row order. This includes
+simultaneous zero-length bounds; do not refactor the same face once per tie.
+Native sign, slack and inactive-row bounds recognize finished faces before any
+null-direction search, separately from linear precision.
+The factorization owns the orthogonal residual and its projection roundoff
+certificate. Do not reconstruct that residual by subtracting cancelling
+reactions. Uncertain signs are zero only in the intermediate null direction;
+all negative admitted directions participate in the blocking ratio.
+Qualify weak directions, redundant unequal clearances, inconsistent hard rows
+inside native slack, the redundant contact-reaction guard and nonsymmetric
+dominance exclusion. Replay failures with the actual production iteration cap.
 The response workspace retains typed linear/angular body gradients and admitted
 addition order in both products. For inner convergence attribution, explicitly
 enable `lunco_physics::constraint_response::iterations=trace`: each completed
