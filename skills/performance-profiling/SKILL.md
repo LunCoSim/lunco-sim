@@ -1285,6 +1285,11 @@ native dominance, signed joint reactions, nonnegative contact reactions and
 convergence tolerances. Preserve the native zero-guess solve's scaled
 minimum-norm reaction selection in rank-deficient systems. A matching body
 correction is insufficient: contact multipliers also feed native friction.
+The response operator gathers packed selected terms by body. Preserve admitted
+row/endpoint order within each body, component dot grouping, endpoint combination
+order and scaling placement. Qualify layout changes against complete captured
+systems, including unilateral pivots and contact multipliers, then compare fixed
+input milestones in production with identical source and initial state.
 Exercise redundant hard rows together with contact rows before qualifying a
 preconditioner or factorization. Generalized body impulses must be summed before
 native rotation integration; large internal reactions can cancel. Rebuild geometry

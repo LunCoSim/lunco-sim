@@ -248,7 +248,6 @@ struct PreparedResponse<'a> {
     rows: Vec<&'a Row>,
     bodies: Vec<[usize; 2]>,
     body_count: usize,
-    scratch: StackReq,
 }
 
 impl<'a> PreparedResponse<'a> {
@@ -269,77 +268,112 @@ impl<'a> PreparedResponse<'a> {
             })
             .collect();
         body_count
-            .checked_mul(std::mem::size_of::<Gradient>())
+            .checked_mul(std::mem::size_of::<Vec<BodyResponseTerm>>())
             .filter(|&size| size <= isize::MAX as usize)
-            .ok_or("coupled body workspace size overflow")?;
+            .ok_or("coupled body topology size overflow")?;
         Ok(Self {
             rows,
             bodies,
             body_count,
-            scratch: StackReq::new::<Gradient>(body_count),
         })
     }
 
-    fn operator<'b>(&'b self, selected: &'b [usize], scales: &'b [f64]) -> ResponseOperator<'b> {
-        ResponseOperator {
-            rows: &self.rows,
-            bodies: &self.bodies,
-            body_count: self.body_count,
-            scratch: self.scratch,
-            selected,
-            scales,
+    fn operator<'b>(
+        &self,
+        selected: &[usize],
+        scales: &'b [f64],
+    ) -> Result<ResponseOperator<'b>, &'static str> {
+        if selected.len() != scales.len() {
+            return Err("coupled response scale ownership is stale");
         }
+        selected
+            .len()
+            .checked_mul(3)
+            .and_then(|n| n.checked_mul(std::mem::size_of::<f64>()))
+            .filter(|&size| size <= isize::MAX as usize)
+            .ok_or("coupled response workspace size overflow")?;
+        let mut terms = Vec::new();
+        terms
+            .try_reserve_exact(self.body_count)
+            .map_err(|_| "coupled body topology allocation failed")?;
+        terms.resize_with(self.body_count, Vec::new);
+        for (i, &index) in selected.iter().enumerate() {
+            let row = self.rows[index];
+            for end in 0..2 {
+                let body = &mut terms[self.bodies[index][end]];
+                body.try_reserve(1)
+                    .map_err(|_| "coupled body term allocation failed")?;
+                body.push(BodyResponseTerm {
+                    endpoint: 2 * i + end,
+                    gradient: row.gradients[end],
+                    response: row.responses[end],
+                });
+            }
+        }
+        Ok(ResponseOperator {
+            terms,
+            scales,
+            scratch: StackReq::new::<f64>(selected.len())
+                .and(StackReq::new::<f64>(2 * selected.len())),
+        })
     }
 }
 
-/// Two sparse body reductions apply J M^-1 J^T and its transpose without a
-/// dense row matrix. All accumulation follows the admitted scalar-row order.
+#[derive(Debug)]
+struct BodyResponseTerm {
+    endpoint: usize,
+    gradient: Gradient,
+    response: Gradient,
+}
+
+/// Gather each body's contributions in admitted row/endpoint order, then
+/// combine endpoint dot products in that same order. No dense matrix is formed.
 #[derive(Debug)]
 struct ResponseOperator<'a> {
-    rows: &'a [&'a Row],
-    bodies: &'a [[usize; 2]],
-    body_count: usize,
+    terms: Vec<Vec<BodyResponseTerm>>,
     scratch: StackReq,
-    selected: &'a [usize],
     scales: &'a [f64],
 }
 
 impl ResponseOperator<'_> {
-    fn product(
+    fn product<const TRANSPOSE: bool>(
         &self,
         mut out: MatMut<'_, f64>,
         rhs: MatRef<'_, f64>,
-        transpose: bool,
         stack: &mut MemStack,
     ) {
-        let (mut work, _) = stack.make_with::<Gradient>(self.body_count, |_| Gradient::default());
+        let n = self.scales.len();
+        let (mut scaled, stack) = stack.make_with::<f64>(n, |_| 0.0);
+        let (mut endpoints, _) = stack.make_with::<f64>(2 * n, |_| 0.0);
         for col in 0..rhs.ncols() {
-            work.fill(Gradient::default());
-            for (j, &index) in self.selected.iter().enumerate() {
-                let row = self.rows[index];
-                let x = rhs[(j, col)] * self.scales[j];
-                let gradients = if transpose {
-                    row.gradients
-                } else {
-                    row.responses
-                };
-                for end in 0..2 {
-                    let body = &mut work[self.bodies[index][end]];
-                    body.linear += gradients[end].linear * x;
-                    body.angular += gradients[end].angular * x;
+            for i in 0..n {
+                scaled[i] = rhs[(i, col)] * self.scales[i];
+            }
+            for terms in &self.terms {
+                let mut body = Gradient::default();
+                for term in terms {
+                    let gradient = if TRANSPOSE {
+                        term.gradient
+                    } else {
+                        term.response
+                    };
+                    let x = scaled[term.endpoint / 2];
+                    body.linear += gradient.linear * x;
+                    body.angular += gradient.angular * x;
+                }
+                for term in terms {
+                    let gradient = if TRANSPOSE {
+                        term.response
+                    } else {
+                        term.gradient
+                    };
+                    endpoints[term.endpoint] = gradient.dot(body);
                 }
             }
-            for (i, &index) in self.selected.iter().enumerate() {
-                let row = self.rows[index];
-                let gradients = if transpose {
-                    row.responses
-                } else {
-                    row.gradients
-                };
+            for i in 0..n {
                 let mut value = 0.0;
-                for end in 0..2 {
-                    value += gradients[end].dot(work[self.bodies[index][end]]);
-                }
+                value += endpoints[2 * i];
+                value += endpoints[2 * i + 1];
                 out[(i, col)] = value * self.scales[i];
             }
         }
@@ -351,13 +385,13 @@ impl LinOp<f64> for ResponseOperator<'_> {
         self.scratch
     }
     fn nrows(&self) -> usize {
-        self.selected.len()
+        self.scales.len()
     }
     fn ncols(&self) -> usize {
-        self.selected.len()
+        self.scales.len()
     }
     fn apply(&self, out: MatMut<'_, f64>, rhs: MatRef<'_, f64>, _par: Par, stack: &mut MemStack) {
-        self.product(out, rhs, false, stack);
+        self.product::<false>(out, rhs, stack);
     }
     fn conj_apply(
         &self,
@@ -381,7 +415,7 @@ impl BiLinOp<f64> for ResponseOperator<'_> {
         _par: Par,
         stack: &mut MemStack,
     ) {
-        self.product(out, rhs, true, stack);
+        self.product::<true>(out, rhs, stack);
     }
     fn adjoint_apply(
         &self,
@@ -404,7 +438,7 @@ fn solve_island(
     let prepared = PreparedResponse::new(rows, indices)?;
     let all = (0..n).collect::<Vec<_>>();
     let unscaled = vec![1.0; n];
-    let full = prepared.operator(&all, &unscaled);
+    let full = prepared.operator(&all, &unscaled)?;
     let diagonal_scales = indices
         .iter()
         .map(|&i| {
@@ -421,7 +455,7 @@ fn solve_island(
     }
     let mut full_input = allocate_matrix(n, 1, |_, _| 0.0)?;
     let mut full_output = allocate_matrix(n, 1, |_, _| 0.0)?;
-    let mut full_memory = MemBuffer::try_new(prepared.scratch)
+    let mut full_memory = MemBuffer::try_new(full.scratch)
         .map_err(|_| "coupled response workspace allocation failed")?;
     // Admission and later re-admission use the same residual bound. Excluded
     // inequalities remain in the full response check after every correction.
@@ -445,7 +479,7 @@ fn solve_island(
             .enumerate()
             .map(|(i, &row)| rows[indices[row]].error * scales[i])
             .collect::<Vec<_>>();
-        let operator = prepared.operator(&selected, &scales);
+        let operator = prepared.operator(&selected, &scales)?;
         let solved = if selected.is_empty() {
             Vec::new()
         } else {
@@ -462,6 +496,7 @@ fn solve_island(
             }
             solve_minimum_residual(&operator, &rhs, absolute_bound, max_iterations)?
         };
+
         let mut multipliers = vec![0.0; n];
         for (i, &row) in selected.iter().enumerate() {
             multipliers[row] = solved[i] * scales[i];
@@ -693,17 +728,26 @@ mod tests {
         let indices = [0, 1, 2];
         let scales = [0.75, 1.25, 0.5];
         let prepared = PreparedResponse::new(&rows, &indices).unwrap();
-        let op = prepared.operator(&indices, &scales);
+        let op = prepared.operator(&indices, &scales).unwrap();
         let rhs = allocate_matrix(3, 2, |i, j| (i as f64 - 1.0) * (j as f64 + 2.0) + 0.25).unwrap();
         let mut out = allocate_matrix(3, 2, |_, _| 0.0).unwrap();
-        let mut memory = MemBuffer::try_new(prepared.scratch).unwrap();
+        let mut memory = MemBuffer::try_new(op.scratch).unwrap();
         for transpose in [false, true] {
-            op.product(
-                out.as_mut(),
-                rhs.as_ref(),
-                transpose,
-                MemStack::new(&mut memory),
-            );
+            if transpose {
+                op.transpose_apply(
+                    out.as_mut(),
+                    rhs.as_ref(),
+                    Par::Seq,
+                    MemStack::new(&mut memory),
+                );
+            } else {
+                op.apply(
+                    out.as_mut(),
+                    rhs.as_ref(),
+                    Par::Seq,
+                    MemStack::new(&mut memory),
+                );
+            }
             for i in 0..3 {
                 for col in 0..2 {
                     let expected = (0..3)

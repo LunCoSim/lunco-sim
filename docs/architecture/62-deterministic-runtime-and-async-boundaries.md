@@ -70,8 +70,14 @@ Rows retain full, axial or perpendicular constrained subspaces as typed
 geometry. Their current scalar gradients and native inertia responses enter
 `lunco-physics::constraint_response` together with admitted continuous-contact
 inequalities. Responsive body islands bound solver work; row order and
-principal-pivot choices remain deterministic. Two sparse body reductions apply
-the native response and its transpose without forming a dense row matrix.
+principal-pivot choices remain deterministic. The sparse response operator packs
+the selected endpoints by body, preserving admitted row/endpoint order within
+each body. It gathers each body's linear/angular sum locally and stores its
+endpoint dot products, then combines those products in input endpoint order.
+Scaling, component dot-product grouping and every accumulation order remain
+unchanged for both the native response and its transpose. This avoids repeated
+scattered writes and forms no dense row matrix. Packed terms and stack workspace
+belong to that exact selected operator and expire with its active-set solve.
 Maintained faer LSMR runs with explicit `Par::Seq`, a 1e-12 relative normal
 residual bound and an absolute budget of one thousandth of the tightest
 scaled native row tolerance, with the owner's iteration bound. The budget
@@ -79,15 +85,15 @@ scales with the declared geometric accuracy; it does not discard small-scale
 constraints behind a fixed absolute floor. The adapter translates that bound
 through native sparse `||A^T b||` into LSMR's consumed relative parameter.
 The allocation includes the published solver layout plus the live n-by-RHS
-search-history column retained while sparse operator products use their own
-body workspace. Workspace admission remains fallible before the solve.
+search-history column retained while sparse operator products use their selected-endpoint workspace. Workspace admission remains fallible before the solve.
+
 Each nonlinear correction is checked against the geometric tolerances;
 least-squares convergence alone does not admit a pose. Unilateral rows release
 pulling reactions and redundant slack. Initial unilateral admission and later
 re-admission both require error beyond the row's declared residual tolerance.
 Excluded rows stay in the complete response check and enter if coupled motion
-crosses that bound. Active rows still target zero error; solver precision and
-geometric writeback tolerances do not change. Allocation failure, failed numerical
+crosses that bound. Active rows still target zero error; geometric writeback tolerances remain
+authoritative. Allocation failure, failed numerical
 convergence or an unresolved native fixed point rejects the operation visibly.
 
 The native zero-guess solve owns minimum-norm multiplier selection in the

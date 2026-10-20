@@ -821,9 +821,10 @@ physics owners while retaining assertions and overflow checks.
 Contact inequalities and hard joint rows share the matrix-free f64 response
 owner in `lunco-physics::constraint_response`. Responsive islands, stable row
 order, serial maintained faer LSMR and principal pivots determine the coupled
-correction. The sparse operator accumulates typed linear/angular gradients in
-its stack workspace, retaining endpoint and component addition order for both
-the response and transpose products. Native impulse kernels apply the summed body response, then fresh
+correction. The sparse operator packs selected terms by body, gathers typed
+linear/angular sums locally and stores endpoint dot products in its stack
+workspace. It retains row, endpoint and component addition order for both the
+response and transpose products. Native impulse kernels apply the summed body response, then fresh
 joint geometry, material trajectories and complete native sweeps validate
 writeback. Motors and compliant channels retain one integration per substep.
 The numerical contract, failure boundary and production gates are specified in
