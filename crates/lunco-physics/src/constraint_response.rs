@@ -532,6 +532,11 @@ fn solve_minimum_residual(
     let mut params = lsmr::LsmrParams::<f64>::default();
     params.initial_guess = InitialGuessStatus::Zero;
     params.max_iters = max_iterations;
+    // Redundant contact/joint rows make the normal equations ill-conditioned.
+    // A 1e-12 relative normal residual resolves native reaction cancellation;
+    // the geometric owner enforces metre/radian bounds before committing a tick.
+    params.rel_tolerance = 1.0e-12;
+    params.abs_tolerance = 1.0e-12;
     let info = lsmr::lsmr(
         out.as_mut(),
         preconditioner,
@@ -542,7 +547,10 @@ fn solve_minimum_residual(
         Par::Seq,
         MemStack::new(&mut memory),
     )
-    .map_err(|_| "coupled minimum-residual solve did not converge")?;
+    .map_err(|error| {
+        bevy::log::warn!(rows = n, max_iterations, ?error, "coupled Krylov convergence failed");
+        "coupled minimum-residual solve did not converge"
+    })?;
     bevy::log::trace!(
         target: "lunco_physics::constraint_response::iterations",
         rows = n,

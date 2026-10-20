@@ -72,8 +72,10 @@ geometry. Their current scalar gradients and native inertia responses enter
 inequalities. Responsive body islands bound solver work; row order and
 principal-pivot choices remain deterministic. Two sparse body reductions apply
 the native response and its transpose without forming a dense row matrix.
-Maintained faer LSMR runs with explicit `Par::Seq`, native f64 stopping precision
-and the owner's iteration bound, including rank-deficient hinge/latch rows.
+Maintained faer LSMR runs with explicit `Par::Seq`, 1e-12 absolute/relative normal-residual
+stopping bounds and the owner's iteration bound, including
+rank-deficient hinge/latch rows. This avoids demanding machine-epsilon
+normal-equation residuals from ill-conditioned redundant contact systems.
 Each nonlinear correction is checked against the geometric tolerances;
 least-squares convergence alone does not admit a pose. Unilateral rows release
 pulling reactions and redundant slack. Initial unilateral admission and later
