@@ -100,21 +100,14 @@ fn on_start(me, ctx) {
     this.zero_intensity = 1.0;
     this.zero_length = 1.0;
     if this.lander >= 0 {
-        // This is a headless authored stimulus. Establish control ownership
-        // without asking the presentation layer to resolve a local embodiment.
-        let possession = cmd("AcquireControl", #{
+        // This authored stimulus uses guidance inputs. Keep the visual/feed
+        // gate inside the stock 60 kN actuator range; Griffin independently
+        // covers full command through its engine gates.
+        let command = cmd("SetPorts", #{
             target: this.lander,
-            bind_camera: false,
+            writes: [["guidance_throttle", 0.5], ["guidance_yaw", 1.0]],
         });
-        if possession.ok {
-            // Keep this visual/feed gate inside the stock 60 kN actuator
-            // range. Griffin's engine gates independently cover full command.
-            let command = cmd("SetPorts", #{
-                target: this.lander,
-                writes: [["external_throttle", 0.5], ["yaw", 1.0]],
-            });
-            this.command_ok = command.ok;
-        }
+        this.command_ok = command.ok;
     }
 }
 
@@ -170,7 +163,7 @@ fn on_tick(me, ctx) {
         this.rcs_length_fraction = max(rcs_pos_fraction, rcs_neg_fraction);
         let zero = cmd("SetPorts", #{
             target: this.lander,
-            writes: [["external_throttle", 0.0], ["yaw", 0.0]],
+            writes: [["guidance_throttle", 0.0], ["guidance_yaw", 0.0]],
         });
         this.zero_command_ok = zero.ok;
         this.phase = 1;

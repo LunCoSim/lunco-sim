@@ -128,6 +128,14 @@ Put behavior assertions in `assets/scenarios/tests/<name>.rhai` and use the
 production scene-test binary. Keep Rust tests limited to generic scripting,
 asset, USD, and lifecycle seams.
 
+For a navigation-only lesson, omit the world payload and use
+`// @timing presentation`. Launch it with the exact `owner_twin_id`; Twin
+ownership does not require scene ownership. Check `InspectGuidedHud.tour` for
+the owner, step and anchor, advance Next/Back while no scene is admitted, then
+replace the Twin and verify the tour cannot return. The production acceptance
+is `python3 scripts/api/test_workbench_perspectives.py --scene-free --port PORT`;
+it launches its own windowed session and requires the authored verdict.
+
 ```bash
 "$LUNCOSIM_BIN" test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000

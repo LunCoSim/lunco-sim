@@ -347,10 +347,10 @@ fn on_tick(me, ctx) {
             "physical skid throttle input was " + this.forward_throttle_s));
         fails.push(t_true(this.forward_throttle_a != () && (this.forward_throttle_a - 0.65).abs() < 0.01,
             "physical Ackermann throttle input was " + this.forward_throttle_a));
-        fails.push(t_true(this.forward_piloted_s == 1.0,
-            "physical skid rover did not own control during its drive matrix"));
-        fails.push(t_true(this.forward_piloted_a == 1.0,
-            "physical Ackermann rover did not own control during its drive matrix"));
+        fails.push(t_true(this.forward_piloted_s == 0.0,
+            "authored skid program drive must not select manual authority"));
+        fails.push(t_true(this.forward_piloted_a == 0.0,
+            "authored Ackermann program drive must not select manual authority"));
         fails.push(t_true(this.forward_drive_left_s != () && this.forward_drive_left_s > 0.1
                           && this.forward_drive_right_s > 0.1,
             "physical skid Modelica drive outputs were " + this.forward_drive_left_s + "/" + this.forward_drive_right_s));

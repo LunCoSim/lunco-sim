@@ -103,8 +103,12 @@ authored subject instead of adding a route-specific child relationship.
 If the mounted document is attached after `on_start`, defer document-backed
 route reads and task actions until the matching `usd.document.projected` event
 binds it; do not retry against an empty identity each task pass.
-Initial scenario admission waits for all world and entity readiness holds
-because a program may depend on entities outside its own hierarchy. After
+Scene-owned and simulation-timed scenario admission waits for world and entity
+readiness holds because a program may depend on entities outside its hierarchy.
+Independent Application/Twin presentation programs wait for their own declared
+inputs and can start without a scene. Their source preparation captures the
+exact Twin identity and optional scene revision; neither a later scene nor a
+reused name authorizes an outgoing worker result. After
 admission, an entity hold idles only scenarios attached within that subtree;
 release resumes them without a stop/start cycle. Fixed-step hooks run after
 `SimTickSet` and release only events stamped before the current tick. Paused

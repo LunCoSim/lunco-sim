@@ -16,16 +16,31 @@ fn on_start(me,ctx) {
     this.omitted_unlimited=joint_drive(finite).max_force.is_infinite();
     this.setter_unlimited=set_joint_drive(finite,1000.0,100.0,joint_drive(find_path("/World/Computed")).max_force);
     this.setter_rejected_negative=!set_joint_drive(finite,1000.0,100.0,-1.0);
-    this.start=sim_tick();this.done=false;this.previous=[];this.cases=[];
+    this.done=false;this.previous=[];this.cases=[];
     this.max_momentum_error=0.0;this.max_kinematic_error=0.0;this.max_damping_error=0.0;this.max_damping_force_error=0.0;this.max_damping_torque_error=0.0;this.previous_damping=[];
+    this.mechanics_initialized=false;
+}
+// Computed mass and inertia belong to native preparation. Establish the
+// analytical baseline from the first completed step, before comparing later
+// steps; tick-zero scenario initialization precedes that native preparation.
+fn initialize_mechanics() {
     let host=query("QueryPhysicsState",#{id:find_path("/World/DampedHost")});
     let bob=query("QueryPhysicsState",#{id:find_path("/World/DampedBob")});
     this.damping_momentum=host.inertia_principal_kgm2[0]*host.angular_velocity_radps[1]+bob.inertia_principal_kgm2[0]*bob.angular_velocity_radps[1];
+    // Native shape mass properties originate in f32. Bound conservation by
+    // their relative precision while retaining an absolute floor near zero.
+    this.momentum_tolerance=max(1.0e-10,abs(this.damping_momentum)*1.1920928955078125e-7);
     this.max_position_error=0.0;this.max_velocity_error=0.0;this.max_force_error=0.0;this.samples=0;
     for name in ["Finite","Computed","Damping","Angular"] {
         let host=query("QueryPhysicsState",#{id:find_path("/World/"+name+"Host")});
         let bob=query("QueryPhysicsState",#{id:find_path("/World/"+name+"Bob")});
         let angular=name=="Angular";
+        if !host.mass_kg.is_finite() || !bob.mass_kg.is_finite()
+                || host.mass_kg<=0.0 || bob.mass_kg<=0.0
+                || (angular && (host.inertia_principal_kgm2[0]<=0.0
+                    || bob.inertia_principal_kgm2[0]<=0.0)) {
+            throw("native force-drive baseline requires prepared positive mass and inertia");
+        }
         let w=if angular {1.0/host.inertia_principal_kgm2[0]+1.0/bob.inertia_principal_kgm2[0]}
               else {if name=="Computed" {1.0/bob.mass_kg} else {1.0/host.mass_kg+1.0/bob.mass_kg}};
         this.cases.push(#{name:name,id:find_path("/World/"+name),angular:angular,w:w,
@@ -36,6 +51,10 @@ fn on_start(me,ctx) {
 }
 fn on_tick(me,ctx) {
     if this.done {return;}
+    if !this.mechanics_initialized {
+        this.initialize_mechanics();
+        this.mechanics_initialized=true;
+    }
     let host=query("QueryPhysicsState",#{id:find_path("/World/DampedHost")});
     let bob=query("QueryPhysicsState",#{id:find_path("/World/DampedBob")});
     let momentum=host.inertia_principal_kgm2[0]*host.angular_velocity_radps[1]+bob.inertia_principal_kgm2[0]*bob.angular_velocity_radps[1];
@@ -81,7 +100,7 @@ fn on_tick(me,ctx) {
         }
     }
     this.previous=current;this.samples+=1;
-    if sim_tick()-this.start<20 {return;}
+    if this.samples<20 {return;}
     this.done=true;
     let computed=query("QueryPhysicsState",#{id:find_path("/World/ComputedBob")});
     report_verdict([
@@ -91,12 +110,12 @@ fn on_tick(me,ctx) {
         t_true(joint_drive(find_path("/World/Computed")).max_force.is_infinite(),"explicit positive infinity retains unlimited drive effort"),
         t_true(this.max_damping_force_error<1e-9,"the completed reaction includes passive linear damping impulse"),
         t_true(this.max_damping_torque_error<1e-9,"the completed reaction includes passive angular damping impulse"),
-        t_true(this.max_momentum_error<1e-10,"passive joint damping conserves unequal-inertia momentum"),
+        t_true(this.max_momentum_error<this.momentum_tolerance,"passive joint damping conserves unequal-inertia momentum"),
         t_true(this.max_kinematic_error<1e-12,"passive joint damping preserves kinematic motion authority"),
         t_true(this.max_damping_error<1e-10,"passive joint damping integrates its decay rate against infinite-inertia endpoints"),
         t_true(get(find_path("/World/Damped"),"angular_velocity").abs()<0.01,"angular damping dissipates relative spin"),
         t_true((get(find_path("/World/Stop"),"displacement")-0.02).abs()<1e-8 && get(find_path("/World/Stop"),"force").abs()<1e-5,"opposing motor and travel-stop reactions cancel in the net force port"),
-        t_true(this.samples>=20,"each admitted tick was observed"),
+        t_true(this.samples>=20,"twenty completed physics samples were observed"),
         t_true(this.max_position_error<1e-8,"force motors preserve the implicit dimensional position law"),
         t_true(this.max_velocity_error<1e-7,"force motors use both native endpoint inertias"),
         t_true(this.max_force_error<1e-5,"force and torque ports report the completed native reaction"),

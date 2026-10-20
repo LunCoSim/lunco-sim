@@ -340,7 +340,7 @@ pub struct PerspectiveDockSnapshot {
     /// arrangement, active leaf. Parsed + reconciled on restore.
     #[serde(default)]
     pub dock: serde_json::Value,
-    // The seven fields below are the SLOT INTENT at save time — the
+    // The fields below are the SLOT INTENT at save time — the
     // perspective's declared panel ids per slot, plus which centre tab was
     // active. Restored into the cache slot verbatim, so a later rebuild/reset
     // reproduces the saved layout even though `dock` above already encodes the
@@ -357,6 +357,10 @@ pub struct PerspectiveDockSnapshot {
     /// Index into [`center`](Self::center) of the tab that was active.
     #[serde(default)]
     pub active_center_tab: usize,
+    /// Central instance-surface intent. Omitted input adopts the current
+    /// authored perspective's intent; saved user layouts retain an override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center_has_initial_instances: Option<bool>,
     /// Panel ids declared for the right inspector slot.
     #[serde(default)]
     pub right_inspector: Vec<PanelId>,
@@ -1019,6 +1023,17 @@ fn restore_workspace_state(world: &mut World) {
     });
 }
 
+fn explicit_perspective(world: &World) -> Option<String> {
+    let active = world
+        .get_resource::<WorkspaceResource>()
+        .and_then(|w| w.active_twin)
+        .map(|id| id.raw());
+    world
+        .get_resource::<lunco_workbench_core::ExplicitPerspectiveChoice>()
+        .filter(|choice| choice.twin_id == active)
+        .and_then(|choice| choice.id.clone())
+}
+
 fn poll_workspace_restore(world: &mut World) {
     let Some(mut pending) = world.resource_mut::<PendingWorkspaceRestore>().0.take() else {
         return;
@@ -1029,6 +1044,16 @@ fn poll_workspace_restore(world: &mut World) {
         return;
     }
 
+    if world
+        .get_resource::<lunco_workbench_core::PerspectiveAdmission>()
+        .is_some_and(|admission| {
+            admission.preparing || admission.twin_id != active.map(|id| id.raw())
+        })
+    {
+        world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
+        return;
+    }
+
     if let WorkspaceRestoreTaskKind::Loading(task) = &mut pending.task {
         let Some(loaded) = block_on(future::poll_once(task)) else {
             world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
@@ -1036,7 +1061,14 @@ fn poll_workspace_restore(world: &mut World) {
         };
         let Some((state, json)) = loaded else {
             world.resource_mut::<RuntimeSurfaceLayouts>().clear();
-            if let Some(perspective) = pending.initial_perspective.take() {
+            let authored = active
+                .and_then(|id| world.resource::<WorkspaceResource>().twin(id))
+                .and_then(|twin| twin.manifest.as_ref())
+                .and_then(|m| m.default_perspective.clone());
+            if let Some(perspective) = explicit_perspective(world)
+                .or(pending.initial_perspective.take())
+                .or(authored)
+            {
                 with_layout_mut(world, |layout, world| {
                     layout.activate_perspective_by_str(world, &perspective);
                 });
@@ -1123,8 +1155,21 @@ fn apply_workspace_state(
         .resource_mut::<RuntimeSurfaceLayouts>()
         .replace(state.runtime_surface_layouts.clone());
 
-    // Perspective: reconcile against the registered set (unknown → drop).
-    if let Some(persp) = initial_perspective.or(state.perspective) {
+    // Explicit navigation wins over late restoration; launch, personal and
+    // authored defaults supply the starting task when no choice was made.
+    let authored = world
+        .resource::<WorkspaceResource>()
+        .active_twin
+        .and_then(|id| world.resource::<WorkspaceResource>().twin(id))
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|m| m.default_perspective.clone());
+    let explicit = explicit_perspective(world);
+    if let Some(persp) = explicit
+        .clone()
+        .or(initial_perspective)
+        .or(state.perspective)
+        .or(authored)
+    {
         with_layout_mut(world, |layout, world| {
             layout.activate_perspective_by_str(world, &persp);
         });
@@ -1229,8 +1274,12 @@ fn apply_workspace_state(
     // tab id) across all trees; the codecs' deferred `OpenTab` then focuses
     // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
+        let mut docks = state.docks;
+        if let Some(explicit) = explicit {
+            docks.remove(&explicit);
+        }
         with_layout_mut(world, |layout, world| {
-            layout.seed_perspective_docks(world, &state.docks, &id_map);
+            layout.seed_perspective_docks(world, &docks, &id_map);
         });
     }
 }
@@ -1577,6 +1626,7 @@ mod tests {
                         side_browser_bottom: vec![],
                         center: vec![PanelId("canvas")],
                         active_center_tab: 2,
+                        center_has_initial_instances: Some(true),
                         right_inspector: vec![],
                         right_inspector_bottom: vec![],
                         bottom: vec![PanelId("plots")],
@@ -1600,6 +1650,7 @@ mod tests {
         assert_eq!(design.side_browser, vec![PanelId("browser")]);
         assert_eq!(design.bottom, vec![PanelId("plots")]);
         assert_eq!(design.active_center_tab, 2);
+        assert_eq!(design.center_has_initial_instances, Some(true));
     }
 
     #[test]

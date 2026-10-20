@@ -32,19 +32,25 @@ This is a small native UI language, not browser HTML: use the workbench/egui
 panels for rich editors, text input, large inspectors, and controls whose
 semantics are not in the runtime surface contract.
 
-## Workspaces
+## Perspectives
 
-The luncosim has two workspaces, switched via the tabs at the top of the window:
+Choose a task from the title-bar tabs or **View → Perspectives**:
 
-- **View** (default) — the 3D scene: viewport, spawn palette, inspector, rover
-  driving, telemetry. Covered by the *Sandbox Intro → First Drive → Lander & Rover
-  Mission* tutorials and the *Build a Scene → Script a Rover → Inspect the
-  Simulation → Cosim* authoring track.
-- **Design** — the embedded Modelica IDE: source / diagram / icon / docs views,
-  a component palette, compile & run (interactive and fast), live inputs, and
-  plots. Backed by the [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
-  plus the bundled models in `assets/models/` (`Lander.mo`, `Battery.mo`,
-  `QuarterCar.mo`, …). Open `Lander.mo` here to see the law the lander flies.
+- **View** operates the live mission in a full-window scene.
+- **Build** composes the scene from assemblies, with Entities, Twin sources,
+  Inspector, Environment and Spawn.
+- **Analyze** compares signals in central Graphs, with Telemetry and Ports.
+- **Editor** edits one explicit USD document in an isolated preview.
+- **Lunica** opens Modelica diagrams, equations, compilation and experiments.
+
+Optional panels live in the corresponding **View** submenus. **Help →
+Perspective help** explains the selected workflow; **View → Reset Layout**
+restores its authored default. Switching tasks preserves the Twin and simulation.
+
+Perspectives are assembled by Rhai over the installed capabilities. A Twin may
+ship its own task presets; follow [Twin perspectives](../../tutorials/05-twin-perspectives.md).
+The [workbench architecture](../../architecture/11-workbench.md#4-perspectives)
+defines composition, validation and personal layout persistence.
 
 ### Desktop updates
 

@@ -1578,7 +1578,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             };
             if let Some(view) = primary_view {
                 world.trigger(OpenTab {
-                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
                 });
             }
@@ -1697,7 +1697,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             .resource_mut::<UsdViewportState>()
             .clear_preview_closed(doc);
         world.trigger(OpenTab {
-            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
             instance: primary_view.0,
         });
         request_preview_text_read(world, preview);
@@ -1780,7 +1780,7 @@ fn on_open_usd_preview_view(
                     .clear_preview_closed(doc);
             }
             world.trigger(OpenTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance: command.view.0,
             });
             Ok(Ack::with_data(
@@ -1819,7 +1819,7 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
         };
         if let Some(view) = primary_view {
             world.trigger(OpenTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance: view.0,
             });
         } else {
@@ -1852,7 +1852,7 @@ fn on_focus_usd_preview_view(
         let outcome = match preview {
             Some(preview) if world.resource_mut::<UsdViewportState>().focus_view(view) => {
                 world.trigger(OpenTab {
-                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
                 });
                 Ok(Ack::with_data(
@@ -3066,7 +3066,10 @@ fn drain_preview_view_closes(pending: Option<ResMut<PendingTabCloses>>, mut comm
         commands.trigger(CloseUsdPreviewView {
             view: UsdPreviewViewId(instance),
         });
-        commands.trigger(CloseTab { kind, instance });
+        commands.trigger(CloseTab {
+            kind: kind.as_str().to_owned(),
+            instance,
+        });
     }
     for tab in unclaimed {
         pending.push(tab);
@@ -3198,7 +3201,7 @@ fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<Do
     }
     for view in views {
         world.trigger(CloseTab {
-            kind: USD_PREVIEW_VIEW_PANEL_ID,
+            kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
             instance: view.id().0,
         });
         despawn_preview_view(world, view);
@@ -3344,9 +3347,21 @@ fn resolve_viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(S
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "scene.usda".to_string()),
         ),
-        // Untitled / in-memory: no external refs to resolve; a placeholder root
-        // is the document-owned transport identity for native layer input.
-        _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
+        // Untitled / in-memory: publish native layer input through a private
+        // transport identity with the asset registry's absolute directory contract.
+        _ => match std::env::current_dir() {
+            Ok(base) => (base, "scene.usda".to_string()),
+            Err(error) => {
+                report_preview_error(
+                    world,
+                    "usd-preview-source-unavailable",
+                    format!(
+                        "cannot resolve the untitled preview's absolute transport directory: {error}"
+                    ),
+                );
+                return None;
+            }
+        },
     };
 
     // Resolve file-backed documents against the workspace first. The workspace

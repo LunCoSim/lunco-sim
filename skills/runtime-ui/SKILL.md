@@ -340,7 +340,8 @@ queue's execution-time scene check. Never resolve the next active Twin for an
 old event. Named cards are scene-owned, so callback tools can update them independently of
 a scenario host. `ClearGuidedOverlay` clears the calling script's card and the
 active coach/spotlight presentation, preserving other cards. Inspect the admitted
-scope, content, and visibility through `InspectGuidedHud`.
+scope, content, and visibility through `InspectGuidedHud`. Its optional `tour`
+report exposes the active coach's exact Twin/script owner, step and anchor.
 Script-opened scene menus retain the same captured scope while open and clear
 on scene transition or owning Twin close; stop hooks cannot open menus. Each
 popup has its own widget identity and child callback leases. Replacement or
@@ -512,3 +513,8 @@ virtualised lists, full accessibility, arbitrary web CSS, `!important`, global
 stylesheets, font fallback chains, or reliable mixed-unit `calc()`. Add a
 deliberate engine/runtime contract and tests before expanding the surface
 language.
+
+For docked engineering task layouts, use the workbench perspective hooks rather
+than a retained HUD as a second docking system. [Twin perspectives](../../docs/tutorials/05-twin-perspectives.md)
+shows Rhai assembly from registered panels; retained surfaces may still choose
+visibility through their existing perspective ids.

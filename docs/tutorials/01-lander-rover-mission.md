@@ -516,7 +516,7 @@ Add these lines to the `MyLander` prim (in `my_lander.usda`, not the scene):
     # The altimeter tells it how high it is. A CROSS-PRIM edge: a different prim.
     float inputs:altitude.connect = </MyLander/Altimeter.outputs:range>
 
-    # AUTHORITY. `piloted` reads 1 whenever any session possesses this vessel.
+    # AUTHORITY. `piloted` reads 1 after a possessing session's first controller input.
     # This is the line that makes the gate in Step 2 work.
     float inputs:piloted.connect = </MyLander.outputs:piloted>
 
@@ -897,13 +897,11 @@ A few of the verbs you just used: `find("/path")` looks up a prim by its scene p
 sim-seconds); `wait_for(name)` parks until an event fires; `wait_until(pred)` parks
 until a condition reads true.
 
-**`follow`, not `possess`.** This is the trap the whole tutorial has been building
-toward. `follow(lander)` attaches a chase camera and nothing else — the lander stays
-unpossessed, its `piloted` port reads 0, and the GNC from Step 2 keeps flying it. If
-you'd written `possess(lander)` instead, `piloted` would snap to 1, the gate would
-switch to the pilot's stick, and your beautiful descent controller would go silent
-while the lander dropped like a stone. Possession *means* "a pilot has this", so
-possess a vehicle only when you actually intend to fly it.
+**Follow for observation, possess for interaction.** `follow(lander)` attaches a
+chase camera without acquiring its command endpoint. `possess(lander)` also
+selects the vessel for pilot input, while GNC continues to fly until the first
+accepted flight-control input. That input sets `piloted` to 1; releasing the
+key retains manual authority until explicit control release.
 
 Notice, too, that this script doesn't drive anything. It watches for real things
 happening and announces them (`rover_deployed`, `waypoint_1_reached`,
@@ -986,9 +984,9 @@ or give each waypoint a time limit and fail the mission if it's missed.
   ground by more than the payload is tall.
 - A vehicle stands on its footpads alone, tank clipping through everything? It went
   children-only compound when the pads got colliders. Add the invisible `Hull` twin.
-- Your self-flying vehicle went inert the moment a script touched it? Something
-  possessed it. `piloted` is 1, so the authority gate handed control to a pilot who
-  isn't pressing anything. Use `follow()` to watch, `possess()` only to fly.
+- Your self-flying vehicle is holding a neutral manual command? Inspect `piloted`
+  and the accepted controller holds. Key release retains manual mode; explicitly
+  release control to return the stick to guidance.
 - A plume looks wrong? Inspect the physical station outputs, radiative estimate,
   shader interfaces and camera exposure before changing fuel tint.
 - A plume never appears at all? Check the `Shader` prim declares `float

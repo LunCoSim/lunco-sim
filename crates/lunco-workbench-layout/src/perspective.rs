@@ -8,7 +8,8 @@ impl WorkbenchLayout {
     /// input gate. No active perspective leaves the simulation default intact.
     pub fn active_scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
         self.active_perspective
-            .and_then(|active| self.perspectives.iter().find(|p| p.id() == active))
+            .as_ref()
+            .and_then(|active| self.perspectives.iter().find(|p| &p.id() == active))
             .map_or(
                 lunco_interaction_core::SceneInteractionMode::Simulation,
                 |perspective| perspective.scene_interaction_mode(),
@@ -19,7 +20,8 @@ impl WorkbenchLayout {
     /// remain behind transient dock chrome even without a viewport panel tab.
     pub fn active_perspective_scene_visible_when_docked(&self) -> bool {
         self.active_perspective
-            .and_then(|active| self.perspectives.iter().find(|p| p.id() == active))
+            .as_ref()
+            .and_then(|active| self.perspectives.iter().find(|p| &p.id() == active))
             .is_some_and(|perspective| perspective.scene_visible_when_docked())
     }
 }

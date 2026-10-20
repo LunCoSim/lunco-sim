@@ -19,6 +19,8 @@ native-allocator = ["dep:mimalloc"]
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
+    # The workbench task layouts are assembled by Rhai policies.
+    "scripting",
     "lunco-assets-runtime/ui",
     "dep:lunco-modelica-assets",
     "dep:lunco-assets-datasets",
@@ -69,8 +71,8 @@ server = ["api", "lunco-api-transport/transport-http", "native-allocator"]
 # In-app rhai scripting: run/hot-reload scenarios and drive the workbench from
 # scripts used by authored scenarios. INDEPENDENT of the API
 # feature — `lunco-scripting` self-supplies the transport-free command core, so
-# `cmd()` works with no HTTP server. On `default` so the GUI ships with it; drop
-# it (`--no-default-features`) for a scripting-free compile-core build.
+# `cmd()` works with no HTTP server. Required by the GUI's task composition;
+# omit `ui` and `scripting` for a scripting-free compile-core build.
 scripting = ["dep:lunco-scripting-rhai", "dep:lunco-scripting-rhai-runtime"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing

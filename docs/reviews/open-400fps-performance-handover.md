@@ -1,5 +1,28 @@
 # High-quality realtime performance handover
 
+## Local main integration validation — 2026-10-20
+
+The combined source preserves main's rotating-slider differential, native
+contact regressions, camera/presentation changes and Modelica contracts. Hard
+joint and contact rows share the coupled response owner. The merged native
+physics suite passes 126 mechanism checks, and the fixed-loop service-yield
+conservation check passes. A normal production build completes without warnings.
+The production app passes 152 authored assertions: 53 physics/drive, 22 lifecycle
+across headless and windowed hosts, 12 frame-history, 46 initialization/receipt
+and 19 Modelica source/structural-parameter checks. The invalid-joint fixture
+also produces its expected structured fault. The windowed terminal screenshot
+is inspected; the settled runtime schema regenerates all 270 command entries.
+
+Independent presentation admission exposed a race in the lifecycle fixture:
+six presentation frames could expire before the startup scene's first automatic
+tick. The fresh-host observer now waits for an admitted master tick before its
+initial clear. Both lifecycle hosts pass with that authoritative prerequisite;
+the runtime lifecycle contract is unchanged. The first failed gate and corrected
+results remain under `.cache/codex-evidence/loading-20261019/integration/`.
+All owned test ports are released. Concurrent tutorials and Roadster recording
+sessions exclude clean FPS qualification. The loading, physics-tail, 200 FPS
+and native macOS acceptance requirements remain open.
+
 ## Validated integration checkpoint — 2026-10-20
 
 The retained physics, lifecycle, preparation diagnostics and Modelica changes
@@ -1048,6 +1071,40 @@ production loading cohorts above include this geometry preparation change;
 they do not isolate its cost. Running FPS, native-physics tails, full-state
 replay and native macOS qualification remain open. The original sub-second
 loading, 200 FPS and sub-millisecond physics targets are unqualified.
+## Griffin unit metadata storage — tutorials, 2026-10-20
+
+`UnitReference` now shares immutable identity/definition storage, and Avian
+reuses its fixed unit references. Complete equality and serialized values are
+preserved. Live port ownership, direction, bounds, frame, permission and topology
+checks remain unchanged. This is generic storage, without a policy hook.
+Bounded debug spans separate input staging and commit.
+
+Qualified normal binary `382460f1eea7975123dfc57a5bf30e8e45c0f93a6da9b55c7547bdbf8961caee`
+passes 35 engineering-value/registry tests, production unit/transaction gates
+(5/11 checks), the 19-check Griffin GNC gate and the rendered 16-gate mission.
+GNC selection/first input/neutral/reconnect behavior passes at SysML source
+`7188239926208515743`.
+
+Retained baseline `5a9aa0c5…` and qualified `382460f1…` use the same Twin,
+active-frame camera, fully resident terrain and High / standard PBR 1280 × 720.
+Completed-mission 25-second windows yield 97.5206/110.6446 FPS. Retained fixed-tick
+p50/p95/p99 are 4.7922/5.4548/6.1519 ms and 4.7519/5.3197/5.6056 ms. Paused
+diagnostic FPS is 151.3388/156.6435; its fixed-tick samples are retained history.
+Sampled process audits contain only the owned simulator. GPU audits and inspected
+images are retained. These short observations do not prove a repeatable causal
+gain or sustained full-mission real-time acceptance.
+
+The later owned Tracy file passes TCP identity, framing, native export and event
+counts, but its playing window drains 35.3201 to 31.5052 seconds of queued
+simulation. Its 722 transactions are not cadence-matched to the earlier 490;
+the 1.15465 versus 1.32975 ms staging means are descriptive only. Another capture
+lacks live socket proof and is excluded. A settled repeat could not launch while
+a separate process replaced this checkout's target executable. That later build
+is outside this qualification; preserve its source and artifacts.
+
+Evidence, source snapshots, scripts, rejection notes, traces and normal binaries:
+`.cache/codex-evidence/griffin-perf-20261020/`. Sustained throughput, awake contact
+precision and hardware qualification remain open.
 
 ## Contact samples retain their solved interval — 2026-10-19
 

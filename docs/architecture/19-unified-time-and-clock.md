@@ -76,13 +76,12 @@ equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
 The runner drains at most `MAX_FIXED_STEPS_PER_FRAME` (64) complete cycles per
-app update at every transport rate, yielding between complete cycles once its
-wall-clock service reaches one fixed quantum. An admitted first cycle always
-runs; expensive ticks cannot cause a further 63-tick batch before input and
-presentation regain control. The fixed timestep supplies this service budget;
-there is no separate tunable clock. Wall-clock observation chooses only the host
-yield boundary: ordered authoritative inputs and every complete cycle retain
-their sequence, state transitions and admitted duration. Bevy's virtual delta is admitted without
+app update at every transport rate. It also yields after one fixed timestep of
+measured wall-clock service, checked between complete causal cycles. This is a
+host service boundary derived from the existing fixed clock, not an authored
+mission decision. It keeps an overloaded catch-up batch from monopolizing
+presentation; a single slow cycle remains indivisible, and throughput still
+depends on cycle cost. Bevy's virtual delta is admitted without
 wall-time clipping (`max_delta = Duration::MAX`); budget exhaustion retains
 the whole remaining duration in the same fixed accumulator. There is no second
 debt clock, timestep change, or skipped tick. Pause and causal holds stop new

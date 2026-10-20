@@ -48,6 +48,19 @@ invalidations check all spatial entities; surface invalidations remain
 restricted to linked consumers and existing fields. Consumers
 read `Local*` rather than recomputing from position.
 
+`LocalGravity` owns the exact vector and its change provenance. Consumer motion
+updates Avian's persistent acceleration without an
+external-force wake notification, including the final movement sample at sleep
+admission. Changed source fields retain native wake notifications. External
+position/rotation edits use native pose wake detection. The provider-pose cache
+compares physical poses once per system pass, so a prescribed sample's tick stamp
+alone is not source motion. The environment owner registers the provider-pose
+cache as scene state, so teardown releases its retained samples before replacement.
+Native sleep thresholds and timers remain unchanged. Live integration and rollback
+consume the same exact acceleration component.
+The celestial site mount writes `GravityBody` only when its body identity differs
+or is absent, preserving the link's change tick during ordinary scene updates.
+
 ## Lighting — the environmental analog of gravity
 
 `lunco-environment` also owns the **physical lighting parameters of the sky**
@@ -244,7 +257,7 @@ in ECS:
 |----------|----------|
 | `inner World world` | `GravityProvider` component on the body entity |
 | `outer World world` | `GravityBody { body_entity }` component on consumer entities |
-| `world.g` | `LocalGravity(DVec3)` cached on consumer entities |
+| `world.g` | `LocalGravity::acceleration()` cached on consumer entities |
 
 ## Status
 

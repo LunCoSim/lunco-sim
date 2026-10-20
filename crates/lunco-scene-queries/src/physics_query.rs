@@ -8,8 +8,9 @@
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, ColliderDisabled, ComputedAngularInertia,
-    ComputedCenterOfMass, ComputedMass, LinearVelocity, Mass, NoAutoAngularInertia,
-    NoAutoCenterOfMass, NoAutoMass, RigidBody, SimpleCollider, Sleeping,
+    ComputedCenterOfMass, ComputedMass, ConstantLinearAcceleration, LinearVelocity, Mass,
+    NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, PhysicsLengthUnit, RigidBody,
+    SimpleCollider, SleepThreshold, SleepTimer, Sleeping, SleepingDisabled, TimeToSleep,
 };
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
@@ -238,6 +239,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         let linear = world.get::<LinearVelocity>(entity);
         let angular = world.get::<AngularVelocity>(entity);
         let sleeping = world.get::<Sleeping>(entity).is_some();
+        let sleep_threshold = world.get::<SleepThreshold>(entity);
+        let length_unit = world.get_resource::<PhysicsLengthUnit>();
+        let constant_acceleration = world.get::<ConstantLinearAcceleration>(entity);
         let ready = world.get::<PhysicsStateReady>(entity).is_some();
         let pending = world.get::<PhysicsStatePending>(entity).is_some();
         let object_paused = world.get::<PhysicsObjectPaused>(entity).is_some();
@@ -467,6 +471,14 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "linear_velocity_mps": linear.map(|velocity| api_value!([velocity.0.x, velocity.0.y, velocity.0.z])),
             "angular_velocity_radps": angular.map(|velocity| api_value!([velocity.0.x, velocity.0.y, velocity.0.z])),
             "sleeping": sleeping,
+            "sleep_state": {
+                "disabled": world.get::<SleepingDisabled>(entity).is_some(),
+                "timer_s": world.get::<SleepTimer>(entity).map(|timer| timer.0),
+                "required_rest_s": world.get_resource::<TimeToSleep>().map(|duration| duration.0),
+                "linear_threshold_mps": sleep_threshold.zip(length_unit).map(|(threshold, unit)| threshold.linear as f64 * unit.0),
+                "angular_threshold_radps": sleep_threshold.map(|threshold| threshold.angular),
+            },
+            "constant_linear_acceleration_mps2": constant_acceleration.map(|acceleration| api_value!([acceleration.0.x, acceleration.0.y, acceleration.0.z])),
             "physics_state_ready": ready,
             "physics_state_pending": pending,
             "physics_admission_requested": admission_requested,
@@ -536,6 +548,10 @@ pub fn register(app: &mut App) {
     world.register_component::<PhysicsPoseAuthoritative>();
     world.register_component::<ShouldBeDynamic>();
     world.register_component::<avian3d::prelude::RigidBodyDisabled>();
+    world.register_component::<SleepThreshold>();
+    world.register_component::<SleepTimer>();
+    world.register_component::<SleepingDisabled>();
+    world.register_component::<ConstantLinearAcceleration>();
     world.register_component::<avian3d::prelude::Collider>();
     world.register_component::<ComputedMass>();
     world.register_component::<ComputedCenterOfMass>();

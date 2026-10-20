@@ -6,9 +6,9 @@
 )
 
 def Xform "LimitedCoolingSink" (
+    prepend apiSchemas = ["LunCoProgramAPI"]
     kind = "component"
     documentation = "Ideal external coolant reservoir: finite heat rejection in W, minimum coolant temperature in K and heat-transfer conductance in W/K. Connect its heat port within a thermal collection. Pump power and a finite coolant reservoir are not modeled."
-    prepend apiSchemas = ["LunCoProgramAPI"]
 )
 {
     uniform token info:implementationSource = "sourceAsset"

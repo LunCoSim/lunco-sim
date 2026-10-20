@@ -568,20 +568,19 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
 /// hold. The per-update work budget also retains time rather than clipping the
-/// input delta or discarding pending fixed cycles.
+/// input delta or discarding pending fixed cycles. Yield after one fixed
+/// quantum of wall-clock service so overloaded catch-up cannot monopolize
+/// presentation. A complete causal cycle remains indivisible.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
+    let service_started = Instant::now();
+    let service_budget = world.resource::<Time<Fixed>>().timestep();
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    let started_at = Instant::now();
-    let service_budget = world.resource::<Time<Fixed>>().timestep();
-    for completed in 0..MAX_FIXED_STEPS_PER_FRAME {
-        // A complete fixed cycle is indivisible. Once one has run, return to
-        // input/presentation after one fixed quantum of wall-clock service.
-        // The accumulator retains every pending cycle for the next update.
-        if completed > 0 && started_at.elapsed() >= service_budget {
+    for cycle in 0..MAX_FIXED_STEPS_PER_FRAME {
+        if cycle > 0 && service_started.elapsed() >= service_budget {
             break;
         }
         if !world.resource::<lunco_core::RuntimeFaults>().active()

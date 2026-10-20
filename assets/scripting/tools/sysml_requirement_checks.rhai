@@ -130,7 +130,9 @@ fn preflight(id, ok, message, actual, expected) {
       message: message, actual: actual, expected: expected}
 }
 
-fn finish_preflight(checks, title, channel, root, package_name) {
+// Build a diagnostic report without publishing a terminal test verdict.
+// A staged verification can inspect this result before accepting its system.
+fn preflight_report(checks, root, package_name) {
     let failures = [];
     for check in checks {
         if check.ok != true { failures.push(check); }
@@ -144,12 +146,24 @@ fn finish_preflight(checks, title, channel, root, package_name) {
         error_count: failures.len(), non_pass_count: failures.len(),
         metrics: #{root: root, component_package: package_name,
             source_preflight: true}};
+    result
+}
+
+fn finish_preflight(checks, title, channel, root, package_name) {
+    let result = preflight_report(checks, root, package_name);
     report_structured_verdict(result, title, channel);
     result
 }
 
 fn finish(source, checks, title, channel, root, package_name, verification) {
-    let result = if checks.len() > 64 {
+    // A formal check can contain many typed observations even in a small
+    // suite. Stream those details instead of packing one unbounded event.
+    let stream = checks.len() > 64;
+    for check in checks {
+        if check.kind == "constraint" || check.kind == "required_constraint"
+            || check.kind == "required_constraints" { stream = true; }
+    }
+    let result = if stream {
         sysml_requirements::evaluate_stream(source, checks, channel, title)
     } else {
         sysml_requirements::evaluate(source, checks)
@@ -157,9 +171,8 @@ fn finish(source, checks, title, channel, root, package_name, verification) {
     let seen = #{};
     let evidence = [];
     let evidence_failures = [];
-    if result.results != () {
-        for check in result.results {
-            let requirement = check.requirement;
+    if result.requirement_names != () {
+        for requirement in result.requirement_names {
             if requirement == () || requirement == "" || seen[requirement] == true { continue; }
             seen[requirement] = true;
             let handle=();

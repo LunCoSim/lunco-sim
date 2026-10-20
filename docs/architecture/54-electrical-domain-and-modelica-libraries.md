@@ -250,7 +250,7 @@ With no `Ground`, **`v` at the node is set by whichever device states it.** `Bat
 that device:
 
 ```modelica
-p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;   // sets the node potential
+p.v = open_circuit_voltage_v + p.i * R_internal;   // sets the node potential
 ```
 
 Every other device must *read* `p.v` and state its **current**, never its voltage. Two

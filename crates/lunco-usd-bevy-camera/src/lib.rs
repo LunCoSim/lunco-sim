@@ -52,10 +52,7 @@ impl Plugin for UsdCameraPlugin {
             .add_observer(camera_switch::on_activate_camera)
             .add_observer(camera_switch::on_request_local_avatar_view)
             .add_observer(camera_path::queue_camera_path_candidate)
-            .add_systems(
-                Update,
-                camera_switch::cycle_active_camera.in_set(UsdCameraProjectionSet),
-            )
+            .add_observer(camera_switch::cycle_active_camera)
             .configure_sets(
                 PostUpdate,
                 (

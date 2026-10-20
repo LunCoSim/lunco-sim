@@ -1458,8 +1458,11 @@ fn runtime_policy_layer(world: &World, id: &str) -> Result<RuntimePolicyLayer, S
             if workspace.active_twin != Some(twin)
                 || workspace.twin(twin).is_none()
                 || registry.active_twin != Some(twin)
-                || coordinator.active_id().is_some()
-                || coordinator.completed_generation() != Some(route.generation)
+                || lunco_core::scene::validate_interaction_scene(
+                    (route.generation != 0).then_some(route.generation),
+                    Some(coordinator),
+                )
+                .is_err()
             {
                 return Err(
                     "Twin policy mutation belongs to a retired or uncommitted scene".to_owned(),

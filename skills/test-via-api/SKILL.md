@@ -708,7 +708,9 @@ Use `python3 scripts/api/test_simulation_lifecycle.py --output <evidence-dir>`
 with `LUNCOSIM_BIN` set to the production binary. The retained application
 observer checks 11 transport and teardown assertions while paused and after
 scene replacement; `--windowed` also captures the terminal presentation. The
-four `SIMULATION_*` Info channels describe actual start, user pause/unpause and
+fresh-host observer waits for its first admitted simulation tick before the
+initial clear; presentation work can start while scene admission is pending.
+The four `SIMULATION_*` Info channels describe actual start, user pause/unpause and
 scene stop. Readiness/solver/manual holds are separate facts, and rejected or
 idempotent transport requests must not create additional lifecycle events.
 

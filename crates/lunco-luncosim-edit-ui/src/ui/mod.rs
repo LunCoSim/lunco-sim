@@ -12,17 +12,11 @@ use lunco_control_core::ControlLink;
 use lunco_core::SceneMountState;
 use lunco_embodiment_core::roles::{Embodiment, TheLocalEmbodiment};
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
-use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{ViewportPanel, WorkbenchAppExt};
-use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench_core::view_model::{ViewModelAppExt, ViewModelSet};
-use lunco_workbench_core::viewport::VIEWPORT_PANEL_ID;
-use lunco_workbench_core::{
-    PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
-    WorkbenchPanelAppExt,
-};
+use lunco_workbench_core::{PerspectiveId, WorkbenchPanelAppExt};
 use lunco_workbench_help_ui::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
 };
@@ -373,24 +367,14 @@ fn refresh_view_help_controls(
         });
     }
 
-    help.set(PerspectiveId("sandbox_view"), sections.clone());
-    help.set(PerspectiveId("rover_build"), sections);
+    help.set(PerspectiveId::new("sandbox_view"), sections.clone());
+    help.set(PerspectiveId::new("rover_build"), sections);
     *last_target = target;
     *published = true;
 }
 
-/// Plugin that registers all luncosim editing UI panels, the workbench
-/// 3D viewport placeholder, and two workspace presets:
-///
-/// - **View** (default) — just the 3D scene, no panels.
-/// - **Build** — 3D + Entities, Inspector, Spawn palette around the edges.
-///
-/// The user switches via the workspace tabs in the transport bar.
-/// `ViewportPanel` reserves the centre slot in both perspectives; the
-/// 3D camera (declared by the canonical `lunco_render::SceneCamera` intent) is
-/// confined to that
-/// rect each frame by `lunco_workbench::apply_workbench_viewport`, and
-/// the panel paints its theme backdrop around it.
+/// Registers scene editing panels and their control references. The Rhai
+/// perspective policy assembles these capabilities into task layouts.
 pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
@@ -411,7 +395,10 @@ impl Plugin for SceneEditUiPlugin {
             .init_scene_resource::<crate::script_tools::ScenePointerDispatch>()
             .init_scene_resource::<crate::script_tools::PendingUsdCurveViews>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
-        app.add_systems(lunco_core::SceneTeardown, crate::script_tools::reset_scene_pointer_move_hooks);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::script_tools::reset_scene_pointer_move_hooks,
+        );
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hook_on_document_closed);
         app.add_observer(crate::script_tools::clear_scene_pointer_move_hooks_on_twin_closed);
         app.world_mut()
@@ -528,16 +515,10 @@ impl Plugin for SceneEditUiPlugin {
             .register_panel(authoring_review::AuthoringReviewPanel)
             .register_panel(joint_state::JointStatePanel)
             .register_panel(ViewportPanel)
-            // Order matters for auto-activation — View first so it's
-            // the default when the rover binary boots.
-            .register_perspective(ViewPerspective)
+            // Task descriptions come from Rhai; domains supply control references.
             .register_perspective_help(
-                PerspectiveId("sandbox_view"),
+                PerspectiveId::new("sandbox_view"),
                 PerspectiveHelp {
-                    description: "Full-screen 3D observation & control mode. Fly the \
-                                  camera around the scene and claim an endpoint's \
-                                  public input ports. The live sections below show \
-                                  the global key map and the controlled endpoint's map.",
                     shortcuts: vec![],
                     mouse: vec![
                         HelpMouse {
@@ -559,14 +540,9 @@ impl Plugin for SceneEditUiPlugin {
                     ],
                 },
             )
-            .register_perspective(BuildPerspective)
             .register_perspective_help(
-                PerspectiveId("rover_build"),
+                PerspectiveId::new("rover_build"),
                 PerspectiveHelp {
-                    description: "General Twin builder. Compose the live base from \
-                                  complete USD assembly roots, select and transform them \
-                                  as one element, and use Editor for a rover or lander's \
-                                  internal parts.",
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "Shift",
@@ -601,13 +577,25 @@ impl Plugin for SceneEditUiPlugin {
                     ],
                 },
             )
-            .register_perspective(TerrainPerspective)
             .register_perspective_help(
-                PerspectiveId("terrain_sculpt"),
+                PerspectiveId::new("analysis"),
                 PerspectiveHelp {
-                    description: "Sculpt the surface. Arm a brush in the Tools palette, \
-                                  then click the terrain to raise, dig, or flatten it. \
-                                  Edits re-bake the visuals and the collider live.",
+                    shortcuts: vec![],
+                    mouse: vec![
+                        HelpMouse {
+                            interaction: "Telemetry checkbox",
+                            description: "Add or remove a signal in the active graph",
+                        },
+                        HelpMouse {
+                            interaction: "Drag a telemetry channel onto Graphs",
+                            description: "Compare signals in the same plot",
+                        },
+                    ],
+                },
+            )
+            .register_perspective_help(
+                PerspectiveId::new("terrain_sculpt"),
+                PerspectiveHelp {
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "Shift + ↑/↓",
@@ -646,15 +634,9 @@ impl Plugin for SceneEditUiPlugin {
                     ],
                 },
             )
-            .register_perspective(EditorPerspective)
             .register_perspective_help(
-                PerspectiveId("editor"),
+                PerspectiveId::new("editor"),
                 PerspectiveHelp {
-                    description: "Assembly Editor. Open one rover, lander, or other \
-                                  USD document in the Twin Browser, navigate its \
-                                  authored structure, and edit the selected prim in the \
-                                  Inspector. Use the Build perspective for live base \
-                                  composition.",
                     shortcuts: vec![
                         HelpShortcut {
                             keys: "Ctrl+Z",
@@ -900,236 +882,4 @@ fn register_debug_viz_settings(world: &mut World) {
             ctx.set_resource(store);
         }
     });
-}
-
-/// Rover luncosim's default workspace — full-screen 3D, no panels.
-///
-/// All slots empty — the workbench renders **nothing** in the
-/// centre, so Bevy's 3D scene gets the pointer events directly. This
-/// is the only way to keep gizmos draggable without render-to-texture:
-/// any egui surface in the central area (even a transparent
-/// `ViewportPanel` tab) marks the rect as egui-interactive and
-/// blocks Bevy input.
-pub struct ViewPerspective;
-
-impl Perspective for ViewPerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("sandbox_view")
-    }
-    fn title(&self) -> String {
-        // The icon is part of the accepted perspective title contract; the
-        // top-level View menu remains a plain menu label.
-        "◉ View".into()
-    }
-    fn restores_cached_layout(&self) -> bool {
-        false
-    }
-    fn scene_visible_when_docked(&self) -> bool {
-        true
-    }
-    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
-        lunco_interaction_core::SceneInteractionMode::Simulation
-    }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        PerspectiveLayoutPlan::new()
-    }
-}
-
-/// Build mode — the general live-Twin composition workspace. Entity roots and
-/// the spawn catalog stay here because this mode edits the mounted scene as a
-/// whole; complete USD assemblies remain one selectable element and their
-/// internals are inspected only through the focused Editor document.
-pub struct BuildPerspective;
-
-impl Perspective for BuildPerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("rover_build")
-    }
-    // ⚒ (U+2692) renders reliably in the bundled fallback font.
-    fn title(&self) -> String {
-        "⚒ Build".into()
-    }
-    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
-        lunco_interaction_core::SceneInteractionMode::Editor
-    }
-    fn layout_revision(&self) -> u32 {
-        // Revision 3 completes the Graphs instance in the bottom-center
-        // split. Revision 2 shipped the invalidated preset without opening
-        // the instance, so cached layouts from it must be rebuilt once.
-        3
-    }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        PerspectiveLayoutPlan {
-            side_browser: PerspectiveSlotPlan::new().stacked(
-                [PanelId("entity_list"), PanelId("port_inspector")],
-                [PanelId("telemetry_browser")],
-            ),
-            center: PerspectiveSlotPlan::new().tabs([VIEWPORT_PANEL_ID]),
-            right_inspector: PerspectiveSlotPlan::new()
-                .stacked([PanelId("sandbox_inspector")], [PanelId("spawn_palette")]),
-            ..Default::default()
-        }
-        .open_instance(
-            PanelId(MODELICA_PLOT_KIND_ID),
-            DEFAULT_MODELICA_GRAPH_ID,
-            PanelSlot::Bottom,
-        )
-    }
-}
-
-/// Editor mode — edit one explicit USD assembly document such as a rover or
-/// lander. The layout deliberately excludes the live Entity list and spawn
-/// palette; those belong to the Assembly Editor's live-scene counterpart.
-///
-/// Distinct from Build (which edits the live simulation scene): Editor leads
-/// with the selected document's USD structure and isolated USD preview. The
-/// document is selected explicitly in the Twin Browser; the preview subtree,
-/// prim tree, Inspector, and all authoring commands then share that document
-/// identity. No live scene stage is inferred from entity counts.
-///
-/// The Rhai editor lives beside this build surface. The USD connection canvas
-/// is opened from the Connections entry in the Lunica/Twin navigation so the
-/// graph has one discoverable home instead of another top-level perspective.
-pub struct EditorPerspective;
-
-impl Perspective for EditorPerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("editor")
-    }
-    fn title(&self) -> String {
-        "✎ Editor".into()
-    }
-    fn show_in_switcher(&self) -> bool {
-        true
-    }
-    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
-        lunco_interaction_core::SceneInteractionMode::Editor
-    }
-    fn layout_revision(&self) -> u32 {
-        // The editor keeps requirement details in a dedicated lower-right
-        // dock pane alongside the inspector.
-        2
-    }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        // Structure first: the USD prim tree is the assembly's authoring
-        // hierarchy. Keep document selection available in the lower side pane
-        // while the authored structure remains the primary upper pane. The
-        // live Entity list and spawn palette belong to Build and are
-        // intentionally absent so an Editor session cannot mix a mounted
-        // scene entity with the selected document.
-        let mut plan = PerspectiveLayoutPlan {
-            side_browser: PerspectiveSlotPlan::new()
-                .stacked([PanelId("usd_prim_tree")], [TWIN_BROWSER_PANEL_ID]),
-            // Central tabs: the isolated USD document preview and the Rhai
-            // behaviour editor. The
-            // USD connection graph is opened from the Connections entry in the
-            // Lunica/Twin navigation, so it is not a second Build workflow.
-            center: PerspectiveSlotPlan::new().tabs([
-                lunco_usd_viewport_runtime::USD_VIEWPORT_PANEL_ID,
-                PanelId("rhai_editor"),
-            ]),
-            // The Inspector tools share the upper-right tab strip. Optional
-            // workflow panels contribute their own lower-right slots.
-            right_inspector: PerspectiveSlotPlan::new().tabs([
-                PanelId("sandbox_inspector"),
-                PanelId("authoring_review"),
-                PanelId("sandbox_environment"),
-            ]),
-            ..Default::default()
-        };
-        plan.active_center_tab = Some(0);
-        plan
-    }
-}
-
-/// Terrain sculpt mode — Tools palette left, 3D centre, Inspector + Entities
-/// tabbed right. The Tools palette arms a brush; clicking the terrain sculpts
-/// it (possession + selection stand down while a brush is armed).
-pub struct TerrainPerspective;
-
-impl Perspective for TerrainPerspective {
-    fn id(&self) -> PerspectiveId {
-        PerspectiveId("terrain_sculpt")
-    }
-    fn title(&self) -> String {
-        "Terrain".into()
-    }
-    fn show_in_switcher(&self) -> bool {
-        false
-    }
-    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
-        lunco_interaction_core::SceneInteractionMode::Editor
-    }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        PerspectiveLayoutPlan {
-            side_browser: PerspectiveSlotPlan::new().tabs([PanelId("tools_palette")]),
-            center: PerspectiveSlotPlan::new().tabs([VIEWPORT_PANEL_ID]),
-            right_inspector: PerspectiveSlotPlan::new().tabs([
-                PanelId("sandbox_inspector"),
-                PanelId("sandbox_environment"),
-                PanelId("entity_list"),
-            ]),
-            ..Default::default()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn view_perspective_keeps_scene_visible_behind_transient_panels() {
-        assert!(ViewPerspective.scene_visible_when_docked());
-    }
-
-    #[test]
-    fn perspectives_assign_primary_scene_click_ownership() {
-        assert_eq!(
-            ViewPerspective.scene_interaction_mode(),
-            lunco_interaction_core::SceneInteractionMode::Simulation
-        );
-        assert_eq!(
-            BuildPerspective.scene_interaction_mode(),
-            lunco_interaction_core::SceneInteractionMode::Editor
-        );
-        assert_eq!(
-            EditorPerspective.scene_interaction_mode(),
-            lunco_interaction_core::SceneInteractionMode::Editor
-        );
-        assert_eq!(
-            TerrainPerspective.scene_interaction_mode(),
-            lunco_interaction_core::SceneInteractionMode::Editor
-        );
-    }
-
-    #[test]
-    fn build_perspective_seeds_the_canonical_graph_instance() {
-        let plan = BuildPerspective.layout();
-        assert_eq!(plan.instance_tabs.len(), 1);
-        assert_eq!(plan.instance_tabs[0].kind, PanelId(MODELICA_PLOT_KIND_ID));
-        assert_eq!(plan.instance_tabs[0].instance, DEFAULT_MODELICA_GRAPH_ID);
-        assert_eq!(plan.instance_tabs[0].slot, PanelSlot::Bottom);
-    }
-
-    #[test]
-    fn editor_perspective_uses_editor_identity() {
-        let perspective = EditorPerspective;
-
-        assert_eq!(perspective.id(), PerspectiveId("editor"));
-        assert_eq!(perspective.title(), "✎ Editor");
-        assert!(perspective.show_in_switcher());
-    }
-
-    #[test]
-    fn editor_perspective_stacks_prims_above_twin_browser() {
-        let plan = EditorPerspective.layout();
-        assert!(
-            plan.side_browser
-                .primary
-                .contains(&PanelId("usd_prim_tree"))
-        );
-        assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
-        assert_eq!(EditorPerspective.layout_revision(), 2);
-    }
 }

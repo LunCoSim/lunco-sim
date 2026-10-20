@@ -225,3 +225,25 @@ in an owned windowed production session, supplying its exact `doc_id` and
 ignored artifact and compares all document layers. The production
 [`test_hook_policies.rhai`](../../assets/scripting/tests/test_hook_policies.rhai)
 covers declaration and off-cycle rejection.
+
+### Live camera presentation
+
+`camera.follow(ctx)` is a per-presentation-frame, optional camera-core seam.
+Use its typed rig/subject/obstruction facts for vessel-specific framing and easing.
+The native adapter validates decisions and commits collision-constrained poses;
+it holds the camera and reports `camera-follow` on an invalid callback result.
+Use a Twin-scoped operator tool (`RunRhaiToolHook`) to replace a Twin policy;
+an application-scoped REPL cannot replace its ownership layer. Policy updates
+must not reload the scene or advance held physics. Full contract and acceptance
+boundaries: [camera follow policy](../../docs/architecture/camera-follow-policy.md).
+
+## Task perspectives
+
+Use `workbench.perspectives.twin(facts)` for custom layouts shipped with a Twin;
+the application defaults use `workbench.perspectives.defaults`. Both return
+arrays of typed semantic layout maps, consumed by the existing dock owner.
+Discover exact panel and instance capabilities with `InspectWorkbench` and read
+[the perspective tutorial](../../docs/tutorials/05-twin-perspectives.md).
+Evaluation is revision-driven Visualization/Preparation work over immutable
+facts; a policy reload does not reset a visited layout. Verify positive and
+rejected plans, explicit reset, and Twin replacement through the production app.

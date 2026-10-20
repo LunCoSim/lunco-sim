@@ -2279,7 +2279,7 @@ fn apply_wheel_drive(
                         gravity
                             .map(|g| {
                                 parking_brake_force_with_velocity(
-                                    g.0,
+                                    g.acceleration(),
                                     hit.normal,
                                     normal_force,
                                     mass.value() * normal_force / total_normal_load[&parent_entity],

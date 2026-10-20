@@ -19,7 +19,9 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.frames += 1; this.waited += 1;
     if this.frames > 3000 { throw "simulation lifecycle timed out at " + this.phase; }
-    if this.phase == "initial" && this.waited >= 6 {
+    // This observer may start while the fresh host's startup scene is pending.
+    // A presentation frame count cannot establish an admitted simulation tick.
+    if this.phase == "initial" && clock_snapshot().sim_tick > 0 {
         cmd("ClearScene", #{});
         this.phase = "initial_clear"; this.waited = 0; return;
     }

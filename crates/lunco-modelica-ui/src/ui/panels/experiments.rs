@@ -1530,8 +1530,13 @@ fn render_experiments_plot_inner(
         if extras.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading("No Modelica model selected");
-                    ui.label("Open a model to browse variables and plot its results.");
+                    ui.heading("Choose signals to compare");
+                    ui.label("Check channels in Telemetry, or open a Modelica model to inspect its results.");
+                    if ui.button("Browse telemetry").clicked() {
+                        ctx.trigger(lunco_workbench_core::commands::FocusPanel {
+                            id: "telemetry_browser".to_owned(),
+                        });
+                    }
                     if ui.button("Browse models").clicked() {
                         ctx.trigger(lunco_workbench_core::commands::FocusPanel {
                             id: crate::ui::panels::welcome::WELCOME_PANEL_ID

@@ -8142,6 +8142,7 @@ name = "lunco-engineering-values"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -11476,14 +11477,18 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_dock",
+ "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-capture",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
  "lunco-doc-bevy",
+ "lunco-hooks",
  "lunco-input-core",
  "lunco-input-ui",
  "lunco-interaction-core",

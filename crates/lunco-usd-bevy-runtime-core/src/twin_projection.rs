@@ -4049,16 +4049,36 @@ fn ensure_reference_layers_for_projection(
     scene_id: AssetId<UsdStageAsset>,
     ops: &[UsdOp],
 ) -> bool {
-    let references: Vec<String> = ops
-        .iter()
-        .filter_map(|op| match op {
-            UsdOp::AddPrim {
-                reference: Some(reference),
-                ..
-            } if !reference.is_empty() => Some(reference.clone()),
-            _ => None,
-        })
-        .collect();
+    // Initial prepared mounts have no deltas and intentionally retain no live
+    // canonical stage. Complete their cursor without opening one just to find
+    // an empty dependency set.
+    if ops.is_empty() {
+        return true;
+    }
+    let references = {
+        let Some(stage) = world
+            .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+            .and_then(|stages| stages.get(scene_id))
+        else {
+            return false;
+        };
+        let root_id = &stage.scene_layer;
+        let dependencies = ops
+            .iter()
+            .map(|op| op.composition_dependencies(root_id))
+            .collect::<Result<Vec<_>, _>>();
+        match dependencies {
+            Ok(dependencies) => dependencies.into_iter().flatten().collect::<BTreeSet<_>>(),
+            Err(error) => {
+                report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("invalid USD projection dependencies: {error}"),
+                );
+                return false;
+            }
+        }
+    };
     if references.is_empty() {
         return true;
     }

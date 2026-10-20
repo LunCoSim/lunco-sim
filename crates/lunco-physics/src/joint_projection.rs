@@ -408,7 +408,7 @@ impl JointProjection {
             | GeometryRow::Distance(..)
             | GeometryRow::SliderAlignment(..)
             | GeometryRow::SliderLimit(..) => {
-                let levers = [
+                let mut levers = [
                     bodies[0].delta_rotation * self.point.world_r1,
                     bodies[1].delta_rotation * self.point.world_r2,
                 ];
@@ -441,6 +441,9 @@ impl JointProjection {
                     }
                     GeometryRow::SliderAlignment(axis) => {
                         let axis = unit(frames()?[0] * axis)?;
+                        // Frame 1 rotates the constrained directions; its reaction
+                        // acts at the second attachment station along the slider.
+                        levers[0] += separation;
                         (
                             separation - axis * separation.dot(axis),
                             ConstraintSpace::Perpendicular(axis),
@@ -449,6 +452,7 @@ impl JointProjection {
                     GeometryRow::SliderLimit(axis, limit) => {
                         let frames = frames()?;
                         let axis = unit(frames[0] * axis)?;
+                        levers[0] += separation;
                         (
                             -limit.compute_correction_along_axis(separation, axis),
                             ConstraintSpace::Along(axis),
@@ -799,6 +803,53 @@ mod tests {
     }
 
     #[test]
+    fn slider_differential_tracks_the_rotating_frame_after_free_travel() {
+        let projection = prepared(
+            |a, b| PrismaticJoint::new(a, b).with_slider_axis(DVec3::Y),
+            [DQuat::IDENTITY; 2],
+        );
+        let first = SolverBody::default();
+        let second = SolverBody {
+            delta_position: DVec3::new(0.02, 0.4, 0.03),
+            ..default()
+        };
+        for (row, direction) in [
+            (GeometryRow::SliderAlignment(DVec3::Y), DVec3::X),
+            (
+                GeometryRow::SliderLimit(DVec3::Y, DistanceLimit::new(-0.1, 0.1)),
+                DVec3::Y,
+            ),
+        ] {
+            let Some(GeometryError::Position { levers, .. }) =
+                projection.row_error(row, [&first, &second]).unwrap()
+            else {
+                panic!("slider must provide a positional row")
+            };
+            let normal = direction;
+            let analytic = -levers[0].cross(normal).z;
+            let epsilon = 1.0e-6;
+            let coordinate = |angle: f64| {
+                let rotated = SolverBody {
+                    delta_rotation: Rotation(DQuat::from_rotation_z(angle)),
+                    ..first.clone()
+                };
+                let normal = rotated.delta_rotation * direction;
+                let Some(GeometryError::Position { error, .. }) =
+                    projection.row_error(row, [&rotated, &second]).unwrap()
+                else {
+                    panic!("slider must provide a positional row")
+                };
+                normal.dot(error)
+            };
+            let numerical = (coordinate(epsilon) - coordinate(-epsilon)) / (2.0 * epsilon);
+            assert!(
+                (analytic - numerical).abs() < 1.0e-9,
+                "slider angular differential: analytic={analytic}, numerical={numerical}"
+            );
+        }
+    }
+
+    #[test]
     fn projection_preserves_soft_translation_while_closing_hard_rotation() {
         let inertia = inertia();
         for angle_compliance in [1.0, 0.0] {
@@ -922,7 +973,15 @@ mod tests {
             delta_position: DVec3::new(1.0, 0.4, 0.0),
             ..default()
         };
-        let inertia = inertia();
+        // Isolate translation-channel compliance from the moving frame's
+        // angular coupling, which has its own finite-difference regression.
+        let inertia = SolverBodyInertia::new(
+            1.0,
+            SymmetricMatrix::IDENTITY,
+            LockedAxes::ROTATION_LOCKED,
+            0,
+            true,
+        );
         projection
             .project_once([&mut a, &mut b], [&inertia, &inertia])
             .unwrap();

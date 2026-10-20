@@ -220,6 +220,18 @@ forces, and collision geometry. The panel is presentation only: measurements,
 tolerances, provenance, candidate grouping, and preview/document navigation
 remain authored Rhai over typed USD queries.
 
+Use the `workbench.perspectives.defaults` and `workbench.perspectives.twin`
+hooks to assemble task layouts in Rhai. Read `InspectWorkbench` for exact
+registered panels, instance kinds and canonical instance ids. Rust validates
+and applies `PerspectiveLayoutPlan`; do not add a Rust preset for changeable
+presentation policy. See [Twin perspectives](../../docs/tutorials/05-twin-perspectives.md)
+for the return schema, namespace, lifecycle and production acceptance. Policy
+updates preserve visited user layouts; explicit Reset Layout uses the new plan.
+`PerspectiveAdmission` fences workspace restoration while definitions prepare.
+Activation of the current task preserves its dock; Reset Layout is explicit.
+Reopening an initial instance uses its authored slot through the existing
+`egui_dock` owner, including when closing its last tab removed that leaf.
+
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
 late panel registration adds the renderer without changing the current
@@ -333,8 +345,9 @@ panel-local styles; the shell applies the preference to both theme styles on
 all contexts before each egui pass.
 
 Panel entries in the View menu use `PanelMenuGroup` for their primary workflow:
-Builder owns live-Twin construction panels, Editor owns authored document
-editing panels, and Lunica owns Modelica workbench panels. Put shared panels in
+Build owns live-Twin construction panels, Analyze owns telemetry, graphs,
+ports and joint measurements, Editor owns authored document editing panels,
+and Lunica owns Modelica workbench panels. Put shared panels in
 their primary home once; leave `Other` for integrations with no workflow home
 and `Hidden` for internal panels that should not be user-toggleable.
 
@@ -699,3 +712,11 @@ Dirty-range uploads preserve the resident texture and its material bindings.
 Budget errors are terminal publication diagnostics.
 Validate long curved paths as well as live contact, and inspect actual GPU
 output after image capacity grows.
+
+Instance navigation uses the reflected `OpenTab` and `CloseTab` commands with
+`{ kind: String, instance: u64 }`; discover kinds and canonical identities from
+`InspectWorkbench`. Unknown kinds reject at the shell. Preserve deferred
+command outcomes when the dock is temporarily scoped out. Saved dock snapshots
+carry central-instance intent independently of policy defaults.
+`scene_mounted` reports an actual mounted payload; `scene_generation` is a
+lifecycle revision and may describe a committed Clear.

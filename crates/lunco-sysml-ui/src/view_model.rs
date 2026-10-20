@@ -9,7 +9,7 @@ use lunco_scene_runner::SceneTestRunReport;
 use lunco_sysml::{SysmlDocument, TwinSysmlAnalyses, TwinSysmlAnalysisState};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlDiagnosticKind, SysmlElement, SysmlElementHandle,
-    SysmlRequirementConstraintKind, SysmlRequirementRecord,
+    SysmlRequirementConstraintKind, SysmlRequirementRecord, SysmlValue,
 };
 use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::TelemetryValue;
@@ -47,6 +47,8 @@ pub(crate) struct RequirementView {
     pub role: RequirementRole,
     pub definition_handle: Option<SysmlElementHandle>,
     pub documentation: Vec<String>,
+    /// Usage documentation or the statement of its uniquely resolved definition.
+    pub statement: Vec<String>,
     pub logical_uri: String,
     pub relative_path: Option<PathBuf>,
     pub line: Option<usize>,
@@ -81,6 +83,14 @@ pub(crate) struct ModelElementView {
 pub(crate) struct ModelStructureNodeView {
     pub element: ModelElementView,
     pub children: Vec<ModelStructureNodeView>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModelAttributeView {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub expression: Option<String>,
+    pub value: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +182,7 @@ pub struct SysmlRequirementsViewModel {
     pub(crate) requirements: Vec<RequirementView>,
     pub(crate) model_structure: Vec<ModelStructureNodeView>,
     pub(crate) model_elements: Vec<ModelElementView>,
+    pub(crate) model_attributes: HashMap<SysmlElementHandle, Vec<ModelAttributeView>>,
     pub(crate) verification_cases: Vec<VerificationCaseView>,
     pub(crate) verification_setup_errors: Vec<String>,
     pub(crate) parser_diagnostics: Vec<ParserDiagnosticView>,
@@ -418,6 +429,7 @@ fn build_view_model(
         requirements,
         model_structure,
         model_elements,
+        model_attributes: build_model_attribute_views(&analysis),
         verification_cases,
         verification_setup_errors,
         parser_diagnostics: analysis
@@ -604,6 +616,22 @@ fn build_requirement_views(
             )
         })
         .collect::<Vec<_>>();
+    let statements: HashMap<_, _> = analysis
+        .requirements()
+        .iter()
+        .map(|record| (record.element.handle, &record.documentation))
+        .collect();
+    for requirement in &mut requirements {
+        requirement.statement = if requirement.documentation.is_empty() {
+            requirement
+                .definition_handle
+                .and_then(|handle| statements.get(&handle))
+                .map(|statement| (*statement).clone())
+                .unwrap_or_default()
+        } else {
+            requirement.documentation.clone()
+        };
+    }
     requirements.sort_by(|left, right| {
         left.logical_uri
             .cmp(&right.logical_uri)
@@ -678,6 +706,7 @@ fn requirement_view(
         },
         definition_handle,
         documentation: requirement.documentation.clone(),
+        statement: Vec::new(),
         logical_uri: element.file.clone(),
         relative_path: source_paths
             .get(element.file.as_str())
@@ -695,6 +724,59 @@ fn requirement_view(
         verification_cases,
         runtime_evidence: Vec::new(),
     }
+}
+
+// Project with the change-gated view model, never by parsing source text in
+// the panel. Owner handles avoid collisions between equally named parameters.
+fn build_model_attribute_views(
+    analysis: &SysmlAnalysis,
+) -> HashMap<SysmlElementHandle, Vec<ModelAttributeView>> {
+    let mut owners = HashMap::<_, Vec<_>>::new();
+    for attribute in analysis.attributes() {
+        let Some(owner) = attribute.owner_handle else {
+            continue;
+        };
+        let literal = attribute.value.as_ref();
+        owners.entry(owner).or_default().push(ModelAttributeView {
+            name: attribute.name.clone(),
+            type_name: attribute.type_name.clone(),
+            expression: literal.map(|value| value.literal.clone()),
+            value: literal
+                .and_then(|value| value.typed_value())
+                .as_ref()
+                .and_then(model_value_label),
+        });
+    }
+    for attributes in owners.values_mut() {
+        attributes.sort_by(|left, right| left.name.cmp(&right.name));
+    }
+    owners
+}
+
+fn model_value_label(value: &SysmlValue) -> Option<String> {
+    Some(match value {
+        SysmlValue::Integer(value) => value.to_string(),
+        SysmlValue::Real(value) => value.as_f64().to_string(),
+        SysmlValue::Boolean(value) => value.to_string(),
+        SysmlValue::String(value) => format!("{value:?}"),
+        SysmlValue::Enumeration(value) => value.literal.clone(),
+        SysmlValue::Quantity(value) => {
+            let number = value.value.as_f64().to_string();
+            match &value.unit_symbol {
+                Some(unit) => format!("{number} [{unit}]"),
+                None => number,
+            }
+        }
+        SysmlValue::Collection(values) => format!(
+            "({})",
+            values
+                .iter()
+                .map(model_value_label)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
+        SysmlValue::Expression(_) => return None,
+    })
 }
 
 fn build_model_element_views(
@@ -1639,10 +1721,52 @@ mod model_view_tests {
     }
 
     #[test]
+    fn parameter_views_resolve_constants_preserve_shape_and_leave_missing_values_explicit() {
+        let analysis = SysmlAnalysis::from_files([(
+            "values.sysml",
+            r#"
+            package Example {
+                part def Vehicle {
+                    attribute count : Integer = 3;
+                    attribute width : Real = 3.60;
+                    attribute halfWidth : Real = width / 2;
+                    attribute stations : Real[2] = (width / 2, -width / 2);
+                    attribute exactInteger : Integer = 9007199254740993;
+                    attribute missing : Real;
+                    attribute unsupported : Real = unknown / 2;
+                }
+                part def Other { attribute count : Integer = 7; }
+            }
+        "#,
+        )]);
+        let views = build_model_attribute_views(&analysis);
+        let owner = analysis
+            .elements()
+            .iter()
+            .find(|element| element.qualified_name == "Example::Vehicle")
+            .unwrap();
+        let attributes = &views[&owner.handle];
+        let get = |name: &str| attributes.iter().find(|value| value.name == name).unwrap();
+        assert_eq!(get("count").value.as_deref(), Some("3"));
+        assert_eq!(get("halfWidth").value.as_deref(), Some("1.8"));
+        assert_eq!(get("halfWidth").expression.as_deref(), Some("width / 2"));
+        assert_eq!(get("stations").value.as_deref(), Some("(1.8, -1.8)"));
+        assert_eq!(get("stations").type_name.as_deref(), Some("Real[2]"));
+        assert_eq!(
+            get("exactInteger").value.as_deref(),
+            Some("9007199254740993")
+        );
+        assert!(get("missing").expression.is_none());
+        assert!(get("missing").value.is_none());
+        assert!(get("unsupported").expression.is_some());
+        assert!(get("unsupported").value.is_none());
+    }
+
+    #[test]
     fn model_views_preserve_requirement_links_and_nested_structure() {
         let analysis = SysmlAnalysis::from_files([(
             "model.sysml",
-            "requirement def PayloadRequirement;\n\
+            "requirement def PayloadRequirement { doc /* Payload shall respect the source capacity. */ }\n\
              part def Rover;\n\
              package Mission {\n\
                  requirement payload : PayloadRequirement { subject rover : Rover; }\n\
@@ -1665,6 +1789,12 @@ mod model_view_tests {
             .find(|requirement| requirement.display_name == "payload")
             .expect("requirement usage is projected");
 
+        assert_eq!(
+            requirement.statement,
+            ["Payload shall respect the source capacity."],
+            "prepared records: {requirements:?}"
+        );
+        assert!(requirement.documentation.is_empty());
         assert_eq!(requirement.subjects.len(), 1);
         let rover = model_elements
             .iter()

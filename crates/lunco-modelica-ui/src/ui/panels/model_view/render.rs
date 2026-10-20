@@ -337,7 +337,7 @@ impl InstancePanel for ModelViewPanel {
             let new_id = ctx.resource_scope::<ModelTabs, _>(|_, tabs| tabs.open_new(doc, drilled));
             if let Some(new_id) = new_id {
                 ctx.trigger(OpenTab {
-                    kind: MODEL_VIEW_KIND,
+                    kind: MODEL_VIEW_KIND.as_str().to_owned(),
                     instance: new_id,
                 });
             }

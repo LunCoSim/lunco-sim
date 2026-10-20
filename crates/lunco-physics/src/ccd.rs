@@ -3705,18 +3705,56 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_native_triangle_retains_boundary_geometry() {
-        use avian3d::parry::{
-            query::PointQueryWithLocation,
-            shape::{Triangle, TrianglePointLocation},
-        };
+    fn degenerate_native_triangle_retains_surface_seed() {
+        use avian3d::parry::{query::PointQuery, shape::Triangle};
         let triangle = Triangle::new(-DVec3::X, DVec3::X, DVec3::X * 2.0);
-        for solid in [false, true] {
-            let (projection, location) =
-                triangle.project_local_point_and_get_location(DVec3::Y, solid);
-            assert_eq!(projection.point, DVec3::ZERO);
-            assert!(!projection.is_inside);
-            assert!(matches!(location, TrianglePointLocation::OnEdge(0, _)));
+        // The seed requests the surface, including for zero-volume geometry.
+        // Solid containment and a unique edge identity are not its contract.
+        let projection = triangle.project_local_point(DVec3::Y, false);
+        assert_eq!(projection.point, DVec3::ZERO);
+        assert_eq!(DVec3::Y.distance(projection.point), 1.0);
+    }
+
+    #[test]
+    fn native_surface_seed_retains_distant_origin_terrain_contact() {
+        use avian3d::parry::shape::{Cylinder, Triangle};
+        let triangle = Triangle::new(
+            DVec3::new(-14.5, 2.1760749417785554, 14.5),
+            DVec3::new(-14.0, 2.1580749417785556, 14.5),
+            DVec3::new(-14.0, 2.1080749417785554, 14.0),
+        );
+        let cylinder = Cylinder::new(0.02, 0.35);
+        let terrain = Pose::from_translation(DVec3::new(16.0, -2.1470749378204346, -16.0));
+        let wheel = Pose::from_parts(
+            DVec3::new(
+                1.8982283137323697,
+                0.0029470898096005047,
+                -1.8897590038741625,
+            ),
+            DQuat::from_xyzw(
+                -0.03559833709997007,
+                0.3802907758157608,
+                -0.02604221804242543,
+                0.9238146389317476,
+            ),
+        );
+        let relative = terrain.inv_mul(&wheel);
+        // An earlier seed lost this separated terrain contact. Both orders
+        // must retain native geometry, alongside the Cylinder/Cuboid case.
+        for contact in [
+            seeded_native_contact(&relative, &triangle, &cylinder, 0.9576728776738404),
+            seeded_native_contact(
+                &relative.inverse(),
+                &cylinder,
+                &triangle,
+                0.9576728776738404,
+            ),
+        ] {
+            let contact = contact
+                .unwrap()
+                .expect("near terrain contact must retain geometry");
+            validate_native_contact(&contact).unwrap();
+            assert!(contact.dist > 0.0 && contact.dist < 1e-6, "{contact:?}");
         }
     }
 
@@ -3725,25 +3763,43 @@ mod tests {
         use avian3d::parry::shape::{Cuboid, Cylinder};
         let cylinder = Cylinder::new(0.15, 0.4);
         let ground = Cuboid::new(DVec3::new(250.0, 0.5, 250.0));
-        let wheel = NonlinearRigidMotion::constant_position(Pose::from_parts(
-            DVec3::new(-9.896414017119408, 0.4000003863307968, 50.09619959068687),
-            DQuat::from_xyzw(
-                0.690498039592694,
-                0.6902207244403379,
-                -0.15237657279535471,
-                0.1535876124767312,
-            ),
-        ));
         let fixed = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
             0.0, -0.5, 0.0,
         )));
-        let contact =
-            initial_native_contact(&wheel, &cylinder, &fixed, &ground, 405.0532286425992).unwrap();
-        validate_native_contact(&contact).unwrap();
-        assert!(
-            contact.dist.abs() < 0.001,
-            "near ground contact: {contact:?}"
-        );
+        // Both poses are native Cylinder/Cuboid query failures captured from
+        // the wheel/ground owner, with their enclosing prediction unchanged.
+        for (position, rotation, prediction) in [
+            (
+                DVec3::new(-9.896414017119408, 0.4000003863307968, 50.09619959068687),
+                DQuat::from_xyzw(
+                    0.690498039592694,
+                    0.6902207244403379,
+                    -0.15237657279535471,
+                    0.1535876124767312,
+                ),
+                405.0532286425992,
+            ),
+            (
+                DVec3::new(-9.880932812923762, 0.4000018155424907, 52.987346017783416),
+                DQuat::from_xyzw(
+                    0.6356484044280515,
+                    0.6368023604465436,
+                    0.3097695237658201,
+                    -0.3073706261562464,
+                ),
+                407.8892152625247,
+            ),
+        ] {
+            let wheel =
+                NonlinearRigidMotion::constant_position(Pose::from_parts(position, rotation));
+            let contact =
+                initial_native_contact(&wheel, &cylinder, &fixed, &ground, prediction).unwrap();
+            validate_native_contact(&contact).unwrap();
+            assert!(
+                contact.dist.abs() < 0.001,
+                "near ground contact: {contact:?}"
+            );
+        }
     }
 
     #[test]

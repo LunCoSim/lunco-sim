@@ -252,6 +252,7 @@ fn report_structured_verdict(report, title, channel) {
     let source_files = [];
     let metrics = #{};
     let evidence_result_events = ();
+    let streamed = false;
     let evidence_channels = ();
     let pass_count = 0;
     let failure_count = 0;
@@ -260,6 +261,7 @@ fn report_structured_verdict(report, title, channel) {
     let unverified_count = 0;
     let non_pass_count = 0;
     if report != () {
+        streamed = report.streamed == true;
         if report.source_revision != () { source_revision = report.source_revision; }
         if report.source_files != () { source_files = report.source_files; }
         if report.metrics != () { metrics = report.metrics; }
@@ -333,6 +335,9 @@ fn report_structured_verdict(report, title, channel) {
         if report.unverified_count != () { unverified_count = report.unverified_count; }
         if report.non_pass_count != () { non_pass_count = report.non_pass_count; }
     }
+    if result_count == 0 && !result_chunks.is_empty() {
+        for chunk in result_chunks { result_count += chunk.len(); }
+    }
     if result_count == 0 && report != () && report.streamed == true {
         result_count = check_count;
     }
@@ -357,7 +362,7 @@ fn report_structured_verdict(report, title, channel) {
         };
         reasons.push(message);
     }
-    let chunked_results = result_chunks.len() > 1 || check_count > 64;
+    let chunked_results = streamed || !result_chunks.is_empty() || check_count > 64;
     let inline_results = !chunked_results && result_count <= 64;
     let evidence = #{schema_version: 3, ok: ok, title: title, channel: channel,
         verdict: verdict, verification: verification,

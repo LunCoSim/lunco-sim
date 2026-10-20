@@ -523,7 +523,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         world
             .commands()
             .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: MODEL_VIEW_KIND,
+                kind: MODEL_VIEW_KIND.as_str().to_owned(),
                 instance: tab_id,
             });
         return;
@@ -536,7 +536,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     world
         .commands()
         .trigger(lunco_workbench_core::commands::OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
 
@@ -636,7 +636,7 @@ fn open_user_file_class(
     world
         .commands()
         .trigger(lunco_workbench_core::commands::OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
 
@@ -712,7 +712,7 @@ fn focus_existing_doc_tab(world: &mut World, doc: lunco_doc::DocumentId, qualifi
     world
         .commands()
         .trigger(lunco_workbench_core::commands::OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
 }

@@ -2213,12 +2213,16 @@ impl PortRegistry {
     ) -> Result<T, E> {
         buffer.writes.clear();
         buffer.unique.clear();
-        let result = stage(&mut InputWriteTransaction {
-            registry: self,
-            world,
-            buffer,
-        });
+        let result = {
+            let _span = bevy::log::debug_span!("port_input_transaction_stage").entered();
+            stage(&mut InputWriteTransaction {
+                registry: self,
+                world,
+                buffer,
+            })
+        };
         if result.is_ok() {
+            let _span = bevy::log::debug_span!("port_input_transaction_commit").entered();
             for write in &buffer.writes {
                 self.commit_validated_input_write(world, write);
             }

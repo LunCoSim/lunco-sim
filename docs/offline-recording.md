@@ -267,7 +267,7 @@ closure:
 ```rhai
 let fly = |m, f| {
     cmd("SetPorts", #{ target: m,
-        writes: [["external_throttle", 0.6]], seq: 0, tick: 0 });
+        writes: [["guidance_throttle", 0.6]], seq: 0, tick: 0 });
     shot_step();          // step AFTER commanding
 };
 ```

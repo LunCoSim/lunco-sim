@@ -83,3 +83,8 @@ target/debug/luncosim test \
 `--validate` checks preflight only; it does not prove runtime behavior. Editing
 Rhai, catalog metadata, or authored USD should use the already-built binary
 where possible.
+
+The Navigation lesson introduces View, Build, Analyze, Editor and Lunica. These
+are task layouts assembled by the application Rhai policy. Twins may ship
+additional layouts through `workbench.perspectives.twin`; see
+[the authored perspective tutorial](../../docs/tutorials/05-twin-perspectives.md).

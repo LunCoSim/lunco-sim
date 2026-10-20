@@ -100,6 +100,25 @@ a structured physics fault and safety hold. Production acceptance includes
 `continuous_articulated_mass`, `continuous_contacts`, the joint-kind and detach
 gates, and the held-contact-load Rhai observer.
 
+Prismatic alignment and travel-limit directions rotate with the first joint
+frame. Their differential includes the attachment separation: the first angular
+lever is `r1 + separation`, matching the coordinate drive's Jacobian. This retains
+angular coupling after free slider travel. A central finite-difference regression
+checks both geometric row types.
+
+Hard orientation and position rows share the coupled response owner above.
+Their current native inertia and constrained directions enter the same solve,
+including interactions with contact rows. The native point-response
+decomposition remains owned by joint damping, with f64 eigenbasis projection
+and its checked rank policy.
+
+The native-drive Rhai gate establishes its analytical mass/inertia baseline
+from the first completed physics step, after native mass preparation, then
+compares twenty consecutive samples. Tick-zero scenario initialization does
+not supply prepared native mass properties. Its angular-momentum tolerance
+accounts for the native shape mass properties' f32 source precision; the
+coordinate-law and completed-reaction checks retain their dimensional bounds.
+
 The shared headless/headful physics composition disables Avian's XPBD plugin.
 The application joint owner composes its public preparation and impulse kernels
 with ordered drive, geometric and closure passes, f64 velocity projection
@@ -516,11 +535,19 @@ and execution routes. Other Twin-scoped cycle owners use the same source instead
 of keeping private scene counters. Before a successful scene commit, there is
 no scene-bound Twin scenario route. Discrete Twin lifecycle callbacks carry the
 stable owner ID and use generation zero until a scene generation exists.
-Scenario execution waits for the readiness gate.
-Application-owned scenarios keep generation zero and may finish source
-preparation across a Twin transition; Twin- and scene-owned scenarios use the
-committed scene generation. A missing generation faults only when live
-scene/Twin scenario work needs that route.
+Scene-owned scenario execution waits for the scene readiness gate. Independent
+Twin and Application presentation programs can prepare, start and receive
+events without a scene. They wait for their own declared prerequisites;
+scene-bound and simulation-timed programs also wait for global scene readiness.
+The scenario driver captures one `ScenarioLease` containing the exact Twin
+owner and optional scene revision through compilation and dependency admission.
+An absent committed generation stays `None` in that lease; only the existing
+route/stamp ABI encodes that absence as generation zero. A committed Clear may
+have a generation without a mounted USD payload. Scene mounting and lifecycle
+revision are separate owner facts. Captured Twin identity and scene
+revision must both still match before a worker result is consumed. Application
+leases ignore scene revisions. A missing generation faults only when live
+scene-owned work requires one after its execution gate has opened.
 
 Scenario ownership is explicit on the host entity. `TwinOwnedScript` carries a
 stable `TwinId`; `SceneOwnedScript` marks a program projected from the current
@@ -618,6 +645,8 @@ receives `Time<Real>` frame samples and a frame sequence; waits use that typed
 context. Its independent bounded event queue prevents a paused simulation pass
 from consuming presentation events. Subscription exists only while the language
 has presentation actors, avoiding event clones in simulation-only hosts.
+While the scene gate is closed, discrete events enter only the presentation
+queue. No simulation-event backlog accumulates across that gate.
 Presentation programs submit typed commands; direct world writes are rejected.
 Rust installs and invokes both cadences from their owning schedules. Lifecycle
 hooks receive the lifecycle, presentation or simulation

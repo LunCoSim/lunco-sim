@@ -427,7 +427,7 @@ fn resolve_scene_viewport_layout(
 pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
     layout.side_browser.is_empty()
         && layout.side_browser_bottom.is_empty()
-        && layout.center.is_empty()
+        && !layout.has_central_content()
         && layout.right_inspector.is_empty()
         && layout.right_inspector_bottom.is_empty()
         && layout.bottom.is_empty()
@@ -975,7 +975,7 @@ mod tests {
 
     impl lunco_workbench_core::Perspective for SceneBackedPerspective {
         fn id(&self) -> lunco_workbench_core::PerspectiveId {
-            lunco_workbench_core::PerspectiveId("scene_backed")
+            lunco_workbench_core::PerspectiveId::new("scene_backed")
         }
 
         fn title(&self) -> String {

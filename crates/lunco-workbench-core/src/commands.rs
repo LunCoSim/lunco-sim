@@ -14,12 +14,12 @@ use crate::{PanelId, TabId};
 
 /// Request the workbench open (or focus) a multi-instance tab.
 ///
-/// The concrete shell owns the observer that applies this event to its dock.
+/// The concrete shell validates the registered kind and applies this command to its dock.
 /// Domain UI crates can therefore open a tab without depending on egui-dock.
-#[derive(Event, Clone, Copy, Debug)]
+#[Command]
 pub struct OpenTab {
     /// The [`crate::InstancePanel::kind`] to open.
-    pub kind: PanelId,
+    pub kind: String,
     /// The tab's instance discriminant, typically a document id.
     pub instance: u64,
 }
@@ -37,10 +37,10 @@ pub struct OpenTabPreserveFocus {
 }
 
 /// Request the workbench close a multi-instance tab, if open.
-#[derive(Event, Clone, Copy, Debug)]
+#[Command]
 pub struct CloseTab {
     /// The [`crate::InstancePanel::kind`] to close.
-    pub kind: PanelId,
+    pub kind: String,
     /// The tab's instance discriminant, typically a document id.
     pub instance: u64,
 }

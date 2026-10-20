@@ -6,7 +6,8 @@
 
 fn simulation_dependencies(me, ctx) {
     let rover = find_path("/ModelicaDriveLaw/RoverModelica");
-    #{ modelica_entities: [rover], entity_reads: [rover], entity_writes: [rover], query_reads: [], required_inputs: [] }
+    let avatar = find_path("/ModelicaDriveLaw/Avatar");
+    #{ modelica_entities: [rover], entity_reads: [rover, avatar], entity_writes: [rover, avatar], query_reads: [], required_inputs: [] }
 }
 
 fn port_value(target, name, direction) {
@@ -24,8 +25,12 @@ fn on_start(me, ctx) {
     this.claimed = false;
     this.manual_idle = true;
     this.manual_live = false;
+    this.selection_idle = false;
+    this.neutral_requested = false;
+    this.manual_neutral = false;
     this.program_started = false;
     this.rover = find_path("/ModelicaDriveLaw/RoverModelica");
+    this.avatar = find_path("/ModelicaDriveLaw/Avatar");
     this.start = ();
     if this.rover < 0 {
         this.done = true;
@@ -47,7 +52,7 @@ fn on_tick(me, ctx) {
         return;
     }
     if !this.claimed && !this.program_started {
-        let claim = cmd("AcquireControl", #{target: this.rover, bind_camera: false});
+        let claim = cmd("AcquireControl", #{target: this.rover, source: this.avatar, bind_camera: true});
         if claim == () || claim.ok != true {
             fail_fast("Modelica drive gate could not acquire manual authority",
                 "MODELICA DRIVE LAW", "MODELICA_DRIVE_LAW");
@@ -55,17 +60,30 @@ fn on_tick(me, ctx) {
             return;
         }
         this.claimed = true;
+        this.selection_idle = port_value(this.rover, "piloted", "out") == 0.0;
+        cmd("SimulateIntent", #{target: this.rover, intent: "forward", held: true});
     }
     if this.elapsed < 2.0 {
-        cmd("SetPorts", #{ target: this.rover,
-            writes: [["throttle", 1.0], ["steer", 0.0], ["brake", 0.0]] });
         let left = port_value(this.rover, "drive_left", "out");
-        if left != () && left > 0.5 { this.manual_live = true; }
+        if left != () && left > 0.5
+                && port_value(this.rover, "piloted", "out") == 1.0 {
+            this.manual_live = true;
+        }
+        return;
+    }
+    if !this.neutral_requested {
+        cmd("SimulateIntent", #{target: this.rover, intent: "forward", held: false});
+        this.neutral_requested = true;
+        return;
+    }
+    if this.elapsed < 2.25 {
+        this.manual_neutral = port_value(this.rover, "piloted", "out") == 1.0
+            && port_value(this.rover, "throttle", "in") == 0.0;
         return;
     }
     if !this.program_started {
         release_control(this.rover);
-        release_control_claim(this.rover);
+        cmd("ReleaseControlSource", #{source: this.avatar});
         this.claimed = false;
         this.program_started = true;
     }
@@ -79,7 +97,9 @@ fn on_tick(me, ctx) {
     brake(this.rover);
     let checks = [
         t_true(this.manual_idle, "unowned manual input cannot actuate the drivetrain"),
+        t_true(this.selection_idle, "possession without controller input preserves guidance authority"),
         t_true(this.manual_live, "claimed manual input actuates the drivetrain"),
+        t_true(this.manual_neutral, "neutral key release retains manual authority"),
         t_true(port_value(this.rover, "piloted", "out") == 0.0
             && left != () && left > 0.5,
             "direct program input actuates without session possession"),
@@ -95,5 +115,9 @@ fn on_tick(me, ctx) {
 }
 
 fn on_stop(me, ctx) {
-    if this.claimed { brake(this.rover); release_control(this.rover); }
+    if this.claimed {
+        brake(this.rover);
+        release_control(this.rover);
+        cmd("ReleaseControlSource", #{source: this.avatar});
+    }
 }

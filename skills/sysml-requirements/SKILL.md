@@ -43,8 +43,15 @@ Windowed LunCoSim builds with the `sysml` feature also provide the
 prepared analysis, displays requirement documentation, formal `require`
 criteria, resolved `verify` cases, parser diagnostics, and source locations.
 Selecting **SysML Requirements** from another perspective opens its owning
-Editor perspective. The panel starts with a compact requirement list and a
-detail pane; search and status filters narrow the list. **Open at line** opens
+Editor perspective. The panel starts with applied requirement usages and a
+compact statement-led list. **Definitions** includes reusable declarations; **All columns** adds source,
+kind and overall status. Search and independent status filters narrow the list.
+**Passed first** is the default ordering: current-revision passing requirement
+evidence comes first, with column sorting within each group. **Column order**
+sorts the entire list by its selected column. Neither option changes evidence,
+execution, or coverage status. Summary cards use the selected usage/definition
+scope. The docked detail pane
+retains the complete statement, source and evidence. **Open at line** opens
 the canonical `SysmlDocument` at the declaration or diagnostic location.
 **Save source** applies revision-checked `ApplySysmlOps` and
 `SaveSysmlDocument` commands. The text editor is read-only when the document is
@@ -80,7 +87,12 @@ subject type as a satisfy link or infer missing relationships. Source-backed
 nodes navigate to their analyzed declarations, and a mapped test can run from
 the map. The **Structure** view presents a filterable package/part/item/
 interface/port/connection hierarchy from the same prepared analysis and opens
-selected elements at their source lines. It is a hierarchy navigator, not full
+selected elements at their source lines. Its parent and contained-declaration
+actions navigate actual ownership; its
+searchable parameter table displays typed constants with source expressions on
+hover. The outline and detail pane scroll independently; compact docks collapse
+the outline so parameter values remain reachable. Traceability stages scroll
+vertically rather than requiring a wide canvas. This is source navigation, not
 BDD/IBD diagram authoring or a general-purpose SysML editor.
 
 ### Preserve declared collection shape
@@ -470,6 +482,15 @@ selection through `expected_index`. The `tolerance` argument on a check is
 numerical evaluator policy for equality comparisons; engineering acceptance
 bounds must remain parameters of the SysML constraint itself.
 
+For observer/criterion diagnostics that accompany a system gate, use
+`sysml_requirement_checks::preflight_report` to build the diagnostic result
+without publishing a terminal verdict. Retain synthetic counterexamples as
+diagnostics, separate from measured system evidence. Publish the mapped gate's
+single terminal verdict only after its complete observation set and diagnostics
+have finished; a preliminary diagnostic PASS must not stop the scene runner
+before the system checks execute. `finish_preflight` remains the terminal
+publisher for a standalone source/adapter diagnostic gate.
+
 The existing `CoincidentPointTranslation` policy can still run a bounded
 asynchronous Modelica solve, read native finite `f64` results by exact
 experiment identity, and produce a generation-bound typed USD placement plan.
@@ -797,6 +818,13 @@ remains available for diagnostics. Requirements without a resolved `verify`
 link or Twin test mapping remain visible as coverage gaps and are skipped. Save
 or discard open SysML edits before running; the runner reads the saved Twin
 source.
+
+`sysml_requirement_checks::finish` streams typed formal-constraint results even
+for suites with fewer than 64 checks; observation-rich results can exceed a
+single event's byte budget. The terminal report marks streamed details and
+their expected event count. Preserve source provenance and the per-result
+identity when consuming this path; an empty inline result array is not missing
+evidence when the declared streamed results were received.
 
 The overview separates requirement usages, definitions, and source-file counts.
 Its actionable counters filter missing formal `require` criteria, missing

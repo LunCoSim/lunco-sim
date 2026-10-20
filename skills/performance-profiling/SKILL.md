@@ -139,6 +139,11 @@ immutable staging and commit share one exclusive world borrow, so each eligible
 target is validated once. Returning an error rejects the staged batch. A
 retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
+Unit-reference clones share immutable definitions, and Avian reuses its fixed
+built-in unit references. This storage sharing never caches the live port
+owner, bounds, frame or permission. The bounded debug spans
+`port_input_transaction_stage` and `port_input_transaction_commit` separate
+validation from application when `lunco_port_core::ports=debug` is enabled.
 
 For continuous-contact preparation, distinguish candidate enumeration from
 native geometry queries. The physics owner enumerates each unordered pair
@@ -1491,10 +1496,17 @@ withdrawal must remove the field. Retain bounded ancestor change detection
 and per-pass provider-pose reuse when optimizing this path.
 Profile flat and surface owners separately and require unchanged exact replay.
 
-For `sync_local_gravity_to_avian`, keep the comparison against the existing
-`ConstantLinearAcceleration` component and batch only changed values in query
-order. Measure its `system_commands` flush separately; removals remain driven
-by the existing `RemovedComponents` streams.
+For `sync_local_gravity_to_avian`, compare against the existing
+`ConstantLinearAcceleration` vector. Update an existing value in place and batch
+new components in query order. Preserve the sample's change provenance:
+consumer-motion updates bypass the external-force change notification, including
+the final motion sample on a newly sleeping body; changed source fields retain
+native wake notifications. External pose edits use native pose wake detection.
+Every path retains the exact vector consumed by live integration and rollback.
+Provider-pose reuse compares actual active-frame poses,
+not prescribed-sample timestamps. Its retained samples belong to the registered
+scene cache and clear at teardown. Measure the insertion `system_commands` flush
+separately; removals remain driven by the existing `RemovedComponents` streams.
 
 For `reconcile_frozen_subtrees`, profile readiness freeze and release flushes
 separately from the system body. Batch repeated joint, rigid-body, collider, and

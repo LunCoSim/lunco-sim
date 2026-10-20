@@ -304,7 +304,12 @@ the live framed pose supplies motion. This declares a spatial approximation,
 not exact cell coverage or solar-disc penumbra.
 
 `lunco-terrain-surface::solar_visibility` publishes demanded samples before the
-fixed co-simulation exchange. Terrain queries traverse native raster cells and
+fixed co-simulation exchange. Initialization waits for irradiance, terrain
+preparation and the shared direction resolver's physical observer/source poses.
+Celestial irradiance alone does not establish pose readiness. Missing,
+ambiguous or coincident direction sources still reach the sampling owner's
+terminal diagnostic; fixed-tick sampling remains strict after admission.
+Terrain queries traverse native raster cells and
 check coarse cells before breadth-first refinement using conservative enclosures
 of the same bicubic surface and analytic modifiers used by the terrain oracle.
 The raster owner converts Catmull–Rom patches to tensor-product Bézier controls

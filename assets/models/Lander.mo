@@ -227,7 +227,7 @@ equation
   der(engine_cutoff_latch) = max(0.0,
     (1.0 - engine_cutoff_latch) * landing_engine_cutoff
       / max(0.001, spool_tau));
-  // Landing inhibits belong to autonomous flight. Possession transfers the
+  // Landing inhibits belong to autonomous flight. Manual input transfers the
   // same airframe to the pilot, who may command another liftoff after landing.
   // Fuel, power, valve/spool dynamics and thrust limits remain downstream.
   flight_handoff = (1.0 - piloted) * max(0.0, min(1.0, landing_handoff));
@@ -237,7 +237,7 @@ equation
     max(0.0, min(1.0, (landing_engine_cutoff - 0.5 + predicate_band)
       / predicate_band)));
 
-  // The possession flag selects the command source; it is not an attitude
+  // The manual-authority signal selects the command source; it is not an attitude
   // authority gate. Guidance and pilot commands therefore use the same law.
   cmd_throttle = piloted * filter_throttle
     + (1.0 - piloted) * guidance_throttle;

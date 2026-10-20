@@ -370,7 +370,7 @@ fn close_source_state_on_twin_closed(
     for tab in &closed_tabs {
         if tabs.close(*tab).is_some() {
             commands.trigger(CloseTab {
-                kind: SOURCE_EDITOR_KIND,
+                kind: SOURCE_EDITOR_KIND.as_str().to_owned(),
                 instance: *tab,
             });
         }
@@ -422,7 +422,7 @@ fn open_inline(world: &mut World, uri: String, text: String) {
             .0
     });
     world.trigger(OpenTab {
-        kind: SOURCE_EDITOR_KIND,
+        kind: SOURCE_EDITOR_KIND.as_str().to_owned(),
         instance: tab,
     });
 }
@@ -473,7 +473,7 @@ fn open_path(
             .resource_mut::<EditorTabs<SourceTabState>>()
             .close(evicted);
         world.trigger(CloseTab {
-            kind: SOURCE_EDITOR_KIND,
+            kind: SOURCE_EDITOR_KIND.as_str().to_owned(),
             instance: evicted,
         });
     }
@@ -484,7 +484,7 @@ fn open_path(
 fn open_source_tab(world: &mut World, tab: EditorTabId, focus: bool) {
     if focus {
         world.trigger(OpenTab {
-            kind: SOURCE_EDITOR_KIND,
+            kind: SOURCE_EDITOR_KIND.as_str().to_owned(),
             instance: tab,
         });
     } else {
@@ -716,7 +716,10 @@ fn drain_source_tab_closes(world: &mut World) {
         world
             .resource_mut::<EditorTabs<SourceTabState>>()
             .close(instance);
-        world.trigger(CloseTab { kind, instance });
+        world.trigger(CloseTab {
+            kind: kind.as_str().to_owned(),
+            instance,
+        });
     }
     let mut pending = world.resource_mut::<PendingTabCloses>();
     for tab in unclaimed {
