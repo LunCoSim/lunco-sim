@@ -52,6 +52,8 @@ model PositionPID3D
   input Real target_vel_x = 0.0 "Landing target velocity X (m/s)";
   input Real target_vel_y = 0.0 "Landing target velocity Y (m/s)";
   input Real target_vel_z = 0.0 "Landing target velocity Z (m/s)";
+  input Real descent_enable = 1.0
+    "Mission descent permission, 0..1; zero removes downward position/rate demand while retaining velocity damping and hover";
   input Real command_tilt_limit_rad = 0.35
     "Airframe maximum component tilt used to bound the requested thrust vector (rad)";
 
@@ -202,7 +204,8 @@ model PositionPID3D
     output_limit = max_lateral_accel,
     anti_windup_gain = anti_windup_gain);
   PIDAxis pid_y(
-    setpoint = target_y,
+    setpoint = navigation.nav_pos_y + max(0.0, min(1.0, descent_enable))
+      * (target_y - navigation.nav_pos_y),
     measurement = navigation.nav_pos_y,
     setpoint_rate = descent_rate_command,
     measurement_rate = navigation.nav_vel_y,
@@ -385,7 +388,8 @@ equation
     max(0.0, descent_speed_limit_mps),
     min(sqrt(2.0 * max(0.0, descent_braking_accel_mps2)
       * altitude_above_target), flare_descent_rate_magnitude));
-  descent_rate_command = target_vel_y - descent_rate_schedule_magnitude;
+  descent_rate_command = target_vel_y
+    - max(0.0, min(1.0, descent_enable)) * descent_rate_schedule_magnitude;
 
   // Keep the realtime model event-free: the Rust output is exactly 0 or 1,
   // so it directly gates the available acceleration. The tiny denominator

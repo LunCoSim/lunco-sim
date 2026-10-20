@@ -95,11 +95,13 @@ the airframe's existing rate damping. Wire the autonomous guidance authority
 to this input so a pilot's first accepted flight input releases heading hold.
 The production analytic gate is `scripts/api/test_attitude_heading.py`.
 
-The reference's `heading_ready` qualifies measured azimuth and yaw rate for
-observers. It does not interrupt descent. Griffin starts its bounded final
-approach aligned to the Sun at the authored epoch and tracks solar azimuth
-while descending. Thrust-vector tilt and the existing manual/contact authority
-boundaries retain priority.
+The reference's `heading_ready` qualifies measured azimuth and yaw rate.
+`PositionPID3D.descent_enable` is an optional mission permission, defaulting to
+one. Zero removes downward position/rate demand while retaining vertical-rate
+damping and gravity compensation. Griffin leaves descent enabled: its final
+approach starts Sun-aligned at the authored epoch and tracks solar azimuth
+while descending. Heading qualification does not pause that approach.
+Thrust-vector tilt and manual/contact authority boundaries retain priority.
 
 The production lander uses four physical RCS pods at the diagonal body-frame
 hardpoints `(±1.8, 0.65, ±1.8)`, between the four raked landing-leg rails. The

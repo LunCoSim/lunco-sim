@@ -4,10 +4,11 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 from pathlib import Path
 
-from runtime import ROOT, ProductionSession, run_authored_scenario
+from runtime import BINARY, ROOT, ProductionSession, run_authored_scenario
 
 
 def main():
@@ -22,6 +23,11 @@ def main():
     with ProductionSession(args.port,
             extra_args=['--scene', 'scenes/tests/modelica_runtime_contracts.usda'],
             log_path=args.output / 'runtime.log') as session:
+        pid = session.process.pid
+        if sys.platform.startswith('linux'):
+            assert Path(f'/proc/{pid}/cwd').resolve() == ROOT
+            assert Path(f'/proc/{pid}/exe').resolve() == BINARY.resolve()
+        print(f'OWNED pid={pid} port={args.port}', flush=True)
         def execute(command, **params):
             response = session.post(dict(type='ExecuteCommand', command=command, params=params))
             if response.get('error'):
@@ -51,15 +57,21 @@ def main():
             runs.append(dict(id=run['experiment_id'], name=name, heading=heading,
                              valid=valid, ex=ex, ey=ey, ready=ready,
                              variables=['heading','valid','ex','ey','ez','ready']))
+        for name, position, rate in [('DescentInhibited',60.,0.),('DescentEnabled',0.,-4.)]:
+            run = execute('RunModelicaSolve', doc_id=doc, **{
+                'class': 'AttitudeHeadingContracts.' + name, 'source_generation': generation,
+                't_start': 0., 't_end': .2, 'dt': .1, 'label': name})
+            runs.append(dict(id=run['experiment_id'], name=name, position=position, rate=rate,
+                             variables=['position_command','rate_command']))
         (args.output / 'runs.json').write_text(json.dumps(runs, indent=2))
         execute('SetTimeTransport', playing=True)
         run_authored_scenario(session, 'lunco://scenarios/tests/attitude_heading_contracts.rhai',
-                              title='ATTITUDE HEADING', check_count=80, params=dict(runs=runs))
+                              title='ATTITUDE HEADING', check_count=88, params=dict(runs=runs))
         for run in runs:
             result = execute('GetExperimentResult', experiment_id=run['id'],
                              variables=run['variables'], max_points=100)
             (args.output / (run['name'] + '.json')).write_text(json.dumps(result, indent=2))
-    print('PASS 80 authored attitude heading checks; owned API released')
+    print('PASS 88 authored attitude heading and descent-interlock checks; owned API released')
 
 
 if __name__ == '__main__':

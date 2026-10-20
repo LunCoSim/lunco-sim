@@ -157,12 +157,14 @@ antipodal, tilted, vertical-target and disabled-authority witnesses, then run
 the vehicle's own descent and manual-handoff gates.
 
 Connect measured IMU yaw rate to `heading_rate_body_y` to qualify
-`heading_ready` for observers. Author angle/rate limits on the reference.
-For a bounded final approach, author the initial attitude toward the Sun at
-the scene epoch and track heading during descent. Prove the initial alignment,
-continued descent and contact handoff together in the vehicle's runtime gate.
+`heading_ready`; author angle/rate limits on the reference. The optional
+`PositionPID3D.descent_enable` defaults to one and can express a mission's
+explicit descent-inhibit requirement. Griffin keeps it enabled: author the
+complete attached assembly Sun-aligned at the scene epoch and track heading
+while descending. Prove initial alignment, continued descent, manual release
+and contact handoff through the vehicle's runtime gates.
 
-A a `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario
+A `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario
 (`uniform asset info:sourceAsset = @scenarios/my_supervisor.rhai@`), does
 supervision and sequencing — **never a control loop**. React to events; don't poll or
 step.

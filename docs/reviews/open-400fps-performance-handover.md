@@ -1,5 +1,27 @@
 # High-quality realtime performance handover
 
+## Lunar Modelica heading interface alignment — 2026-10-20
+
+The current authored Griffin Twin requires heading target, enable, measured yaw
+rate and readiness ports on `AttitudeReference`, plus descent permission on
+`PositionPID3D`. The shared Modelica contract from maintained commits
+`bcb2e6ca8` and `eccb8a038` supplies those equations and public ports. Their
+analytic fixtures, authored verdict, API driver, controller skill and canonical
+lander documentation are integrated together. The driver verifies its owned
+Linux PID/cwd/executable. No authored Twin source or Rust control law is changed.
+
+All 88 authored heading/descent-interlock assertions pass through the production
+Modelica owner. The real lunar Twin then completes certified initialization for
+six coupled participants and first reaches readiness in 31.135 s. This clears
+the missing-heading-interface failure. The continued windowed run later faults
+with `physics-continuous-contact-invalid`: `coupled minimum-residual solve did
+not converge`. No complete quiet frame window is accepted. Source hashes remain
+fixed and owned ports are released. Native geometry/response capture of that
+failure is the next physics investigation; neither full mission behavior nor
+loading/FPS acceptance is established. Evidence under
+`.cache/codex-evidence/loading-20261019/`: `heading-contract-integration/` and
+`griffin-heading-integrated/`.
+
 ## Body-indexed response reductions — 2026-10-20
 
 `lunco-physics::constraint_response` packs each active operator's selected
