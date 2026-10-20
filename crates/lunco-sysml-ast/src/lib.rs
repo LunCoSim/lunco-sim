@@ -3794,7 +3794,9 @@ fn project_requirements(
                 .unwrap_or_default();
             Some(SysmlRequirementRecord {
                 element: element.clone(),
-                documentation: fields.documentation,
+                documentation: semantic_id
+                    .map(|id| element_documentation(workspace, id))
+                    .unwrap_or_default(),
                 subjects: fields.subjects,
                 attributes: owned_attributes,
                 constraints,
@@ -3909,7 +3911,7 @@ fn project_verifications(
                 .collect();
             Some(SysmlVerificationRecord {
                 element: element.clone(),
-                documentation: fields.documentation,
+                documentation: element_documentation(workspace, semantic_id),
                 subjects: fields.subjects,
                 verifies: fields.verifies,
                 verified_requirements,
@@ -3919,9 +3921,33 @@ fn project_verifications(
         .collect()
 }
 
+/// Project every directly owned Documentation body from the semantic model.
+/// This preserves inline and multiline prose without attributing nested docs to
+/// their parent. The upstream single-document getter exposes only the first body.
+fn element_documentation(workspace: &Workspace, owner: ElementId) -> Vec<String> {
+    let model = workspace.model();
+    model
+        .owned(owner)
+        .iter()
+        .filter(|&&id| model.kind(id) == ElementKind::Documentation)
+        .filter_map(|&id| model.body(id))
+        .map(|body| {
+            body.lines()
+                .map(|line| {
+                    let line = line.trim();
+                    line.strip_prefix("* ").unwrap_or(line).trim()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_owned()
+        })
+        .filter(|body| !body.is_empty())
+        .collect()
+}
+
 #[derive(Default)]
 struct BlockFields {
-    documentation: Vec<String>,
     subjects: Vec<SysmlSubject>,
     verifies: Vec<String>,
     satisfies: Vec<String>,
@@ -3932,15 +3958,7 @@ fn parse_block_fields(block: &str) -> BlockFields {
     let mut fields = BlockFields::default();
     for line in block.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("doc /*") {
-            let text = rest
-                .split_once("*/")
-                .map(|(text, _)| text)
-                .unwrap_or(rest)
-                .trim();
-            if !text.is_empty() {
-                fields.documentation.push(text.to_owned());
-            }
+        if line.starts_with("doc /*") {
             continue;
         }
 
@@ -4174,6 +4192,51 @@ mod tests {
             .expect("complete source closure");
 
         assert_ne!(first.sources[0].cid, second.sources[0].cid);
+    }
+
+    #[test]
+    fn documentation_preserves_owned_inline_and_multiline_bodies() {
+        let analysis = SysmlAnalysis::build(
+            [(
+                "model.sysml",
+                r#"
+            package Mission {
+                requirement def Envelope {
+                    doc /* First line.
+                         * Second line. */
+                    doc additional /* **Explicit** additional statement. */
+                    requirement child { doc /* Child statement. */ }
+                }
+                verification def VerifyEnvelope { doc /* Verification statement. */ }
+            }
+        "#,
+            )],
+            true,
+            7,
+        );
+        assert!(!analysis.has_errors(), "{:?}", analysis.diagnostics());
+        let envelope = analysis
+            .requirements()
+            .iter()
+            .find(|record| record.element.qualified_name == "Mission::Envelope")
+            .unwrap();
+        assert_eq!(
+            envelope.documentation,
+            [
+                "First line.\nSecond line.",
+                "**Explicit** additional statement."
+            ]
+        );
+        let child = analysis
+            .requirements()
+            .iter()
+            .find(|record| record.element.qualified_name == "Mission::Envelope::child")
+            .unwrap();
+        assert_eq!(child.documentation, ["Child statement."]);
+        assert_eq!(
+            analysis.verifications()[0].documentation,
+            ["Verification statement."]
+        );
     }
 
     #[test]

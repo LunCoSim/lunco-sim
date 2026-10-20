@@ -43,8 +43,15 @@ Windowed LunCoSim builds with the `sysml` feature also provide the
 prepared analysis, displays requirement documentation, formal `require`
 criteria, resolved `verify` cases, parser diagnostics, and source locations.
 Selecting **SysML Requirements** from another perspective opens its owning
-Editor perspective. The panel starts with a compact requirement list and a
-detail pane; search and status filters narrow the list. **Open at line** opens
+Editor perspective. The panel starts with applied requirement usages and a
+compact statement-led list. **Definitions** includes reusable declarations; **All columns** adds source,
+kind and overall status. Search and independent status filters narrow the list.
+**Passed first** is the default ordering: current-revision passing requirement
+evidence comes first, with column sorting within each group. **Column order**
+sorts the entire list by its selected column. Neither option changes evidence,
+execution, or coverage status. Summary cards use the selected usage/definition
+scope. The docked detail pane
+retains the complete statement, source and evidence. **Open at line** opens
 the canonical `SysmlDocument` at the declaration or diagnostic location.
 **Save source** applies revision-checked `ApplySysmlOps` and
 `SaveSysmlDocument` commands. The text editor is read-only when the document is
@@ -80,7 +87,12 @@ subject type as a satisfy link or infer missing relationships. Source-backed
 nodes navigate to their analyzed declarations, and a mapped test can run from
 the map. The **Structure** view presents a filterable package/part/item/
 interface/port/connection hierarchy from the same prepared analysis and opens
-selected elements at their source lines. It is a hierarchy navigator, not full
+selected elements at their source lines. Its parent and contained-declaration
+actions navigate actual ownership; its
+searchable parameter table displays typed constants with source expressions on
+hover. The outline and detail pane scroll independently; compact docks collapse
+the outline so parameter values remain reachable. Traceability stages scroll
+vertically rather than requiring a wide canvas. This is source navigation, not
 BDD/IBD diagram authoring or a general-purpose SysML editor.
 
 ### Preserve declared collection shape

@@ -695,7 +695,9 @@ Use the smallest existing typed intent that expresses the change:
   Each entry carries an asset identity and optional absolute target prim path.
   `Prepend`, `Append`, `Add`, and `Delete` preserve weaker-layer opinions;
   `Explicit` replaces the selected layer's list and an empty explicit list
-  clears it. Inspect `references.authored` and native `references.composed`
+  clears it. New reference targets must finish closure admission and appear in
+  the composed preview before the edit is considered verified. Inspect
+  `references.authored` and native `references.composed`
   (list result and spec sites, source `document_composition`) before editing,
   and resolve the target first so a composed-only prim is reported as
   read-only rather than flattened or guessed.

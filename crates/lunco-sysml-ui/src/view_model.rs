@@ -47,6 +47,8 @@ pub(crate) struct RequirementView {
     pub role: RequirementRole,
     pub definition_handle: Option<SysmlElementHandle>,
     pub documentation: Vec<String>,
+    /// Usage documentation or the statement of its uniquely resolved definition.
+    pub statement: Vec<String>,
     pub logical_uri: String,
     pub relative_path: Option<PathBuf>,
     pub line: Option<usize>,
@@ -614,6 +616,22 @@ fn build_requirement_views(
             )
         })
         .collect::<Vec<_>>();
+    let statements: HashMap<_, _> = analysis
+        .requirements()
+        .iter()
+        .map(|record| (record.element.handle, &record.documentation))
+        .collect();
+    for requirement in &mut requirements {
+        requirement.statement = if requirement.documentation.is_empty() {
+            requirement
+                .definition_handle
+                .and_then(|handle| statements.get(&handle))
+                .map(|statement| (*statement).clone())
+                .unwrap_or_default()
+        } else {
+            requirement.documentation.clone()
+        };
+    }
     requirements.sort_by(|left, right| {
         left.logical_uri
             .cmp(&right.logical_uri)
@@ -688,6 +706,7 @@ fn requirement_view(
         },
         definition_handle,
         documentation: requirement.documentation.clone(),
+        statement: Vec::new(),
         logical_uri: element.file.clone(),
         relative_path: source_paths
             .get(element.file.as_str())
@@ -1747,7 +1766,7 @@ mod model_view_tests {
     fn model_views_preserve_requirement_links_and_nested_structure() {
         let analysis = SysmlAnalysis::from_files([(
             "model.sysml",
-            "requirement def PayloadRequirement;\n\
+            "requirement def PayloadRequirement { doc /* Payload shall respect the source capacity. */ }\n\
              part def Rover;\n\
              package Mission {\n\
                  requirement payload : PayloadRequirement { subject rover : Rover; }\n\
@@ -1770,6 +1789,12 @@ mod model_view_tests {
             .find(|requirement| requirement.display_name == "payload")
             .expect("requirement usage is projected");
 
+        assert_eq!(
+            requirement.statement,
+            ["Payload shall respect the source capacity."],
+            "prepared records: {requirements:?}"
+        );
+        assert!(requirement.documentation.is_empty());
         assert_eq!(requirement.subjects.len(), 1);
         let rover = model_elements
             .iter()

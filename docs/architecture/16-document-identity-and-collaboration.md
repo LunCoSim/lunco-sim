@@ -146,6 +146,9 @@ tokens, relationships, and connections. Native namespace mapping and ListOp
 composition determine incoming edges; failed reads reject the operation.
 The document projection owner admits a batch's new reference closures before
 replaying any opinions, including sibling joint/relationship declarations.
+Dependency discovery uses `UsdOp::composition_dependencies` for added parts,
+existing reference list edits, payloads and source snapshots; deleting an arc
+does not load its target. The projection and command owners share this visitor.
 An incomplete closure holds that document generation; no intermediate topology
 is published to physics. This uses the same native preparation for incremental
 and coarse edits.

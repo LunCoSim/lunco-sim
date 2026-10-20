@@ -411,9 +411,55 @@ fn on_tick(me, ctx) {
         if removed.ok != false || removed.code != 404 {
             this = finish(this, false, "retired probe remains in the document"); return;
         }
+        let edit = assembly_edit::batch(this.doc, "Admit a changed reference target", [
+            #{AddPrim: #{edit_target: "@root@", parent_path: ROOT + "/World", name: "LifecycleProbe",
+                type_name: "Xform", reference: (), reference_prim_path: ()}},
+            #{SetReferenceArcs: #{edit_target: "@root@", path: PROBE, list_op: "Explicit",
+                references: [#{asset_path: "lunco://vessels/markers/landing_location.usda", prim_path: ()}]}},
+        ], this.generation);
+        if edit == () || edit.ok == false || edit.id == () {
+            this = finish(this, false, "changed reference target was rejected"); return;
+        }
+        this.command = edit.id; this.phase = 17; return;
+    }
+
+    if this.phase == 17 {
+        let result = command_result(this.command);
+        if result.status == "pending" { return; }
+        if result.ok != true || result.status != "applied" {
+            this = finish(this, false, "reference closure admission failed: " + result.error); return;
+        }
+        this.generation = assembly_edit::describe(this.doc).generation;
+        this.phase = 18; return;
+    }
+
+    if this.phase == 18 {
+        if !preview_ready(PREVIEW, this.doc, this.generation)
+            || !preview_ready(SECOND_PREVIEW, this.doc, this.generation) { return; }
+        let marker = query("QueryUsdPrim", #{doc_id: this.doc, path: PROBE + "/Dome",
+            attrs: [], geometry_bounds: true});
+        if marker == () || marker.ok == false || marker.type_name != "Cylinder"
+            || marker.geometry_bounds == () || marker.geometry_bounds.half_extents[0] < 2.49 {
+            this = finish(this, false, "ready previews omitted the newly referenced geometry"); return;
+        }
+        let invalid = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: this.generation,
+            op: #{SetReferenceArcs: #{edit_target: "@root@", path: PROBE, list_op: "Append",
+                references: [#{asset_path: "lunco://vessels/markers/landing_location.usda", prim_path: "NotAbsolute"}]}}});
+        if invalid == () || invalid.id == () {
+            this = finish(this, false, "invalid reference command had no terminal result"); return;
+        }
+        this.command = invalid.id; this.phase = 19; return;
+    }
+
+    if this.phase == 19 {
+        let result = command_result(this.command);
+        if result.status == "pending" { return; }
+        if result.ok != false || assembly_edit::describe(this.doc).generation != this.generation {
+            this = finish(this, false, "invalid reference target changed the document"); return;
+        }
         assembly_edit::preview_close(SECOND_PREVIEW);
         assembly_edit::preview_close(PREVIEW);
         assembly_edit::close_document(this.doc);
-        this = finish(this, true, "material, source replacement and structural edits reconcile and retire every preview lease");
+        this = finish(this, true, "material, source, structure and reference closures reconcile every preview lease; invalid targets reject");
     }
 }

@@ -199,6 +199,13 @@ enum RequirementSortColumn {
     Status,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RequirementPriority {
+    #[default]
+    PassedFirst,
+    ColumnOrder,
+}
+
 const REQUIREMENT_COLUMNS: [RequirementSortColumn; 7] = [
     RequirementSortColumn::Id,
     RequirementSortColumn::Kind,
@@ -256,12 +263,16 @@ pub struct SysmlRequirementsPanel {
     search: String,
     filters: RequirementFilters,
     selected_source: Option<String>,
+    priority: RequirementPriority,
     selected_requirement: Option<String>,
     selected_structure_element: Option<SysmlElementHandle>,
     view_twin_id: Option<lunco_workspace::TwinId>,
     active_view: RequirementsWorkspaceView,
     trace_search: String,
     structure_search: String,
+    parameter_search: String,
+    include_definitions: bool,
+    full_table: bool,
     sort_column: RequirementSortColumn,
     sort_descending: bool,
     column_order: RequirementColumnOrder,
@@ -670,7 +681,9 @@ impl SysmlRequirementsPanel {
         if close_editor {
             self.editor = None;
         }
-        self.render_source_diagnostics(ui, view_model, documents, theme);
+        if self.active_view == RequirementsWorkspaceView::Requirements {
+            self.render_source_diagnostics(ui, view_model, documents, theme);
+        }
         actions
     }
 
@@ -711,6 +724,7 @@ impl SysmlRequirementsPanel {
                 self.selected_source
                     .as_deref()
                     .is_none_or(|source| requirement.logical_uri == source)
+                    && (self.include_definitions || requirement.role == RequirementRole::Usage)
                     && requirement_matches_search(requirement, &search)
                     && requirement_matches_filters(requirement, view_model, runs, self.filters)
             })
@@ -757,7 +771,7 @@ impl SysmlRequirementsPanel {
             return None;
         }
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Requirement");
             ui.add(
                 egui::TextEdit::singleline(&mut self.trace_search)
@@ -814,13 +828,14 @@ impl SysmlRequirementsPanel {
         };
 
         let mut open_source = None;
-        egui::ScrollArea::horizontal()
+        egui::ScrollArea::vertical()
             .id_salt("sysml_traceability_map")
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    trace_card(ui, theme, "REQUIREMENT", |ui| {
+                ui.vertical(|ui| {
+                    trace_card(ui, theme, "01  REQUIREMENT", |ui| {
                         ui.strong(&requirement.display_name);
+                        for statement in &requirement.statement { ui.label(statement); }
                         muted(ui, theme, &requirement.qualified_name);
                         let (rollup, color, explanation) = requirement_rollup_label(
                             requirement_rollup_state(requirement, view_model, runs),
@@ -844,7 +859,7 @@ impl SysmlRequirementsPanel {
                         }
                     });
                     trace_arrow(ui, theme);
-                    trace_card(ui, theme, "SUBJECT TYPES", |ui| {
+                    trace_card(ui, theme, "02  DECLARED SUBJECT TYPES", |ui| {
                         if requirement.subjects.is_empty() {
                             muted(ui, theme, "No subject type is declared.");
                         }
@@ -864,7 +879,7 @@ impl SysmlRequirementsPanel {
                         }
                     });
                     trace_arrow(ui, theme);
-                    trace_card(ui, theme, "SATISFIED BY", |ui| {
+                    trace_card(ui, theme, "03  EXPLICIT SATISFACTION", |ui| {
                         if requirement.satisfied_by.is_empty() {
                             muted(ui, theme, "No explicit SysML satisfy relationship.");
                         }
@@ -884,7 +899,7 @@ impl SysmlRequirementsPanel {
                         }
                     });
                     trace_arrow(ui, theme);
-                    trace_card(ui, theme, "VERIFY & RUN", |ui| {
+                    trace_card(ui, theme, "04  VERIFICATION", |ui| {
                         if requirement.verification_cases.is_empty() {
                             ui.colored_label(theme.tokens.warning, "No resolved verify link.");
                         }
@@ -947,7 +962,7 @@ impl SysmlRequirementsPanel {
                         }
                     });
                     trace_arrow(ui, theme);
-                    trace_card(ui, theme, "EVIDENCE", |ui| {
+                    trace_card(ui, theme, "05  MEASURED EVIDENCE", |ui| {
                         let (label, color, explanation) =
                             evidence_status(requirement, view_model, runs, theme);
                         ui.colored_label(color, label).on_hover_text(explanation);
@@ -1010,113 +1025,142 @@ impl SysmlRequirementsPanel {
         view_model: &SysmlRequirementsViewModel,
         theme: &lunco_theme::Theme,
     ) -> Option<(SourceFileView, usize)> {
-        ui.heading("Model structure");
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.structure_search)
-                    .hint_text("Filter packages, parts, ports, connections…")
-                    .desired_width(280.0),
-            );
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("System structure");
             muted(
                 ui,
                 theme,
                 &format!(
-                    "{} structural elements",
+                    "{} source elements",
                     count_structure_nodes(&view_model.model_structure)
                 ),
             );
         });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.structure_search)
+                .hint_text("Find a package, part, interface, port or connection")
+                .desired_width(ui.available_width()),
+        );
         if view_model.model_structure.is_empty() {
-            muted(
-                ui,
-                theme,
-                "No package, part, item, interface, port, or connection elements were found in the supported projection.",
-            );
+            muted(ui, theme, "No structural declarations in this source set.");
             return None;
         }
-
         let query = self.structure_search.trim().to_lowercase();
         let matching = matching_structure_nodes(&view_model.model_structure, &query);
-        if self.selected_structure_element.is_some_and(|selected| {
-            find_structure_element(&view_model.model_structure, selected).is_none()
-        }) {
-            self.selected_structure_element = None;
+        if self
+            .selected_structure_element
+            .is_none_or(|selected| !matching.contains(&selected))
+        {
+            self.selected_structure_element = view_model
+                .model_elements
+                .iter()
+                .find(|element| {
+                    matching.contains(&element.handle)
+                        && view_model.model_attributes.contains_key(&element.handle)
+                })
+                .or_else(|| {
+                    view_model
+                        .model_elements
+                        .iter()
+                        .find(|element| matching.contains(&element.handle))
+                })
+                .map(|element| element.handle);
+            self.parameter_search.clear();
         }
-
         let mut open_source = None;
-        if ui.available_width() >= 760.0 {
-            ui.columns(2, |columns| {
-                columns[0].heading("Packages and structure");
-                egui::ScrollArea::vertical()
-                    .id_salt("sysml_model_structure_tree")
-                    .max_height(440.0)
-                    .show(&mut columns[0], |ui| {
-                        for root in &view_model.model_structure {
-                            self.render_structure_node(
-                                ui,
-                                view_model,
-                                root,
-                                0,
-                                &query,
-                                &matching,
-                                theme,
-                                &mut open_source,
-                            );
-                        }
-                    });
-                columns[1].heading("Selected element");
-                if let Some(selected) = self
-                    .selected_structure_element
-                    .and_then(|handle| find_structure_element(&view_model.model_structure, handle))
-                {
-                    render_structure_details(
-                        &mut columns[1],
-                        view_model,
-                        selected,
-                        theme,
-                        &mut open_source,
-                    );
-                } else {
-                    muted(
-                        &mut columns[1],
-                        theme,
-                        "Select a package, part, port, interface, item, or connection.",
-                    );
-                }
+        let height = ui.available_height().max(100.0);
+        if ui.available_width() >= 600.0 {
+            let tree_width = (ui.available_width() * 0.33).clamp(180.0, 320.0);
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(tree_width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.strong("MODEL OUTLINE");
+                        egui::ScrollArea::vertical()
+                            .id_salt("sysml_model_structure_tree")
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                for root in &view_model.model_structure {
+                                    self.render_structure_node(
+                                        ui,
+                                        view_model,
+                                        root,
+                                        0,
+                                        &query,
+                                        &matching,
+                                        theme,
+                                        &mut open_source,
+                                    );
+                                }
+                            });
+                    },
+                );
+                ui.separator();
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("sysml_structure_detail_scroll")
+                            .max_height(ui.available_height())
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if let Some(node) =
+                                    self.selected_structure_element.and_then(|handle| {
+                                        find_structure_node(&view_model.model_structure, handle)
+                                    })
+                                {
+                                    render_structure_details(
+                                        ui,
+                                        view_model,
+                                        node,
+                                        &mut self.selected_structure_element,
+                                        &mut self.parameter_search,
+                                        theme,
+                                        &mut open_source,
+                                    );
+                                }
+                            });
+                    },
+                );
             });
         } else {
-            ui.heading("Packages and structure");
             egui::ScrollArea::vertical()
-                .id_salt("sysml_model_structure_tree_narrow")
-                .max_height(360.0)
+                .id_salt("sysml_structure_narrow_scroll")
+                .max_height(height)
                 .show(ui, |ui| {
-                    for root in &view_model.model_structure {
-                        self.render_structure_node(
+                    egui::CollapsingHeader::new("Model outline")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            for root in &view_model.model_structure {
+                                self.render_structure_node(
+                                    ui,
+                                    view_model,
+                                    root,
+                                    0,
+                                    &query,
+                                    &matching,
+                                    theme,
+                                    &mut open_source,
+                                );
+                            }
+                        });
+                    if let Some(node) = self
+                        .selected_structure_element
+                        .and_then(|handle| find_structure_node(&view_model.model_structure, handle))
+                    {
+                        render_structure_details(
                             ui,
                             view_model,
-                            root,
-                            0,
-                            &query,
-                            &matching,
+                            node,
+                            &mut self.selected_structure_element,
+                            &mut self.parameter_search,
                             theme,
                             &mut open_source,
                         );
                     }
                 });
-            ui.separator();
-            ui.heading("Selected element");
-            if let Some(selected) = self
-                .selected_structure_element
-                .and_then(|handle| find_structure_element(&view_model.model_structure, handle))
-            {
-                render_structure_details(ui, view_model, selected, theme, &mut open_source);
-            } else {
-                muted(
-                    ui,
-                    theme,
-                    "Select a structural element to inspect and open its source.",
-                );
-            }
         }
         open_source
     }
@@ -1218,14 +1262,17 @@ impl SysmlRequirementsPanel {
         view_model: &SysmlRequirementsViewModel,
         theme: &lunco_theme::Theme,
     ) {
-        ui.horizontal(|ui| {
-            ui.heading("SysML Requirements");
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("SysML v2");
             if let Some(name) = &view_model.twin_name {
                 muted(ui, theme, name);
             }
         });
         if let Some(revision) = view_model.source_revision {
-            muted(ui, theme, &format!("Analyzed source revision {revision}"));
+            ui.small(
+                egui::RichText::new(format!("Source revision {revision}"))
+                    .color(theme.tokens.text_subdued),
+            );
         }
     }
 
@@ -1238,21 +1285,25 @@ impl SysmlRequirementsPanel {
         theme: &lunco_theme::Theme,
         actions: &mut Vec<PanelAction>,
     ) {
-        let missing_criteria = view_model
+        let scoped_requirements: Vec<_> = view_model
             .requirements
+            .iter()
+            .filter(|requirement| {
+                self.include_definitions || requirement.role == RequirementRole::Usage
+            })
+            .collect();
+        let missing_criteria = scoped_requirements
             .iter()
             .filter(|requirement| !requirement.has_required_constraint)
             .count();
-        let no_verify = view_model
-            .requirements
+        let no_verify = scoped_requirements
             .iter()
             .filter(|requirement| {
                 requirement.role == RequirementRole::Usage
                     && requirement.verification_cases.is_empty()
             })
             .count();
-        let unmapped_verify = view_model
-            .requirements
+        let unmapped_verify = scoped_requirements
             .iter()
             .filter(|requirement| {
                 !requirement.verification_cases.is_empty()
@@ -1268,8 +1319,7 @@ impl SysmlRequirementsPanel {
             .filter(|requirement| requirement.role == RequirementRole::Definition)
             .count();
         let usages = view_model.requirements.len().saturating_sub(definitions);
-        let not_run = view_model
-            .requirements
+        let not_run = scoped_requirements
             .iter()
             .filter(|requirement| {
                 execution_summary(requirement, view_model, runs).state == ExecutionState::NotRun
@@ -1296,10 +1346,10 @@ impl SysmlRequirementsPanel {
                 ui,
                 theme,
                 card_width,
-                "Model coverage",
+                "Missing criteria",
                 self.filters == RequirementQuickFilter::NeedsCriterion.filters(),
-                &format!("{missing_criteria} / {}", view_model.requirements.len()),
-                "entries without a formal require criterion",
+                &missing_criteria.to_string(),
+                "formal require",
                 missing_criteria,
                 theme.tokens.text_subdued,
                 "Filter requirements that lack a formal `require` criterion.",
@@ -1310,10 +1360,10 @@ impl SysmlRequirementsPanel {
                 ui,
                 theme,
                 card_width,
-                "Usage verification",
+                "Missing verify",
                 self.filters == RequirementQuickFilter::NeedsVerify.filters(),
-                &format!("{no_verify} usages"),
-                "without a `verify` link",
+                &no_verify.to_string(),
+                "usage verify links",
                 no_verify,
                 if no_verify == 0 {
                     theme.tokens.success
@@ -1328,10 +1378,10 @@ impl SysmlRequirementsPanel {
                 ui,
                 theme,
                 card_width,
-                "Twin test mapping",
+                "Unmapped tests",
                 self.filters == RequirementQuickFilter::NeedsTwinMapping.filters(),
-                &format!("{unmapped_verify} requirements"),
-                "with unmapped Twin tests",
+                &unmapped_verify.to_string(),
+                "requirement entries",
                 unmapped_verify,
                 if unmapped_verify == 0 {
                     theme.tokens.success
@@ -1346,10 +1396,10 @@ impl SysmlRequirementsPanel {
                 ui,
                 theme,
                 card_width,
-                "Test execution",
+                "Not run",
                 self.filters == RequirementQuickFilter::NotRun.filters(),
-                &format!("{not_run} requirements"),
-                "with mapped tests not run",
+                &not_run.to_string(),
+                "mapped entries",
                 not_run,
                 theme.tokens.text_subdued,
                 "Filter requirements with mapped tests and no current result.",
@@ -1454,7 +1504,7 @@ impl SysmlRequirementsPanel {
                 muted(
                     ui,
                     theme,
-                    "Counts on buttons are unique tests; cards count affected requirements.",
+                    "Run counts are unique tests. Cards count entries in the selected scope.",
                 );
             }
         });
@@ -1804,10 +1854,26 @@ impl SysmlRequirementsPanel {
         theme: &lunco_theme::Theme,
     ) {
         ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.include_definitions, "Definitions")
+                .on_hover_text("Include reusable requirement definitions alongside the applied usages.");
+            egui::ComboBox::from_id_salt("sysml_requirement_priority")
+                .selected_text(match self.priority {
+                    RequirementPriority::PassedFirst => "Passed first",
+                    RequirementPriority::ColumnOrder => "Column order",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.priority, RequirementPriority::PassedFirst, "Passed first");
+                    ui.selectable_value(&mut self.priority, RequirementPriority::ColumnOrder, "Column order");
+                })
+                .response.on_hover_text("Passed first places current-revision passing requirement evidence above other rows. Column headers sort within each group. Test execution and model coverage remain independent.");
+            ui.checkbox(&mut self.full_table, "All columns")
+                .on_hover_text("Show source, declaration kind and overall status as well as the independent status dimensions.");
+        });
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search name, ID, docs or test")
-                    .desired_width((ui.available_width() * 0.42).max(180.0)),
+                    .desired_width((ui.available_width() * 0.52).clamp(120.0, 400.0)),
             );
             let selected_name = self
                 .selected_source
@@ -1821,6 +1887,7 @@ impl SysmlRequirementsPanel {
                 .map(|file| file.relative_path.display().to_string())
                 .unwrap_or_else(|| "All source files".to_owned());
             egui::ComboBox::from_id_salt("sysml_requirement_source_filter")
+                .width(160.0)
                 .selected_text(selected_name)
                 .show_ui(ui, |ui| {
                     if ui
@@ -1945,6 +2012,7 @@ impl SysmlRequirementsPanel {
                 self.selected_source
                     .as_deref()
                     .is_none_or(|source| requirement.logical_uri == source)
+                    && (self.include_definitions || requirement.role == RequirementRole::Usage)
                     && requirement_matches_search(requirement, &search)
                     && requirement_matches_filters(requirement, view_model, runs, self.filters)
             })
@@ -1972,6 +2040,14 @@ impl SysmlRequirementsPanel {
         ordered.sort_by(|left, right| {
             let left = &view_model.requirements[*left];
             let right = &view_model.requirements[*right];
+            if self.priority == RequirementPriority::PassedFirst {
+                let left_pass = evidence_state(left, view_model, runs) == EvidenceState::Pass;
+                let right_pass = evidence_state(right, view_model, runs) == EvidenceState::Pass;
+                let priority = right_pass.cmp(&left_pass);
+                if !priority.is_eq() {
+                    return priority;
+                }
+            }
             let ordering = compare_requirements(left, right, view_model, runs, self.sort_column);
             let ordering = if self.sort_descending {
                 ordering.reverse()
@@ -1983,19 +2059,33 @@ impl SysmlRequirementsPanel {
 
         let mut next_sort = None;
         let mut next_reorder = None;
-        let column_order = self.column_order.0;
+        let column_order: Vec<_> = self
+            .column_order
+            .0
+            .iter()
+            .copied()
+            .filter(|column| {
+                self.full_table
+                    || !matches!(
+                        column,
+                        RequirementSortColumn::Kind
+                            | RequirementSortColumn::Source
+                            | RequirementSortColumn::Status
+                    )
+            })
+            .collect();
         let mut selected_requirement = self.selected_requirement.clone();
-        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+        let row_height = 2.0 * ui.text_style_height(&egui::TextStyle::Body) + 16.0;
         egui::ScrollArea::horizontal()
             .id_salt("sysml_requirements_table_horizontal")
             .show(ui, |ui| {
                 let table_width = (ui.available_width()
                     - ui.spacing().scroll.allocated_width()
-                    - ui.spacing().item_spacing.x * 6.0)
+                    - ui.spacing().item_spacing.x * column_order.len().saturating_sub(1) as f32)
                     .max(0.0);
                 let minimum_width_scale = (table_width / 500.0).min(1.0) * 0.95;
                 let mut table_builder = TableBuilder::new(ui)
-                    .id_salt("sysml_requirements_table")
+                    .id_salt(("sysml_requirements_table", self.full_table))
                     .striped(true)
                     .resizable(true)
                     .sense(egui::Sense::click());
@@ -2003,15 +2093,16 @@ impl SysmlRequirementsPanel {
                     table_builder.reset();
                     self.reset_table_column_widths = false;
                 }
-                for column in column_order {
+                for column in column_order.iter().copied() {
                     table_builder = table_builder.column(requirement_column_layout(
                         column,
                         table_width,
                         minimum_width_scale,
+                        !self.full_table,
                     ));
                 }
                 let table = table_builder.header(26.0, |mut header| {
-                    for column in column_order {
+                    for column in column_order.iter().copied() {
                         let label = requirement_column_label(column);
                         let active = self.sort_column == column;
                         let marker = if active {
@@ -2069,8 +2160,14 @@ impl SysmlRequirementsPanel {
                 for column in column_order.iter().copied() {
                     match column {
                         RequirementSortColumn::Id => row.col(|ui| {
-                            ui.add(egui::Label::new(&requirement.display_name).truncate())
-                                .on_hover_text(&requirement.qualified_name);
+                            ui.vertical(|ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&requirement.display_name).strong()).truncate())
+                                    .on_hover_text(&requirement.qualified_name);
+                                if let Some(statement) = requirement.statement.first() {
+                                    ui.add(egui::Label::new(egui::RichText::new(statement).color(theme.tokens.text_subdued)).truncate())
+                                        .on_hover_text(statement);
+                                }
+                            });
                         }),
                         RequirementSortColumn::Kind => row.col(|ui| {
                             let (label, color) = requirement_role_label(requirement.role, theme);
@@ -2085,7 +2182,7 @@ impl SysmlRequirementsPanel {
                         RequirementSortColumn::Evidence => row.col(|ui| {
                             let (label, color, explanation) =
                                 evidence_status(requirement, view_model, runs, theme);
-                            ui.colored_label(color, label).on_hover_text(explanation);
+                            status_badge(ui, label, color).on_hover_text(explanation);
                         }),
                         RequirementSortColumn::TwinTest => row.col(|ui| {
                             if requirement.role == RequirementRole::Definition
@@ -2097,10 +2194,8 @@ impl SysmlRequirementsPanel {
                                     );
                             } else {
                                 let execution = execution_summary(requirement, view_model, runs);
-                                ui.colored_label(
-                                    execution_color(execution.state, theme),
-                                    execution_label(&execution),
-                                )
+                                status_badge(ui, &execution_label(&execution),
+                                    execution_color(execution.state, theme))
                                 .on_hover_text(execution_explanation(execution.state));
                             }
                         }),
@@ -2108,18 +2203,18 @@ impl SysmlRequirementsPanel {
                             let (full_label, color) =
                                 model_coverage_label(requirement, view_model, theme);
                             let label = model_coverage_table_label(requirement, view_model);
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(label).color(color)).truncate(),
-                            )
-                            .on_hover_text(format!(
-                                "{full_label}. Formal `require` criteria and resolved `verify` links describe model coverage, not test PASS/FAIL."
-                            ));
+                            ui.vertical(|ui| {
+                                for line in label.lines() {
+                                    ui.add(egui::Label::new(egui::RichText::new(line).small().color(color)).truncate())
+                                        .on_hover_text(&full_label);
+                                }
+                            });
                         }),
                         RequirementSortColumn::Status => row.col(|ui| {
                             let state = requirement_rollup_state(requirement, view_model, runs);
                             let (label, color, explanation) =
                                 requirement_rollup_label(state, theme);
-                            ui.colored_label(color, label).on_hover_text(explanation);
+                            status_badge(ui, label, color).on_hover_text(explanation);
                         }),
                     };
                 }
@@ -3611,7 +3706,7 @@ fn model_coverage_label(
     let mapping_gap =
         (requirement.role == RequirementRole::Usage && linked == 0) || mapped < linked;
     (
-        format!("{criterion} · {links}"),
+        format!("{criterion}\n{links}"),
         if complete {
             theme.tokens.success
         } else if mapping_gap {
@@ -3640,7 +3735,7 @@ fn model_coverage_table_label(
     } else {
         format!("verify {mapped}/{linked}")
     };
-    format!("{criterion} · {links}")
+    format!("{criterion}\n{links}")
 }
 
 /// Applies the three independent status dimensions as a combined list filter.
@@ -3649,7 +3744,7 @@ fn requirement_matches_search(requirement: &RequirementView, query: &str) -> boo
         || requirement.qualified_name.to_lowercase().contains(query)
         || requirement.display_name.to_lowercase().contains(query)
         || requirement
-            .documentation
+            .statement
             .iter()
             .any(|text| text.to_lowercase().contains(query))
         || requirement
@@ -3770,7 +3865,7 @@ fn requirement_source_cell_label(requirement: &RequirementView) -> String {
 
 fn requirement_column_label(column: RequirementSortColumn) -> &'static str {
     match column {
-        RequirementSortColumn::Id => "ID",
+        RequirementSortColumn::Id => "Requirement",
         RequirementSortColumn::Kind => "Kind",
         RequirementSortColumn::Source => "Source",
         RequirementSortColumn::Evidence => "Evidence",
@@ -3810,6 +3905,7 @@ fn requirement_column_layout(
     column: RequirementSortColumn,
     table_width: f32,
     minimum_width_scale: f32,
+    compact: bool,
 ) -> Column {
     let (share, minimum_width) = match column {
         RequirementSortColumn::Id => (0.18, 96.0),
@@ -3819,6 +3915,17 @@ fn requirement_column_layout(
         RequirementSortColumn::TwinTest => (0.13, 72.0),
         RequirementSortColumn::Coverage => (0.16, 80.0),
         RequirementSortColumn::Status => (0.15, 82.0),
+    };
+    let share = if compact {
+        match column {
+            RequirementSortColumn::Id => 0.40,
+            RequirementSortColumn::Evidence => 0.18,
+            RequirementSortColumn::TwinTest => 0.18,
+            RequirementSortColumn::Coverage => 0.24,
+            _ => share,
+        }
+    } else {
+        share
     };
     Column::initial((table_width * share).max(0.0))
         .at_least(minimum_width * minimum_width_scale)
@@ -3999,9 +4106,10 @@ fn quick_filter_button(
             },
         );
     }
+    text.wrap.max_width = (card_width - 2.0 * ui.spacing().button_padding.x).max(1.0);
     let height = ui.text_style_height(&egui::TextStyle::Heading)
-        + 4.0 * ui.text_style_height(&egui::TextStyle::Body)
-        + 2.0 * theme.spacing.window_padding;
+        + 2.0 * ui.text_style_height(&egui::TextStyle::Body)
+        + 2.0 * ui.spacing().button_padding.y;
     ui.add_enabled_ui(count > 0, |ui| {
         ui.add_sized(
             egui::vec2(card_width, height),
@@ -4014,18 +4122,26 @@ fn quick_filter_button(
     .clicked()
 }
 
+fn status_badge(ui: &mut egui::Ui, label: &str, color: egui::Color32) -> egui::Response {
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.10))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(5, 3))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(label).color(color)).truncate())
+        })
+        .inner
+}
+
 fn summary_card_width(available_width: f32, item_spacing: f32) -> f32 {
-    if !available_width.is_finite() || !item_spacing.is_finite() {
-        return 220.0;
-    }
-    let available_width = available_width.max(0.0);
-    if available_width >= 4.0 * 220.0 + 3.0 * item_spacing {
-        ((available_width - 3.0 * item_spacing) / 4.0).min(320.0)
-    } else if available_width >= 2.0 * 220.0 + item_spacing {
-        ((available_width - item_spacing).max(0.0) / 2.0).min(320.0)
+    let columns = if available_width >= 560.0 {
+        4.0
+    } else if available_width >= 280.0 {
+        2.0
     } else {
-        available_width
-    }
+        1.0
+    };
+    ((available_width - (columns - 1.0) * item_spacing) / columns).max(1.0)
 }
 
 fn trace_card<R>(
@@ -4040,8 +4156,8 @@ fn trace_card<R>(
         .corner_radius(egui::CornerRadius::same(theme.rounding.button.round() as u8))
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
-            ui.set_min_width(190.0);
-            ui.set_max_width(220.0);
+            ui.set_width((ui.available_width() - 16.0).max(1.0));
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
             ui.strong(title);
             ui.add_space(theme.spacing.item_spacing);
             add_contents(ui)
@@ -4049,14 +4165,7 @@ fn trace_card<R>(
 }
 
 fn trace_arrow(ui: &mut egui::Ui, theme: &lunco_theme::Theme) {
-    ui.add_sized(
-        [22.0, 36.0],
-        egui::Label::new(
-            egui::RichText::new("→")
-                .text_style(lunco_theme::TypographyRole::Button.text_style())
-                .color(theme.tokens.text_subdued),
-        ),
-    );
+    ui.label(egui::RichText::new("↓").color(theme.tokens.text_subdued));
 }
 
 fn source_location(
@@ -4175,15 +4284,15 @@ fn matching_structure_nodes(
     included
 }
 
-fn find_structure_element(
+fn find_structure_node(
     nodes: &[ModelStructureNodeView],
     handle: SysmlElementHandle,
-) -> Option<&ModelElementView> {
+) -> Option<&ModelStructureNodeView> {
     for node in nodes {
         if node.element.handle == handle {
-            return Some(&node.element);
+            return Some(node);
         }
-        if let Some(found) = find_structure_element(&node.children, handle) {
+        if let Some(found) = find_structure_node(&node.children, handle) {
             return Some(found);
         }
     }
@@ -4193,67 +4302,167 @@ fn find_structure_element(
 fn render_structure_details(
     ui: &mut egui::Ui,
     view_model: &SysmlRequirementsViewModel,
-    element: &ModelElementView,
+    node: &ModelStructureNodeView,
+    selection: &mut Option<SysmlElementHandle>,
+    parameter_search: &mut String,
     theme: &lunco_theme::Theme,
     open_source: &mut Option<(SourceFileView, usize)>,
 ) {
+    let element = &node.element;
+    if let Some(parent) = element
+        .owner_handle
+        .and_then(|handle| find_structure_node(&view_model.model_structure, handle))
+        && ui
+            .small_button(format!("↑ {}", parent.element.display_name))
+            .clicked()
+    {
+        *selection = Some(parent.element.handle);
+        parameter_search.clear();
+    }
     ui.colored_label(
         structure_kind_color(&element.kind, theme),
         structure_kind_label(&element.kind),
     );
     ui.heading(&element.display_name);
-    muted(ui, theme, &element.qualified_name);
-    if let Some(path) = &element.relative_path {
-        ui.label(format!("{}:{}", path.display(), element.line));
-    } else {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(&element.qualified_name)
+                .small()
+                .color(theme.tokens.text_subdued),
+        )
+        .wrap(),
+    );
+    ui.horizontal_wrapped(|ui| {
+        if let Some(path) = &element.relative_path {
+            ui.small(format!("{}:{}", path.display(), element.line));
+        }
+        if let Some(source) = source_location(view_model, element)
+            && ui.small_button("Open source").clicked()
+        {
+            *open_source = Some(source);
+        }
+    });
+    if !node.children.is_empty() {
+        ui.add_space(theme.spacing.item_spacing);
+        ui.strong(format!("Contains {} declarations", node.children.len()));
+        ui.horizontal_wrapped(|ui| {
+            for child in &node.children {
+                if ui
+                    .button(&child.element.display_name)
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        structure_kind_label(&child.element.kind),
+                        child.element.qualified_name
+                    ))
+                    .clicked()
+                {
+                    *selection = Some(child.element.handle);
+                    parameter_search.clear();
+                }
+            }
+        });
+    }
+    ui.add_space(theme.spacing.item_spacing);
+    ui.separator();
+    let Some(attributes) = view_model.model_attributes.get(&element.handle) else {
         muted(
             ui,
             theme,
-            &format!("{}:{}", element.logical_uri, element.line),
+            "No parameters declared directly on this element.",
         );
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("Parameters");
+        ui.small(format!("{} declared", attributes.len()));
+    });
+    ui.add(
+        egui::TextEdit::singleline(parameter_search)
+            .hint_text("Find a parameter, type or value")
+            .desired_width(ui.available_width()),
+    );
+    let query = parameter_search.trim().to_lowercase();
+    let filtered: Vec<_> = attributes
+        .iter()
+        .filter(|attribute| {
+            query.is_empty()
+                || attribute.name.to_lowercase().contains(&query)
+                || attribute
+                    .type_name
+                    .as_deref()
+                    .is_some_and(|s| s.to_lowercase().contains(&query))
+                || attribute
+                    .value
+                    .as_deref()
+                    .is_some_and(|s| s.to_lowercase().contains(&query))
+        })
+        .collect();
+    if filtered.is_empty() {
+        muted(ui, theme, "No parameters match this filter.");
+        return;
     }
-    if let Some(source) = source_location(view_model, element)
-        && ui
-            .button(format!("Open at line {}", element.line))
-            .clicked()
-    {
-        *open_source = Some(source);
-    }
-    if let Some(attributes) = view_model.model_attributes.get(&element.handle) {
-        ui.separator();
-        ui.heading("Declared parameters");
-        muted(
-            ui,
-            theme,
-            "Prepared source values; expressions without a resolved constant remain unresolved.",
-        );
-        egui::ScrollArea::both()
-            .id_salt(("sysml_structure_parameters", element.handle))
-            .max_height(360.0)
-            .show(ui, |ui| {
-                egui::Grid::new(("sysml_parameter_values", element.handle))
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for heading in ["Parameter", "Type", "Value", "Source expression"] {
-                            ui.strong(heading);
-                        }
-                        ui.end_row();
-                        for attribute in attributes {
-                            ui.label(&attribute.name);
-                            ui.label(attribute.type_name.as_deref().unwrap_or("Undeclared"));
-                            ui.label(attribute.value.as_deref().unwrap_or(
-                                if attribute.expression.is_some() {
-                                    "Unresolved"
-                                } else {
-                                    "Unassigned"
-                                },
-                            ));
-                            ui.label(attribute.expression.as_deref().unwrap_or("—"));
-                            ui.end_row();
-                        }
-                    });
+    let width = ui.available_width();
+    TableBuilder::new(ui)
+        .id_salt(("sysml_parameter_values", element.handle))
+        .striped(true)
+        .resizable(true)
+        .vscroll(false)
+        .column(Column::initial(width * 0.43).at_least(90.0).clip(true))
+        .column(Column::remainder().at_least(70.0).clip(true))
+        .column(Column::initial(width * 0.16).at_least(50.0).clip(true))
+        .header(26.0, |mut header| {
+            for title in ["Parameter", "Value", "Type"] {
+                header.col(|ui| {
+                    ui.strong(title);
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(30.0, filtered.len(), |mut row| {
+                let attribute = filtered[row.index()];
+                let value =
+                    attribute
+                        .value
+                        .as_deref()
+                        .unwrap_or(if attribute.expression.is_some() {
+                            "Unresolved"
+                        } else {
+                            "Unassigned"
+                        });
+                let expression = attribute
+                    .expression
+                    .as_deref()
+                    .unwrap_or("No source initializer");
+                row.col(|ui| {
+                    ui.add(egui::Label::new(&attribute.name).truncate())
+                        .on_hover_text(&attribute.name);
+                });
+                row.col(|ui| {
+                    let color = if attribute.value.is_some() {
+                        theme.tokens.text
+                    } else {
+                        theme.tokens.warning
+                    };
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(value).monospace().color(color))
+                            .truncate(),
+                    )
+                    .on_hover_text(format!("{value}\nSource expression: {expression}"));
+                });
+                row.col(|ui| {
+                    ui.add(
+                        egui::Label::new(attribute.type_name.as_deref().unwrap_or("Undeclared"))
+                            .truncate(),
+                    )
+                    .on_hover_text(expression);
+                });
             });
-    }
+        });
+    ui.add_space(theme.spacing.item_spacing);
+    ui.small(
+        egui::RichText::new("Resolved source constants · hover a value for its expression")
+            .color(theme.tokens.text_subdued),
+    );
 }
 
 fn muted(ui: &mut egui::Ui, theme: &lunco_theme::Theme, text: &str) {

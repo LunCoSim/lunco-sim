@@ -105,6 +105,28 @@ the panel does not evaluate a second expression language or infer inheritance.
 Parameter ownership uses snapshot-scoped element handles, so equal short names
 in different parts do not share values.
 
+The requirements list defaults to applied usages. **Definitions** includes reusable
+requirement definitions for authoring. The compact table leads with a requirement's
+statement and keeps evidence, test execution and model coverage separate. Usage
+statements inherit only from their uniquely resolved definition when the usage
+has no documentation; the prepared view model supplies the same text to search,
+the list and traceability. **All columns** adds declaration kind, source and
+overall status. Both column sets retain sorting, resizing and reordering.
+**Passed first** defaults to current-revision passing requirement evidence, with
+column sorting within each group; **Column order** applies column sorting to the
+entire list. Ordering does not alter the independent status dimensions. Summary
+cards use the selected usage/definition scope; inventory counts still identify
+both kinds.
+
+Traceability is a vertically scrollable set of source-backed stages, so its
+subjects, explicit satisfaction, mapped verification and evidence remain reachable
+in an ordinary dock. Structure uses a bounded outline and an independently
+scrollable detail pane; compact docks collapse the outline. Parameters are
+searchable by name, type and value. Values keep the typed projection's precision,
+units and collection shape; source expressions are available on hover and the
+canonical source remains navigable. Contained declarations and the parent action
+navigate the prepared ownership hierarchy without inferring connections.
+
 The requirements view browses analyzed Twin sources, jumps from a failed check to
 its requirement declaration, and edits through the canonical `SysmlDocument`
 command/save lifecycle. Requirement evidence, per-case test
