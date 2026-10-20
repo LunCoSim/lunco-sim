@@ -1282,8 +1282,12 @@ repeat that unused work. Residual reads retain typed full/axial/perpendicular
 subspaces. Current scalar gradients and native responses enter the coupled
 constraint solve with contact inequalities. Preserve row order, locked channels,
 native dominance, signed joint reactions, nonnegative contact reactions and
-convergence tolerances. Generalized body impulses must be summed before native
-rotation integration; large internal reactions can cancel. Rebuild geometry
+convergence tolerances. Preserve the native zero-guess solve's scaled
+minimum-norm reaction selection in rank-deficient systems. A matching body
+correction is insufficient: contact multipliers also feed native friction.
+Exercise redundant hard rows together with contact rows before qualifying a
+preconditioner or factorization. Generalized body impulses must be summed before
+native rotation integration; large internal reactions can cancel. Rebuild geometry
 after each nonlinear correction and require a complete native sweep before
 writeback. `continuous_articulated_mass` exercises a heavy attachment, contact
 and an unconnected witness. `continuous_contacts` covers joint closure, nonlinear

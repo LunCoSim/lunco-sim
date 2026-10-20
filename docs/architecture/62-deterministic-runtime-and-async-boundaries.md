@@ -85,6 +85,14 @@ crosses that bound. Active rows still target zero error; solver precision and
 geometric writeback tolerances do not change. Allocation failure, failed numerical
 convergence or an unresolved native fixed point rejects the operation visibly.
 
+The native zero-guess solve owns minimum-norm multiplier selection in the
+diagonally scaled coordinates. Preserving a body correction or equation residual
+alone does not preserve contact mechanics: the contact multiplier feeds native
+friction. A numerical acceleration must preserve that reaction selection in
+rank-deficient systems. The mechanism regression with two identical hard rows
+and one identical contact row requires the contact multiplier to remain `1/3`
+when their total response is one.
+
 The owner sums every generalized impulse before integrating any body's
 rotation, using the native positional and angular impulse kernels. It validates
 all body candidates before mutation and writes only prepared native solver

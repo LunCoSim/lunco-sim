@@ -787,6 +787,33 @@ mod tests {
     }
 
     #[test]
+    fn rank_deficient_response_retains_minimum_norm_contact_multiplier() {
+        let a = Entity::from_bits(1);
+        let wall = Entity::from_bits(2);
+        let moving = inertia(1.0);
+        let fixed = SolverBodyInertia::DUMMY;
+        let row = |unilateral| {
+            Row::new(
+                [a, wall],
+                [linear(1.0), linear(-1.0)],
+                [&moving, &fixed],
+                1.0,
+                1e-9,
+                unilateral,
+            )
+            .unwrap()
+        };
+        let result = solve(&[row(false), row(false), row(true)], 64).unwrap();
+        assert!((result.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        // Equal scaled columns have one minimum-norm reaction: all three
+        // multipliers are 1/3. The contact multiplier also feeds native friction.
+        assert!(
+            (result[2] - 1.0 / 3.0).abs() < 1e-10,
+            "minimum-norm contact reaction changed: {result:?}"
+        );
+    }
+
+    #[test]
     fn coupled_response_retains_redundancy_and_rejects_incompatible_locked_rows() {
         let a = Entity::from_bits(1);
         let b = Entity::from_bits(2);
