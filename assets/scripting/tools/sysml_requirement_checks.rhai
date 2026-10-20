@@ -156,7 +156,14 @@ fn finish_preflight(checks, title, channel, root, package_name) {
 }
 
 fn finish(source, checks, title, channel, root, package_name, verification) {
-    let result = if checks.len() > 64 {
+    // A formal check can contain many typed observations even in a small
+    // suite. Stream those details instead of packing one unbounded event.
+    let stream = checks.len() > 64;
+    for check in checks {
+        if check.kind == "constraint" || check.kind == "required_constraint"
+            || check.kind == "required_constraints" { stream = true; }
+    }
+    let result = if stream {
         sysml_requirements::evaluate_stream(source, checks, channel, title)
     } else {
         sysml_requirements::evaluate(source, checks)
@@ -164,9 +171,8 @@ fn finish(source, checks, title, channel, root, package_name, verification) {
     let seen = #{};
     let evidence = [];
     let evidence_failures = [];
-    if result.results != () {
-        for check in result.results {
-            let requirement = check.requirement;
+    if result.requirement_names != () {
+        for requirement in result.requirement_names {
             if requirement == () || requirement == "" || seen[requirement] == true { continue; }
             seen[requirement] = true;
             let handle=();

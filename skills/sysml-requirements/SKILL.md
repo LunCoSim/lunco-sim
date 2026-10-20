@@ -807,6 +807,13 @@ link or Twin test mapping remain visible as coverage gaps and are skipped. Save
 or discard open SysML edits before running; the runner reads the saved Twin
 source.
 
+`sysml_requirement_checks::finish` streams typed formal-constraint results even
+for suites with fewer than 64 checks; observation-rich results can exceed a
+single event's byte budget. The terminal report marks streamed details and
+their expected event count. Preserve source provenance and the per-result
+identity when consuming this path; an empty inline result array is not missing
+evidence when the declared streamed results were received.
+
 The overview separates requirement usages, definitions, and source-file counts.
 Its actionable counters filter missing formal `require` criteria, missing
 `verify` links, unmapped Twin tests, or mapped tests without a current result.

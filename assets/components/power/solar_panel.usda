@@ -34,24 +34,39 @@ def Xform "SolarPanel" (
     custom double inputs:sun_visibility
     double inputs:sun_visibility.connect = </SolarPanel/Environment.outputs:sun_visibility>
     custom double outputs:incident_irradiance_w_m2
-    double outputs:incident_irradiance_w_m2.connect = []
+    double outputs:incident_irradiance_w_m2.connect = None
     custom double outputs:incident_power_w
-    double outputs:incident_power_w.connect = []
+    double outputs:incident_power_w.connect = None
     double parameters:area = 18.0
     double parameters:efficiency = 0.3
     double inputs:panel_normal_x = 0.0
     double inputs:panel_normal_y = 1.0
     double inputs:panel_normal_z = 0.0
     custom double outputs:available_power_w
-    double outputs:available_power_w.connect = []
+    double outputs:available_power_w.connect = None
     custom double outputs:power_out
-    double outputs:power_out.connect = []
+    double outputs:power_out.connect = None
     custom double outputs:cos_incidence
-    double outputs:cos_incidence.connect = []
+    double outputs:cos_incidence.connect = None
     custom double outputs:terminal_voltage_v
-    double outputs:terminal_voltage_v.connect = []
+    double outputs:terminal_voltage_v.connect = None
     custom double outputs:generated_current_a
-    double outputs:generated_current_a.connect = []
+    double outputs:generated_current_a.connect = None
+    custom double inputs:cell_temperature_k = 298.15 (
+        documentation = "Absolute cell temperature in kelvin. Prescribed at reference temperature until connected to a thermal-mass temperature output."
+    )
+    custom double parameters:reference_temperature_k = 298.15
+    custom double parameters:power_temperature_coefficient_per_k = -0.0037 (
+        documentation = "Relative per-kelvin power coefficient. Default -0.0037/K is the PVWatts standard crystalline-silicon study value, not a FLIP supplier measurement. Source: https://samrepo.nlr.gov/help/pvwatts_system_design.html (accessed 2026-10-20)."
+    )
+    custom double parameters:solar_absorptivity = 1.0
+    custom double outputs:temperature_k = 0.0
+    custom double outputs:temperature_factor = 0.0
+    custom double outputs:conversion_efficiency = 0.0
+    custom double outputs:temperature_adjusted_peak_power_w = 0.0
+    custom double outputs:absorbed_power_w = 0.0
+    custom double outputs:reflected_power_w = 0.0
+    custom double outputs:heat_w = 0.0
     def Scope "Looks"
     {
         def Material "SolarPanel"
@@ -75,7 +90,7 @@ def Xform "SolarPanel" (
         }
     }
     def Cube "PanelFrame" (
-        prepend apiSchemas = "PhysicsCollisionAPI"
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
@@ -108,7 +123,7 @@ def Xform "SolarPanel" (
         token visibility = "invisible"
     }
     def Scope "VoltageTelemetry" (
-        prepend apiSchemas = "LunCoTelemetryAPI"
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
     )
     {
         bool lunco:telemetry = true
@@ -120,7 +135,7 @@ def Xform "SolarPanel" (
         rel lunco:telemetry:target = </SolarPanel>
     }
     def Scope "CurrentTelemetry" (
-        prepend apiSchemas = "LunCoTelemetryAPI"
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
     )
     {
         bool lunco:telemetry = true
@@ -132,7 +147,7 @@ def Xform "SolarPanel" (
         rel lunco:telemetry:target = </SolarPanel>
     }
     def Scope "AvailablePowerTelemetry" (
-        prepend apiSchemas = "LunCoTelemetryAPI"
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
     )
     {
         bool lunco:telemetry = true
