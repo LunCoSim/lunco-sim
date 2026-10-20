@@ -1401,7 +1401,15 @@ same relative-frame native adapter. For asymmetric scales, choose the larger
 native bounding-sphere shape as the query frame before querying, then flip
 native contact ownership back. Retain near-zero gaps, reversed input order,
 penetration and large-world checks: one successful touching pose does not
-certify adjacent poses. For non-ball convex pairs, preserve Parry's
+certify adjacent poses. For cuboid/support-map face contacts, preserve the
+native SAT/support/nearest-feature certificate in `lunco-physics::ccd`.
+Require the projected native face normal to equal the SAT axis before using
+its signed witness distance. The same certificate owns initial samples,
+cast witnesses at the unchanged native TOI, and native endpoint-manifold normal
+constraints. Exercise edges and incompatible contained supports that must
+retain GJK, as well as the touching-face rotation and scale sweep. A certified
+penetration without native manifold geometry must fault visibly.
+For the remaining non-ball convex pairs, preserve Parry's
 parameterized GJK/EPA API and its fresh feature seed: subtract and normalize
 point-projection gaps in the projecting shape's local frame before rotation.
 Do not substitute remote centre directions, retry failed queries with guessed

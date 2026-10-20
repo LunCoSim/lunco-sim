@@ -1,5 +1,48 @@
 # High-quality realtime performance handover
 
+## Certified cuboid-face geometry — 2026-10-20
+
+The native relative-frame adapter in `lunco-physics::ccd` certifies cuboid-face
+contacts using maintained Parry SAT, support and nearest-feature queries. The
+native projected face must have exactly the selected SAT normal. Its witnesses
+and signed distance then apply to initial samples, native cast results at their
+unchanged time of impact, and normal constraints on native endpoint manifolds.
+Other features retain their native query. Authored shapes, tolerance, timestep,
+reaction norm and dependency source are unchanged.
+
+A 240-case diagnostic covers two cuboid scales, 24 cylinder rotations and five
+gaps around touching. The existing query's worst normal is almost horizontal
+at an exact horizontal-face contact; the certificate retains a vertical normal
+throughout, with maximum signed-distance error `1.613e-16 m`. Captured early
+Roadster contact rows also contain nonvertical ground normals and poorly
+conditioned response systems. This is a geometry defect independently of any
+solver optimization. All 36 CCD mechanism checks pass, including the new
+rotation/scale sweep, reversed order, native endpoint manifolds, and rejection
+of edge and incompatible contained-support certificates. Evidence is under
+`.cache/codex-evidence/loading-20261019/`: `cuboid-face-baseline-test.log`,
+`cuboid-face-normal-comparison.summary.json` and `cuboid-face-ccd-tests.log`.
+The normal production artifact
+`c7c78ed9ab7b5f6cd4d455177e9eddac24ce3a6572894dd01d1995d110cc9215`
+builds without warnings and passes all 53 authored physics/drive assertions
+plus the expected invalid-joint fault. A matched-source, equal-initial-state
+headless comparison uses fixed epoch and forward/release inputs at ticks
+301/361. Baseline versus certified-face physics medians at ticks 300/360/420
+are 27.002/17.913/8.730 versus 34.199/19.495/8.689 ms. This does not establish
+a performance improvement; maximum retained cost reaches 113.176 ms. Speed
+before the commanded launch changes from 0.0999 to 0.0176 m/s, and at tick 360
+from 3.9257 to 3.7513 m/s. Corrected geometry changes the physical trajectory;
+the response operator and reaction selection remain unchanged.
+
+The windowed production run admits in 2.496 s, reaches tick 559, accepts
+forward/release input, reports 4.096 m/s while held and has no runtime findings.
+The inspected driving screenshot shows the car on the road. All source hashes
+stay fixed within each run and both owned API ports are released. Concurrent
+workloads prevent clean FPS qualification. Evidence includes
+`integration/certified-face-controlled-comparison.json`,
+`integration/cuboid-face-production-gates.json`, `cuboid-face-production-build.log`
+and `tesla-certified-face/driving.png`. This is a geometry-correctness checkpoint;
+loading, sub-millisecond physics, 200 FPS and native macOS acceptance remain open.
+
 ## Contact reaction selection and controlled solver comparison — 2026-10-20
 
 The coupled response owner retains the native zero-guess LSMR solve and its

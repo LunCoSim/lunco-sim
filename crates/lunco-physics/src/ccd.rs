@@ -1244,9 +1244,85 @@ fn contact_seed_axis(
     }
 }
 
-/// Select the maintained analytic dispatcher or its parameterized convex GJK
-/// kernel. A fresh finite-feature direction avoids making an elongated shape's
-/// remote centre the initial simplex direction. Native geometry stays native.
+/// An object-safe support map at the native SAT helper's sized boundary.
+struct SupportRef<'a>(&'a dyn avian3d::parry::shape::SupportMap);
+impl avian3d::parry::shape::SupportMap for SupportRef<'_> {
+    fn local_support_point(&self, direction: DVec3) -> DVec3 {
+        self.0.local_support_point(direction)
+    }
+}
+
+struct CuboidFaceContact {
+    contact: avian3d::parry::query::Contact,
+    cuboid_first: bool,
+}
+
+/// Native support and nearest-feature queries certify a closest cuboid face.
+/// For an interior support point, its nearest face also bounds an inscribed
+/// ball in the Minkowski difference, certifying the penetration depth.
+fn certified_cuboid_face_contact(
+    relative: &Pose,
+    shape1: &dyn avian3d::parry::shape::Shape,
+    shape2: &dyn avian3d::parry::shape::Shape,
+) -> Result<Option<CuboidFaceContact>, String> {
+    use avian3d::parry::{
+        query::{Contact, PointQuery, sat::cuboid_support_map_find_local_separating_normal_oneway},
+        shape::FeatureId,
+    };
+    if shape1.as_ball().is_some() || shape2.as_ball().is_some() {
+        return Ok(None);
+    }
+    for cuboid_first in [true, false] {
+        let (first, second, pose) = if cuboid_first {
+            (shape1, shape2, *relative)
+        } else {
+            (shape2, shape1, relative.inverse())
+        };
+        let (Some(cuboid), Some(support)) = (first.as_cuboid(), second.as_support_map()) else {
+            continue;
+        };
+        let (separation, axis) = cuboid_support_map_find_local_separating_normal_oneway(
+            cuboid,
+            &SupportRef(support),
+            &pose,
+        );
+        let normal2 = pose.rotation.inverse() * -axis;
+        let point2 = support.local_support_point(normal2);
+        let point2_in1 = pose * point2;
+        if !separation.is_finite()
+            || !axis.is_finite()
+            || axis == DVec3::ZERO
+            || !point2.is_finite()
+            || !point2_in1.is_finite()
+        {
+            return Err("native cuboid feature query is not finite".into());
+        }
+        let (projection, feature) = cuboid.project_local_point_and_get_feature(point2_in1);
+        if !matches!(feature, FeatureId::Face(_)) || cuboid.feature_normal(feature) != Some(axis) {
+            continue;
+        }
+        let mut contact = Contact::new(
+            projection.point,
+            point2,
+            axis,
+            normal2,
+            (point2_in1 - projection.point).dot(axis),
+        );
+        validate_native_contact(&contact)?;
+        if !cuboid_first {
+            contact.flip();
+        }
+        return Ok(Some(CuboidFaceContact {
+            contact,
+            cuboid_first,
+        }));
+    }
+    Ok(None)
+}
+
+/// Select maintained analytic queries, certified native face geometry or GJK.
+/// A fresh finite-feature direction avoids making an elongated shape's remote
+/// centre the initial simplex direction. Native geometry stays native.
 fn seeded_native_contact(
     relative: &Pose,
     shape1: &dyn avian3d::parry::shape::Shape,
@@ -1259,9 +1335,12 @@ fn seeded_native_contact(
         gjk::{GJKResult, VoronoiSimplex},
     };
     // Retain native analytic ball queries and non-support-map dispatch.
-    // Other convex leaves use the same native GJK kernel with an explicit seed.
+    // Convex leaves can certify a face before needing the seeded native GJK kernel.
     match shape1.as_support_map().zip(shape2.as_support_map()) {
         Some((first, second)) if shape1.as_ball().is_none() && shape2.as_ball().is_none() => {
+            if let Some(face) = certified_cuboid_face_contact(relative, shape1, shape2)? {
+                return Ok((face.contact.dist <= prediction).then_some(face.contact));
+            }
             let sphere1 = shape1.compute_local_bounding_sphere();
             let sphere2 = shape2.compute_local_bounding_sphere();
             // Keep the larger geometry in its own frame. Rotating a wide
@@ -1639,6 +1718,17 @@ fn shape_hits(
     let Some(mut hit) = hit? else {
         return Ok(Vec::new());
     };
+    if hit.time_of_impact > 0.0 && hit.time_of_impact < 1.0 {
+        let relative = m1
+            .position_at_time(hit.time_of_impact)
+            .inv_mul(&m2.position_at_time(hit.time_of_impact));
+        if let Some(face) = certified_cuboid_face_contact(&relative, s1, s2)? {
+            hit.witness1 = face.contact.point1;
+            hit.witness2 = face.contact.point2;
+            hit.normal1 = face.contact.normal1;
+            hit.normal2 = face.contact.normal2;
+        }
+    }
     if hit.time_of_impact > 0.0
         && hit.time_of_impact < 1.0
         && hit.status != ShapeCastStatus::PenetratingOrWithinTargetDist
@@ -1686,59 +1776,111 @@ fn endpoint_contact_planes(
     m2: &NonlinearRigidMotion,
     tolerance: f64,
 ) -> Result<Vec<Plane>, String> {
+    let p1 = m1.position_at_time(1.0);
+    let p2 = m2.position_at_time(1.0);
+    let contacts = native_endpoint_contacts(
+        &p1.inv_mul(&p2),
+        a.collider.shape_scaled().as_ref(),
+        b.collider.shape_scaled().as_ref(),
+        tolerance,
+    )?;
+    let mut planes = Vec::new();
+    for contact in contacts {
+        validate_native_contact(&contact)?;
+        if contact.dist >= -tolerance {
+            continue;
+        }
+        planes.push(Plane {
+            collider1: a.entity,
+            collider2: b.entity,
+            part1: a.part_index,
+            part2: b.part_index,
+            body1: a.body,
+            body2: b.body,
+            center1: a.center,
+            center2: b.center,
+            point1: (a.position - a.center) + a.rotation * contact.point1,
+            point2: (b.position - b.center) + b.rotation * contact.point2,
+            normal: p1.rotation * contact.normal1,
+            offset: 0.0,
+            native_point: None,
+            close_endpoint: true,
+        });
+    }
+    Ok(planes)
+}
+
+/// A certified native feature constrains the native manifold generator's normal.
+struct FaceNormal(DVec3);
+impl NormalConstraints for FaceNormal {
+    fn project_local_normal_mut(&self, normal: &mut DVec3) -> bool {
+        *normal = self.0;
+        true
+    }
+}
+
+fn native_endpoint_contacts(
+    relative: &Pose,
+    shape1: &dyn avian3d::parry::shape::Shape,
+    shape2: &dyn avian3d::parry::shape::Shape,
+    tolerance: f64,
+) -> Result<Vec<avian3d::parry::query::Contact>, String> {
     use avian3d::parry::query::{
         Contact, ContactManifold, DefaultQueryDispatcher, PersistentQueryDispatcher,
     };
-    let p1 = m1.position_at_time(1.0);
-    let p2 = m2.position_at_time(1.0);
-    // The native manifold dispatcher owns mesh traversal, internal-edge normal
-    // constraints and local subshape frames, just as in discrete preparation.
+    let certificate = certified_cuboid_face_contact(relative, shape1, shape2)?;
     let mut manifolds = Vec::<ContactManifold<(), ()>>::new();
-    DefaultQueryDispatcher
-        .contact_manifolds(
-            &p1.inv_mul(&p2),
-            a.collider.shape_scaled().as_ref(),
-            b.collider.shape_scaled().as_ref(),
-            0.0,
-            &mut manifolds,
-            &mut None,
-        )
-        .map_err(|e| format!("native endpoint manifold query failed: {e:?}"))?;
-    let mut planes = Vec::new();
+    let flipped = certificate.as_ref().is_some_and(|face| !face.cuboid_first);
+    if let Some(face) = &certificate {
+        let (pose, first, second, normal) = if face.cuboid_first {
+            (*relative, shape1, shape2, face.contact.normal1)
+        } else {
+            (relative.inverse(), shape2, shape1, face.contact.normal2)
+        };
+        let constraint = FaceNormal(normal);
+        let mut manifold = ContactManifold::new();
+        manifold.local_n1 = normal;
+        DefaultQueryDispatcher
+            .contact_manifold_convex_convex(
+                &pose,
+                first,
+                second,
+                Some(&constraint),
+                None,
+                0.0,
+                &mut manifold,
+            )
+            .map_err(|e| format!("native certified-face manifold query failed: {e:?}"))?;
+        manifolds.push(manifold);
+    } else {
+        // The native dispatcher retains composite traversal and mesh normal constraints.
+        DefaultQueryDispatcher
+            .contact_manifolds(relative, shape1, shape2, 0.0, &mut manifolds, &mut None)
+            .map_err(|e| format!("native endpoint manifold query failed: {e:?}"))?;
+    }
+    let mut contacts = Vec::new();
     for manifold in manifolds {
         let sub1 = manifold.subshape_pos1.unwrap_or(Pose::IDENTITY);
         let sub2 = manifold.subshape_pos2.unwrap_or(Pose::IDENTITY);
         for point in manifold.contacts() {
-            let contact = Contact::new(
+            let mut contact = Contact::new(
                 sub1 * point.local_p1,
                 sub2 * point.local_p2,
                 sub1.rotation * manifold.local_n1,
                 sub2.rotation * manifold.local_n2,
                 point.dist,
             );
-            validate_native_contact(&contact)?;
-            if contact.dist >= -tolerance {
-                continue;
+            if flipped {
+                contact.flip();
             }
-            planes.push(Plane {
-                collider1: a.entity,
-                collider2: b.entity,
-                part1: a.part_index,
-                part2: b.part_index,
-                body1: a.body,
-                body2: b.body,
-                center1: a.center,
-                center2: b.center,
-                point1: (a.position - a.center) + a.rotation * contact.point1,
-                point2: (b.position - b.center) + b.rotation * contact.point2,
-                normal: p1.rotation * contact.normal1,
-                offset: 0.0,
-                native_point: None,
-                close_endpoint: true,
-            });
+            validate_native_contact(&contact)?;
+            contacts.push(contact);
         }
     }
-    Ok(planes)
+    if contacts.is_empty() && certificate.is_some_and(|face| face.contact.dist < -tolerance) {
+        return Err("certified penetrating face has no native manifold geometry".into());
+    }
+    Ok(contacts)
 }
 
 /// Rolling support can change its material witness within one prepared patch.
@@ -3702,6 +3844,75 @@ mod tests {
             "the finite triangle edge is separated: {contact:?}"
         );
         assert!(contact.point1.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn continuous_contact_retains_the_exact_cuboid_face_at_touching() {
+        use avian3d::parry::shape::{Cuboid, Cylinder, SupportMap};
+        let wheel = Cylinder::new(0.15, 0.4);
+        for width in [250.0, 50_000.0] {
+            let ground = Cuboid::new(DVec3::new(width, 0.5, width));
+            for i in 0..24 {
+                let rotation = DQuat::from_rotation_y(i as f64 * 0.071)
+                    * DQuat::from_rotation_z(
+                        std::f64::consts::FRAC_PI_2 + 0.001 * (i as f64).sin(),
+                    )
+                    * DQuat::from_rotation_y(i as f64 * 0.23);
+                for gap in [-0.0005, -1e-8, 0.0, 1e-8, 0.0005] {
+                    let mut relative = Pose::from_parts(DVec3::new(-9.88, 0.0, 52.98), rotation);
+                    let bottom = wheel.support_point_toward(&relative, -DVec3::Y).y;
+                    relative.translation.y = 0.5 + gap - bottom;
+                    let contact = seeded_native_contact(&relative, &ground, &wheel, 100_000.0)
+                        .unwrap()
+                        .unwrap();
+                    assert!((contact.dist - gap).abs() < 1e-10, "{contact:?}");
+                    assert!(
+                        (contact.normal1 - DVec3::Y).length() < 1e-12,
+                        "face normal at width={width}, rotation={i}, gap={gap}: {contact:?}"
+                    );
+                    let reversed =
+                        seeded_native_contact(&relative.inverse(), &wheel, &ground, 100_000.0)
+                            .unwrap()
+                            .unwrap();
+                    assert!((reversed.dist - gap).abs() < 1e-10);
+                    assert!((reversed.normal2 - DVec3::Y).length() < 1e-12);
+                    if gap < -1e-6 {
+                        let contacts =
+                            native_endpoint_contacts(&relative, &ground, &wheel, 1e-6).unwrap();
+                        assert!(!contacts.is_empty());
+                        for point in contacts {
+                            assert!((point.normal1 - DVec3::Y).length() < 1e-12);
+                            assert!(point.dist >= gap - 1e-10 && point.dist <= 1e-10);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_cuboid_face_certificate_rejects_edges_and_contained_supports() {
+        use avian3d::parry::shape::{Cuboid, Cylinder};
+        let ground = Cuboid::new(DVec3::ONE);
+        let wheel = Cylinder::new(0.15, 0.4);
+        let rotation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let corner = Pose::from_parts(DVec3::new(1.4, 1.6, 0.0), rotation);
+        assert!(
+            certified_cuboid_face_contact(&corner, &ground, &wheel)
+                .unwrap()
+                .is_none()
+        );
+        let contact = seeded_native_contact(&corner, &ground, &wheel, 10.0)
+            .unwrap()
+            .unwrap();
+        assert!(contact.dist > 0.25);
+        assert!(contact.normal1.x > 0.1 && contact.normal1.y > 0.1);
+        let inside = Pose::from_parts(DVec3::ZERO, rotation);
+        assert!(
+            certified_cuboid_face_contact(&inside, &ground, &wheel)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

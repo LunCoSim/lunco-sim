@@ -763,8 +763,19 @@ minimum translation depth beyond tolerance rules out a clear separating axis at
 the initial pose, so closure need not repeat other separation-only axes.
 Initial contacts and nonlinear re-samples share one native-query adapter in
 the relative shape frame. Analytic ball and non-support-map queries retain
-Parry's native dispatcher; other convex leaves use its parameterized GJK/EPA
-API with a fresh nearest-feature direction. Native point projection supplies
+Parry's native dispatcher. For a cuboid and a convex support map, native SAT
+selects a face axis and the other shape's opposing support point. The native
+nearest-feature projection must identify that same cuboid face. This certifies
+the exact normal and signed witness distance: outside the cuboid the support
+plane attains the separation; inside it the nearest face bounds an inscribed
+ball in the Minkowski difference and attains the penetration depth. Edges,
+corners and incompatible interior features do not meet that certificate.
+The same certificate supplies initial contact samples, witnesses at the native
+cast's unchanged time of impact, and normal constraints for native endpoint
+manifold generation. Parry still owns support features and manifold clipping.
+A certified penetration without native manifold geometry faults the solve.
+Other convex leaves use Parry's parameterized GJK/EPA API with a fresh
+nearest-feature direction. Native point projection supplies
 two centre-to-boundary candidates in their respective shape frames. The shorter
 candidate is subtracted and normalized locally before rotating its direction;
 large translations therefore cannot contaminate a small contact gap. No seed,
