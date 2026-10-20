@@ -4219,6 +4219,41 @@ fn render_structure_details(
     {
         *open_source = Some(source);
     }
+    if let Some(attributes) = view_model.model_attributes.get(&element.handle) {
+        ui.separator();
+        ui.heading("Declared parameters");
+        muted(
+            ui,
+            theme,
+            "Prepared source values; expressions without a resolved constant remain unresolved.",
+        );
+        egui::ScrollArea::both()
+            .id_salt(("sysml_structure_parameters", element.handle))
+            .max_height(360.0)
+            .show(ui, |ui| {
+                egui::Grid::new(("sysml_parameter_values", element.handle))
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for heading in ["Parameter", "Type", "Value", "Source expression"] {
+                            ui.strong(heading);
+                        }
+                        ui.end_row();
+                        for attribute in attributes {
+                            ui.label(&attribute.name);
+                            ui.label(attribute.type_name.as_deref().unwrap_or("Undeclared"));
+                            ui.label(attribute.value.as_deref().unwrap_or(
+                                if attribute.expression.is_some() {
+                                    "Unresolved"
+                                } else {
+                                    "Unassigned"
+                                },
+                            ));
+                            ui.label(attribute.expression.as_deref().unwrap_or("—"));
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
 }
 
 fn muted(ui: &mut egui::Ui, theme: &lunco_theme::Theme, text: &str) {

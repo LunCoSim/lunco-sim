@@ -27,6 +27,19 @@ actuator list. `LunCoDomainSynthesisAPI` remains available only when an asset
 deliberately selects a registered non-default policy. Mixed or unclassified
 member roles are rejected as authoring errors.
 
+Operator selection and manual command authority are distinct. `AcquireControl`
+binds the avatar and records session ownership without interrupting GNC.
+The shared `piloted` output becomes one only after an owning session has
+accepted controller inputs in `PortHolds`; neutral stick release retains those
+holds until explicit release. Authored program holds do not establish manual
+authority. The airframe and guidance model consume that same wired output,
+and the avatar's AUTO/MANUAL overlay reads it through `PortRegistry`.
+Griffin's production GNC handoff case checks selection during powered descent,
+first-input takeover, neutral hold and explicit guidance reconnect.
+Its HUD/console toggle submits `griffin_gnc_engagement_requested`; the mission
+owns the guidance write in its Simulation callback. The action acknowledges a
+queued request, and verification waits for the live authority/engagement ports.
+
 ## Signal and fluid paths
 
 The main propulsion is a generated `CollectionAPI:components` network. Each

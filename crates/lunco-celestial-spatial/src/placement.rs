@@ -74,7 +74,7 @@ pub fn attach_site_scene_to_surface_grid(
     // celestial ownership binding on the probe instead of making the
     // environment bridge infer a body from a prim name or a model port.
     q_physical: Query<
-        Entity,
+        (Entity, Option<&lunco_environment::GravityBody>),
         Or<(
             With<avian3d::prelude::RigidBody>,
             With<lunco_environment::EnvironmentProbe>,
@@ -162,7 +162,10 @@ pub fn attach_site_scene_to_surface_grid(
     // site scene, not only of the camera. The USD physics projection owns the
     // rigid bodies; this celestial projection only supplies their explicit
     // gravitational parent at the scene-frame boundary.
-    for physical in &q_physical {
+    for (physical, existing_gravity_body) in &q_physical {
+        if existing_gravity_body.is_some_and(|link| link.body_entity == body_entity) {
+            continue;
+        }
         let mut current = physical;
         for _ in 0..32 {
             if current == scene_root {
@@ -1321,6 +1324,11 @@ mod tests {
 
         let site_cell = *world.get::<CellCoord>(site).unwrap();
         let site_transform = *world.get::<Transform>(site).unwrap();
+        let gravity_link_tick = world
+            .entity(rigid_body)
+            .get_ref::<lunco_environment::GravityBody>()
+            .unwrap()
+            .last_changed();
         app.world_mut()
             .get_mut::<Transform>(body_fixed_grid)
             .unwrap()
@@ -1330,6 +1338,15 @@ mod tests {
         let world = app.world();
         assert_eq!(*world.get::<CellCoord>(site).unwrap(), site_cell);
         assert_eq!(*world.get::<Transform>(site).unwrap(), site_transform);
+        assert_eq!(
+            world
+                .entity(rigid_body)
+                .get_ref::<lunco_environment::GravityBody>()
+                .unwrap()
+                .last_changed(),
+            gravity_link_tick,
+            "unchanged gravitational ownership must not publish a source change"
+        );
     }
 
     #[test]

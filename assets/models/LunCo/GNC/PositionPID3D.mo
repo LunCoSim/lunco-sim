@@ -93,7 +93,7 @@ model PositionPID3D
     "Lateral acceleration deadband before hover support is requested (m/s²)";
 
   // The airframe uses normalized guidance commands.
-  input Real piloted = 0.0 "1 while a pilot owns the vehicle";
+  input Real piloted = 0.0 "1 while an owning session has accepted manual input";
   input Real engage = 0.0 "1 while this mission guidance is active";
   input Real touchdown = 0.0
     "Touchdown state; guidance is removed as the vehicle settles on its legs";

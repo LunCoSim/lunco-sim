@@ -106,8 +106,10 @@ to physics.
 ## Step 4 — control authority (already done!)
 
 You connected `inputs:piloted` in Step 3 — that's the whole authority mechanism. The
-`piloted` port is `1.0` whenever a session (a user **or** an autopilot) possesses the
-vessel, derived from the possession registry (`PILOTED_BACKEND`). Add a pilot
+`piloted` port is `1.0` after an owning session has accepted controller input,
+derived from ownership and controller holds (`PILOTED_BACKEND`). Possession
+alone preserves GNC; neutral key release retains manual authority until explicit
+control release. Add a pilot
 intent→port binding — a `Controls` child that `references` a profile — so the stick
 reaches `external_throttle` when possessed:
 

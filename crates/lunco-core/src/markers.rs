@@ -15,10 +15,10 @@ pub struct NoSelectionBounds;
 /// vessel's own guidance law has it.
 ///
 /// The same fact the vessel's `piloted` port carries, hoisted to a resource so
-/// UI can read it without depending on the possession crate. Written by
-/// `AcquireControl`/`ReleaseControlSource`; read by the input overlay's AUTO/MANUAL
-/// badge, which is what makes a handback legible on camera — the keys go dark
-/// and the badge flips in the same frame.
+/// UI can read it without depending on the port implementation. The avatar
+/// presentation adapter samples its controlled target's canonical `piloted`
+/// output; the input overlay consumes the AUTO/MANUAL badge. Possession alone
+/// does not select manual authority.
 #[derive(Resource, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct FlightAuthority {

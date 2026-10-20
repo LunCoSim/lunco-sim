@@ -1165,8 +1165,8 @@ actually call, with the fields the deserializer actually accepts. See the
  Diagnostic read-out of every **commandable** vessel's *control authority* state —
  the chain that decides whether the stick actually flies it:
  `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
- `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
- the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
+ `ControlBinding` (intent→port map from the USD `Controls` scope), alongside
+ the `SessionRegistry` owner and live `piloted` manual-input authority. Logs one
  `[inspect]` line per vessel at INFO. API-driven: `{"type":"ExecuteCommand","command":"InspectVessels"}`.
 
 - *defined in:* `crates/lunco-avatar/src/lib.rs`

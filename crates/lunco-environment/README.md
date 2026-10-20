@@ -85,7 +85,7 @@ environment resolves its target bearing in that probe's own BigSpace frame.
 
 ## What's implemented
 
-### `LocalGravity(DVec3)`
+### `LocalGravity`
 
 Gravity vector at an entity's active physics-frame position, in m/s². Computed in
 `FixedUpdate` when gravity, frame, provider, pose, or body-link inputs change.
@@ -106,7 +106,20 @@ entities missing the cached field. Steady surface work selects linked
 consumers and existing fields, excluding unlinked entities with nothing to
 produce or remove, including on provider or frame invalidation. Flat-field
 global invalidations check all spatial entities. Provider-pose changes also
-invalidate linked fields. The source is this crate's
+invalidate linked fields. `LocalGravity::new(acceleration)` supplies an external
+field; `acceleration()` reads its exact f64 vector. The sample also retains whether
+a changed field came from consumer motion or from its source. The provider-pose
+cache compares actual active-frame poses once per system pass; a new prescribed
+sample timestamp alone does not imply source motion. The environment owner registers the provider-pose
+cache as scene state, so teardown releases its retained samples before replacement.
+
+The Avian projection updates the persistent `ConstantLinearAcceleration` vector
+exactly. A position-derived update bypasses the external-force change notification,
+including the final movement sample when a body falls asleep. Changed source
+fields retain normal wake notifications. External pose edits use native
+position/rotation wake detection. Native sleep thresholds, timers, integration,
+and rollback use their standard contracts.
+The source is this crate's
 [`Gravity`](src/gravity_types.rs) resource:
 
 - **`Gravity::Flat`** — same vector for all entities (sandbox / single-body)
@@ -315,8 +328,9 @@ faster and more idiomatic ECS than re-deriving from Position + Body each time.
 **Why `Bevy` change detection?**
 The compute systems observe their actual dependencies and compare the computed
 value before inserting a Local\* component. Consumers such as Avian's
-acceleration projection therefore wake only when the field really changes;
-reactive UI can still use `Changed<LocalGravity>` for events such as crossing
+acceleration projection additionally use the gravity sample's change provenance
+to distinguish external source changes from a body's own motion.
+Reactive UI can still use `Changed<LocalGravity>` for events such as crossing
 an SOI boundary.
 
 **Why opt-in by input name in `inject_environment`?**

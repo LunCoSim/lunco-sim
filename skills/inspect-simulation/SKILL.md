@@ -70,6 +70,7 @@ shared-clock gate.
 |---|---|
 | `list_entities` (`ListEntities`) | every registered entity → `{api_id, name, type, pos}`. **Start here** — most reads need an `api_id`. |
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
+| `QueryPhysicsState {id}` | native body/admission state, collider ownership and support; `sleep_state` reports the native timer, required rest time, disabled marker and effective velocity thresholds. `constant_linear_acceleration_mps2` reports the persistent native acceleration, or unavailable when absent. These are observations, not instructions to force sleeping. |
 | `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. Add `topology:true` for one scoped visual/collider/material/joint/bounds/projection record. |
 | `InspectUsdViewport` | the explicit focused USD preview/view handles, document IDs, edit targets, projection generations, and `projection_ready` state; use this to identify the exact editor item visible in a screenshot and wait for a ready preview before editing. |
 | `InspectUsdInspectionPresets` | persisted view-only USD inspection camera presets; use it to verify the named settings state and the active preset without treating camera presentation as authored USD. |

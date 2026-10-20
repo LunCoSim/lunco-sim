@@ -97,7 +97,15 @@ text; they do not parse on the caller's schedule.
 
 The optional `lunco-sysml-ui` application adapter provides a SysML workspace
 with **Requirements**, **Traceability**, and **Structure** views. The
-requirements view browses analyzed Twin sources, jumps from a failed check to
+Structure detail pane lists the selected element's declared parameters with
+their types, source expressions, and resolved constant values. It projects the
+prepared typed analysis through its change-gated view model, preserving collection shape, units
+and native numeric precision. Unassigned and unresolved values are explicit;
+the panel does not evaluate a second expression language or infer inheritance.
+Parameter ownership uses snapshot-scoped element handles, so equal short names
+in different parts do not share values.
+
+The requirements view browses analyzed Twin sources, jumps from a failed check to
 its requirement declaration, and edits through the canonical `SysmlDocument`
 command/save lifecycle. Requirement evidence, per-case test
 execution, and model coverage (`require` criteria and resolved `verify` links)
@@ -568,6 +576,14 @@ authored runtime verdict:
    observer still owns measurement and verdict policy.
 
 ### Typed engineering values and policy boundary
+
+The Rhai check library exposes `preflight_report` for constructing a diagnostic
+report without emitting a terminal verdict. `finish_preflight` publishes that
+report for a standalone source/adapter gate. A system gate that also exercises
+synthetic criterion counterexamples keeps those diagnostics separate from its
+measured evidence and emits one terminal verdict after both are complete. The
+scene runner's default listener accepts the first recognized verdict, so an
+earlier diagnostic PASS would otherwise bypass the remaining system checks.
 
 The shared `lunco-engineering-values` crate is a mechanism seam, not another
 domain language. It accepts a resolved unit definition (`symbol`, SI

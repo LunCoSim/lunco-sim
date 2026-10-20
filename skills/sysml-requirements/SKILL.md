@@ -470,6 +470,15 @@ selection through `expected_index`. The `tolerance` argument on a check is
 numerical evaluator policy for equality comparisons; engineering acceptance
 bounds must remain parameters of the SysML constraint itself.
 
+For observer/criterion diagnostics that accompany a system gate, use
+`sysml_requirement_checks::preflight_report` to build the diagnostic result
+without publishing a terminal verdict. Retain synthetic counterexamples as
+diagnostics, separate from measured system evidence. Publish the mapped gate's
+single terminal verdict only after its complete observation set and diagnostics
+have finished; a preliminary diagnostic PASS must not stop the scene runner
+before the system checks execute. `finish_preflight` remains the terminal
+publisher for a standalone source/adapter diagnostic gate.
+
 The existing `CoincidentPointTranslation` policy can still run a bounded
 asynchronous Modelica solve, read native finite `f64` results by exact
 experiment identity, and produce a generation-bound typed USD placement plan.

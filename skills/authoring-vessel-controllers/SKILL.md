@@ -195,9 +195,12 @@ parsed Modelica contract does not match the authored scene.
   external session that may possess the vessel; `SessionRegistry` and RBAC
   (`may_take_control`) arbitrate those user sessions. An authored mission or
   route program is scenario policy, not a possession session.
-- The internal controller **yields** to whoever possesses via the **`piloted`** port:
+- The internal controller **yields** to accepted operator inputs via the **`piloted`** port:
   a read-only cosim port (`PILOTED_BACKEND`, `lunco-cosim/src/ports.rs`) that is `1.0`
-  when any session owns the vessel (`SessionRegistry::owner_of(...).is_some()`), else `0`.
+  when a session owns the vessel and `PortHolds` contains controller input on it,
+  else `0`. Selection/possession alone leaves GNC active. The first accepted
+  bound input selects manual authority; its neutral release retains that authority
+  until explicit control release. Authored program holds do not select manual mode.
 - Wire it (`float inputs:piloted.connect = </Lander.outputs:piloted>`) into the
   model as the manual-input authority signal. Gate the pilot stick with it, then
   combine manual input with authored program/autopilot inputs through the model's
@@ -356,8 +359,9 @@ trace is not a session replay log.
    so the pilot's intents reach the stick ports.
 4. Add a `Scope` applying `LunCoProgramAPI` child prim naming a `.rhai` supervisor for events/sequencing
    (no control loop), with connected `LunCoEvent` children for model conditions.
-5. Verify: unpossessed → the GNC flies it; possess → the pilot drives (gate flips via
-   `piloted`); release → GNC resumes. Tune live via the Inspector or `set()`.
+5. Verify: unpossessed or selected without input → the GNC flies it; first
+   accepted pilot input → manual flight (`piloted = 1`); neutral key release →
+   manual remains active; explicit control release → GNC resumes.
 
 ## Anti-patterns
 

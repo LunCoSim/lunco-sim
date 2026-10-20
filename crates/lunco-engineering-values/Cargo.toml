@@ -8,5 +8,8 @@ description = "Dependency-light UCUM/SI engineering quantities shared by domain 
 [dependencies]
 serde = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

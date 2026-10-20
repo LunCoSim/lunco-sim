@@ -565,14 +565,21 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
 /// hold. The per-update work budget also retains time rather than clipping the
-/// input delta or discarding pending fixed cycles.
+/// input delta or discarding pending fixed cycles. Yield after one fixed
+/// quantum of wall-clock service so overloaded catch-up cannot monopolize
+/// presentation. A complete causal cycle remains indivisible.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
+    let service_started = Instant::now();
+    let service_budget = world.resource::<Time<Fixed>>().timestep();
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
+    for cycle in 0..MAX_FIXED_STEPS_PER_FRAME {
+        if cycle > 0 && service_started.elapsed() >= service_budget {
+            break;
+        }
         if !world.resource::<lunco_core::RuntimeFaults>().active()
             && (world
                 .get_resource::<lunco_core_runtime::SimulationBarrier>()
@@ -1564,6 +1571,54 @@ mod tests {
             sixty_four_x >= one_x * 56,
             "64x fixed schedule ran {sixty_four_x} ticks versus {one_x} at 1x"
         );
+    }
+
+    #[test]
+    fn fixed_loop_yields_after_service_quantum_without_losing_time() {
+        fn slow_fixed_tick(mut count: ResMut<FixedRunCount>) {
+            std::thread::sleep(Duration::from_millis(6));
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::ZERO,
+            ))
+            .insert_resource(TimeTransport {
+                mode: TransportMode::Playing,
+                rate: 1.0,
+            })
+            .init_resource::<FixedRunCount>()
+            .add_systems(FixedUpdate, (slow_fixed_tick, count_fixed_ticks));
+        let quantum = Duration::from_millis(4);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(quantum);
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(quantum * 4));
+        app.update();
+        assert_eq!(
+            app.world().resource::<FixedRunCount>().0,
+            1,
+            "one expensive cycle must yield before draining the queued cycles"
+        );
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+        for expected in 1..=4 {
+            let fixed = app.world().resource::<Time<Fixed>>();
+            assert_eq!(fixed.elapsed() + fixed.overstep(), quantum * 4);
+            assert_eq!(app.world().resource::<FixedRunCount>().0, expected);
+            if expected < 4 {
+                app.update();
+            }
+        }
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
+        assert_eq!(app.world().resource::<SimTick>().0, 4);
     }
 
     #[test]

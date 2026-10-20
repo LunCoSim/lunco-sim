@@ -11,8 +11,8 @@
 //   • The command comes either from a session's stick or from a guidance program the
 //     SCENE composed onto the vessel (`components/gnc/descent_guidance.usda`), wired
 //     into the airframe's `guidance_throttle` input. Unwired, it is zero.
-//   • Authority is possession (the WIRED `piloted` port, derived by `PILOTED_BACKEND`
-//     in Rust), not a flag — nothing here touches it.
+//   • The wired `piloted` port selects accepted controller-input authority;
+//     possession alone preserves guidance. Nothing here writes that sensor.
 //
 // This script only ORCHESTRATES via events: it latches source-qualified engine
 // cutoff at target-qualified gear load, latches flight handoff at low-speed

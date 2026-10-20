@@ -227,28 +227,39 @@ pub enum AvianUnit {
 
 impl AvianUnit {
     fn reference(self) -> UnitReference {
-        let (symbol, dimension) = match self {
-            Self::Dimensionless => ("1", Dimension::NONE),
-            Self::Meter => ("m", Dimension::LENGTH),
-            Self::MeterPerSecond => ("m/s", Dimension([1, 0, -1, 0, 0, 0, 0])),
-            Self::MeterPerSecondSquared => ("m/s²", Dimension([1, 0, -2, 0, 0, 0, 0])),
-            Self::Radian => ("rad", Dimension::NONE),
-            Self::RadianPerSecond => ("rad/s", Dimension([0, 0, -1, 0, 0, 0, 0])),
-            Self::Newton => ("N", Dimension([1, 1, -2, 0, 0, 0, 0])),
-            Self::NewtonMeter => ("N·m", Dimension([2, 1, -2, 0, 0, 0, 0])),
-            Self::Kilogram => ("kg", Dimension([0, 1, 0, 0, 0, 0, 0])),
-            Self::KilogramMeterSquared => ("kg·m²", Dimension([2, 1, 0, 0, 0, 0, 0])),
-            Self::Second => ("s", Dimension([0, 0, 1, 0, 0, 0, 0])),
-        };
-        UnitReference::resolved(
-            Unit::new_with_exactness(symbol, dimension, 1.0, 0.0, UnitScaleExactness::Exact)
-                .expect("Avian port unit definition is valid")
-                .with_angle_power(if matches!(self, Self::Radian | Self::RadianPerSecond) {
-                    1
-                } else {
-                    0
-                }),
-        )
+        // Only these built-in unit definitions are static. The port owner,
+        // direction, bounds and frame are still derived from the live world.
+        macro_rules! reference {
+            ($symbol:literal, $dimension:expr, $angle:literal) => {{
+                static UNIT: LazyLock<UnitReference> = LazyLock::new(|| {
+                    UnitReference::resolved(
+                        Unit::new_with_exactness(
+                            $symbol,
+                            $dimension,
+                            1.0,
+                            0.0,
+                            UnitScaleExactness::Exact,
+                        )
+                        .expect("Avian port unit definition is valid")
+                        .with_angle_power($angle),
+                    )
+                });
+                UNIT.clone()
+            }};
+        }
+        match self {
+            Self::Dimensionless => reference!("1", Dimension::NONE, 0),
+            Self::Meter => reference!("m", Dimension::LENGTH, 0),
+            Self::MeterPerSecond => reference!("m/s", Dimension([1, 0, -1, 0, 0, 0, 0]), 0),
+            Self::MeterPerSecondSquared => reference!("m/s²", Dimension([1, 0, -2, 0, 0, 0, 0]), 0),
+            Self::Radian => reference!("rad", Dimension::NONE, 1),
+            Self::RadianPerSecond => reference!("rad/s", Dimension([0, 0, -1, 0, 0, 0, 0]), 1),
+            Self::Newton => reference!("N", Dimension([1, 1, -2, 0, 0, 0, 0]), 0),
+            Self::NewtonMeter => reference!("N·m", Dimension([2, 1, -2, 0, 0, 0, 0]), 0),
+            Self::Kilogram => reference!("kg", Dimension([0, 1, 0, 0, 0, 0, 0]), 0),
+            Self::KilogramMeterSquared => reference!("kg·m²", Dimension([2, 1, 0, 0, 0, 0, 0]), 0),
+            Self::Second => reference!("s", Dimension([0, 0, 1, 0, 0, 0, 0]), 0),
+        }
     }
 }
 
@@ -1085,18 +1096,12 @@ fn connection_topology_key(connection: &SimConnection) -> u64 {
     hasher.finish()
 }
 
-/// Control-authority sensor: a read-only `piloted` port, 1.0 while the vessel is
-/// possessed by ANY external session — a human user OR an autopilot (both are
-/// external session-controllers) — else 0.0. It reports only POSSESSION STATUS from
-/// the single source of truth ([`SessionRegistry`]); it treats every session
-/// uniformly, with no autopilot-specific or role logic.
-///
-/// This is "the INTERNAL controller yields to whoever possesses it": the vessel's
-/// intrinsic GNC (an in-model controller) wires `piloted` and gates
-/// `cmd = piloted ? session : gnc`. Because it's WIRED it's a live input (reaches
-/// the solver, unlike a folded flag). Session-vs-session (user vs autopilot) is
-/// arbitrated by possession + RBAC upstream; the GNC is simply the floor beneath
-/// the whole session layer.
+/// Manual-authority sensor: the read-only `piloted` port is 1.0 when an owning
+/// session has accepted controller input on this endpoint. Possession alone
+/// leaves the intrinsic GNC active. Persistent controller holds, including a
+/// released stick's neutral setpoint, retain manual authority until explicit
+/// release. Authored program setpoints never select manual flight.
+/// Session ownership and RBAC continue to arbitrate which session may write.
 const PILOTED_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(
@@ -1124,8 +1129,8 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
             None,
             Some(0.0),
             Some(1.0),
-            "session registry",
-            "possession",
+            "session registry and controller holds",
+            "manual authority",
             false,
             None,
         )
@@ -1140,7 +1145,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
-/// 1.0 iff this entity's vessel is owned by some session (possessed), else 0.0.
+/// 1.0 iff a session owns this endpoint and has accepted controller inputs.
 fn piloted_value(w: &World, e: Entity) -> f64 {
     let Some(gid) = w.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get()) else {
         return 0.0;
@@ -1148,7 +1153,10 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
     let owned = w
         .get_resource::<lunco_core_session::SessionRegistry>()
         .is_some_and(|r| r.owner_of(gid).is_some());
-    if owned { 1.0 } else { 0.0 }
+    let commanded = w
+        .get_resource::<lunco_cosim_core::PortHolds>()
+        .is_some_and(|holds| holds.has_control(e));
+    if owned && commanded { 1.0 } else { 0.0 }
 }
 
 /// Detect in-place changes to the map-backed port owners without sampling every
