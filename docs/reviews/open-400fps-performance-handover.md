@@ -1,10 +1,49 @@
 # High-quality realtime performance handover
 
+## Griffin presentation and merged mission qualification — 2026-10-20
+
+The tutorials integration includes main's certified cuboid-face contacts,
+body-indexed response products and shared heading interface. The response owner
+uses a scale-aware normal-residual stopping budget and reserves the live LSMR
+search-history column alongside its published workspace. Failed solves still
+fail admission, and the native geometric tolerances remain unchanged. All 131
+physics library checks pass, including small-scale heavy attachments and a
+many-row sparse-workspace sweep. This repairs the later contact failure recorded
+in the historical cohort below; no performance gain is claimed.
+
+The production artifact SHA-256 is
+`a80c2d6060c3429e861016f99e52bb8a9b0310f166ac41baf44f8cacb6bf2516`.
+All five mapped Griffin cases exit zero with structured PASS verdicts: descent
+Sun pointing, engine-out response, GNC handoff, 60-second landing stability and
+surface operations. The visible application independently passes Sun pointing
+with clear readiness and connection diagnostics. Acquisition takes 0.05 s;
+maximum heading error is 0.00592636 rad (0.340 degrees) over 23.5 s of tracking.
+The stability case retains all four pads in all 361 observations over 60.0167 s.
+The shared Modelica gate passes 88 checks, GNC selection/manual/reconnect passes
+22, engine-out passes 20, and HUD coordinate presentation passes seven.
+
+The inspected 1024 by 1024 native-window image shows the reconstructed solar
+bank, gold MLI and angular lunar position with height. The HUD labels the actual
+IAU/WGCCRE body-fixed convention, east-positive longitude and mean-sphere height;
+it does not claim an exact MOON_ME or MOON_PA realization. Evidence is under
+`.cache/codex-evidence/griffin-sun-heading-20261020/final-main/`, including
+`integrated-acceptance.json`, the five case reports, `native-post-landing.json`,
+`analytic-driver.log` and `griffin-sun-facing-1024x1024.png`.
+
+These are bounded simulation checks. Public-data reconstruction, thermal
+qualification and open transit requirements remain separate. The optional UI
+preparation harness's nine policy checks pass, but its aggregate run retains a
+pre-existing ground-height fixture mismatch (0.5 m versus 0 m), reproduced on
+the older optimization executable. That harness is not reported as passing.
+Loading/FPS targets and external FMU interoperability remain open.
+
 ## Lunar Modelica heading interface alignment — 2026-10-20
 
-The current authored Griffin Twin requires heading target, enable, measured yaw
-rate and readiness ports on `AttitudeReference`, plus descent permission on
-`PositionPID3D`. The shared Modelica contract from maintained commits
+The authored Griffin Twin requires heading target, enable, measured yaw
+rate and readiness ports on `AttitudeReference`. The shared Modelica contract
+also offers optional descent permission on `PositionPID3D`. Griffin starts
+Sun-aligned and leaves descent enabled; heading qualification does not hold
+its final approach. The shared contract from maintained commits
 `bcb2e6ca8` and `eccb8a038` supplies those equations and public ports. Their
 analytic fixtures, authored verdict, API driver, controller skill and canonical
 lander documentation are integrated together. The driver verifies its owned
@@ -13,12 +52,12 @@ Linux PID/cwd/executable. No authored Twin source or Rust control law is changed
 All 88 authored heading/descent-interlock assertions pass through the production
 Modelica owner. The real lunar Twin then completes certified initialization for
 six coupled participants and first reaches readiness in 31.135 s. This clears
-the missing-heading-interface failure. The continued windowed run later faults
+the missing-heading-interface failure. That windowed artifact later faults
 with `physics-continuous-contact-invalid`: `coupled minimum-residual solve did
 not converge`. No complete quiet frame window is accepted. Source hashes remain
-fixed and owned ports are released. Native geometry/response capture of that
-failure is the next physics investigation; neither full mission behavior nor
-loading/FPS acceptance is established. Evidence under
+fixed and owned ports are released. This is historical evidence from before
+the tutorials branch's scale-aware Krylov stopping and workspace repairs;
+it establishes neither full mission behavior nor loading/FPS acceptance. Evidence under
 `.cache/codex-evidence/loading-20261019/`: `heading-contract-integration/` and
 `griffin-heading-integrated/`.
 
@@ -70,12 +109,11 @@ Summer reaches simulation readiness in 4.216 s and terrain readiness in
 the final retained physics history has 0.683 ms median and 1.898 ms maximum.
 All 342 co-simulation entities are admitted without runtime findings, and the
 inspected screenshot shows the terrain. These are contention-affected baseline
-measurements, not target acceptance. The current lunar-base Griffin sources
-fail coupled initialization after 11.230 s: `AttitudeReference` lacks the
+measurements, not target acceptance. In that artifact, lunar-base Griffin
+failed coupled initialization after 11.230 s: `AttitudeReference` lacked the
 authored `heading_enable`, `heading_rate_body_y` and three target-direction
-inputs. Source hashes remain fixed within both runs. The matching heading
-Modelica contract exists on the tutorials branch; aligning that contract is the
-next loading prerequisite. Evidence: `summer-response-gather/` and
+inputs. Source hashes remain fixed within both runs. The heading alignment
+described above resolves that interface failure. Evidence: `summer-response-gather/` and
 `griffin-response-gather/`.
 
 ## Certified cuboid-face geometry — 2026-10-20
