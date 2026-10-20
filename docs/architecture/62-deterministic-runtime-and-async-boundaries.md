@@ -70,8 +70,14 @@ Rows retain full, axial or perpendicular constrained subspaces as typed
 geometry. Their current scalar gradients and native inertia responses enter
 `lunco-physics::constraint_response` together with admitted continuous-contact
 inequalities. Responsive body islands bound solver work; row order and
-principal-pivot choices remain deterministic. Two sparse body reductions apply
-the native response and its transpose without forming a dense row matrix.
+principal-pivot choices remain deterministic. The sparse response operator packs
+the selected endpoints by body, preserving admitted row/endpoint order within
+each body. It gathers each body's linear/angular sum locally and stores its
+endpoint dot products, then combines those products in input endpoint order.
+Scaling, component dot-product grouping and every accumulation order remain
+unchanged for both the native response and its transpose. This avoids repeated
+scattered writes and forms no dense row matrix. Packed terms and stack workspace
+belong to that exact selected operator and expire with its active-set solve.
 Maintained faer LSMR runs with explicit `Par::Seq`, native f64 stopping precision
 and the owner's iteration bound, including rank-deficient hinge/latch rows.
 Each nonlinear correction is checked against the geometric tolerances;

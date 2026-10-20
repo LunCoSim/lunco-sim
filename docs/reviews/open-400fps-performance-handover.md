@@ -1,5 +1,61 @@
 # High-quality realtime performance handover
 
+## Body-indexed response reductions — 2026-10-20
+
+`lunco-physics::constraint_response` packs each active operator's selected
+endpoints by body. Each body gathers its contributions in the
+original admitted row/endpoint order into a local linear/angular sum. Endpoint
+dot products then combine in the original endpoint order. Scaling placement,
+component grouping, native dominance, LSMR parameters and principal pivots are
+unchanged. The existing response owner supplies both products to maintained
+faer LSMR and the complete residual check. Packed topology and stack scratch
+expire with that exact operator; allocation failures return the owner's error.
+This is shared continuous numerical work, without a new lifecycle or scenario
+policy. No dependency source or Modelica equation is changed.
+
+The current geometry capture contains 116 systems. Its largest has 131 rows
+and numerical rank 61; 49 systems are rank deficient. A body-indexed diagnostic
+reduces aggregate captured solve time from 143.630 to 110.010 ms while retaining
+identical multipliers, contact reactions, pivots and Krylov iteration counts in
+every system. These are diagnostic timings, not product performance acceptance.
+All five focused response mechanism checks pass, including the minimum-norm
+contact guard, native dominance/adjoint, redundant rows, and residual admission.
+Evidence is under `.cache/codex-evidence/loading-20261019/`:
+`response-gather-fresh.summary.json`, `certified-face-response-spectra.csv` and
+`response-gather-mechanism-tests.log`.
+
+The normal production artifact
+`a6aadbe4c1ce43779c34f428459d692e7f5751722fb6166ab508a8461a4d71eb`
+builds without warnings and passes all 53 authored physics/drive assertions plus
+the expected invalid-joint fault. An identical-source, equal-initial-state cold
+Roadster comparison retains identical queried physics state and ports at ticks
+300, 360 and 420, including vehicle speeds and position-iteration counts.
+Baseline versus gathered physics medians are 34.199/19.495/8.689 versus
+27.738/17.435/8.140 ms; retained maxima fall from 113.176 to 95.559 ms at the
+first milestone. The fixed epoch and forward/release inputs are unchanged.
+The windowed run reaches tick 552, accepts drive/release input, reports
+5.130 m/s while held and has no runtime findings. The inspected screenshot
+shows the car on the road. Owned ports are released. Concurrent workloads
+exclude clean FPS qualification. This improves the measured shared solve but
+does not meet sub-millisecond physics, sub-second loading or 200 FPS.
+Production evidence includes `integration/gather-controlled-comparison.json`,
+`integration/response-gather-production-gates.json`,
+`response-gather-production-build-resumed.log` and `tesla-response-gather/`.
+
+Both requested Twin cohorts are rechecked with this artifact at High quality.
+Summer reaches simulation readiness in 4.216 s and terrain readiness in
+4.799 s. Its complete 15 s frame window has 11.104 ms median frame time;
+the final retained physics history has 0.683 ms median and 1.898 ms maximum.
+All 342 co-simulation entities are admitted without runtime findings, and the
+inspected screenshot shows the terrain. These are contention-affected baseline
+measurements, not target acceptance. The current lunar-base Griffin sources
+fail coupled initialization after 11.230 s: `AttitudeReference` lacks the
+authored `heading_enable`, `heading_rate_body_y` and three target-direction
+inputs. Source hashes remain fixed within both runs. The matching heading
+Modelica contract exists on the tutorials branch; aligning that contract is the
+next loading prerequisite. Evidence: `summer-response-gather/` and
+`griffin-response-gather/`.
+
 ## Certified cuboid-face geometry — 2026-10-20
 
 The native relative-frame adapter in `lunco-physics::ccd` certifies cuboid-face
