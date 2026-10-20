@@ -156,6 +156,14 @@ Run `scripts/api/test_attitude_heading.py --output <evidence-dir>` for signed,
 antipodal, tilted, vertical-target and disabled-authority witnesses, then run
 the vehicle's own descent and manual-handoff gates.
 
+For acquisition before landing, wire the reference's `heading_ready` to
+`PositionPID3D.descent_enable` and connect the measured IMU yaw rate to
+`heading_rate_body_y`. Author angle/rate qualification limits on the reference.
+Zero descent permission removes downward position and rate commands while
+retaining hover and vertical-rate damping; one enables the normal descent
+schedule. Validate both the inhibited and enabled reference, then prove the
+vehicle stays airborne during acquisition and lands with the heading held.
+
 A a `Scope` applying `LunCoProgramAPI` child prim on the vessel, naming a `.rhai` scenario
 (`uniform asset info:sourceAsset = @scenarios/my_supervisor.rhai@`), does
 supervision and sequencing — **never a control loop**. React to events; don't poll or

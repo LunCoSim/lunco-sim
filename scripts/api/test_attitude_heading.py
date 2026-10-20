@@ -37,27 +37,35 @@ def main():
             time.sleep(.1)
         generation = execute('GetDocumentSource', doc_id=doc)['generation']
         runs = []
-        for name, heading, valid, ex, ey in [
-            ('Aligned', 0., 1., 0., 0.), ('Right', math.pi/2, 1., 0., math.pi/2),
-            ('Left', -math.pi/2, 1., 0., -math.pi/2),
-            ('Behind', math.pi, 1., 0., math.pi), ('Disabled', math.pi/2, 1., 0., 0.),
-            ('Overhead', 0., 0., 0., 0.), ('Tilted', 0., 1., -.5, 0.),
-            ('Yawed', -math.pi/2, 1., 0., -math.pi/2), ('Inverted', -math.pi/2, 1., 0., 0.),
+        for name, heading, valid, ex, ey, ready in [
+            ('Aligned', 0., 1., 0., 0., 1.), ('Right', math.pi/2, 1., 0., math.pi/2, 0.),
+            ('Left', -math.pi/2, 1., 0., -math.pi/2, 0.),
+            ('Behind', math.pi, 1., 0., math.pi, 0.), ('Disabled', math.pi/2, 1., 0., 0., 0.),
+            ('Overhead', 0., 0., 0., 0., 0.), ('Tilted', 0., 1., -.5, 0., 1.),
+            ('Yawed', -math.pi/2, 1., 0., -math.pi/2, 0.), ('Inverted', -math.pi/2, 1., 0., 0., 0.),
+            ('FastAligned', 0., 1., 0., 0., 0.),
         ]:
             run = execute('RunModelicaSolve', doc_id=doc, **{
                 'class': 'AttitudeHeadingContracts.' + name, 'source_generation': generation,
                 't_start': 0., 't_end': .2, 'dt': .1, 'label': 'Attitude heading ' + name})
             runs.append(dict(id=run['experiment_id'], name=name, heading=heading,
-                             valid=valid, ex=ex, ey=ey))
+                             valid=valid, ex=ex, ey=ey, ready=ready,
+                             variables=['heading','valid','ex','ey','ez','ready']))
+        for name, position, rate in [('DescentInhibited',60.,0.),('DescentEnabled',0.,-4.)]:
+            run = execute('RunModelicaSolve', doc_id=doc, **{
+                'class': 'AttitudeHeadingContracts.' + name, 'source_generation': generation,
+                't_start': 0., 't_end': .2, 'dt': .1, 'label': name})
+            runs.append(dict(id=run['experiment_id'], name=name, position=position, rate=rate,
+                             variables=['position_command','rate_command']))
         (args.output / 'runs.json').write_text(json.dumps(runs, indent=2))
         execute('SetTimeTransport', playing=True)
         run_authored_scenario(session, 'lunco://scenarios/tests/attitude_heading_contracts.rhai',
-                              title='ATTITUDE HEADING', check_count=63, params=dict(runs=runs))
+                              title='ATTITUDE HEADING', check_count=88, params=dict(runs=runs))
         for run in runs:
             result = execute('GetExperimentResult', experiment_id=run['id'],
-                             variables=['heading','valid','ex','ey','ez'], max_points=100)
+                             variables=run['variables'], max_points=100)
             (args.output / (run['name'] + '.json')).write_text(json.dumps(result, indent=2))
-    print('PASS 63 authored attitude heading checks; owned API released')
+    print('PASS 88 authored attitude heading and descent-interlock checks; owned API released')
 
 
 if __name__ == '__main__':

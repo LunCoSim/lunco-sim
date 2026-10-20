@@ -21,6 +21,10 @@ model AttitudeReference
     "Body X component of the forward face used for heading";
   parameter Real heading_forward_body_z = 1.0
     "Body Z component of the forward face used for heading";
+  parameter Real heading_tolerance_rad = 0.08726646259971647
+    "Heading readiness envelope in radians";
+  parameter Real heading_rate_tolerance_rad_s = 0.02
+    "Maximum measured yaw rate for heading readiness";
 
   input Real attitude_quat_w = 1.0 "IMU attitude quaternion W";
   input Real attitude_quat_x = 0.0 "IMU attitude quaternion X";
@@ -35,6 +39,7 @@ model AttitudeReference
   input Real heading_target_body_x = 0.0 "Target direction measured in body X";
   input Real heading_target_body_y = 0.0 "Target direction measured in body Y";
   input Real heading_target_body_z = 0.0 "Target direction measured in body Z";
+  input Real heading_rate_body_y = 0.0 "Measured body yaw rate in rad/s";
 
   output Real error_x "Body-frame upright error about X";
   output Real error_y "Body-frame autonomous heading error about Y";
@@ -44,6 +49,7 @@ model AttitudeReference
   output Real estimated_up_z "Estimated world-up direction in body Z";
   output Real heading_error_rad "Signed shortest azimuth error about navigation +Y";
   output Real heading_valid "One when forward and target both have an azimuth";
+  output Real heading_ready "One when enabled heading and yaw rate are inside their envelopes";
 
   FrameVectorTransform up_transform(
     quaternion_epsilon = quaternion_epsilon,
@@ -129,5 +135,9 @@ equation
   // The existing X/Z thrust-vector reference retains recovery priority.
   error_y = max(0.0, min(1.0, heading_enable)) * heading_error_rad
     * max(0.0, min(1.0, target_transform.body_frame_y));
+  heading_ready = noEvent(if heading_enable > 0.5 and heading_valid > 0.5
+    and target_transform.body_frame_y > 0.0
+    and abs(heading_error_rad) <= heading_tolerance_rad
+    and abs(heading_rate_body_y) <= heading_rate_tolerance_rad_s then 1.0 else 0.0);
   error_z = -target_transform.body_frame_x;
 end AttitudeReference;

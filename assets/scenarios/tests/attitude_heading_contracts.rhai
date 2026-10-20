@@ -16,13 +16,15 @@ fn on_tick(me, params) {
         checks.push(t_true(status.state=="done",run.name+" compiles and runs"));
         if status.state!="done" {print(status);continue;}
         let result=query("GetExperimentResult",#{experiment_id:run.id,
-            variables:["heading","valid","ex","ey","ez"],max_points:100});
+            variables:run.variables,max_points:100});
         let complete=result.times!=() && result.times.len()==3
             && !result.downsampled && result.missing_variables.is_empty();
         checks.push(t_true(complete,run.name+" complete trajectory"));
         if !complete {continue;}
-        for spec in [["heading",run.heading],["valid",run.valid],
-            ["ex",run.ex],["ey",run.ey],["ez",0.0]] {
+        let specs=if run.position!=() {[["position_command",run.position],["rate_command",run.rate]]}
+            else {[["heading",run.heading],["valid",run.valid],
+                ["ex",run.ex],["ey",run.ey],["ez",0.0],["ready",run.ready]]};
+        for spec in specs {
             let good=result.series.contains(spec[0]);
             if good {
                 for v in result.series[spec[0]] {
