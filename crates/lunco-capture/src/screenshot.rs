@@ -217,9 +217,24 @@ fn on_capture_screenshot(
     trigger: On<CaptureScreenshot>,
     pending_request: Res<PendingApiRequest>,
     capture_target: Option<Res<OfflineCaptureTarget>>,
+    recording: Res<OfflineRecordingState>,
+    pending_recording: Option<Res<PendingShotStart>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    // Bevy admits one screenshot per render target in a render frame. A
+    // competing primary-window screenshot can otherwise discard the offline
+    // recorder's request and leave its completed-cycle latch waiting forever.
+    // Reject before arming any GPU work, including save-to-file requests.
+    if recording.active || pending_recording.is_some() {
+        let message = "CaptureScreenshot is unavailable while offline recording owns the capture target; inspect the encoded take after recording finishes";
+        warn!("[screenshot] {message}");
+        commands.trigger(ApiResponseEvent {
+            correlation_id: pending_request.correlation_id,
+            response: ApiResponse::error(lunco_api_core::ApiErrorCode::CommandRejected, message),
+        });
+        return;
+    }
 
     // A 4-element `[x, y, w, h]`, or nothing. A malformed region is ignored rather than
     // rejected — cropping is a convenience, and a bad crop should not cost you the frame.

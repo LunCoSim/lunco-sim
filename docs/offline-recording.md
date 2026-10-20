@@ -62,6 +62,12 @@ luncosim --api 4101 --offscreen --render-quality high \
 | `--record-size WxH` | Offscreen target resolution (default 1280x720 — the windowed default, so offscreen takes match windowed ones). |
 | `--render-quality <low\|balanced\|high>` | Explicit renderer quality for this process. `high` is the highest shipped preset and raises shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. It does not replace shader sources authored by the USD scene. |
 
+`CaptureScreenshot` rejects with `CommandRejected` while an offline take is
+pending or active. The recorder owns its capture target for that interval;
+competing window screenshots can cause Bevy to drop a capture and strand the
+completed-cycle latch. Inspect a screenshot before the take or extract a frame
+from the completed recording. Status and measurement queries remain available.
+
 After the authored camera contract and the complete USD visual projection are
 present, offscreen recording holds virtual time for a one-second cold-GPU render
 warm-up before numbering frame 0. A CLI request made at process startup keeps

@@ -3,8 +3,8 @@
 //! Physics state is discovered from the live Avian body, not from authored
 //! telemetry declarations. USD supplies the owning prim path for presentation
 //! and Avian supplies the measured world-frame kinematics. Acceleration is the
-//! finite-time derivative of the post-step velocity using the authoritative
-//! fixed simulation clock; it is never inferred from a rover or component name.
+//! physics-owned native-interval measurement, shared with co-simulation and
+//! sensors; this recorder does not calculate a second derivative.
 
 use avian3d::prelude::{
     AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph,
@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use lunco_core_runtime::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_physics::kinematics::SolvedBodyAcceleration;
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
@@ -37,6 +38,7 @@ impl Plugin for PhysicsTelemetryPlugin {
                 FixedPostUpdate,
                 retain_physics_telemetry
                     .after(PhysicsSystems::StepSimulation)
+                    .after(lunco_physics::kinematics::BodyAccelerationSampleSet)
                     .after(lunco_mobility::WheelRaycastResultsSet),
             );
     }
@@ -44,7 +46,6 @@ impl Plugin for PhysicsTelemetryPlugin {
 
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {
-    previous: HashMap<Entity, PreviousKinematics>,
     /// Next physics-time batch sample. The shared signal registry still applies
     /// the final per-channel rate; this owner-level gate keeps the body query
     /// out of fixed steps between telemetry batches.
@@ -56,13 +57,6 @@ pub struct PhysicsTelemetryState {
 }
 
 impl SceneResource for PhysicsTelemetryState {}
-
-#[derive(Clone, Copy)]
-struct PreviousKinematics {
-    time: f64,
-    linear_velocity: DVec3,
-    angular_velocity: DVec3,
-}
 
 /// Retain post-step rigid-body kinematics in the shared signal registry.
 ///
@@ -92,6 +86,7 @@ fn retain_physics_telemetry(
             Option<&AngularVelocity>,
             Option<&GlobalEntityId>,
             Option<&SignalSource>,
+            Option<&SolvedBodyAcceleration>,
         ),
         With<RigidBody>,
     >,
@@ -118,7 +113,6 @@ fn retain_physics_telemetry(
 ) {
     queued_signal_sources.clear();
     let Some(settings) = settings else {
-        state.previous.clear();
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
@@ -128,7 +122,6 @@ fn retain_physics_telemetry(
     };
     if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
     {
-        state.previous.clear();
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
@@ -137,7 +130,6 @@ fn retain_physics_telemetry(
         return;
     }
     let Some(signals) = signals.as_deref_mut() else {
-        state.previous.clear();
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
@@ -166,7 +158,6 @@ fn retain_physics_telemetry(
         if sources.contains(entity) {
             return;
         }
-        state.previous.remove(&entity);
         state.metadata_group_paths.remove(&entity);
         state.metadata.retain(|(source, _), _| *source != entity);
     };
@@ -183,7 +174,6 @@ fn retain_physics_telemetry(
         state.next_sample_time = None;
     }
     if state.last_sample_time.is_some_and(|last| time < last) {
-        state.previous.clear();
         state.next_sample_time = None;
     }
     let sample_due = !state.next_sample_time.is_some_and(|next_sample_time| {
@@ -202,7 +192,7 @@ fn retain_physics_telemetry(
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, prim, linear, angular, global_owner, signal_source) in &bodies {
+    for (entity, prim, linear, angular, global_owner, signal_source, acceleration) in &bodies {
         let metadata_dirty = state
             .metadata_group_paths
             .get(&entity)
@@ -212,28 +202,9 @@ fn retain_physics_telemetry(
         if linear_velocity.is_some_and(|value| !value.is_finite())
             || angular_velocity.is_some_and(|value| !value.is_finite())
         {
-            state.previous.remove(&entity);
             continue;
         }
 
-        let previous = match (linear_velocity, angular_velocity) {
-            (Some(linear_velocity), Some(angular_velocity)) => state.previous.insert(
-                entity,
-                PreviousKinematics {
-                    time,
-                    linear_velocity,
-                    angular_velocity,
-                },
-            ),
-            _ => {
-                state.previous.remove(&entity);
-                None
-            }
-        };
-
-        // Keep the fixed-step velocity cursor current so acceleration remains
-        // the derivative over the immediately preceding physics step. The
-        // expensive channel construction/retention below is still batch-gated.
         if !sample_due && !metadata_dirty {
             continue;
         }
@@ -285,45 +256,45 @@ fn retain_physics_telemetry(
             ));
         }
 
-        if let (Some(previous), Some(linear_velocity), Some(angular_velocity)) =
-            (previous, linear_velocity, angular_velocity)
-        {
-            let dt = time - previous.time;
-            if dt.is_finite() && dt > 0.0 {
-                let linear_acceleration = (linear_velocity - previous.linear_velocity) / dt;
-                let angular_acceleration = (angular_velocity - previous.angular_velocity) / dt;
-                if linear_acceleration.is_finite() && angular_acceleration.is_finite() {
-                    samples.extend(vector_channels(
-                        "linear_acceleration",
-                        linear_acceleration,
-                        "m/s^2",
-                        "World-frame acceleration component.",
-                    ));
-                    samples.push(PhysicsSample::summary(
-                        "linear_acceleration",
-                        "linear_acceleration",
-                        "magnitude",
-                        "magnitude",
-                        linear_acceleration.length(),
-                        "m/s^2",
-                        "Magnitude of world-frame linear acceleration.",
-                    ));
-                    samples.extend(vector_channels(
-                        "angular_acceleration",
-                        angular_acceleration,
-                        "rad/s^2",
-                        "World-frame angular-acceleration component.",
-                    ));
-                    samples.push(PhysicsSample::summary(
-                        "angular_acceleration",
-                        "angular_acceleration",
-                        "magnitude",
-                        "magnitude",
-                        angular_acceleration.length(),
-                        "rad/s^2",
-                        "Magnitude of world-frame angular acceleration.",
-                    ));
-                }
+        // Physics owns the interval, including constraints and contacts.
+        // Telemetry retains the completed result at its own configured rate.
+        if let Some(acceleration) = acceleration.filter(|s| s.valid && s.tick == Some(tick.0)) {
+            for (name, vector, unit, description) in [
+                (
+                    "linear_acceleration",
+                    acceleration.linear_world,
+                    "m/s^2",
+                    "Net acceleration of the body's centre of mass in the physics frame.",
+                ),
+                (
+                    "angular_acceleration",
+                    acceleration.angular_world,
+                    "rad/s^2",
+                    "Angular acceleration in the physics frame.",
+                ),
+            ] {
+                samples.extend(vector_channels(name, vector, unit, description));
+                samples.push(PhysicsSample::summary(
+                    name,
+                    name,
+                    "magnitude",
+                    "magnitude",
+                    vector.length(),
+                    unit,
+                    description,
+                ));
+            }
+            if let Some(force) = acceleration.specific_force_world {
+                samples.extend(vector_channels(
+                    "specific_force",
+                    force,
+                    "m/s^2",
+                    "Centre-of-mass acceleration minus gravitational acceleration, physics frame.",
+                ));
+                samples.push(PhysicsSample::summary("specific_force", "specific_force", "magnitude", "magnitude", force.length(), "m/s^2", "Accelerometer magnitude |a - g| at the centre of mass. Zero in ideal free fall; support load while parked."));
+            }
+            if let Some(force) = acceleration.specific_force_body {
+                samples.extend(vector_channels("specific_force_body", force, "m/s^2", "Centre-of-mass acceleration minus gravity, expressed in the completed body frame."));
             }
         }
 
@@ -994,19 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn derivative_uses_physics_time_and_world_velocity() {
-        let previous = DVec3::new(1.0, -2.0, 0.5);
-        let current = DVec3::new(3.0, 0.0, -0.5);
-        let acceleration = (current - previous) / 0.5;
-        assert_eq!(acceleration, DVec3::new(4.0, 4.0, -2.0));
-    }
-
-    #[test]
-    fn first_kinematics_sample_has_no_fabricated_acceleration() {
-        assert!(None::<PreviousKinematics>.is_none());
-    }
-
-    #[test]
     fn acceleration_channels_report_acceleration_units() {
         let linear = vector_channels(
             "linear_acceleration",
@@ -1066,6 +1024,7 @@ mod tests {
                 RigidBody::Dynamic,
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(DVec3::ZERO),
+                SolvedBodyAcceleration::default(),
                 Position::from_xyz(2.0, 3.0, 4.0),
                 Rotation(bevy::math::DQuat::from_rotation_y(0.25)),
                 ComputedMass::new(2.0),
@@ -1088,6 +1047,15 @@ mod tests {
         );
         app.world_mut().resource_mut::<SimTick>().0 = 6;
         app.world_mut().get_mut::<LinearVelocity>(body).unwrap().0 = DVec3::X;
+        {
+            let mut sample = app
+                .world_mut()
+                .get_mut::<SolvedBodyAcceleration>(body)
+                .unwrap();
+            sample.linear_world = DVec3::X * 12.0;
+            sample.tick = Some(6);
+            sample.valid = true;
+        }
         app.update();
 
         let signal = SignalRef::new(body, "linear_acceleration.x");
@@ -1156,7 +1124,6 @@ mod tests {
         app.update();
 
         let state = app.world().resource::<PhysicsTelemetryState>();
-        assert!(!state.previous.contains_key(&body));
         assert!(!state.metadata_group_paths.contains_key(&body));
         assert!(state.metadata.keys().all(|(entity, _)| *entity != body));
         assert!(

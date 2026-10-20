@@ -26,7 +26,8 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
-use lunco_environment::{EnvironmentPlugin, Gravity, LocalGravity};
+use lunco_environment::{EnvironmentPlugin, Gravity};
+use lunco_physics::kinematics::LocalGravity;
 
 /// One replayed tick, mirroring `lunco-networking`'s `replay_one_tick`: run the
 /// actuation chain, then advance the physics clocks and step the solver.

@@ -25,6 +25,14 @@ crates/lunco-ui/ARCHITECTURE.md
 It explains the full architecture, step-by-step panel integration guide,
 and design decisions. This skill is a quick-reference summary.
 
+## Graph readability
+
+Use the native line plot toolbar's `Line` control to set curve thickness from
+0.5 to 8 logical pixels. It is saved per visualization in `LinePlotStyle` and
+uses the existing typed edit observer. Keep global UI zoom at the operator's
+preferred scale; curve width does not change typography or signal samples.
+Verify the saved width and rendered stroke in the actual plot panel.
+
 ## Core Principles
 
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.

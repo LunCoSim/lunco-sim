@@ -72,6 +72,13 @@ The active line plot keeps its binding and frame-series lists inline for the
 usual small curve count and moves each formatted label into its plot item once
 per paint, without cloning retained point buffers.
 
+Each line plot's toolbar has a `Line` thickness control (0.5–8 logical pixels).
+The value belongs to `LinePlotStyle`, survives visualization save/load and
+duplication, and affects only the curve stroke. It does not scale interface
+text or modify samples, history decimation, axes, or physical state. Omitted
+widths use 1.5 pixels. The toolbar emits `LinePlotEditRequested`; its observer
+owns the registry update consumed by the native `egui_plot::Line` renderer.
+
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged
 scenes do not rebuild entity lookup maps or rewrite plot bindings; missing

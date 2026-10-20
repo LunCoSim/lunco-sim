@@ -121,43 +121,8 @@ pub enum EnvironmentSet {
     Apply,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LocalGravity — the gravity vector at an entity's position
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Gravity vector at this entity's position, in the entity's Avian physics
-/// frame (m/s²).
-///
-/// Computed in [`FixedUpdate`] when gravity, frame, provider, transform, or
-/// body-link inputs change. Surface gravity uses the [`GravityProvider`] on
-/// the entity's gravitational parent body (linked via [`GravityBody`]).
-///
-/// - **Magnitude:** `length()` gives `g` in m/s²
-/// - **Direction:** `normalize()` gives the gravity unit vector
-///
-/// Read this instead of querying the [`Gravity`] resource directly — it's
-/// position-dependent and cached. Multiple consumers (Avian acceleration,
-/// cosim input injection, UI display) can read it without recomputation.
-#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
-#[reflect(Component)]
-pub struct LocalGravity(pub DVec3);
-
-impl LocalGravity {
-    /// Magnitude in m/s² (always non-negative).
-    pub fn magnitude(&self) -> f64 {
-        self.0.length()
-    }
-
-    /// Unit vector in the direction of gravity (downward).
-    /// Returns [`DVec3::NEG_Y`] if the gravity vector is zero.
-    pub fn direction(&self) -> DVec3 {
-        if self.0.length_squared() > 0.0 {
-            self.0.normalize()
-        } else {
-            DVec3::NEG_Y
-        }
-    }
-}
+// Gravity computation publishes the physics-owned per-body field contract.
+use lunco_physics::kinematics::LocalGravity;
 
 fn clear_unresolved_local_gravity(
     commands: &mut Commands,

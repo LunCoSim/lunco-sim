@@ -2167,7 +2167,7 @@ fn apply_wheel_drive(
             &RigidBody,
             &ComputedMass,
             Option<&InputPorts>,
-            Option<&lunco_environment::LocalGravity>,
+            Option<&lunco_physics::kinematics::LocalGravity>,
         ),
         lunco_physics::Integrable,
     >,

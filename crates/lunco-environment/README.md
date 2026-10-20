@@ -87,6 +87,9 @@ environment resolves its target bearing in that probe's own BigSpace frame.
 
 ### `LocalGravity(DVec3)`
 
+The field contract belongs to `lunco-physics::kinematics`; environment computes
+and publishes it for physics, sensors and telemetry.
+
 Gravity vector at an entity's active physics-frame position, in m/s². Computed in
 `FixedUpdate` when gravity, frame, provider, pose, or body-link inputs change.
 `lunco-physics::SimulationPoseQuery` supplies both consumer and provider poses
@@ -114,7 +117,7 @@ invalidate linked fields. The source is this crate's
   with a `GravityProvider`
 
 ```rust
-use lunco_environment::LocalGravity;
+use lunco_physics::kinematics::LocalGravity;
 
 fn read_gravity(q: Query<&LocalGravity>) {
     for grav in &q {

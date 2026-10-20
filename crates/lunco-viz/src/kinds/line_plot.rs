@@ -53,7 +53,7 @@ pub(crate) struct LinePlotFitRequested {
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
 /// round-trip. All fields optional — missing fields keep default
 /// behaviour (X = time, auto-labeled axes).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinePlotStyle {
     /// Signal to drive the X axis. `None` = simulation time (the
     /// classic time-series plot). When `Some`, each Y sample is
@@ -76,6 +76,26 @@ pub struct LinePlotStyle {
     /// not clamped). Persists with the plot like the other style.
     #[serde(default)]
     pub log_y: bool,
+    /// Curve thickness in logical display pixels; independent of UI zoom.
+    #[serde(default = "default_line_width")]
+    pub line_width: f32,
+}
+
+fn default_line_width() -> f32 {
+    1.5
+}
+
+impl Default for LinePlotStyle {
+    fn default() -> Self {
+        Self {
+            x_signal: None,
+            x_persisted_signal: None,
+            x_label: None,
+            y_label: None,
+            log_y: false,
+            line_width: default_line_width(),
+        }
+    }
 }
 
 impl LinePlotStyle {
@@ -804,7 +824,8 @@ impl LinePlot {
                 crate::multi_series_plot::add_cached_line(
                     plot_ui,
                     Line::new(std::mem::take(label), PlotPoints::from(series.1.as_slice()))
-                        .color(*color),
+                        .color(*color)
+                        .width(style.line_width),
                     series.2,
                     style.x_signal.is_none(),
                 );
@@ -823,6 +844,7 @@ enum Edit {
     AddY(SignalRef),
     RemoveY(SignalRef),
     SetLogY(bool),
+    SetLineWidth(f32),
 }
 
 fn render_toolbar(
@@ -884,7 +906,7 @@ fn render_toolbar(
         // binding strip every remaining pixel. This keeps long canonical
         // names readable without letting the action buttons drift into the
         // middle of the toolbar.
-        let y_width = (ui.available_width() - 300.0).max(160.0);
+        let y_width = (ui.available_width() - 400.0).max(160.0);
         egui::ScrollArea::horizontal()
             .id_salt(("lp_y_bindings", config.id.raw()))
             .max_width(y_width)
@@ -914,9 +936,25 @@ fn render_toolbar(
 
         // Add/log/actions stay in a right-aligned cluster. Add remains
         // outside the scrolling list so it is always reachable.
-        ui.add_space((ui.available_width() - 300.0).max(0.0));
+        ui.add_space((ui.available_width() - 400.0).max(0.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             actions(ui, ctx.wb);
+            ui.separator();
+            let mut line_width = style.line_width;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut line_width)
+                        .range(0.5..=8.0)
+                        .speed(0.1)
+                        .fixed_decimals(1)
+                        .prefix("Line ")
+                        .suffix(" px"),
+                )
+                .on_hover_text("Curve thickness; does not change UI scale or signal samples")
+                .changed()
+            {
+                edit = Some(Edit::SetLineWidth(line_width));
+            }
             ui.separator();
             let mut log_y = style.log_y;
             if ui
@@ -996,6 +1034,11 @@ fn apply_edit(registry: &mut VisualizationRegistry, viz: lunco_viz_core::VizId, 
         Edit::SetLogY(on) => {
             let mut style = LinePlotStyle::load(cfg);
             style.log_y = on;
+            style.save(cfg);
+        }
+        Edit::SetLineWidth(width) => {
+            let mut style = LinePlotStyle::load(cfg);
+            style.line_width = width;
             style.save(cfg);
         }
     }
@@ -1105,6 +1148,7 @@ mod tests {
             x_label: Some("phi [rad]".into()),
             y_label: Some("w [rad/s]".into()),
             log_y: true,
+            line_width: 4.0,
         };
         style.save(&mut cfg);
         let roundtrip = LinePlotStyle::load(&cfg);
@@ -1112,5 +1156,6 @@ mod tests {
         assert_eq!(roundtrip.x_label.as_deref(), Some("phi [rad]"));
         assert_eq!(roundtrip.y_label.as_deref(), Some("w [rad/s]"));
         assert!(roundtrip.log_y);
+        assert_eq!(roundtrip.line_width, 4.0);
     }
 }

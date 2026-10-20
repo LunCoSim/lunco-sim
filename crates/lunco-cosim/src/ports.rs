@@ -105,6 +105,16 @@ impl AvianPortContract {
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
+    pub const ACCELERATION: Self = Self::new(
+        AvianUnit::MeterPerSecondSquared,
+        AvianFrame::None,
+        AvianRange::Unbounded,
+    );
+    pub const ACCELERATION_BODY: Self = Self::new(
+        AvianUnit::MeterPerSecondSquared,
+        AvianFrame::OwningBody,
+        AvianRange::Unbounded,
+    );
     pub const ANGLE_WORLD: Self = Self::new(
         AvianUnit::Radian,
         AvianFrame::PhysicsWorld,

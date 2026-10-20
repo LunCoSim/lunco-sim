@@ -8244,7 +8244,7 @@ gain is claimed. The other three long Sandbox model lowerings remain distinct.
 
 The same Tracy capture shows `ensure_acceleration_samples` with a 46.135 ms
 maximum deferred-command flush over 1,061 calls, while its system body peaked at
-46.7 microseconds. The system only initializes `SolvedLinearAcceleration` for
+46.7 microseconds. The system only initializes `SolvedBodyAcceleration` for
 newly physics-ready bodies. It now collects these identical initial states and
 inserts them through one fallible typed batch in query order; steady fixed-step
 sampling is unchanged. `cargo +nightly-2026-02-27 check --locked -j 4 -p
