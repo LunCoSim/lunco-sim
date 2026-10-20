@@ -3347,9 +3347,21 @@ fn resolve_viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(S
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "scene.usda".to_string()),
         ),
-        // Untitled / in-memory: no external refs to resolve; a placeholder root
-        // is the document-owned transport identity for native layer input.
-        _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
+        // Untitled / in-memory: publish native layer input through a private
+        // transport identity with the asset registry's absolute directory contract.
+        _ => match std::env::current_dir() {
+            Ok(base) => (base, "scene.usda".to_string()),
+            Err(error) => {
+                report_preview_error(
+                    world,
+                    "usd-preview-source-unavailable",
+                    format!(
+                        "cannot resolve the untitled preview's absolute transport directory: {error}"
+                    ),
+                );
+                return None;
+            }
+        },
     };
 
     // Resolve file-backed documents against the workspace first. The workspace

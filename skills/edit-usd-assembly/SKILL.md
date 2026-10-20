@@ -701,6 +701,8 @@ Use the smallest existing typed intent that expresses the change:
   (list result and spec sites, source `document_composition`) before editing,
   and resolve the target first so a composed-only prim is reported as
   read-only rather than flattened or guessed.
+  Untitled forks use a private preview transport mount; require the preview to
+  become ready before applying subsequent edits, including reference changes.
 - `assembly_edit::default_prim(doc, path, parent_gen)` authors the
   root layer `defaultPrim`; use an absolute or root-relative existing prim
   path, and pass `()` to clear its selection. Runtime/view targets are rejected.

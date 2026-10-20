@@ -546,6 +546,9 @@ The fork has no file identity until Save-As. Its subsequent operations are
 journalled under the new document id, while the existing Twin journal remains
 the one cross-document history stream. Per-document undo/redo remains on that
 document's `DocumentHost`.
+An untitled preview publishes its native layer input through a document-private
+transport mount with an absolute directory. Failure to resolve that directory
+rejects preview creation; a relative mount cannot enter the asset registry.
 
 ### Command and inspection contract
 
