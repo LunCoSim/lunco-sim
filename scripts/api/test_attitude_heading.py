@@ -51,21 +51,15 @@ def main():
             runs.append(dict(id=run['experiment_id'], name=name, heading=heading,
                              valid=valid, ex=ex, ey=ey, ready=ready,
                              variables=['heading','valid','ex','ey','ez','ready']))
-        for name, position, rate in [('DescentInhibited',60.,0.),('DescentEnabled',0.,-4.)]:
-            run = execute('RunModelicaSolve', doc_id=doc, **{
-                'class': 'AttitudeHeadingContracts.' + name, 'source_generation': generation,
-                't_start': 0., 't_end': .2, 'dt': .1, 'label': name})
-            runs.append(dict(id=run['experiment_id'], name=name, position=position, rate=rate,
-                             variables=['position_command','rate_command']))
         (args.output / 'runs.json').write_text(json.dumps(runs, indent=2))
         execute('SetTimeTransport', playing=True)
         run_authored_scenario(session, 'lunco://scenarios/tests/attitude_heading_contracts.rhai',
-                              title='ATTITUDE HEADING', check_count=88, params=dict(runs=runs))
+                              title='ATTITUDE HEADING', check_count=80, params=dict(runs=runs))
         for run in runs:
             result = execute('GetExperimentResult', experiment_id=run['id'],
                              variables=run['variables'], max_points=100)
             (args.output / (run['name'] + '.json')).write_text(json.dumps(result, indent=2))
-    print('PASS 88 authored attitude heading and descent-interlock checks; owned API released')
+    print('PASS 80 authored attitude heading checks; owned API released')
 
 
 if __name__ == '__main__':

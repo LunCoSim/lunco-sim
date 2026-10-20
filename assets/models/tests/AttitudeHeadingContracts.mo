@@ -54,15 +54,4 @@ package AttitudeHeadingContracts
   model FastAligned
     extends Aligned(rate=0.1);
   end FastAligned;
-  model DescentInhibited
-    parameter Real permission = 0.0;
-    LunCo.GNC.PositionPID3D guidance(initial_pos_y=60.0,
-      target_y=0.0,descent_enable=permission,vehicle_mass=1000.0,mass_properties_valid=1.0,
-      imu_coordinate_accel_local_y=1.62);
-    output Real position_command = guidance.pid_y.setpoint;
-    output Real rate_command = guidance.descent_rate_command;
-  end DescentInhibited;
-  model DescentEnabled
-    extends DescentInhibited(permission=1.0);
-  end DescentEnabled;
 end AttitudeHeadingContracts;

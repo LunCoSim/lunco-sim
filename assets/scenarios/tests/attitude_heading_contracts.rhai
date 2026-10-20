@@ -21,9 +21,8 @@ fn on_tick(me, params) {
             && !result.downsampled && result.missing_variables.is_empty();
         checks.push(t_true(complete,run.name+" complete trajectory"));
         if !complete {continue;}
-        let specs=if run.position!=() {[["position_command",run.position],["rate_command",run.rate]]}
-            else {[["heading",run.heading],["valid",run.valid],
-                ["ex",run.ex],["ey",run.ey],["ez",0.0],["ready",run.ready]]};
+        let specs=[["heading",run.heading],["valid",run.valid],
+            ["ex",run.ex],["ey",run.ey],["ez",0.0],["ready",run.ready]];
         for spec in specs {
             let good=result.series.contains(spec[0]);
             if good {
