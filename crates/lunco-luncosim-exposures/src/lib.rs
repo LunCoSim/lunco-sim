@@ -288,6 +288,30 @@ fn hook_value_to_exposure(
     }
 }
 
+/// Coordinates share the site/body-fixed resolver used by navigation and maps.
+/// A missing frame in a site scene remains unavailable, never world metres.
+fn surface_coordinate_facts(
+    root: Option<Entity>,
+    query: &lunco_celestial_spatial_core::SurfacePoseQuery,
+) -> HookValue {
+    match query.site_count() {
+        0 => HookValue::map([("system", HookValue::str("world"))]),
+        1 => root.and_then(|entity| query.get(entity)).map_or_else(
+            || HookValue::Unit,
+            |pose| {
+                HookValue::map([
+                    ("system", HookValue::str("IAU/WGCCRE")),
+                    ("body", HookValue::Int(i64::from(pose.body))),
+                    ("latitude_deg", HookValue::Float(pose.geodetic.lat_deg)),
+                    ("longitude_deg", HookValue::Float(pose.geodetic.lon_deg)),
+                    ("height_m", HookValue::Float(pose.geodetic.height_m)),
+                ])
+            },
+        ),
+        _ => HookValue::Unit,
+    }
+}
+
 fn runtime_ui_facts(
     surface_id: &str,
     root: Option<Entity>,
@@ -313,6 +337,7 @@ fn runtime_ui_facts(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     telemetry: &[PublicTelemetryValue],
+    surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
 ) -> HookValue {
     let label = root
@@ -489,6 +514,7 @@ fn runtime_ui_facts(
         ("status", HookValue::str(status.0)),
         ("error", status.1.map_or(HookValue::Unit, HookValue::str)),
         ("position", position),
+        ("coordinates", surface_coordinate_facts(root, surface_pose)),
         ("velocity", velocity),
         ("angular_velocity", angular_velocity),
         ("rotation", rotation),
@@ -1807,6 +1833,7 @@ pub(crate) fn publish_exposure(
                 &runtime.sessions,
                 runtime.local_session.0,
                 &queries.inputs,
+                &geo.surface_pose,
                 overlays.simulation_progress.as_deref(),
                 runtime_context,
             );
@@ -2405,6 +2432,7 @@ fn queue_runtime_surfaces(
     sessions: &lunco_core_session::SessionRegistry,
     local_session: lunco_command_contracts::SessionId,
     q_inputs: &Query<&InputPorts>,
+    surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
@@ -2456,6 +2484,7 @@ fn queue_runtime_surfaces(
             q_paths,
             stages,
             canonical,
+            surface_pose,
             progress,
             runtime_context,
         );
@@ -2489,6 +2518,7 @@ fn queue_runtime_surface(
     q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
+    surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
@@ -2519,6 +2549,7 @@ fn queue_runtime_surface(
             stages,
             canonical,
             &telemetry,
+            surface_pose,
             progress,
         )
     };

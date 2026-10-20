@@ -5,6 +5,8 @@
   <property name="owner">none</property>
   <property name="speed">—</property>
   <property name="position">—</property>
+  <property name="height">—</property>
+  <property name="coordinate_frame">FRAME UNAVAILABLE</property>
   <property name="angular_velocity">—</property>
   <property name="simulation_summary">NO SIMULATION PARTICIPANTS</property>
   <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
@@ -26,8 +28,11 @@
 
     <node id="compact-control-motion-grid">
       <node id="compact-speed"><text id="compact-speed-label">VELOCITY</text><text id="compact-speed-value">{speed}</text></node>
+      <node id="compact-height"><text id="compact-height-label">HEIGHT</text><text id="compact-height-value">{height}</text></node>
       <node id="compact-position"><text id="compact-position-label">POSITION</text><text id="compact-position-value">{position}</text></node>
     </node>
+
+    <text id="compact-coordinate-frame">{coordinate_frame}</text>
 
     <node id="compact-control-angular-row">
       <text id="compact-control-angular-label">ANGULAR SPEED</text>

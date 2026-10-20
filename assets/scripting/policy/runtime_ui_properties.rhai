@@ -126,6 +126,24 @@ fn angular_speed_text(value) {
     number_text(sqrt(squared), 1000.0) + " rad/s"
 }
 
+fn angle_text(value, positive, negative) {
+    number_text(abs(value), 100000.0) + "° " + if value < 0.0 { negative } else { positive }
+}
+
+fn coordinate_properties(coordinates, world_position) {
+    if coordinates == () {
+        return #{position: "COORDINATES UNAVAILABLE", height: "—", coordinate_frame: "FRAME UNAVAILABLE"};
+    }
+    if coordinates.system == "world" {
+        return #{position: vector_text(world_position, 100.0) + " m", height: "—", coordinate_frame: "WORLD · metres"};
+    }
+    let body = if coordinates.body == 301 { "MOON" } else { "BODY " + coordinates.body };
+    #{position: angle_text(coordinates.latitude_deg, "N", "S") + "  ·  "
+        + angle_text(coordinates.longitude_deg, "E", "W"),
+      height: number_text(coordinates.height_m, 10.0) + " m · mean sphere",
+      coordinate_frame: body + " · " + coordinates.system + " · east positive"}
+}
+
 fn runtime_ui_properties(facts) {
     let ui_owner = runtime_context.scope == "application"
         && runtime_context.cycle == "ui"
@@ -152,7 +170,10 @@ fn runtime_ui_properties(facts) {
     result.runtime_status = runtime_status_label(facts.status, facts.simulation_progress);
     result.owner = facts.control_owner;
     result.speed = vector_text(facts.velocity, 100.0) + " m/s";
-    result.position = vector_text(facts.position, 1.0) + " m";
+    let coordinates = coordinate_properties(facts.coordinates, facts.position);
+    result.position = coordinates.position;
+    result.height = coordinates.height;
+    result.coordinate_frame = coordinates.coordinate_frame;
     result.angular_velocity = angular_speed_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);
     // Index only statuses; copying participant maps also copies their model values.

@@ -835,3 +835,11 @@ handler and uses registered command type identity to select deferral. Admission
 failures answer immediately; admitted work completes through its owner. This
 keeps concurrent requests distinct and prevents a rejected callback from leaving
 its transport waiting.
+
+Subject surface facts include `coordinates` from `SurfacePoseQuery`: IAU/WGCCRE
+body-fixed latitude (north positive), longitude (east positive), and height above
+the body's mean sphere, all f64. The compact vehicle HUD formats degrees and
+hemispheres and labels the height datum. It must not label these coordinates
+`MOON_ME` or `MOON_PA`: those require an explicit frame transform. In a scene
+without a site anchor the coordinate mode is explicitly world metres; an
+unresolvable or ambiguous site frame publishes coordinates as unavailable.

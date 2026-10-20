@@ -173,3 +173,19 @@
 #compact-control-error {
   color: var(--danger-color);
 }
+
+#compact-height {
+  display: flex;
+  align-items: baseline;
+  column-gap: 5px;
+  min-width: 0px;
+}
+#compact-height-label {
+  color: var(--muted-color);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+#compact-height-value { color: var(--text-color); font-size: 11px; font-weight: 700; }
+#compact-coordinate-frame { color: var(--muted-color); font-size: 9px; }
+#compact-position-value { font-size: 11px; }

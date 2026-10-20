@@ -73,6 +73,8 @@
         "owner": { "source": "owner" },
         "speed": { "source": "speed" },
         "position": { "source": "position" },
+        "height": { "source": "height" },
+        "coordinate_frame": { "source": "coordinate_frame" },
         "angular_velocity": { "source": "angular_velocity" },
         "simulation_summary": { "source": "simulation_summary" },
         "telemetry_summary": { "source": "telemetry_summary" },
@@ -84,7 +86,7 @@
         "anchor": "bottom_left",
         "offset": [16.0, -32.0],
         "width": 320.0,
-        "height": 184.0
+        "height": 216.0
       }
     },
     {
@@ -99,6 +101,8 @@
         "owner": { "source": "owner" },
         "speed": { "source": "speed" },
         "position": { "source": "position" },
+        "height": { "source": "height" },
+        "coordinate_frame": { "source": "coordinate_frame" },
         "angular_velocity": { "source": "angular_velocity" },
         "simulation_summary": { "source": "simulation_summary" },
         "telemetry_summary": { "source": "telemetry_summary" },
@@ -110,7 +114,7 @@
         "anchor": "bottom_right",
         "offset": [-16.0, -32.0],
         "width": 320.0,
-        "height": 184.0
+        "height": 216.0
       }
     },
     {

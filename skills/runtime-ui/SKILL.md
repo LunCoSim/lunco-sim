@@ -518,3 +518,11 @@ For docked engineering task layouts, use the workbench perspective hooks rather
 than a retained HUD as a second docking system. [Twin perspectives](../../docs/tutorials/05-twin-perspectives.md)
 shows Rhai assembly from registered panels; retained surfaces may still choose
 visibility through their existing perspective ids.
+
+Subject surface facts include `coordinates` from `SurfacePoseQuery`: IAU/WGCCRE
+body-fixed latitude (north positive), longitude (east positive), and height above
+the body's mean sphere, all f64. The compact vehicle HUD formats degrees and
+hemispheres and labels the height datum. It must not label these coordinates
+`MOON_ME` or `MOON_PA`: those require an explicit frame transform. In a scene
+without a site anchor the coordinate mode is explicitly world metres; an
+unresolvable or ambiguous site frame publishes coordinates as unavailable.
