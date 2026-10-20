@@ -24,6 +24,8 @@ use std::collections::HashMap;
 #[derive(Resource)]
 pub struct WorkbenchLayout {
     pub panels: HashMap<PanelId, Box<dyn Panel>>,
+    /// Advances only when a panel capability is registered or replaced.
+    pub capability_revision: u64,
     /// Registered multi-instance panel kinds (one entry per
     /// [`InstancePanel::kind`]). Instances share the same renderer;
     /// each tab picks its behaviour via `TabId::Instance { kind, … }`.
@@ -49,6 +51,7 @@ pub struct WorkbenchLayout {
     pub side_browser_bottom: Vec<PanelId>,
     pub center: Vec<PanelId>,
     pub active_center_tab: usize,
+    center_has_initial_instances: bool,
     pub right_inspector: Vec<PanelId>,
     pub right_inspector_bottom: Vec<PanelId>,
     pub bottom: Vec<PanelId>,
@@ -80,6 +83,7 @@ pub struct PerspectiveDockSlot {
     pub side_browser_bottom: Vec<PanelId>,
     pub center: Vec<PanelId>,
     pub active_center_tab: usize,
+    center_has_initial_instances: bool,
     pub right_inspector: Vec<PanelId>,
     pub right_inspector_bottom: Vec<PanelId>,
     pub bottom: Vec<PanelId>,
@@ -89,6 +93,7 @@ impl Default for WorkbenchLayout {
     fn default() -> Self {
         Self {
             panels: HashMap::new(),
+            capability_revision: 0,
             instance_panels: HashMap::new(),
             perspectives: Vec::new(),
             active_perspective: None,
@@ -98,6 +103,7 @@ impl Default for WorkbenchLayout {
             side_browser_bottom: Vec::new(),
             center: Vec::new(),
             active_center_tab: 0,
+            center_has_initial_instances: false,
             right_inspector: Vec::new(),
             right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
@@ -120,6 +126,7 @@ impl WorkbenchLayout {
     }
 
     pub fn register_boxed(&mut self, panel: Box<dyn Panel>) {
+        self.capability_revision = self.capability_revision.wrapping_add(1);
         let id = panel.id();
         let slot = panel.default_slot();
         // A perspective may declare a panel before the domain plugin registers
@@ -128,7 +135,7 @@ impl WorkbenchLayout {
         // Build preset silently turns back into one tab strip.
         let declared = self.has_slot_intent(id);
         if !declared {
-            if let Some(perspective) = self.active_perspective {
+            if let Some(perspective) = self.active_perspective.clone() {
                 if let Some(slot) = panel.visible_in_perspective(perspective) {
                     self.add_panel_to_slot(id, slot);
                 }
@@ -174,19 +181,27 @@ impl WorkbenchLayout {
     }
 
     pub fn register_instance_panel_boxed(&mut self, panel: Box<dyn InstancePanel>) {
+        self.capability_revision = self.capability_revision.wrapping_add(1);
         self.instance_panels.insert(panel.kind(), panel);
     }
 
-    /// Open (or focus, if already open) a multi-instance tab of `kind`
-    /// with the given `instance` discriminant. Slot comes from the
-    /// kind's [`InstancePanel::default_slot`] on first open.
-    ///
-    /// The workbench scans the dock for an existing tab matching the
-    /// id and focuses it if found; otherwise adds a new tab to the
-    /// **center** leaf — identified by matching any singleton tab
-    /// currently in the `center` slot intent.
+    /// Open or focus an instance in its authored initial slot, or its kind's
+    /// default slot when no active perspective assigns that identity.
+    /// Existing dock placement is preserved; a missing authored center is
+    /// recreated beside surviving semantic regions through egui_dock.
     pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
-        self.open_instance_with_slot(kind, instance, None);
+        let slot = self
+            .active_perspective
+            .as_ref()
+            .and_then(|id| self.perspectives.iter().find(|p| p.id() == *id))
+            .and_then(|p| {
+                p.layout()
+                    .instance_tabs
+                    .into_iter()
+                    .find(|tab| tab.kind == kind && tab.instance == instance)
+                    .map(|tab| tab.slot)
+            });
+        self.open_instance_with_slot(kind, instance, slot);
     }
 
     fn open_instance_with_slot(
@@ -215,20 +230,9 @@ impl WorkbenchLayout {
             return;
         }
 
-        // Find the center leaf. We identify it as the one containing
-        // any tab whose `PanelId` is in our `center` slot intent —
-        // or, failing that, any existing `TabId::Instance` of this
-        // same `kind` (because instance tabs of a kind belong in its
-        // `default_slot`, which for model views is Center).
-        //
-        // Falling back to "first leaf" was wrong: after split_left /
-        // split_right / split_below, the tree's first leaf in walk
-        // order is the left side panel, and new tabs landed inside
-        // the Package Browser instead of the center.
-        // Resolve the kind's preferred slot. New instance tabs should
-        // land in the same dock area as their kind's defaults — e.g.
-        // a `VizPanel` (Bottom) opened next to the singleton `Graphs`
-        // tab, NOT in the Center alongside the model view.
+        // Resolve the authored slot before the kind's ordinary default. Prefer
+        // an existing leaf for the same kind or semantic region; keep the live
+        // scene viewport exclusive and recreate a missing instance center.
         let preferred_slot =
             slot_override.or_else(|| self.instance_panels.get(&kind).map(|p| p.default_slot()));
         // Build the set of singleton PanelIds occupying each slot so
@@ -289,7 +293,9 @@ impl WorkbenchLayout {
                 if !matches!(
                     preferred_slot,
                     Some(PanelSlot::Bottom | PanelSlot::RightInspectorBottom)
-                ) {
+                ) && !(preferred_slot == Some(PanelSlot::Center)
+                    && self.center_has_initial_instances)
+                {
                     first_leaf(main)
                 } else {
                     None
@@ -316,6 +322,36 @@ impl WorkbenchLayout {
                 surface: egui_dock::SurfaceIndex::main(),
                 node: leaf,
             });
+        } else if preferred_slot == Some(PanelSlot::Center) && vp_leaf.is_none() {
+            // Recreate the declared center beside its surviving semantic peers.
+            // egui_dock removes an empty leaf when its last tab closes.
+            let locate = |ids: &[PanelId], dock: &mut DockState<TabId>| {
+                find_leaf_matching(
+                    dock.main_surface_mut(),
+                    |tab| matches!(tab, TabId::Singleton(id) if ids.contains(id)),
+                )
+            };
+            if let Some(node) = locate(&self.right_inspector, &mut self.dock) {
+                self.dock
+                    .main_surface_mut()
+                    .split_left(node, 0.7, vec![tab]);
+            } else if let Some(node) = locate(&self.side_browser, &mut self.dock) {
+                self.dock
+                    .main_surface_mut()
+                    .split_right(node, 0.3, vec![tab]);
+            } else if let Some(node) = locate(&self.bottom, &mut self.dock) {
+                self.dock
+                    .main_surface_mut()
+                    .split_above(node, 0.7, vec![tab]);
+            } else if let Some(node) = first_leaf(self.dock.main_surface_mut()) {
+                self.dock.main_surface_mut()[node].append_tab(tab);
+            } else {
+                self.dock = DockState::new(vec![tab]);
+            }
+            if let Some(path) = self.dock.find_tab(&tab) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                let _ = self.dock.set_active_tab(path);
+            }
         } else if preferred_slot == Some(PanelSlot::RightInspectorBottom) {
             let inspector_node = self.right_inspector.first().copied().and_then(|id| {
                 let inspector_tab = TabId::Singleton(id);
@@ -438,9 +474,14 @@ impl WorkbenchLayout {
     /// Retire a multi-instance tab from the live and cached perspectives.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
-        self.dock.retain_tabs(|candidate| *candidate != tab);
+        let remove = |dock: &mut DockState<TabId>| {
+            while let Some(path) = dock.find_tab(&tab) {
+                dock.remove_tab(path);
+            }
+        };
+        remove(&mut self.dock);
         for slot in self.dock_cache.values_mut() {
-            slot.dock.retain_tabs(|candidate| *candidate != tab);
+            remove(&mut slot.dock);
         }
     }
 
@@ -449,6 +490,10 @@ impl WorkbenchLayout {
     /// `egui_dock` nodes.
     pub fn apply_perspective_plan(&mut self, id: PerspectiveId, plan: PerspectiveLayoutPlan) {
         self.activity_bar = plan.activity_bar;
+        self.center_has_initial_instances = plan
+            .instance_tabs
+            .iter()
+            .any(|tab| tab.slot == PanelSlot::Center);
         self.side_browser = plan.side_browser.primary;
         self.side_browser_bottom = plan.side_browser.secondary;
         self.center = plan.center.primary;
@@ -467,17 +512,14 @@ impl WorkbenchLayout {
                     return None;
                 }
                 panel
-                    .visible_in_perspective(id)
+                    .visible_in_perspective(id.clone())
                     .map(|slot| (*panel_id, slot))
             })
             .collect();
         for (panel_id, slot) in contributions {
             self.add_panel_to_slot(panel_id, slot);
         }
-        self.rebuild_dock();
-        for tab in plan.instance_tabs {
-            self.open_instance_with_slot(tab.kind, tab.instance, Some(tab.slot));
-        }
+        self.rebuild_dock_with_instances(&plan.instance_tabs);
     }
 
     /// Register a perspective (named workbench layout). The first one
@@ -488,6 +530,47 @@ impl WorkbenchLayout {
         self.perspectives.push(Box::new(perspective));
         if first {
             self.activate_perspective(id);
+        }
+    }
+
+    /// Whether this task has a central singleton or an authored initial instance.
+    pub fn has_central_content(&self) -> bool {
+        !self.center.is_empty() || self.center_has_initial_instances
+    }
+
+    /// Replace policy-owned definitions without rebuilding a visited layout.
+    /// Removed definitions retire their cached dock in the same transaction.
+    pub fn replace_authored_perspectives(
+        &mut self,
+        previous: &[PerspectiveId],
+        incoming: Vec<Box<dyn Perspective>>,
+    ) {
+        let ids: Vec<_> = incoming.iter().map(|p| p.id()).collect();
+        self.perspectives.retain(|p| !previous.contains(&p.id()));
+        for id in previous.iter().filter(|id| !ids.contains(id)) {
+            self.dock_cache.remove(id);
+            if self.required_perspective.as_deref() == Some(id.as_str()) {
+                self.required_perspective = None;
+            }
+        }
+        self.perspectives.extend(incoming);
+        if self
+            .active_perspective
+            .as_ref()
+            .is_none_or(|active| !self.perspectives.iter().any(|p| p.id() == *active))
+        {
+            self.active_perspective = None;
+            self.dock = DockState::new(Vec::new());
+            self.side_browser.clear();
+            self.side_browser_bottom.clear();
+            self.center.clear();
+            self.center_has_initial_instances = false;
+            self.right_inspector.clear();
+            self.right_inspector_bottom.clear();
+            self.bottom.clear();
+            if let Some(first) = self.perspectives.first().map(|p| p.id()) {
+                self.activate_perspective(first);
+            }
         }
     }
 
@@ -522,13 +605,16 @@ impl WorkbenchLayout {
         if !self.perspectives.iter().any(|w| w.id() == id) {
             return;
         }
+        if self.active_perspective.as_ref() == Some(&id) {
+            return;
+        }
         let restores_cached_layout = self
             .perspectives
             .iter()
             .find(|w| w.id() == id)
             .is_some_and(|w| w.restores_cached_layout());
-        let prev = self.active_perspective;
-        let switching = prev != Some(id);
+        let prev = self.active_perspective.clone();
+        let switching = prev.as_ref() != Some(&id);
 
         // Snapshot the outgoing perspective's live layout on a real switch.
         if switching {
@@ -558,7 +644,7 @@ impl WorkbenchLayout {
         let perspectives = std::mem::take(&mut self.perspectives);
         if let Some(ws) = perspectives.iter().find(|w| w.id() == id) {
             let plan = ws.layout();
-            self.apply_perspective_plan(id, plan);
+            self.apply_perspective_plan(id.clone(), plan);
             self.active_perspective = Some(id);
         }
         self.perspectives = perspectives;
@@ -576,6 +662,7 @@ impl WorkbenchLayout {
                 side_browser_bottom: self.side_browser_bottom.clone(),
                 center: self.center.clone(),
                 active_center_tab: self.active_center_tab,
+                center_has_initial_instances: self.center_has_initial_instances,
                 right_inspector: self.right_inspector.clone(),
                 right_inspector_bottom: self.right_inspector_bottom.clone(),
                 bottom: self.bottom.clone(),
@@ -594,6 +681,7 @@ impl WorkbenchLayout {
             side_browser_bottom,
             center,
             active_center_tab,
+            center_has_initial_instances,
             right_inspector,
             right_inspector_bottom,
             bottom,
@@ -603,6 +691,7 @@ impl WorkbenchLayout {
         self.side_browser_bottom = side_browser_bottom;
         self.center = center;
         self.active_center_tab = active_center_tab;
+        self.center_has_initial_instances = center_has_initial_instances;
         self.right_inspector = right_inspector;
         self.right_inspector_bottom = right_inspector_bottom;
         self.bottom = bottom;
@@ -610,15 +699,14 @@ impl WorkbenchLayout {
 
     /// Which perspective is currently active, if any.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
-        self.active_perspective
+        self.active_perspective.clone()
     }
 
     /// Require a registered perspective while a presentation owns the
     /// workbench. Passing `None` returns perspective selection to the user.
     ///
     /// The value is intentionally a runtime string: curriculum providers
-    /// author perspective ids, while [`PerspectiveId`] is a static registry
-    /// key. The requirement is resolved against the registered perspectives
+    /// author perspective ids; [`PerspectiveId`] may own a runtime name. The requirement is resolved against the registered perspectives
     /// at activation time and never persisted as workspace state.
     pub fn set_required_perspective(&mut self, id: Option<&str>) {
         self.required_perspective = id.map(str::to_owned);
@@ -633,6 +721,7 @@ impl WorkbenchLayout {
     pub fn reset_to_default_layout(&mut self) {
         let id = self
             .active_perspective
+            .clone()
             .or_else(|| self.perspectives.first().map(|p| p.id()));
         if let Some(id) = id {
             // Drop any cached layout for this perspective and clear the live
@@ -641,6 +730,7 @@ impl WorkbenchLayout {
             // (still-dirty) layout or preserve the current tabs.
             self.dock_cache.remove(&id);
             self.dock = DockState::new(Vec::new());
+            self.active_perspective = None;
             self.activate_perspective(id);
         }
     }
@@ -768,7 +858,7 @@ impl WorkbenchLayout {
     ///   requires a mapping for session-allocated ids. Stable-instance tabs,
     ///   such as the default plot, retain their own identities.
     ///
-    /// Empty leaves collapse via egui_dock's `retain_tabs`; non-finite
+    /// Empty leaves collapse via egui_dock's native tab removal; non-finite
     /// split fractions are healed ([`sanitize_dock_fractions`]). Returns
     /// `None` when the JSON won't parse or nothing survived — the caller
     /// then keeps its current dock. Shared by the live restore path
@@ -808,22 +898,30 @@ impl WorkbenchLayout {
         // in dock order; the current perspective then supplies its canonical
         // position on the next normal layout rebuild.
         let mut seen_singletons = HashSet::new();
-        new_dock.retain_tabs(|tab| match tab {
+        // Keep filtering decisions in a typed sidecar while native remove_tab
+        // maintains subtree indices, focus and surfaces for every removed leaf.
+        let mut filtered = new_dock.map_tabs(|tab| match *tab {
             TabId::Singleton(pid) => {
-                valid_singletons.contains(pid.0) && seen_singletons.insert(*pid)
+                (valid_singletons.contains(pid.0) && seen_singletons.insert(pid)).then_some(*tab)
             }
             TabId::Instance { kind, instance } => {
                 if !valid_kinds.contains(kind.0) {
-                    return false;
+                    return None;
                 }
-                if let Some(&new_id) = id_map.get(&(kind.0, *instance)) {
-                    *instance = new_id;
-                } else if self.instance_panels[kind].requires_instance_remap() {
-                    return false;
-                }
-                true
+                let instance = if let Some(&new_id) = id_map.get(&(kind.0, instance)) {
+                    new_id
+                } else if self.instance_panels[&kind].requires_instance_remap() {
+                    return None;
+                } else {
+                    instance
+                };
+                Some(TabId::Instance { kind, instance })
             }
         });
+        while let Some(path) = filtered.find_tab(&None) {
+            filtered.remove_tab(path);
+        }
+        new_dock = filtered.map_tabs(|tab| tab.expect("all rejected tabs were removed"));
 
         new_dock.iter_all_tabs().next()?;
         // Heal any non-finite split fraction persisted to disk. egui_dock can
@@ -948,12 +1046,13 @@ impl WorkbenchLayout {
             out.insert(
                 id.as_str().to_string(),
                 PerspectiveDockSnapshot {
-                    layout_revision: self.perspective_layout_revision(*id),
+                    layout_revision: self.perspective_layout_revision(id.clone()),
                     dock,
                     side_browser: slot.side_browser.clone(),
                     side_browser_bottom: slot.side_browser_bottom.clone(),
                     center: slot.center.clone(),
                     active_center_tab: slot.active_center_tab,
+                    center_has_initial_instances: Some(slot.center_has_initial_instances),
                     right_inspector: slot.right_inspector.clone(),
                     right_inspector_bottom: slot.right_inspector_bottom.clone(),
                     bottom: slot.bottom.clone(),
@@ -972,6 +1071,7 @@ impl WorkbenchLayout {
                             side_browser_bottom: self.side_browser_bottom.clone(),
                             center: self.center.clone(),
                             active_center_tab: self.active_center_tab,
+                            center_has_initial_instances: Some(self.center_has_initial_instances),
                             right_inspector: self.right_inspector.clone(),
                             right_inspector_bottom: self.right_inspector_bottom.clone(),
                             bottom: self.bottom.clone(),
@@ -1006,6 +1106,9 @@ impl WorkbenchLayout {
                 snap.layout_revision == self.perspective_layout_revision_by_str(active)
             }) {
                 if self.set_dock_from_json(snap.dock.clone(), id_map) {
+                    if let Some(intent) = snap.center_has_initial_instances {
+                        self.center_has_initial_instances = intent;
+                    }
                     self.ensure_chrome_present();
                 }
             }
@@ -1026,10 +1129,10 @@ impl WorkbenchLayout {
             else {
                 continue; // not registered in this app — skip
             };
-            if snap.layout_revision != self.perspective_layout_revision(pid) {
+            if snap.layout_revision != self.perspective_layout_revision(pid.clone()) {
                 continue;
             }
-            let Some(slot) = self.reconcile_dock_slot(snap, id_map) else {
+            let Some(slot) = self.reconcile_dock_slot(&pid, snap, id_map) else {
                 continue;
             };
             seeded.push((pid, slot));
@@ -1062,6 +1165,7 @@ impl WorkbenchLayout {
     /// first visit instead).
     fn reconcile_dock_slot(
         &self,
+        perspective: &PerspectiveId,
         snap: &PerspectiveDockSnapshot,
         id_map: &HashMap<(&'static str, u64), u64>,
     ) -> Option<PerspectiveDockSlot> {
@@ -1072,6 +1176,17 @@ impl WorkbenchLayout {
             side_browser_bottom: snap.side_browser_bottom.clone(),
             center: snap.center.clone(),
             active_center_tab: snap.active_center_tab,
+            center_has_initial_instances: snap.center_has_initial_instances.unwrap_or_else(|| {
+                self.perspectives
+                    .iter()
+                    .find(|p| p.id() == *perspective)
+                    .is_some_and(|p| {
+                        p.layout()
+                            .instance_tabs
+                            .iter()
+                            .any(|tab| tab.slot == PanelSlot::Center)
+                    })
+            }),
             right_inspector: snap.right_inspector.clone(),
             right_inspector_bottom: snap.right_inspector_bottom.clone(),
             bottom: snap.bottom.clone(),
@@ -1082,11 +1197,8 @@ impl WorkbenchLayout {
     /// registered set. Returns `true` if a perspective with that id
     /// exists in this app and was activated; `false` (no-op) otherwise.
     ///
-    /// The reconciliation seam for persisted state: a `PerspectiveId`
-    /// holds a `&'static str` and can't be rebuilt from a runtime
-    /// `String`, so restore looks the string up here and drops ids that
-    /// aren't registered in the current binary (e.g. a perspective only
-    /// `luncosim` ships, loaded into `lunica`).
+    /// Restore resolves persisted names against the current registry and drops
+    /// names not installed by this host or the active Twin.
     pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
         let found = self
             .perspectives
@@ -1169,6 +1281,8 @@ impl WorkbenchLayout {
         if let Some(node) = target_node {
             main.set_focused_node(node);
             main.push_to_focused_leaf(tab);
+        } else if slot == PanelSlot::Bottom && !main.is_empty() {
+            main.split_below(NodeIndex::root(), 0.7, vec![tab]);
         } else if slot == PanelSlot::RightInspectorBottom
             && let Some(top_panel) = self.right_inspector.first().copied()
         {
@@ -1253,34 +1367,43 @@ impl WorkbenchLayout {
     }
 
     pub fn rebuild_dock(&mut self) {
+        self.rebuild_dock_with_instances(&[]);
+    }
+
+    fn rebuild_dock_with_instances(
+        &mut self,
+        initial: &[lunco_workbench_core::PerspectiveInstanceTab],
+    ) {
         // Filter slot intent down to panels actually registered in this
-        // app, so perspective presets can optimistically list panels that
-        // may only exist in some binaries (e.g. a rover-only Code tab
-        // referenced from the shared `BuildPerspective`).
+        // app. Policy-authored plans validate capabilities before admission;
+        // native hosts may still register plans before their renderers.
         //
         // Perspective plans still use `PanelId` — slot declarations describe
-        // singleton-panel layouts. Instance-panel tabs are
-        // opened dynamically at runtime (e.g. Package Browser opens a
-        // model tab) and don't come from the perspective preset.
-        let known = |ids: &[PanelId]| -> Vec<TabId> {
-            ids.iter()
-                .copied()
-                .filter(|id| self.panels.contains_key(id))
-                .map(TabId::Singleton)
-                .collect()
-        };
-        let side_browser_tabs = known(&self.side_browser);
-        let side_browser_bottom_tabs = known(&self.side_browser_bottom);
-        let right_inspector_tabs = known(&self.right_inspector);
-        let right_inspector_bottom_tabs = known(&self.right_inspector_bottom);
-        let bottom_tabs = known(&self.bottom);
-        let center_tabs: Vec<TabId> = self
-            .center
-            .iter()
-            .copied()
-            .filter(|id| self.panels.contains_key(id))
-            .map(TabId::Singleton)
-            .collect();
+        // singleton-panel layouts. Authored initial instance tabs are seeded
+        // in their explicit slots alongside these singleton declarations.
+        let known =
+            |ids: &[PanelId], slot: PanelSlot| -> Vec<TabId> {
+                ids.iter()
+                    .copied()
+                    .filter(|id| self.panels.contains_key(id))
+                    .map(TabId::Singleton)
+                    .chain(initial.iter().filter(|tab| tab.slot == slot).map(|tab| {
+                        TabId::Instance {
+                            kind: tab.kind,
+                            instance: tab.instance,
+                        }
+                    }))
+                    .collect()
+            };
+        let side_browser_tabs = known(&self.side_browser, PanelSlot::SideBrowser);
+        let side_browser_bottom_tabs = known(&self.side_browser_bottom, PanelSlot::Hidden);
+        let right_inspector_tabs = known(&self.right_inspector, PanelSlot::RightInspector);
+        let right_inspector_bottom_tabs = known(
+            &self.right_inspector_bottom,
+            PanelSlot::RightInspectorBottom,
+        );
+        let bottom_tabs = known(&self.bottom, PanelSlot::Bottom);
+        let mut center_tabs = known(&self.center, PanelSlot::Center);
 
         // Preserve dynamically-opened instance (document/model/viz) tabs
         // across a *same-perspective* slot rebuild (e.g. a panel re-registering
@@ -1307,7 +1430,11 @@ impl WorkbenchLayout {
                 if let egui_dock::Node::Leaf(leaf) = node {
                     for tab in &leaf.tabs {
                         if let TabId::Instance { kind, instance } = tab {
-                            if self.instance_panels.contains_key(kind) {
+                            if self.instance_panels.contains_key(kind)
+                                && !initial
+                                    .iter()
+                                    .any(|tab| tab.kind == *kind && tab.instance == *instance)
+                            {
                                 acc.push((*kind, *instance));
                             }
                         }
@@ -1316,6 +1443,24 @@ impl WorkbenchLayout {
             }
             acc
         };
+        if initial.is_empty() {
+            if let Some(perspective) = self
+                .active_perspective
+                .as_ref()
+                .and_then(|active| self.perspectives.iter().find(|p| p.id() == *active))
+            {
+                for tab in perspective.layout().instance_tabs {
+                    if tab.slot == PanelSlot::Center
+                        && preserved_instances.contains(&(tab.kind, tab.instance))
+                    {
+                        center_tabs.push(TabId::Instance {
+                            kind: tab.kind,
+                            instance: tab.instance,
+                        });
+                    }
+                }
+            }
+        }
         let active_instance: Option<(PanelId, u64)> =
             self.focused_tab().and_then(|tab| match tab {
                 TabId::Instance { kind, instance } if self.instance_panels.contains_key(kind) => {
@@ -1406,7 +1551,18 @@ impl WorkbenchLayout {
         // originally-focused instance tab last so the right one stays
         // active.
         for (kind, instance) in &preserved_instances {
-            self.open_instance(*kind, *instance);
+            let slot = self
+                .active_perspective
+                .as_ref()
+                .and_then(|id| self.perspectives.iter().find(|p| p.id() == *id))
+                .and_then(|p| {
+                    p.layout()
+                        .instance_tabs
+                        .into_iter()
+                        .find(|tab| tab.kind == *kind && tab.instance == *instance)
+                        .map(|tab| tab.slot)
+                });
+            self.open_instance_with_slot(*kind, *instance, slot);
         }
         if let Some((kind, instance)) = active_instance {
             // Idempotent: the tab is already present, so this just
@@ -1592,8 +1748,9 @@ mod tests {
 
         fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
             self.contribution
+                .as_ref()
                 .filter(|(owner, _)| *owner == perspective)
-                .map(|(_, slot)| slot)
+                .map(|(_, slot)| *slot)
         }
 
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
@@ -1606,7 +1763,7 @@ mod tests {
 
     impl Perspective for TestPerspective {
         fn id(&self) -> PerspectiveId {
-            self.id
+            self.id.clone()
         }
 
         fn title(&self) -> String {
@@ -1639,6 +1796,31 @@ mod tests {
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx, _instance: u64) {}
     }
 
+    #[test]
+    fn saved_instance_center_preserves_its_intent_when_the_policy_default_changes() {
+        let id = PerspectiveId::new("study");
+        let kind = PanelId("plot");
+        let mut original = WorkbenchLayout::default();
+        original.register_instance_panel(TestInstancePanel(kind, false));
+        original.register_perspective(TestPerspective {
+            id: id.clone(),
+            plan: PerspectiveLayoutPlan::new().open_instance(kind, 7, PanelSlot::Center),
+        });
+        let saved = original.capture_perspective_docks();
+        let bytes = serde_json::to_vec(&saved).unwrap();
+        let saved = serde_json::from_slice(&bytes).unwrap();
+        let mut restored = WorkbenchLayout::default();
+        restored.register_instance_panel(TestInstancePanel(kind, false));
+        restored.register_perspective(TestPerspective {
+            id,
+            plan: PerspectiveLayoutPlan::new(),
+        });
+        assert!(!restored.has_central_content());
+        restored.seed_perspective_docks(&saved, &HashMap::new());
+        assert!(restored.has_central_content());
+        assert!(restored.dock.find_tab(&TabId::instance(kind, 7)).is_some());
+    }
+
     struct RightInspectorBottomInstancePanel(PanelId);
 
     impl InstancePanel for RightInspectorBottomInstancePanel {
@@ -1663,10 +1845,10 @@ mod tests {
         let retired = TabId::instance(kind, 7);
         let retained = TabId::instance(kind, 8);
         let singleton = TabId::Singleton(PanelId("inspector"));
-        let perspective = PerspectiveId("inactive");
+        let perspective = PerspectiveId::new("inactive");
         let mut layout = WorkbenchLayout::default();
         layout.dock = DockState::new(vec![retired, retained, singleton]);
-        layout.snapshot_perspective(perspective);
+        layout.snapshot_perspective(perspective.clone());
         layout.dock = DockState::new(vec![retired, retained]);
 
         layout.close_instance(kind, 7);
@@ -1713,7 +1895,7 @@ mod tests {
 
     #[test]
     fn late_perspective_contribution_builds_the_lower_right_dock_leaf() {
-        let editor = PerspectiveId("editor");
+        let editor = PerspectiveId::new("editor");
         let viewport = PanelId("viewport");
         let inspector = PanelId("inspector");
         let details = PanelId("requirement_details");
@@ -1722,7 +1904,10 @@ mod tests {
         plan.right_inspector = plan.right_inspector.single(Some(inspector));
 
         let mut layout = WorkbenchLayout::default();
-        layout.register_perspective(TestPerspective { id: editor, plan });
+        layout.register_perspective(TestPerspective {
+            id: editor.clone(),
+            plan,
+        });
         layout.register(TestPanel {
             id: viewport,
             slot: PanelSlot::Center,
@@ -1736,7 +1921,7 @@ mod tests {
         layout.register(TestPanel {
             id: details,
             slot: PanelSlot::Hidden,
-            contribution: Some((editor, PanelSlot::RightInspectorBottom)),
+            contribution: Some((editor.clone(), PanelSlot::RightInspectorBottom)),
         });
 
         assert_eq!(layout.right_inspector_bottom, [details]);
@@ -1755,7 +1940,7 @@ mod tests {
 
     #[test]
     fn explicit_perspective_slot_wins_over_panel_contribution() {
-        let editor = PerspectiveId("editor");
+        let editor = PerspectiveId::new("editor");
         let viewport = PanelId("viewport");
         let inspector = PanelId("inspector");
         let details = PanelId("requirement_details");
@@ -1766,7 +1951,7 @@ mod tests {
             (
                 details,
                 PanelSlot::Hidden,
-                Some((editor, PanelSlot::RightInspectorBottom)),
+                Some((editor.clone(), PanelSlot::RightInspectorBottom)),
             ),
         ] {
             layout.register(TestPanel {
@@ -1814,7 +1999,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = plan.center.single(Some(viewport));
         plan.right_inspector = plan.right_inspector.single(Some(inspector));
-        layout.apply_perspective_plan(PerspectiveId("editor"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("editor"), plan);
         layout.open_instance(instance_kind, 7);
 
         let inspector_node = layout

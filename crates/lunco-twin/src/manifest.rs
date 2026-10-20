@@ -70,9 +70,9 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<Uuid>,
 
-    /// Which **Perspective** (layout preset — `"build"`, `"simulate"`,
-    /// `"analyze"`) to activate when this Twin opens. Perspectives are
-    /// defined by the app; the manifest stores only the identifier.
+    /// Authored initial task layout, resolved after perspective admission.
+    /// May identify an application task or a Twin policy's `twin/<local-id>`.
+    /// A saved personal selection or explicit host launch takes precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_perspective: Option<String>,
 

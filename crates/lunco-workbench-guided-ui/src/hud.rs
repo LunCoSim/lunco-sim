@@ -9,7 +9,7 @@ use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
 use std::collections::BTreeMap;
 
 /// Host default for the scene HUD's complete hint/objectives/action card.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct GuidedHudVisibility {
     /// Perspective that may display the scene card; `None` allows all.
     pub visible_in_perspective: Option<PerspectiveId>,
@@ -61,13 +61,14 @@ struct BoundActions {
 }
 
 impl HudCard {
-    fn visible(&self, defaults: &GuidedHudVisibility, active: Option<PerspectiveId>) -> bool {
+    fn visible(&self, defaults: &GuidedHudVisibility, active: Option<&PerspectiveId>) -> bool {
         match &self.perspectives {
             Some(ids) => {
                 ids.is_empty() || active.is_some_and(|id| ids.iter().any(|v| v == id.as_str()))
             }
             None => defaults
                 .visible_in_perspective
+                .as_ref()
                 .is_none_or(|id| active == Some(id)),
         }
     }
@@ -271,6 +272,7 @@ pub struct SetGuidedHudPerspectives {
 }
 
 /// Inspect authored cards and the same visibility/input decision used by rendering.
+/// Includes the active anchored tour's Twin owner, step and target.
 #[Command(default)]
 pub struct InspectGuidedHud {}
 
@@ -400,19 +402,30 @@ struct HudCardReport<'a> {
     interactive: bool,
 }
 
+#[derive(serde::Serialize)]
+struct TourReport<'a> {
+    twin: Option<u64>,
+    author: Option<u64>,
+    index: usize,
+    total: usize,
+    anchor: &'a str,
+    title: &'a str,
+}
+
 #[on_command(InspectGuidedHud)]
 fn on_inspect_guided_hud(
     _trigger: On<InspectGuidedHud>,
     hud: Res<GuidedHuds>,
     defaults: Res<GuidedHudVisibility>,
     snapshot: Option<Res<WorkbenchSnapshot>>,
+    overlay: Res<crate::GuidedOverlay>,
 ) -> Result<Ack, String> {
     let active = snapshot.as_ref().and_then(|s| s.active_perspective());
     let cards: Vec<_> =
         hud.cards
             .iter()
             .map(|(owner, card)| {
-                let visible = card.has_content() && card.visible(&defaults, active);
+                let visible = card.has_content() && card.visible(&defaults, active.as_ref());
                 HudCardReport {
                     kind: match &owner.id {
                         HudId::Named(_) => "scene",
@@ -446,9 +459,14 @@ fn on_inspect_guided_hud(
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({
-            "active_perspective": active.map(|id| id.as_str()),
-            "default_perspective": defaults.visible_in_perspective.map(|id| id.as_str()),
+            "active_perspective": active.as_ref().map(|id| id.as_str()),
+            "default_perspective": defaults.visible_in_perspective.as_ref().map(|id| id.as_str()),
             "cards": lunco_api_core::api_value_from_serializable(&cards).map_err(|e| e.to_string())?,
+            "tour": lunco_api_core::api_value_from_serializable(&overlay.tour.as_ref().map(|tour| TourReport {
+                twin: overlay.owner_twin.map(|id| id.raw()),
+                author: overlay.owner_script.map(|id| id.get()),
+                index: tour.index, total: tour.total, anchor: &tour.anchor, title: &tour.title,
+            })).map_err(|e| e.to_string())?,
         }),
     ))
 }
@@ -477,7 +495,7 @@ pub(crate) fn draw_guided_hud(
 
     let mut top = screen.top() + 44.0;
     for (owner, hud) in &overlay.cards {
-        if !hud.has_content() || !hud.visible(&visibility, active) {
+        if !hud.has_content() || !hud.visible(&visibility, active.as_ref()) {
             continue;
         }
         let show_objectives = !hud.objectives.is_empty();
@@ -597,10 +615,10 @@ mod tests {
                     .objectives = "outgoing objective".into();
             });
         });
-        let preference = Some(PerspectiveId("application_preference"));
+        let preference = Some(PerspectiveId::new("application_preference"));
         app.world_mut()
             .resource_mut::<GuidedHudVisibility>()
-            .visible_in_perspective = preference;
+            .visible_in_perspective = preference.clone();
         for _ in 0..3 {
             app.world_mut()
                 .spawn((lunco_core::SceneOwned, TerminalPublisher));

@@ -15,12 +15,8 @@
 > `lunco-workbench-file-dialog` owns native and browser file-dialog backends; the
 > shell and domain panels consume its typed request/result events.
 >
-> **Terminology note.** Later sections of this doc (§4 onward) use
-> "workspace" in its original Blender/CATIA sense — a layout preset.
-> Since then LunCoSim has renamed that concept to **Perspective** and
-> uses "Workspace" for the broader editor-session concept (VS Code
-> sense). Read those sections with the translation in mind; the
-> terminology table in §1 is canonical.
+> A **Perspective** is a task layout. A **Workspace** is the broader editor
+> session containing open Twins, documents, recents and personal view state.
 >
 > `lunco-status-core` owns renderer-independent lifecycle, progress, and status
 > data. The workbench status bar is one consumer of that contract, alongside
@@ -41,7 +37,7 @@
 - [1. What "workbench" means here](#1-what-workbench-means-here)
 - [2. Why we're building this](#2-why-were-building-this)
 - [3. The standard layout](#3-the-standard-layout)
-- [4. Workspaces](#4-workspaces)
+- [4. Perspectives](#4-perspectives)
 - [5. Panel system](#5-panel-system)
 - [6. Context-awareness](#6-context-awareness)
 - [7. Command palette](#7-command-palette)
@@ -167,9 +163,9 @@ private dock layout.
    Click an icon to open its browser in a slide-in panel.
 4. **Slide-in side browser (between activity bar and viewport)** —
    content depends on the selected Activity. Resizable, collapsible.
-5. **Viewport (center)** — the 3D world. **Structurally persistent** —
-   always the central region of the window. Not a panel, not a tile.
-   Cannot be closed or docked-over. The workbench contributes only the
+5. **Primary work area (center)** — a scene viewport, document editor or
+   analysis view chosen by the task. The live 3D viewport has an exclusive
+   dock leaf; analysis may instead seed a central graph without a viewport. The workbench contributes only the
    viewport's *visibility* into `lunco_viewport_core::SceneViewport`; it never sets
    camera `is_active` — the single-authority reconciler in `lunco-usd-bevy-camera`
    actuates that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)). A
@@ -381,90 +377,113 @@ window, toolbar, slot, and model-view keys are borrowed static strings, and
 registered panel landmarks use `PanelId` directly. Refreshing these anchors does
 not allocate a new key string for each visible control or panel.
 
-## 4. Workspaces
+## 4. Perspectives
 
-A workspace is a named task-specific UI configuration. LunCoSim ships with
-five standard workspaces.
+A perspective presents an engineering task over the same Twin, document,
+simulation and signal owners. Application defaults are assembled by
+`assets/scripting/policy/workbench_perspectives.rhai` through
+`workbench.perspectives.defaults`. The shell validates the returned semantic
+plans; `lunco-workbench-layout` materializes them through the same dock owner.
 
-### Build — edit scenes and subsystems
+| Perspective | Task | Initial presentation |
+|---|---|---|
+| View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
+| Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
+| Analyze (`analysis`) | Inspect and compare simulation signals | Telemetry above Entities; Graphs center; Ports right |
+| Editor (`editor`) | Edit an explicit USD assembly document | Prim structure above Twin sources; isolated preview/behavior center; Inspector and authoring review right |
+| Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
 
-Purpose: construct the colony. Place entities, wire subsystems, author
-physical models.
+Optional panel contributions still use `Panel::visible_in_perspective`, for
+example requirement details in Editor. Terrain is a specialist preset available under View → Perspectives, without
+a pinned title-bar tab. Compact windows collapse pinned tasks into one picker.
 
-| Slot | Default content |
-|------|-----------------|
-| Activity | Scene (active), Subsystems, Assets |
-| Side browser | Spawn Palette, Inspector, Tools |
-| Right | Entity List |
-| Bottom | Collapsible |
+Use the title-bar tabs or **View → Perspectives** to select a task. **View →
+Build / Analyze / Editor / Lunica / General** contains optional panels. The
+canonical Graphs menu action activates Analyze when that workflow is available.
+**Help → Perspective help** reads the current registry, including Twin-defined
+tasks. **View → Reset Layout** reapplies the current definition.
+Selecting the active task is idempotent. Reopening an authored initial instance
+uses its declared slot and preserves other tools. The adapter recreates a
+missing region with `egui_dock` splits beside its surviving semantic peers.
+An explicitly opened bottom tool creates a bottom split when no bottom leaf
+exists, independently of keyboard focus;
+the docking library owns the tree, tab movement and split interaction.
 
-### Simulate — run and observe
+### Dynamic assembly and Twin policies
 
-Purpose: run physics + Modelica, watch behaviors. Minimize chrome.
+`InspectWorkbench` exposes the actual registered singleton panels, instance
+kinds and canonical instance identities, plus admitted perspective definitions,
+active identity, docked panels, preparation state and errors. Use these facts
+instead of inventing panel names or plot instance numbers. `OpenTab` and
+`CloseTab` accept `{ kind: String, instance: u64 }` through the same reflected
+command bus used by Rhai. The shell resolves the exact registered instance kind;
+unknown kinds reject with a terminal diagnostic. Requests received while the
+layout is scoped out remain pending until the Update drain applies or rejects
+them. The shell initializes the shared command-result resources independently
+of the host dispatcher's installation order. `OpenTabPreserveFocus` remains the
+internal typed presentation intent.
 
-| Slot | Default content |
-|------|-----------------|
-| Activity bar | Collapsed (icons only) |
-| Side browser | Closed |
-| Right | Minimal — just current selection label |
-| Bottom | Live telemetry (plots for selected entity) |
+`workbench.perspectives.defaults(facts)` returns application task definitions;
+`workbench.perspectives.twin(facts)` returns additional Twin tasks. Install the
+latter through the existing indexed `scope = "twin"` policy manifest. Its
+local ids are registered as `twin/<id>` and may be selected by the manifest's
+`default_perspective`. Personal saved selection takes precedence over that
+authored default; an explicit host launch selection takes precedence over both.
+An explicit task navigation issued during startup takes precedence over late
+restoration and preserves its current dock.
+See [the Twin perspective tutorial](../tutorials/05-twin-perspectives.md).
 
-In this workspace, most docks auto-hide. Toggle back with standard keybinds.
+Facts include registered panel ids/titles, `instance_kinds`, `instance_panels`
+with optional `canonical_instance`, active `twin_id`, `document_id`, admitted
+`scene_generation`, `scene_mounted` and `capability_revision`. A committed Clear
+has a lifecycle generation without a mounted payload; use `scene_mounted` to
+choose scene-dependent presentation. Definitions contain:
 
-### Analyze — Modelica / subsystem deep dive
+- Required `id`, `title`, `description`, and `interaction` (`editor` or
+  `simulation`). Local ids use ASCII letters, digits, `_` and `-`.
+- Optional `left`, `left_bottom`, `center`, `right`, `right_bottom`, and
+  `bottom` arrays of exact singleton panel ids.
+- Optional `instances`: `{ kind, instance, slot }` records, with slots `left`,
+  `center`, `right`, `right_bottom`, or `bottom`. The domain owns the instance
+  identity; the shell does not allocate a document or visualization for it.
+- Optional `visible` (true), `restore` (true), `scene_visible` (false),
+  `activity_bar` (false), and integer `revision` (0).
 
-Purpose: study and tune an individual subsystem model. This is the
-"lunica" layout, consolidated.
+The owner rejects unknown capabilities, repeated identities, invalid types and
+unsupported slots before applying that scope's plan. A rejected Twin plan
+publishes a diagnostic and admits no custom definitions; application tasks
+remain available. The limit is 32 definitions per scope and 32 panels or
+initial instances per definition/slot.
 
-| Slot | Default content |
-|------|-----------------|
-| Activity | Subsystems (active) |
-| Side browser | Twin panel (Modelica section: source libraries + Bundled Examples + Workspace), Files panel |
-| Right | Modelica Inspector (params, variables), Component Palette |
-| Bottom | Plots (time series), Console, Diagnostics |
-| Center overlay (optional) | Diagram / Code editor (when a model is open) |
+Evaluation uses bounded background work over immutable facts when capabilities,
+policy registration, active document, Twin, admitted scene generation or mounted payload change.
+It never runs during paint or on every telemetry sample. The worker captures
+exact hook implementations and the complete revision; publication rejects
+outgoing work. At most one worker runs; changes coalesce until that invocation
+finishes, and a retired lease cannot publish. The context is Visualization/Preparation, with no simulation
+clock and an Application or exact Twin route. No JSON crosses this boundary.
 
-Selecting a Space System with a `ModelicaModel` automatically focuses the
-editor on that model.
+Admitted definitions update without moving a user's visited layout or stealing
+focus. Initial activation and explicit reset use the current plan. Saved docks
+wait for `PerspectiveAdmission` before restoration. Personal arrangements stay
+in the existing per-Twin workspace store; authored plans stay in Rhai. All
+facts and materialized definitions admitted for a Twin, their cached docks and
+pending workers retire on `TwinClosed`; the application plan is then recomposed
+for the current context. Stable runtime names use shared owned strings and do not leak
+into a process-wide string interner.
 
-### Plan — mission timeline and events
-
-Purpose: author mission timelines, schedule events, lay out trajectories.
-
-| Slot | Default content |
-|------|-----------------|
-| Activity | Missions (active) |
-| Side browser | Mission outline |
-| Right | Event / maneuver properties |
-| Bottom | Timeline (primary authoring surface) |
-
-### Observe — cinema / presentation
-
-Purpose: camera-driven observation. No editing.
-
-| Slot | Default content |
-|------|-----------------|
-| Menu bar | Hidden |
-| Activity bar | Hidden |
-| Side browser | Hidden |
-| Right | Hidden |
-| Bottom | Hidden |
-| Status bar | Minimal (time + body) |
-
-Just the viewport, transport, and status. User can still show panels via
-keyboard if needed.
-
-### User-defined workspaces
-
-Users can customize any layout and save as a named workspace. Ship workspaces
-are just the defaults; everything is editable.
+A Twin may bind/rebind its extension hook through the existing typed
+`bind_policy` API. Changing an installed hook invalidates the composition
+revision. Authored policy manifest loading and retirement remain owned by the
+shared scripting lifecycle. Script policies choose presentation; Rust owns
+validation, activation constraints, docking and retirement.
 
 ### Registered but hidden perspectives
 
 Registration controls whether a perspective can be activated by the typed API
 or a guided tutorial. `Perspective::show_in_switcher()` controls only whether
 it appears in the default title-bar switcher. Luncosim keeps `terrain_sculpt`
-registered for authored flows and hides it from everyday navigation; the
+available under View → Perspectives without pinning it to the title bar; the
 Assembly Editor is an ordinary user-facing perspective and appears in the
 switcher. This does not remove or duplicate either authoring mode.
 
@@ -556,7 +575,7 @@ declares a registered `preferred_perspective()`, the shell activates that
 perspective before opening and focusing the panel; panels without an owner
 perspective keep the active perspective. The menu keeps Reset Layout and
 Toggle Activity Bar directly available, then groups panel checkboxes into
-Builder, Editor, and Lunica submenus according to `PanelMenuGroup`;
+Build, Analyze, Editor, and Lunica submenus according to `PanelMenuGroup`;
 unclassified integrations use Other. The SysML Requirements browser is
 grouped under Editor and opens in Center. Its Requirement details panel
 contributes the lower-right Editor pane and follows the selected requirement.
@@ -768,6 +787,14 @@ choice to cover it. Later Twin switches and ordinary launches restore the
 persisted state for that Twin's root. With no active Twin, previous document
 tabs and dock windows are not restored or persisted.
 
+Each perspective dock snapshot saves its central-instance surface intent with
+the tree. An omitted intent adopts the current authored plan; an explicit saved
+value preserves the user's center even when a policy changes its initial tabs.
+
+Native tab removal maintains subtree indices, focus and surface lifetime during
+close and saved-layout filtering. The adapter marks rejected restored tabs in a
+typed sidecar, then removes them through that same library operation.
+
 Document-close owners retire their view instances and emit `CloseTab` for each
 one. `lunco-workbench-layout::WorkbenchLayout::close_instance` removes that
 identity from the live dock and every cached perspective dock. Returning to an
@@ -782,9 +809,9 @@ views have no persisted document codec and are therefore not restored.
 
 **Reconciliation.** Restore maps stored string ids back to the panels /
 perspectives registered in *this* binary (luncosim and lunica ship
-different sets) and **drops anything unknown** — `PanelId` /
-`PerspectiveId` hold `&'static str`, so the live registry is the source
-of truth, never the file.
+different sets) and **drops anything unknown**. `PanelId` uses registered
+panel names; `PerspectiveId` owns a shared string so runtime Twin task names
+can retire without leaking. The live registry is the identity authority.
 
 **Restore.** Once a Twin is active, the saved workspace snapshot loads
 asynchronously. Domain codecs prepare file-backed buffers on the task pool,
@@ -1247,15 +1274,12 @@ lunica         = workbench + CodeEditor + Diagram + PackageBrowser +
 ```
 
 Same workbench shell for the two windowed apps, with different panel sets and
-default perspectives. `lunica` opens in the Analyze perspective; `luncosim`
+default perspectives. `lunica` opens in the Lunica perspective; `luncosim`
 opens in the View perspective for an explicit scene launch.
 
 
 ## 14. Open questions
 
-- **Workspace persistence scope.** Per-user only, or per-project as well?
-  Per-project lets teams share layouts; per-user lets individuals customize.
-  Likely need both (project defines, user overrides).
 - **Detached window survival.** If the user closes a detached window, does
   that detach it from the workspace (so reopening brings the panel back to
   its docked slot) or hide it (so it reopens detached)? VS Code chose

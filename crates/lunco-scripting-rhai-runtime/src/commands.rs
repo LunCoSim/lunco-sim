@@ -29,7 +29,7 @@ use lunco_scripting::doc::{
     ScriptedModel,
 };
 #[cfg(feature = "rhai")]
-use lunco_scripting::scenario::{ScenarioExecutionGate, ScenarioPreparationAdmissions};
+use lunco_scripting::scenario::ScenarioPreparationAdmissions;
 #[cfg(feature = "rhai")]
 use lunco_scripting_bridge_core as bridge_core;
 #[cfg(feature = "rhai")]
@@ -465,23 +465,22 @@ fn reserve_attached_scenario_preparation(
     document_id: u64,
     generation: u64,
     parameters_revision: u64,
-    gate: &ScenarioExecutionGate,
+    twin_owner: Option<lunco_scripting::TwinOwnedScript>,
     coordinator: &lunco_core::SceneTransitionCoordinator,
     admissions: &mut ScenarioPreparationAdmissions,
     progress: &mut lunco_core_runtime::SimulationProgress,
 ) {
-    if !gate.enabled {
-        return;
-    }
-    let Some(scene_generation) = coordinator.completed_generation() else {
-        return;
+    let twin = twin_owner.map(|owner| owner.twin);
+    let lease = lunco_scripting::scenario::ScenarioLease {
+        twin,
+        scene: twin.and_then(|_| coordinator.completed_generation()),
     };
     admissions.reserve(
         target,
         document_id,
         generation,
         parameters_revision,
-        scene_generation,
+        lease,
         progress,
     );
 }
@@ -496,7 +495,6 @@ fn on_run_scenario(
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    gate: Res<ScenarioExecutionGate>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
@@ -529,7 +527,7 @@ fn on_run_scenario(
         doc_id_raw,
         generation,
         parameters_revision,
-        &gate,
+        twin_owner,
         &coordinator,
         &mut admissions,
         &mut progress,
@@ -1750,7 +1748,6 @@ fn on_run_timeline(
     q_existing: Query<&ScriptedModel>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-    gate: Res<ScenarioExecutionGate>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
@@ -1782,7 +1779,7 @@ fn on_run_timeline(
         doc_id_raw,
         generation,
         parameters_revision,
-        &gate,
+        twin_owner,
         &coordinator,
         &mut admissions,
         &mut progress,
@@ -1875,7 +1872,6 @@ fn on_run_stored_timeline(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-    gate: Res<ScenarioExecutionGate>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
@@ -1928,7 +1924,7 @@ fn on_run_stored_timeline(
         doc_id_raw,
         generation,
         parameters_revision,
-        &gate,
+        twin_owner,
         &coordinator,
         &mut admissions,
         &mut progress,

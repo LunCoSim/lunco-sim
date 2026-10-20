@@ -279,3 +279,21 @@ For visual acceptance, launch the built production binary head-full with an
 explicit free API port, inspect surface and inertial views, then send the API
 `Exit` command and verify the process and port are gone. Use `--no-ui` only for
 headless deterministic checks.
+
+## Vessel follow policies and live tuning
+
+Use `SetCameraFollow` to tune an existing local spring arm atomically; it does
+not rebind possession. `camera.follow` exposes subject identity, authored follow
+mode, grid-frame orientation, body-frame motion, rig settings and obstruction
+facts to a Twin-scoped Rhai policy. Return presentation decisions, including
+interpolation weights, rather than writing private spatial state. Rust retains
+frame conversion and collision ownership. A policy can choose offsets and easing
+per vessel without a Rust vessel-type dispatch. See
+[the camera follow contract](../../docs/architecture/camera-follow-policy.md).
+
+Verify changes with physics held: live distance/height/angle/mode updates,
+invalid-batch rejection without partial mutation, policy fault/diagnostic/recovery,
+and unchanged simulation tick. Exercise the native switch-mode intent (default V)
+and any vehicle key that previously conflicted (C is not reserved by cameras).
+Inspect crest and flight captures; a passing driving verdict does not establish
+camera visibility or camera-frustum clearance.

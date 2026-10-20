@@ -83,10 +83,9 @@ UI while preserving menu contributions across layout resets.
 ```rust,no_run
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiPlugin};
-use lunco_workbench::{WorkbenchAppExt, WorkbenchPlugin};
+use lunco_workbench::WorkbenchPlugin;
 use lunco_workbench_core::{
-    Panel, PanelCtx, PanelId, PanelSlot, Perspective, PerspectiveId,
-    PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt,
 };
 
 struct SceneTreePanel;
@@ -99,27 +98,32 @@ impl Panel for SceneTreePanel {
     }
 }
 
-struct BuildPerspective;
-impl Perspective for BuildPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("build") }
-    fn title(&self) -> String { "🏗 Build".into() }
-    fn layout(&self) -> PerspectiveLayoutPlan {
-        let mut plan = PerspectiveLayoutPlan::new();
-        plan.side_browser = PerspectiveSlotPlan::new().single(Some(PanelId("scene_tree")));
-        plan
-    }
-}
-
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())
         .add_plugins(WorkbenchPlugin)
         .register_panel(SceneTreePanel)
-        .register_perspective(BuildPerspective)
         .run();
 }
 ```
+
+Task layouts are composed through `workbench.perspectives.defaults` or
+`workbench.perspectives.twin` in Rhai, using the capabilities reported by
+`InspectWorkbench`. For example, a policy for the panel above can return:
+
+```rhai
+fn assemble(facts) {
+    [#{ id: "build", title: "Build", interaction: "editor",
+        description: "Browse the scene structure.", left: ["scene_tree"] }]
+}
+```
+
+See the [Twin perspective tutorial](../../docs/tutorials/05-twin-perspectives.md)
+for installation, validation, namespaces and lifetime rules. The host installs
+the shared scripting backend and policy bundle; WorkbenchPlugin declares and
+consumes the hooks. Rust panel renderers and the docking owner stay shared
+across authored layouts.
 
 Applications that need the standard Twin and Files navigation add the browser
 feature alongside the shell:

@@ -79,7 +79,8 @@ pub struct RuntimeRoute {
     pub scope: RuntimeScope,
     /// Runtime cycle that consumes the routed work.
     pub cycle: RuntimeCycle,
-    /// Owner generation; application routes use zero.
+    /// Scene generation. Zero represents an explicitly absent scene, including
+    /// Application work and Twin-owned UI before any scene is admitted.
     pub generation: u64,
     /// Stable identity of the Twin that owns this route, when the caller knows
     /// it. Scene generations remain in `generation`; they are not Twin IDs.

@@ -83,3 +83,25 @@ pub struct SetCameraLookAt {
     /// Camera look-at point in the active physics frame, metres.
     pub target: Vec3,
 }
+
+/// Atomically tune a live subject-follow rig without rebinding its subject.
+#[Command(default)]
+pub struct SetCameraFollow {
+    #[sync_local]
+    #[serde(default)]
+    #[reflect(default)]
+    /// Local follow camera; omitted selects the current local embodiment.
+    pub camera: Option<Entity>,
+    /// Positive requested boom distance in metres; scene obstruction may shorten it.
+    pub distance_m: Option<f64>,
+    /// Focus height along surface up, or world Y in a flat grid.
+    pub height_m: Option<f64>,
+    /// Orbit yaw offset in radians.
+    pub yaw_rad: Option<f64>,
+    /// View tilt in radians, strictly between -pi/2 and pi/2.
+    pub pitch_rad: Option<f64>,
+    /// stabilized (external frame), heading (surface yaw), or body (all axes).
+    pub mode: Option<String>,
+    /// Native exponential easing damping, in [0,1).
+    pub damping: Option<f64>,
+}

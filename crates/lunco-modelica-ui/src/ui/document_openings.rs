@@ -572,7 +572,7 @@ fn close_pending_file_tabs(
     let tab_ids: Vec<_> = tabs.iter_mut_for_doc(document).map(|(id, _)| id).collect();
     for tab_id in tab_ids {
         commands.trigger(lunco_workbench_core::commands::CloseTab {
-            kind: crate::ui::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
         tabs.close_tab(tab_id);

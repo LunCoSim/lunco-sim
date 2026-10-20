@@ -31,7 +31,8 @@ pub use panel::{
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, TabId,
 };
 pub use perspective::{
-    Perspective, PerspectiveId, PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    ExplicitPerspectiveChoice, Perspective, PerspectiveAdmission, PerspectiveId,
+    PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
 pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;

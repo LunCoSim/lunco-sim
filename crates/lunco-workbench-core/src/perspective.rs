@@ -1,15 +1,21 @@
 //! Renderer-independent perspective contracts.
 
 use crate::{PanelId, PanelSlot};
+use std::sync::Arc;
 
 /// Stable perspective identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PerspectiveId(pub &'static str);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PerspectiveId(pub Arc<str>);
 
 impl PerspectiveId {
     /// Return the stable string representation.
-    pub const fn as_str(self) -> &'static str {
-        self.0
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+
+    /// Own a stable identity without leaking dynamically authored names.
+    pub fn new(id: impl Into<Arc<str>>) -> Self {
+        Self(id.into())
     }
 }
 
@@ -118,7 +124,11 @@ pub trait Perspective: Send + Sync + 'static {
     fn id(&self) -> PerspectiveId;
     /// Human-readable title.
     fn title(&self) -> String;
-    /// Whether the shell shows this perspective in its normal switcher.
+    /// Task guidance displayed by the shell and perspective help.
+    fn description(&self) -> &str {
+        ""
+    }
+    /// Whether the title bar pins this perspective; View → Perspectives lists every registered task.
     fn show_in_switcher(&self) -> bool {
         true
     }
@@ -140,4 +150,30 @@ pub trait Perspective: Send + Sync + 'static {
     fn layout_revision(&self) -> u32 {
         0
     }
+}
+
+/// Admission state consumed by session restoration before applying saved docks.
+#[derive(bevy::prelude::Resource, Clone, Debug, PartialEq, Eq)]
+pub struct PerspectiveAdmission {
+    /// Exact Twin for which the current policy result is being prepared.
+    pub twin_id: Option<u64>,
+    /// Work is outstanding; restoring a dock must wait for its definitions.
+    pub preparing: bool,
+}
+impl Default for PerspectiveAdmission {
+    fn default() -> Self {
+        Self {
+            twin_id: None,
+            preparing: true,
+        }
+    }
+}
+
+/// Explicit navigation takes precedence over asynchronous session restoration.
+#[derive(bevy::prelude::Resource, Clone, Debug, Default)]
+pub struct ExplicitPerspectiveChoice {
+    /// Exact Twin lease, or the application with no Twin.
+    pub twin_id: Option<u64>,
+    /// Last deliberately selected registered task.
+    pub id: Option<String>,
 }

@@ -25,7 +25,7 @@
 //! - [`SetUserCamera`] — explicit operator selection;
 //! - [`ObserveAvatar`] / [`ResumeCameraDirector`] — explicit presentation-mode
 //!   transitions;
-//! - the `KeyC` hotkey ([`cycle_active_camera`]) when a host runs with input.
+//! - the semantic switch-mode intent ([`cycle_active_camera`]) when a host runs with input.
 
 use bevy::camera::{Exposure, RenderTarget, Viewport, primitives::Aabb};
 use bevy::prelude::*;
@@ -723,36 +723,14 @@ pub fn on_resume_camera_director(
     info!("[camera] presentation ownership → authored director");
 }
 
-/// `KeyC`: advance the viewport's active camera to the next window camera
-/// (stable order by `Name`, wrapping). No-op with fewer than two window
-/// cameras or no input. "Current" is the viewport binding, not raw `is_active`
-/// (which the visibility gate may have cleared).
+/// Advance the viewport from a semantic operator request. Input bindings and
+/// focus ownership are resolved by the avatar input adapter.
 pub fn cycle_active_camera(
-    // Optional: a static/headless world has no `ButtonInput` resource (no input
-    // plugin). It simply never cycles — the command path still works there.
-    keys: Option<Res<ButtonInput<KeyCode>>>,
+    _request: On<lunco_camera_core::CycleCamera>,
     vp: Res<SceneViewport>,
     q_cams: Query<(Entity, &RenderTarget, &Name), With<SceneCamera>>,
     mut commands: Commands,
 ) {
-    let Some(keys) = keys else {
-        return;
-    };
-    if !keys.just_pressed(KeyCode::KeyC) {
-        return;
-    }
-    // Don't hijack modified chords (Ctrl+C copy, etc.).
-    if keys.any_pressed([
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-        KeyCode::AltLeft,
-        KeyCode::AltRight,
-        KeyCode::SuperLeft,
-        KeyCode::SuperRight,
-    ]) {
-        return;
-    }
-
     let mut cams: Vec<(Entity, &str)> = q_cams
         .iter()
         .filter(|(_, target, _)| is_window_render_target(target))

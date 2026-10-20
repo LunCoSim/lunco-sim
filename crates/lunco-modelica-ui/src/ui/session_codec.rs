@@ -191,7 +191,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         }
         let tab_id = world.resource_mut::<ModelTabs>().ensure_for(new_id, None);
         world.commands().trigger(OpenTab {
-            kind: MODEL_VIEW_KIND,
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
             instance: tab_id,
         });
         Some(new_id.raw())

@@ -12,6 +12,11 @@ tools, and the full development cycle, start with
 [`author-tutorial`](../../skills/author-tutorial/SKILL.md) runbook is the
 tutorial-specific route after the task shape is clear.
 
+## Twin task layouts
+
+[Ship a task perspective](05-twin-perspectives.md) shows how a Twin assembles
+its own workbench with Rhai over the registered panel capabilities.
+
 ## In-app lessons
 
 At startup, the application policy manifest installs

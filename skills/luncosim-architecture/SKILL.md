@@ -1328,3 +1328,9 @@ source operation mismatches cannot publish new package facts. Open document fact
 retire on document/Twin close. The common `AssetBytesLoader` and maintained egui
 image decoders serve documentation, bitmaps and `OpenAssetResource` previews;
 resource/source revisions invalidate bytes, images and textures together.
+
+Task layouts are assembled through `workbench.perspectives.defaults` and
+`workbench.perspectives.twin` over `InspectWorkbench` capability facts. Reuse
+`PerspectiveLayoutPlan`, the existing dock owner and policy lifecycle. See
+[Twin perspectives](../../docs/tutorials/05-twin-perspectives.md) for the
+schema, source lease, async admission, explicit-navigation precedence and tests.

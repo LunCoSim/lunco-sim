@@ -1,0 +1,12 @@
+kind = "lunco.policy.v1"
+scope = "twin"
+
+[startup]
+source = "perspectives.rhai"
+entry = "install"
+
+[[policies]]
+hook = "workbench.perspectives.twin"
+source = "perspectives.rhai"
+entry = "assemble"
+skip_when_hook_unavailable = true

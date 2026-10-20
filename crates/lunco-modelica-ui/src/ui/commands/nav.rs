@@ -117,7 +117,7 @@ pub fn on_focus_document_by_name(trigger: On<FocusDocumentByName>, mut commands:
         world
             .commands()
             .trigger(lunco_workbench_core::commands::OpenTab {
-                kind: crate::ui::MODEL_VIEW_KIND,
+                kind: crate::ui::MODEL_VIEW_KIND.as_str().to_owned(),
                 instance: tab_id,
             });
     });

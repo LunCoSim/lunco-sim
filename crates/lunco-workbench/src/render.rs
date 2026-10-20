@@ -894,7 +894,17 @@ pub(crate) fn render_help_menu(
     ui: &mut egui::Ui,
     world: &mut World,
     menus: &WorkbenchMenuRegistry,
+    layout: &WorkbenchLayout,
 ) {
+    ui.menu_button("Perspective help", |ui| {
+        for perspective in &layout.perspectives {
+            if ui.button(perspective.title()).clicked() {
+                world.insert_resource(lunco_workbench_help_ui::HelpPopup(Some(perspective.id())));
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
     if let Some(identity) = world.get_resource::<lunco_core::BuildIdentity>() {
         ui.label(format!(
             "{} · {}",
@@ -1185,14 +1195,14 @@ pub(crate) fn scene_camera_is_rendering(world: &World) -> bool {
 pub(crate) fn perspective_switcher_tabs(
     layout: &WorkbenchLayout,
 ) -> Vec<(PerspectiveId, String, bool)> {
-    let active = layout.active_perspective;
+    let active = layout.active_perspective.as_ref();
     layout
         .perspectives
         .iter()
         .filter(|perspective| perspective.show_in_switcher())
         .map(|perspective| {
             let id = perspective.id();
-            (id, perspective.title(), active == Some(id))
+            (id.clone(), perspective.title(), active == Some(&id))
         })
         // Iterate in reverse so right-to-left layout still puts them in
         // registration order from left to right.
@@ -3281,7 +3291,7 @@ mod tests {
 
     impl Perspective for SceneBackedTestPerspective {
         fn id(&self) -> PerspectiveId {
-            PerspectiveId("scene_backed_test")
+            PerspectiveId::new("scene_backed_test")
         }
 
         fn title(&self) -> String {
@@ -3543,16 +3553,18 @@ mod tests {
     fn deferred_navigation_applies_perspective_before_tab() {
         let mut app = App::new();
         app.init_resource::<PendingLayoutRequests>()
-            .init_resource::<PendingTabRequests>();
+            .init_resource::<PendingTabRequests>()
+            .init_resource::<CommandResults>()
+            .init_resource::<ActiveCommandId>();
 
         let mut layout = WorkbenchLayout::default();
         layout.register(DockPanel(PanelId("center")));
         layout.register_instance_panel(NavigationInstancePanel);
         layout.register_perspective(CenterPerspective {
-            id: PerspectiveId("source"),
+            id: PerspectiveId::new("source"),
         });
         layout.register_perspective(CenterPerspective {
-            id: PerspectiveId("destination"),
+            id: PerspectiveId::new("destination"),
         });
 
         // Match the render-time state: the workbench has queued both intents
@@ -3566,10 +3578,13 @@ mod tests {
         app.world_mut()
             .resource_mut::<PendingTabRequests>()
             .0
-            .push(TabRequest::Open(OpenTab {
-                kind: PanelId("navigation_instance"),
-                instance: 7,
-            }));
+            .push(TabRequest::Open(
+                OpenTab {
+                    kind: PanelId("navigation_instance").as_str().to_owned(),
+                    instance: 7,
+                },
+                None,
+            ));
         app.add_systems(
             Update,
             (drain_pending_layout_requests, drain_pending_tab_requests).chain(),
@@ -3580,7 +3595,7 @@ mod tests {
         let layout = app.world().resource::<WorkbenchLayout>();
         assert_eq!(
             layout.active_perspective(),
-            Some(PerspectiveId("destination"))
+            Some(PerspectiveId::new("destination"))
         );
         assert!(layout.dock.iter_all_tabs().any(|(_, tab)| {
             *tab == TabId::Instance {
@@ -3593,10 +3608,12 @@ mod tests {
     #[test]
     fn open_tab_is_queued_while_layout_is_scoped_out() {
         let mut app = App::new();
-        app.init_resource::<PendingTabRequests>();
+        app.init_resource::<PendingTabRequests>()
+            .init_resource::<CommandResults>()
+            .init_resource::<ActiveCommandId>();
         app.add_observer(on_open_tab);
         app.world_mut().trigger(OpenTab {
-            kind: PanelId("navigation_instance"),
+            kind: PanelId("navigation_instance").as_str().to_owned(),
             instance: 7,
         });
 
@@ -3619,7 +3636,7 @@ mod tests {
         }
 
         fn preferred_perspective(&self) -> Option<PerspectiveId> {
-            Some(PerspectiveId("focus_home"))
+            Some(PerspectiveId::new("focus_home"))
         }
 
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
@@ -3657,18 +3674,18 @@ mod tests {
         layout.register(FocusPanelFixture);
         layout.register(DockPanel(PanelId("center")));
         layout.register_perspective(CenterPerspective {
-            id: PerspectiveId("focus_home"),
+            id: PerspectiveId::new("focus_home"),
         });
         layout.register_perspective(CenterPerspective {
-            id: PerspectiveId("other"),
+            id: PerspectiveId::new("other"),
         });
-        layout.activate_perspective(PerspectiveId("other"));
+        layout.activate_perspective(PerspectiveId::new("other"));
 
         focus_registered_panel(&mut layout, "focus_fixture");
 
         assert_eq!(
             layout.active_perspective(),
-            Some(PerspectiveId("focus_home"))
+            Some(PerspectiveId::new("focus_home"))
         );
         assert_eq!(
             layout.focused_tab(),
@@ -3707,7 +3724,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(PerspectiveId("test"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("test"), plan);
 
         let leaves: Vec<Vec<TabId>> = layout
             .dock
@@ -3738,7 +3755,7 @@ mod tests {
         plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
         plan.right_inspector =
             PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
-        layout.apply_perspective_plan(PerspectiveId("test"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("test"), plan);
 
         layout.register(DockPanel(PanelId("entities")));
         layout.register(DockPanel(PanelId("telemetry")));
@@ -3757,7 +3774,7 @@ mod tests {
     fn late_panel_registration_does_not_mutate_active_perspective() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("view"),
+            id: PerspectiveId::new("view"),
             title: "View",
             marker: PanelId("side_panel"),
         });
@@ -3765,7 +3782,10 @@ mod tests {
 
         layout.register(DockPanel(PanelId("late_center")));
 
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId::new("view"))
+        );
         assert!(layout.center.is_empty());
         assert!(
             !layout
@@ -3784,13 +3804,13 @@ mod tests {
 
     impl Perspective for TestPerspective {
         fn id(&self) -> PerspectiveId {
-            self.id
+            self.id.clone()
         }
         fn title(&self) -> String {
             self.title.to_string()
         }
         fn show_in_switcher(&self) -> bool {
-            self.id != PerspectiveId("hidden")
+            self.id != PerspectiveId::new("hidden")
         }
         fn layout(&self) -> PerspectiveLayoutPlan {
             let mut plan = PerspectiveLayoutPlan::new();
@@ -3805,7 +3825,7 @@ mod tests {
 
     impl Perspective for CenterPerspective {
         fn id(&self) -> PerspectiveId {
-            self.id
+            self.id.clone()
         }
 
         fn title(&self) -> String {
@@ -3825,12 +3845,12 @@ mod tests {
         assert!(layout.active_perspective().is_none());
 
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
 
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
@@ -3838,17 +3858,17 @@ mod tests {
     fn second_perspective_does_not_override_active() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("b"),
+            id: PerspectiveId::new("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
 
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
@@ -3861,7 +3881,7 @@ mod tests {
             ("b", "panel_b"),
         ] {
             layout.register_perspective(TestPerspective {
-                id: PerspectiveId(id),
+                id: PerspectiveId::new(id),
                 title: id,
                 marker: PanelId(marker),
             });
@@ -3871,42 +3891,51 @@ mod tests {
             .into_iter()
             .map(|(id, _, _)| id)
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec![PerspectiveId("b"), PerspectiveId("a")]);
+        assert_eq!(ids, vec![PerspectiveId::new("b"), PerspectiveId::new("a")]);
 
         // Hiding navigation chrome must not remove the activation/API path.
-        layout.activate_perspective(PerspectiveId("hidden"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("hidden")));
+        layout.activate_perspective(PerspectiveId::new("hidden"));
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId::new("hidden"))
+        );
     }
 
     #[test]
     fn perspective_help_anchor_uses_the_registered_id() {
         assert_eq!(
-            perspective_help_anchor(PerspectiveId("sandbox_view")),
+            perspective_help_anchor(PerspectiveId::new("sandbox_view")),
             "menu.perspective.sandbox_view"
         );
     }
 
     #[test]
-    fn help_uses_visible_perspective_title_as_its_canonical_label() {
+    fn help_uses_registered_perspective_title_as_its_canonical_label() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("visible"),
+            id: PerspectiveId::new("visible"),
             title: "Build",
             marker: PanelId("visible_panel"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("hidden"),
+            id: PerspectiveId::new("hidden"),
             title: "Hidden",
             marker: PanelId("hidden_panel"),
         });
 
         assert_eq!(
-            lunco_workbench_help_ui::visible_perspective_title(&layout, PerspectiveId("visible"),),
+            lunco_workbench_help_ui::registered_perspective_title(
+                &layout,
+                PerspectiveId::new("visible")
+            ),
             Some("Build".to_owned())
         );
         assert_eq!(
-            lunco_workbench_help_ui::visible_perspective_title(&layout, PerspectiveId("hidden"),),
-            None
+            lunco_workbench_help_ui::registered_perspective_title(
+                &layout,
+                PerspectiveId::new("hidden")
+            ),
+            Some("Hidden".to_owned())
         );
     }
 
@@ -3914,18 +3943,18 @@ mod tests {
     fn activate_perspective_applies_preset() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("b"),
+            id: PerspectiveId::new("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
 
-        layout.activate_perspective(PerspectiveId("b"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("b")));
+        layout.activate_perspective(PerspectiveId::new("b"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("b")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_b")]);
     }
 
@@ -3933,13 +3962,13 @@ mod tests {
     fn activate_unknown_perspective_is_noop() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
 
-        layout.activate_perspective(PerspectiveId("ghost"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        layout.activate_perspective(PerspectiveId::new("ghost"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
@@ -3947,12 +3976,12 @@ mod tests {
     fn perspectives_keep_separate_docks() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("b"),
+            id: PerspectiveId::new("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
@@ -3961,16 +3990,16 @@ mod tests {
         layout.dock = DockState::new(vec![only_a]);
 
         // A → B: B must NOT inherit A's tab.
-        layout.activate_perspective(PerspectiveId("b"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("b")));
+        layout.activate_perspective(PerspectiveId::new("b"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("b")));
         assert!(
             !layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
             "B inherited A's tab — each perspective must keep its own dock"
         );
 
         // B → A: A's tab must come back from the per-perspective cache.
-        layout.activate_perspective(PerspectiveId("a"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        layout.activate_perspective(PerspectiveId::new("a"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
         assert!(
             layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
             "A's tab was not restored on return"
@@ -3981,7 +4010,7 @@ mod tests {
     fn reset_to_default_layout_drops_cached_tabs() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
@@ -3990,12 +4019,12 @@ mod tests {
         // Round-trip through another perspective so A's tab is cached, then
         // a reset of A must produce a clean preset, not the cached tab.
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("b"),
+            id: PerspectiveId::new("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
-        layout.activate_perspective(PerspectiveId("b"));
-        layout.activate_perspective(PerspectiveId("a"));
+        layout.activate_perspective(PerspectiveId::new("b"));
+        layout.activate_perspective(PerspectiveId::new("a"));
         assert!(layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a));
 
         layout.reset_to_default_layout();
@@ -4010,25 +4039,25 @@ mod tests {
     fn reset_to_default_perspective_discards_current_view_and_all_caches() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("a"),
+            id: PerspectiveId::new("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("b"),
+            id: PerspectiveId::new("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
 
-        layout.activate_perspective(PerspectiveId("b"));
+        layout.activate_perspective(PerspectiveId::new("b"));
         layout.dock = DockState::new(vec![TabId::Singleton(PanelId("stale"))]);
-        layout.activate_perspective(PerspectiveId("a"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
-        assert!(layout.dock_cache.contains_key(&PerspectiveId("b")));
+        layout.activate_perspective(PerspectiveId::new("a"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
+        assert!(layout.dock_cache.contains_key(&PerspectiveId::new("b")));
 
         layout.reset_to_default_perspective();
 
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId::new("a")));
         assert!(layout.dock_cache.is_empty());
         assert!(
             !layout
@@ -4043,25 +4072,31 @@ mod tests {
     fn required_perspective_keeps_guided_presentations_in_their_authored_layout() {
         let mut layout = WorkbenchLayout::default();
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("view"),
+            id: PerspectiveId::new("view"),
             title: "View",
             marker: PanelId("view_panel"),
         });
         layout.register_perspective(TestPerspective {
-            id: PerspectiveId("build"),
+            id: PerspectiveId::new("build"),
             title: "Build",
             marker: PanelId("build_panel"),
         });
 
         layout.set_required_perspective(Some("build"));
-        layout.activate_perspective(PerspectiveId("view"));
+        layout.activate_perspective(PerspectiveId::new("view"));
 
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("build")));
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId::new("build"))
+        );
         assert_eq!(layout.side_browser, [PanelId("build_panel")]);
 
         layout.set_required_perspective(None);
-        layout.activate_perspective(PerspectiveId("view"));
-        assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
+        layout.activate_perspective(PerspectiveId::new("view"));
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId::new("view"))
+        );
     }
 
     /// A NaN split fraction (egui_dock poisons the tree from inside `show`)
@@ -4119,7 +4154,7 @@ mod tests {
         let mut layout = WorkbenchLayout::default();
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("a"), PanelId("b")]);
-        layout.apply_perspective_plan(PerspectiveId("test"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("test"), plan);
         assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
     }
 
@@ -4129,7 +4164,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("code"), PanelId("diagram")]);
         plan.active_center_tab = Some(1);
-        layout.apply_perspective_plan(PerspectiveId("test"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("test"), plan);
         assert_eq!(layout.active_center_tab, 1);
     }
 
@@ -4139,7 +4174,7 @@ mod tests {
         let mut plan = PerspectiveLayoutPlan::new();
         plan.center = PerspectiveSlotPlan::new().tabs([PanelId("x")]);
         plan.active_center_tab = Some(2);
-        layout.apply_perspective_plan(PerspectiveId("test"), plan);
+        layout.apply_perspective_plan(PerspectiveId::new("test"), plan);
         assert_eq!(layout.active_center_tab, 0);
     }
 }

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**267 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**270 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -84,7 +84,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
-- [`lunco-camera-core`](#lunco-camera-core) (6 commands)
+- [`lunco-camera-core`](#lunco-camera-core) (7 commands)
 - [`lunco-capture`](#lunco-capture) (4 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workbench-core`](#lunco-workbench-core) (10 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
@@ -1887,6 +1887,22 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `camera` | `Entity` |  The camera rig returning from orbit view. |
 
+#### `SetCameraFollow`
+
+ Atomically tune a live subject-follow rig without rebinding its subject.
+
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `camera` | `Option < Entity >` |  Local follow camera; omitted selects the current local embodiment. |
+| `distance_m` | `Option < f64 >` |  Positive requested boom distance in metres; scene obstruction may shorten it. |
+| `height_m` | `Option < f64 >` |  Focus height along surface up, or world Y in a flat grid. |
+| `yaw_rad` | `Option < f64 >` |  Orbit yaw offset in radians. |
+| `pitch_rad` | `Option < f64 >` |  View tilt in radians, strictly between -pi/2 and pi/2. |
+| `mode` | `Option < String >` |  stabilized (external frame), heading (surface yaw), or body (all axes). |
+| `damping` | `Option < f64 >` |  Native exponential easing damping, in [0,1). |
+
 #### `SetCameraInput`
 
  Tune pointer-to-camera response while the application is running.
@@ -3618,6 +3634,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `id` | `String` |  The identifier of the perspective to activate. |
 
+#### `CloseTab`
+
+ Request the workbench close a multi-instance tab, if open.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `String` |  The [`crate::InstancePanel::kind`] to close. |
+| `instance` | `u64` |  The tab's instance discriminant, typically a document id. |
+
 #### `FocusPanel`
 
  Open and focus a registered singleton panel, activating its preferred perspective when set.
@@ -3659,6 +3686,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `asset_path` | `String` |  Registered asset path. |
+
+#### `OpenTab`
+
+ Request the workbench open (or focus) a multi-instance tab.
+
+ The concrete shell validates the registered kind and applies this command to its dock.
+ Domain UI crates can therefore open a tab without depending on egui-dock.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `String` |  The [`crate::InstancePanel::kind`] to open. |
+| `instance` | `u64` |  The tab's instance discriminant, typically a document id. |
 
 #### `OpenTwinSource`
 
@@ -3826,6 +3867,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `InspectGuidedHud`
 
  Inspect authored cards and the same visibility/input decision used by rendering.
+ Includes the active anchored tour's Twin owner, step and target.
 
 - *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
 - *fields:* none — call with `InspectGuidedHud` (no params)
@@ -4065,7 +4107,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 267 commands from the runtime schema; scanned 1021 .rs files for docs (0 parse failure(s) skipped).
+<!-- 270 commands from the runtime schema; scanned 1023 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

@@ -9,8 +9,8 @@ pub mod commands;
 pub mod math;
 
 pub use commands::{
-    AnimateOrbitCameraDirection, FocusTarget, FollowTarget, ReturnFromOrbit, SetCameraInput,
-    SetCameraLookAt,
+    AnimateOrbitCameraDirection, FocusTarget, FollowTarget, ReturnFromOrbit, SetCameraFollow,
+    SetCameraInput, SetCameraLookAt,
 };
 
 /// Project authored camera identities into concise, deterministic UI labels.
@@ -671,3 +671,10 @@ pub struct AdaptiveNearPlane;
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
 pub struct SurfaceRelativeMode;
+
+/// Reloadable vessel-specific follow presentation over the native rig.
+pub mod follow_policy;
+
+/// Semantic operator request to advance the active viewport camera.
+#[derive(bevy::prelude::Event)]
+pub struct CycleCamera;
