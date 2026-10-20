@@ -1,5 +1,40 @@
 # High-quality realtime performance handover
 
+## Contact reaction selection and controlled solver comparison — 2026-10-20
+
+The coupled response owner retains the native zero-guess LSMR solve and its
+minimum-norm multiplier selection in diagonally scaled coordinates. Contact
+multipliers feed native friction; body-correction agreement alone is insufficient
+for a numerical acceleration. A new inline mechanism regression uses two
+identical hard rows and one contact row. A unit body response requires the native
+contact multiplier `1/3`. The tested hard-coordinate right preconditioner keeps
+the total response at one but changes that contact multiplier to `2/3`, doubling
+its friction allowance. Its source and executable are archived as diagnostic
+evidence; the implementation and its private API are removed from the runtime.
+
+The normal candidate artifact
+`bb60a99aaf4c0046ee8eede8b329cc66b0f3f7e6665c4242de233606ebb5a19e`
+passes the six focused numerical checks and all 53 authored physics/drive
+assertions plus the expected invalid-joint fault. It is still rejected by the
+reaction counterexample and the real vehicle comparison. Two headless production
+runs use identical Twin source hashes, equal initial queried physics state,
+zero admitted startup ticks, fixed epoch JD 2451545 and forward/release inputs at
+master ticks 301 and 361. At ticks 300/360/420, the baseline's retained physics
+medians are 34.382/23.514/12.760 ms; the candidate's are 10.106/8.632/5.250 ms.
+Vehicle speed at tick 360 changes from 3.925748 to 3.572621 m/s. Faster timings
+do not qualify a solver that silently changes the reaction selection.
+
+The original production executable
+`529edfbd4a409d966ce82b29ee45df04652a0b19e0f58989d0770a8247b2ea58`
+is restored and hash verified. The retained source change is the reaction
+regression plus its owner/runbook documentation. The next numerical investigation
+must preserve the original reaction norm and distinguish body-space agreement
+from contact-force agreement. Loading, sub-millisecond physics, 200 FPS and
+native macOS acceptance remain open. Evidence is under
+`.cache/codex-evidence/loading-20261019/integration/`:
+`preconditioner-controlled-comparison.json`, the failed reaction counterexample,
+`restored-reaction-contract-tests.log`, and the archived candidate source/binary.
+
 ## Local main integration validation — 2026-10-20
 
 The combined source preserves main's rotating-slider differential, native
@@ -22,21 +57,6 @@ results remain under `.cache/codex-evidence/loading-20261019/integration/`.
 All owned test ports are released. Concurrent tutorials and Roadster recording
 sessions exclude clean FPS qualification. The loading, physics-tail, 200 FPS
 and native macOS acceptance requirements remain open.
-
-## Validated integration checkpoint — 2026-10-20
-
-The retained physics, lifecycle, preparation diagnostics and Modelica changes
-are ready for local integration. The Roadster projection tail remains open.
-An ignored native Faer block-preconditioner experiment preserves the original
-matrix-free body reduction, LSMR tolerance and unilateral contact coordinates.
-Across 133 captured systems it reduces diagnostic time from 109.426 to 39.354 ms
-and pivots from 314 to 303. These are isolated numerical measurements, not
-production physics or FPS acceptance. No preconditioner implementation is
-installed in the runtime; full authored and vehicle validation is required
-before adopting it. The next investigation must also establish which retained
-material witnesses remain necessary across the complete swept trajectory.
-Evidence: `response-preconditioned-all.csv` and the ignored native diagnostic
-sources under `.cache/codex-evidence/loading-20261019/`.
 
 ## Unilateral residual admission and real Roadster stall — 2026-10-20
 
