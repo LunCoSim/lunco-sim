@@ -1,5 +1,65 @@
 # High-quality realtime performance handover
 
+## Reaction precision and redundant contact faces — 2026-10-20
+
+The Roadster startup fault reproduces at physics tick 12. A geometric tolerance
+used as a normal-residual stopping floor reverses a contact reaction's sign and
+cycles release/re-admission. The analytical heavy-attachment fixture reproduces
+the wrong sign independently of the Twin. Reaction precision now remains
+independent of geometric slack.
+
+Griffin's fixed flight latches and ramp hinges also produce permanently
+singular coupled islands: one captured packet has 104 hard rows above 84
+supported native response components. The response owner certifies that
+topology and native dominance masks before applying serial complete orthogonal
+decomposition. Feasible contact pivots use its directly projected Householder
+residual, including its arithmetic error bound. Contacts attaining the same
+first blocking ratio retire together at the same feasible point. Native
+geometric admission, nonlinear revalidation and reaction norm remain owned by
+the existing response and continuous-contact mechanisms. No authored Modelica,
+Twin geometry, graphics settings or physics substeps change.
+
+All 15 focused numerical checks and 48 captured Griffin packet replays pass.
+Simultaneous-bound retirement reduces those packet pivots from 1,140 to 212.
+It can select a different geometrically acceptable contact face; captured
+reactions differ, so replay completion alone does not qualify contact behavior
+or product performance.
+
+The normal production build (SHA-256
+`0b1dcbf8c438a9dce3414da9009ef7bdc64fd4772e670d90d64f89a52d944cfb`)
+passes 53 authored physics assertions and the invalid-joint negative gate.
+Griffin's mapped landing-stability case passes at tick 5,000 with 60.033 seconds
+of post-touchdown observations. All 361 observations retain all four pads, with
+no contact drops; maximum horizontal drift is 0.143721 m and maximum ground
+speed is 0.0118952 m/s. Its source revision is unchanged. The owned headless
+session exits zero and releases its port after 403.27 seconds of wall time.
+Owned windowed sessions retain unchanged Twin/model source hashes, clear
+readiness, zero retained errors and complete frame-history windows. Griffin
+confirms touchdown and reaches tick 1,799; Roadster reaches tick 1,221 and
+4.71 m/s under held forward input; Summer reaches tick 1,640. Their captured
+screenshots were inspected. OpenTwin-to-ready and median timing observations:
+
+| Twin | Ready (s) | Physics (ms) | Frame (ms) |
+| --- | ---: | ---: | ---: |
+| Griffin | 39.202 | 87.271 | 109.098 |
+| Roadster | 3.886 | 18.325 | 35.611 |
+| Summer | 3.469 | 0.785 | 12.333 |
+
+These are unprofiled High-quality runs with ephemeral no-throttle/no-vsync
+overrides. Two foreign simulator sessions remain active and are recorded in
+each report. Defaults and saved preferences are unchanged. The measurements do
+not meet the full loading, physics-stall or 200 FPS goals and establish no macOS
+result. The retained coupled-initialization receipt attributes 14.677 seconds
+of Griffin's load to live solver construction despite a prepared-IR disk hit;
+metadata and first observation take 3.928 and 2.916 ms separately.
+
+Evidence uses `.cache/codex-evidence/performance-20261020/`, including
+`reaction-slack-baseline.log`, `roadster-pivot-failure/`,
+`griffin-relative-failure/`, `batched-bounds-tests.log`,
+`single-pivot-golden.log`, `batched-pivot-replays.log`,
+`batched-production-gates.json`, `batched-landing-stability.{json,log}` and
+`{griffin,roadster,summer}-batched/`.
+
 ## Initial collider-query admission — 2026-10-20
 
 The first-tick ground-height failure came from child colliders retaining their
@@ -29,8 +89,9 @@ All owned ports are released. Evidence is under
 
 The tutorials integration includes main's certified cuboid-face contacts,
 body-indexed response products and shared heading interface. The response owner
-uses a scale-aware normal-residual stopping budget and reserves the live LSMR
-search-history column alongside its published workspace. Failed solves still
+reserves the live LSMR search-history column alongside its published workspace.
+Its authoritative reaction-precision contract is specified in
+[deterministic runtime](../architecture/62-deterministic-runtime-and-async-boundaries.md). Failed solves still
 fail admission, and the native geometric tolerances remain unchanged. All 131
 physics library checks pass, including small-scale heavy attachments and a
 many-row sparse-workspace sweep. This repairs the later contact failure recorded
@@ -81,7 +142,7 @@ the missing-heading-interface failure. That windowed artifact later faults
 with `physics-continuous-contact-invalid`: `coupled minimum-residual solve did
 not converge`. No complete quiet frame window is accepted. Source hashes remain
 fixed and owned ports are released. This is historical evidence from before
-the tutorials branch's scale-aware Krylov stopping and workspace repairs;
+the current Krylov precision and workspace repairs;
 it establishes neither full mission behavior nor loading/FPS acceptance. Evidence under
 `.cache/codex-evidence/loading-20261019/`: `heading-contract-integration/` and
 `griffin-heading-integrated/`.

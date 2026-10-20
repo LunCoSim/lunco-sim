@@ -78,13 +78,40 @@ Scaling, component dot-product grouping and every accumulation order remain
 unchanged for both the native response and its transpose. This avoids repeated
 scattered writes and forms no dense row matrix. Packed terms and stack workspace
 belong to that exact selected operator and expire with its active-set solve.
-Maintained faer LSMR runs with explicit `Par::Seq`, a 1e-12 relative normal
-residual bound and an absolute budget of one thousandth of the tightest
-scaled native row tolerance, with the owner's iteration bound. The budget
-scales with the declared geometric accuracy; it does not discard small-scale
-constraints behind a fixed absolute floor. The adapter translates that bound
-through native sparse `||A^T b||` into LSMR's consumed relative parameter.
-The allocation includes the published solver layout plus the live n-by-RHS
+Preparation counts supported native linear/angular response components. If the
+permanent hard-row count exceeds that rank ceiling, every active face is
+singular. A common dominance mask per responsive body also certifies the
+positive-semidefinite response required by feasible face updates. Those islands
+materialize scaled coefficients once through the same native sparse operator.
+Maintained faer column-pivoted QR and transpose QR recover the minimum-norm
+selected response. The numerical rank is bounded by native component support
+and the dimension-scaled f64 roundoff threshold. Coefficients and feasible
+multipliers expire with that immutable island preparation.
+
+These singular faces retain nonnegative contact multipliers between pivots.
+Native sign, slack and inactive-inequality checks recognize a finished face
+before further search. A nonterminal face follows a least-squares null residual
+to a blocking contact when one exists; otherwise a pulling target uses the
+feasible line toward its minimum-norm solution. All contacts attaining the
+first blocking ratio retire together, in admitted row order, at that same
+feasible point. The factorization publishes its left-null residual directly
+from the Householder tail, with a dimension-scaled projection roundoff bound.
+Search components with uncertain sign are zero only in the intermediate
+direction; every negative admitted component bounds the feasible step. The
+native terminal reaction is unchanged by that search preparation. Native
+geometric slack determines which faces are finished; it does not change
+reaction precision. Hard
+linearized rows may remain inconsistent inside their geometric bounds, retaining
+their selected minimum-norm contact share until nonlinear revalidation.
+
+Other islands use maintained faer LSMR with a zero initial guess, a 1e-12 relative
+normal-residual bound and the owner's iteration limit. Both kernels use explicit
+`Par::Seq`, finite-result checks and fallible numerical workspace allocation.
+Reaction convergence is
+independent of geometric writeback tolerances. Those tolerances cannot bound
+the linear solve's normal residual: weak response directions can amplify that
+error, change a contact reaction's sign and cause repeated release/re-admission.
+The sparse allocation includes the published solver layout plus the live n-by-RHS
 search-history column retained while sparse operator products use their selected-endpoint workspace. Workspace admission remains fallible before the solve.
 
 Each nonlinear correction is checked against the geometric tolerances;
@@ -100,7 +127,10 @@ The native zero-guess solve owns minimum-norm multiplier selection in the
 diagonally scaled coordinates. Preserving a body correction or equation residual
 alone does not preserve contact mechanics: the contact multiplier feeds native
 friction. A numerical acceleration must preserve that reaction selection in
-rank-deficient systems. The mechanism regression with two identical hard rows
+rank-deficient systems and when geometric tolerances are loose. The analytical
+heavy-attachment regression requires the same minimum-norm reactions at loose
+writeback tolerances; accepting the geometry alone is insufficient.
+The mechanism regression with two identical hard rows
 and one identical contact row requires the contact multiplier to remain `1/3`
 when their total response is one.
 
