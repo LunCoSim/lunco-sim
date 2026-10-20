@@ -249,7 +249,7 @@ resolver = "2"
 [patch.crates-io]
 # Avian's contacts, spatial queries and CCD share this kernel. Keep them on the
 # same reviewed 0.27 revision with robust convex intersection and witness tests.
-parry3d-f64 = { git = "https://github.com/LunCoSim/parry", rev = "75b6acccdc42151995d0a653c576e65248164447" }
+parry3d-f64 = { git = "https://github.com/LunCoSim/parry", rev = "fbef896f85d04dada74bec54ff7c64de77589705" }
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
 # Pin the fork revision because its Bevy picking backend must apply the same
 # GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews,

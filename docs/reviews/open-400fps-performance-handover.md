@@ -1,5 +1,43 @@
 # High-quality realtime performance handover
 
+## Grazing box/cylinder contact — 2026-10-21
+
+The Griffin rover/gear gate exposed an EPA hull failure in the maintained Parry
+0.27 fork. A very thin connecting triangle caused silhouette traversal to delete
+a back-facing face. All four initial faces could then be deleted, losing real
+contact witnesses. Parry commit `fbef896f85d04dada74bec54ff7c64de77589705`
+uses the existing signed face-visibility test without that unrelated triangle
+area override; its geometric tolerances are unchanged. LunCoSim pins that exact
+revision for Avian, spatial queries and continuous contact.
+
+Parry passes 62 double-precision library tests, eight double-precision convex
+query contracts and 63 single-precision library tests. The regression exercises
+the captured pose, both shape orders, six initial directions and three nearby
+gaps/penetrations. Shared tests also retain coplanar/degenerate face traversal.
+
+The production binary SHA-256 is
+`3829363b96bf558b2c5cf51b35b9bad6b6ae855ac5fa6eef5d97cbf14abef820`.
+It passes Griffin's 900-tick rover/gear gate (91 assertions) and 1,800-tick
+engine-off impact gate (nine assertions). Removing the query fault exposed an
+observer error: the test watched only the PX leg body although the Sun-oriented
+lander presented an NX mounting barrel. Twin commit `49270bd` observes the
+source-derived structural proxies across all four legs and bus-owned mounting
+hardware, retaining independent motion, impulse and penetration assertions.
+The recorded gear impulse is 1,217.508 N s and maximum penetration is
+0.000000957116 m, below the existing one-micrometre tolerance.
+
+An owned visible High-quality session independently passes the typed descent
+Sun-pointing requirement at tick 1,401. Readiness is clear, retained errors and
+broken connections are zero, and the captured 1024 by 1024 landed view was
+inspected. The admitted SysML revision is `17180385253375652997`. These focused
+contact/landing results do not qualify the complete 31-case Twin suite, all
+formal requirements or the outstanding loading/FPS targets.
+
+Evidence is under `.cache/codex-evidence/parry-grazing-20261021/`: `results.json`,
+the two verification logs, `observer-baseline/`, and `native/qualification.json`,
+`native/native-integrated.log` and `native/griffin-qualified-1024.png`. Parry
+unit/contract logs are under `.cache/griffin-rust-tmp/parry-{f64,f32}-tests.log`.
+
 ## Reaction precision and redundant contact faces — 2026-10-20
 
 The Roadster startup fault reproduces at physics tick 12. A geometric tolerance
